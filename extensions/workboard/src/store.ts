@@ -3013,8 +3013,8 @@ export class WorkboardStore {
       }
       return card.status === "scheduled" ? "ready" : card.status;
     }
-    const cards = new Map((await this.list()).map((entry) => [entry.id, entry]));
-    const parentsDone = parents.every((parentId) => cards.get(parentId)?.status === "done");
+    const parentCards = await Promise.all(parents.map((parentId) => this.get(parentId)));
+    const parentsDone = parentCards.every((parent) => parent?.status === "done");
     if (
       !parentsDone &&
       scheduledAt &&

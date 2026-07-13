@@ -233,6 +233,15 @@ export const ja_JP: TranslationMap = {
       subtitle:
         "新しいスマートフォンを接続するには、モバイルアプリでこのQRコードをスキャンしてください。",
       generating: "安全なセットアップコードを作成しています…",
+      accessTitle: "モバイルアクセス",
+      fullAccess: "フルアクセス（推奨）",
+      fullAccessHint: "ノードに加え、設定やアップグレードを含むGatewayのすべての操作が可能です。",
+      limitedAccess: "制限付きアクセス",
+      limitedAccessHint: "管理操作を除き、ノード、チャット、承認を利用できます。",
+      generateCode: "セットアップコードを作成",
+      transportLimitedTitle: "ネットワークの安全性のため制限されています",
+      transportLimitedHint:
+        "このGateway URLは平文のws://を使用しています。wss://またはTailscale Serveを使用してから、フルアクセス用の新しいコードを作成してください。",
       failed: "セットアップコードを作成できませんでした。",
       qrAlt: "OpenClaw mobile ペアリングQRコード",
       qrUnavailable: "QRを利用できません。代わりにセットアップコードをコピーしてください。",
@@ -268,7 +277,8 @@ export const ja_JP: TranslationMap = {
     },
     inventory: {
       title: "デバイス",
-      subtitle: "ペア設定済みクライアントごとに1行: ステータス、ロール、トークン。",
+      summaryConnected: "{total}台中{connected}台が接続済み",
+      summaryPending: "{count}件が承認待ち",
       cleanupStale: "{count} 件の古い項目をクリーンアップ",
       pendingApproval: "承認待ち",
       paired: "ペア設定済み",

@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { normalizeUrlDraft } from "./browser-panel.ts";
+import { afterEach, describe, expect, it } from "vitest";
+import { OpenClawBrowserPanel, normalizeUrlDraft } from "./browser-panel.ts";
 
 describe("normalizeUrlDraft", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    localStorage.clear();
+  });
+
   it("prefixes bare hosts with https", () => {
     expect(normalizeUrlDraft("example.com")).toBe("https://example.com/");
     expect(normalizeUrlDraft("  github.com/openclaw/openclaw ")).toBe(
@@ -23,5 +28,22 @@ describe("normalizeUrlDraft", () => {
     expect(normalizeUrlDraft("   ")).toBeNull();
     expect(normalizeUrlDraft("javascript:alert(1)")).toBeNull();
     expect(normalizeUrlDraft("file:///etc/passwd")).toBeNull();
+  });
+
+  it("restores persisted open state when a mounted tag upgrades lazily", async () => {
+    localStorage.setItem(
+      "openclaw.browser.panel.v1",
+      JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
+    );
+    const tagName = `test-lazy-browser-panel-${crypto.randomUUID()}`;
+    const element = document.createElement(tagName) as HTMLElement & { available: boolean };
+    element.available = true;
+    document.body.append(element);
+
+    class LazyUpgradeBrowserPanel extends OpenClawBrowserPanel {}
+    customElements.define(tagName, LazyUpgradeBrowserPanel);
+    const panel = element as unknown as OpenClawBrowserPanel;
+    await panel.updateComplete;
+    expect((panel as unknown as { open: boolean }).open).toBe(true);
   });
 });

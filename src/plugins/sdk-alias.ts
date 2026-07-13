@@ -768,25 +768,6 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
     srcFile: "read-byte-stream-with-limit.ts",
     distFile: "read-byte-stream-with-limit.mjs",
   },
-  ...(
-    [
-      ["", "index"],
-      ["boolean-coercion", "boolean-coercion"],
-      ["error-coercion", "error-coercion"],
-      ["number-coercion", "number-coercion"],
-      ["record-coerce", "record-coerce"],
-      ["result", "result"],
-      ["string-coerce", "string-coerce"],
-      ["string-normalization", "string-normalization"],
-      ["utf16-slice", "utf16-slice"],
-    ] as const
-  ).map(([subpath, file]) => ({
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath,
-    srcFile: `${file}.ts`,
-    distFile: `${file}.mjs`,
-  })),
   {
     packageName: "@openclaw/retry",
     packageDir: "retry",
@@ -1343,11 +1324,13 @@ function resolveWorkspacePackageAliasMap(params: {
   const aliasMap: Record<string, string> = {};
   const workspacePackageAliasEntries = [
     ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
-    ...listWorkspacePackageExportAliasEntries({
-      packageRoot,
-      packageName: "@openclaw/acp-core",
-      packageDir: "acp-core",
-    }),
+    ...["normalization-core", "acp-core"].flatMap((packageDir) =>
+      listWorkspacePackageExportAliasEntries({
+        packageRoot,
+        packageName: `@openclaw/${packageDir}`,
+        packageDir,
+      }),
+    ),
   ];
   for (const entry of workspacePackageAliasEntries) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
