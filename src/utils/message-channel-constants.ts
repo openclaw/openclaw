@@ -2,7 +2,6 @@
 import { isStringOption } from "./string-readers.js";
 
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
-export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
 
 // Internal, non-delivery sources that may surface as a `channel` hint when an
 // agent run is triggered by something other than a chat message — heartbeat
@@ -46,7 +45,7 @@ export const NATIVE_APPROVAL_CHANNELS = [
   "telegram",
   "whatsapp",
 ] as const;
-export type NativeApprovalChannel = (typeof NATIVE_APPROVAL_CHANNELS)[number];
+type NativeApprovalChannel = (typeof NATIVE_APPROVAL_CHANNELS)[number];
 
 export function isNativeApprovalChannel(
   value: string | null | undefined,

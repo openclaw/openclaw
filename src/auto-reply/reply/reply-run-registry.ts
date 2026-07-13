@@ -20,11 +20,11 @@ import type {
 } from "../get-reply-options.types.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 
-export type ReplyRunKey = string;
+type ReplyRunKey = string;
 
-export type ReplyBackendKind = "embedded" | "cli";
+type ReplyBackendKind = "embedded" | "cli";
 
-export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
@@ -53,7 +53,7 @@ export type ReplyBackendHandle = {
   isCompacting?: () => boolean;
 };
 
-export type ReplyBackendQueueMessageMismatch =
+type ReplyBackendQueueMessageMismatch =
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
 
@@ -90,7 +90,7 @@ export type ReplyOperationPhase =
   | "failed"
   | "aborted";
 
-export type ReplyOperationFailureCode =
+type ReplyOperationFailureCode =
   | "gateway_draining"
   | "command_lane_cleared"
   | "aborted_by_user"
@@ -98,9 +98,9 @@ export type ReplyOperationFailureCode =
   | "run_stalled"
   | "run_failed";
 
-export type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
+type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
 
-export type ReplyOperationResult =
+type ReplyOperationResult =
   | { kind: "completed" }
   | { kind: "failed"; code: ReplyOperationFailureCode; cause?: unknown }
   | { kind: "aborted"; code: ReplyOperationAbortCode };
@@ -182,7 +182,7 @@ export type ReplyOperation = {
   abortForRestart(): boolean;
 };
 
-export type ReplyRunRegistry = {
+type ReplyRunRegistry = {
   begin(params: {
     sessionKey: string;
     sessionId: string;
@@ -238,7 +238,7 @@ export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 // Without this, abort/failure can leave the session wedged until process restart.
 export const REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS = 60_000;
 
-export type ReplyOperationStaleReason = "terminal_unreleased" | "no_activity" | "stuck_recovery";
+type ReplyOperationStaleReason = "terminal_unreleased" | "no_activity" | "stuck_recovery";
 
 export class ReplyRunAlreadyActiveError extends Error {
   constructor(sessionKey: string) {

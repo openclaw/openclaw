@@ -6,6 +6,7 @@ import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { resolveWorktreeBase } from "./base-ref.js";
 import { lockState, lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import {
   commandError,
@@ -122,31 +123,6 @@ async function resolveRepository(repoRoot: string): Promise<{
     .digest("hex")
     .slice(0, 16);
   return { repoRoot: canonicalRoot, sourceRoot, commonDir, originUrl, fingerprint };
-}
-
-async function resolveBase(
-  repoRoot: string,
-  baseRef?: string,
-): Promise<{
-  base: string;
-  remote: boolean;
-}> {
-  if (baseRef) {
-    return { base: baseRef, remote: false };
-  }
-  const fetched = await runGit(repoRoot, ["fetch", "origin"]);
-  if (fetched.code === 0) {
-    const remoteHead = await runGit(repoRoot, [
-      "symbolic-ref",
-      "--quiet",
-      "--short",
-      "refs/remotes/origin/HEAD",
-    ]);
-    if (remoteHead.code === 0 && remoteHead.stdout.trim()) {
-      return { base: remoteHead.stdout.trim(), remote: true };
-    }
-  }
-  return { base: "HEAD", remote: false };
 }
 
 async function ensureNoSymlinkDirectory(root: string, relativePath: string): Promise<boolean> {
@@ -377,7 +353,6 @@ export class ManagedWorktreeService {
       }
       return await this.restore({ id: existing.id });
     }
-    await fs.mkdir(root, { recursive: true });
     const branch = `openclaw/${name}`;
     const branchExists = await runGit(repository.repoRoot, [
       "show-ref",
@@ -391,29 +366,34 @@ export class ManagedWorktreeService {
     if (branchExists.code !== 1) {
       throw commandError("git show-ref --verify", branchExists);
     }
-    const base = await resolveBase(repository.repoRoot, params.baseRef);
-    let usedBase = base.base;
+    const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef);
+    await fs.mkdir(root, { recursive: true });
+    let gitBase = base.gitOperand;
+    let recordBase = base.recordRef;
     let added = await runGit(repository.repoRoot, [
       "worktree",
       "add",
-      worktreePath,
       "-b",
       branch,
-      usedBase,
+      "--",
+      worktreePath,
+      gitBase,
     ]);
     if (added.code !== 0 && base.remote) {
       if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {
         throw commandError("git worktree add", added);
       }
       await resetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch);
-      usedBase = "HEAD";
+      gitBase = "HEAD";
+      recordBase = "HEAD";
       added = await runGit(repository.repoRoot, [
         "worktree",
         "add",
-        worktreePath,
         "-b",
         branch,
-        usedBase,
+        "--",
+        worktreePath,
+        gitBase,
       ]);
     }
     if (added.code !== 0) {
@@ -440,7 +420,7 @@ export class ManagedWorktreeService {
       repoRoot: repository.repoRoot,
       path: worktreePath,
       branch,
-      baseRef: usedBase,
+      baseRef: recordBase,
       ownerKind: params.ownerKind ?? "manual",
       ...(params.ownerId ? { ownerId: params.ownerId } : {}),
       createdAt,
@@ -479,7 +459,7 @@ export class ManagedWorktreeService {
 
   /**
    * Lists selectable base refs for a repository without touching the network.
-   * Base-ref pickers must stay snappy; resolveBase() still fetches on create
+   * Base-ref pickers must stay snappy; resolveWorktreeBase() still fetches on create
    * when no explicit ref is chosen.
    */
   async listRepositoryBranches(repoRoot: string): Promise<ManagedWorktreeBranchesResult> {

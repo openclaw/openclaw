@@ -6,9 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { createJiti } from "jiti";
 import { buildChannelConfigSchema } from "../src/channels/plugins/config-schema.js";
 import {
+  buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
-  resolvePluginSdkAliasFile,
-  resolvePluginSdkScopedAliasMap,
 } from "../src/plugins/sdk-alias.js";
 
 type CreateJiti = typeof createJiti;
@@ -152,19 +151,7 @@ export async function loadChannelConfigSurfaceModule(
   };
   const loadViaJiti = (candidatePath: string) => {
     const resolvedPath = path.resolve(candidatePath);
-    const pluginSdkAlias = resolvePluginSdkAliasFile({
-      srcFile: "root-alias.cjs",
-      distFile: "root-alias.cjs",
-      modulePath: resolvedPath,
-      pluginSdkResolution: "src",
-    });
-    const aliasMap = {
-      ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-      ...resolvePluginSdkScopedAliasMap({
-        modulePath: resolvedPath,
-        pluginSdkResolution: "src",
-      }),
-    };
+    const aliasMap = buildPluginLoaderAliasMap(resolvedPath, "", undefined, "src");
     const jiti = loadCreateJitiLoaderFactory()(import.meta.url, {
       ...buildPluginLoaderJitiOptions(aliasMap),
       interopDefault: true,

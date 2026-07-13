@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import "../../styles/usage.css";
 import { getUsageCacheRefreshTitle } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";

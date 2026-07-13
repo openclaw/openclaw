@@ -5,6 +5,7 @@ import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildUsageCostWindows,
@@ -875,11 +876,7 @@ function renderSessionsCard(
   };
   const copySessionName = async (s: UsageSessionEntry) => {
     const text = formatSessionListLabel(s);
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      // Best effort; clipboard can fail on insecure contexts or denied permission.
-    }
+    await copyToClipboard(text);
   };
 
   const buildSessionMeta = (s: UsageSessionEntry): string[] => {

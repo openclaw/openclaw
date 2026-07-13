@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
 import { createQaArtifactRunId } from "../../artifact-run-id.js";
@@ -448,7 +449,6 @@ function buildDiscordQaConfig(
     ...baseCfg.plugins?.entries,
     discord: { enabled: true },
   };
-  const requireMention = !options.statusReactionsToolOnly;
   const messages = options.statusReactionsToolOnly
     ? {
         ...baseCfg.messages,
@@ -478,6 +478,7 @@ function buildDiscordQaConfig(
     ? {
         ...baseCfg.channels?.discord?.voice,
         enabled: true,
+        mode: "stt-tts" as const,
         autoJoin: [options.voiceAutoJoin],
       }
     : undefined;
@@ -503,12 +504,12 @@ function buildDiscordQaConfig(
             groupPolicy: "allowlist",
             guilds: {
               [params.guildId]: {
-                requireMention,
+                requireMention: !options.statusReactionsToolOnly,
                 users: [params.driverBotId],
                 channels: {
                   [params.channelId]: {
                     enabled: true,
-                    requireMention,
+                    requireMention: !options.statusReactionsToolOnly,
                     users: [params.driverBotId],
                   },
                 },
@@ -785,14 +786,6 @@ function collectSeenReactionSequence(
     }
   }
   return sequence;
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/gu, "&amp;")
-    .replace(/</gu, "&lt;")
-    .replace(/>/gu, "&gt;")
-    .replace(/"/gu, "&quot;");
 }
 
 function renderDiscordStatusReactionHtml(params: {
