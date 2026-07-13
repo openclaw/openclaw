@@ -28,7 +28,9 @@ import {
   isForcedPrivateQaCodexRuntime,
   normalizeCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
+import { addCodexMessageToolOnlyFinalControl } from "./message-tool-final-control.js";
 import {
+  resolveCodexNodeExecToolOverrides,
   resolveCodexNativeExecutionPolicy,
   type CodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
@@ -40,7 +42,6 @@ import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./w
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
 >;
-type OpenClawExecOptions = NonNullable<OpenClawCodingToolsOptions["exec"]>;
 
 /** Factory seam for constructing OpenClaw runtime tools without eagerly loading agent-harness. */
 type OpenClawCodingToolsFactory =
@@ -231,7 +232,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     ...buildEmbeddedAttemptToolRunContext(params),
     exec: {
       ...params.execOverrides,
-      ...resolveNodeExecToolOverrides(nativeExecutionPolicy),
+      ...resolveCodexNodeExecToolOverrides(nativeExecutionPolicy),
       config: params.config,
       elevated: params.bashElevated,
     },
@@ -881,51 +882,6 @@ function hideNodeExecDynamicToolParameters(
     ...(Array.isArray(rawRequired) ? { required: nextRequired } : {}),
   };
 }
-/**
- * `final` is a Codex-only control for message-tool-only source delivery. Keep
- * it on the projected Codex schema so other agent runtimes never receive an
- * API contract they do not implement.
- */
-function addCodexMessageToolOnlyFinalControl(
-  tools: OpenClawDynamicTool[],
-  sourceReplyDeliveryMode: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"],
-): OpenClawDynamicTool[] {
-  if (sourceReplyDeliveryMode !== "message_tool_only") {
-    return tools;
-  }
-  // allTools is attempt-fresh from createOpenClawCodingTools inside
-  // buildDynamicTools — never a shared/cached instance across attempts or
-  // delivery modes. Project the Codex-only `final` property in place so
-  // WeakMap ownership metadata stays attached without a public SDK clone helper.
-  for (const tool of tools) {
-    if (normalizeCodexDynamicToolName(tool.name) !== "message") {
-      continue;
-    }
-    tool.parameters = addCodexMessageToolOnlyFinalParameter(tool.parameters);
-  }
-  return tools;
-}
-function addCodexMessageToolOnlyFinalParameter(parameters: OpenClawDynamicTool["parameters"]) {
-  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
-    return parameters;
-  }
-  const schema = parameters as Record<string, unknown>;
-  const rawProperties = schema.properties;
-  if (!rawProperties || typeof rawProperties !== "object" || Array.isArray(rawProperties)) {
-    return parameters;
-  }
-  return {
-    ...schema,
-    properties: {
-      ...rawProperties,
-      final: {
-        type: "boolean",
-        description:
-          "Set true only when this message is intended to complete the reply to the current source conversation. OpenClaw stops after confirming delivery.",
-      },
-    },
-  };
-}
 function resolveCodexNativeExecutionPolicyForDynamicTools(
   input: DynamicToolBuildParams,
 ): CodexNativeExecutionPolicy {
@@ -938,18 +894,6 @@ function resolveCodexNativeExecutionPolicyForDynamicTools(
     sandboxAvailable: input.sandbox?.enabled,
     readRuntimeSessionEntry: true,
   });
-}
-function resolveNodeExecToolOverrides(
-  policy: CodexNativeExecutionPolicy,
-): Pick<OpenClawExecOptions, "host" | "node"> | undefined {
-  if (policy.effectiveExecHost !== "node") {
-    return undefined;
-  }
-  const node = policy.node?.trim();
-  return {
-    host: "node",
-    ...(node ? { node } : {}),
-  };
 }
 /** Applies a normalized tool allowlist while preserving shell aliases for exec/process. */
 function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(

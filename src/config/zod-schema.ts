@@ -58,7 +58,6 @@ type ConfigSchemaShape<T extends object> = {
 };
 
 const GatewayRemoteSchemaShape = {
-  enabled: z.boolean().optional(),
   url: z.string().optional(),
   transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
   remotePort: z.number().int().min(1).max(65_535).optional(),
