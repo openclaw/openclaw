@@ -48,9 +48,24 @@ const deliveryQueueMocks = vi.hoisted(() => ({
   drainPendingDeliveries: vi.fn(async (_opts: unknown) => undefined),
 }));
 
+const inboundDebounceHookMocks = vi.hoisted(() => ({
+  hasHooks: vi.fn(() => false),
+  runInboundDebounce: vi.fn(async () => undefined),
+}));
+
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
   drainPendingDeliveries: deliveryQueueMocks.drainPendingDeliveries,
 }));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+    "openclaw/plugin-sdk/plugin-runtime",
+  );
+  return {
+    ...actual,
+    getGlobalHookRunner: () => inboundDebounceHookMocks,
+  };
+});
 
 installWebAutoReplyTestHomeHooks();
 
@@ -1043,14 +1058,16 @@ describe("web auto-reply connection", () => {
       reply,
     });
 
-    expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
+    await expect(
+      Promise.resolve(capture.getLastOptions()?.resolveDebounceDecision?.(msg)),
+    ).resolves.toEqual({ action: "bypass" });
     expect(
       capture
         .getLastOptions()
         ?.shouldDebounce?.(createTestWebInboundMessage({ payload: { body: "   " } })),
     ).toBe(false);
     expect(
-      capture.getLastOptions()?.shouldDebounce?.(
+      await capture.getLastOptions()?.resolveDebounceDecision?.(
         createTestWebInboundMessage({
           payload: {
             body: "/stop\n\n[whatsapp attachment unavailable]",
@@ -1059,7 +1076,7 @@ describe("web auto-reply connection", () => {
           platform: { sendComposing, reply, sendMedia },
         }),
       ),
-    ).toBe(false);
+    ).toEqual({ action: "bypass" });
     await onMessage(msg);
 
     expect(reply).toHaveBeenCalledWith("ok", undefined);
@@ -1090,6 +1107,60 @@ describe("web auto-reply connection", () => {
         payload: { body: "partial nested" },
       } as unknown as WebInboundMessageInput),
     ).rejects.toThrow(/legacy flat or canonical nested/);
+  });
+
+  it("lets a plugin opt rich messages into debounce with a conversation-specific window", async () => {
+    const capture = createWebListenerFactoryCapture();
+    const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
+    inboundDebounceHookMocks.hasHooks.mockReturnValueOnce(true);
+    inboundDebounceHookMocks.runInboundDebounce.mockResolvedValueOnce({
+      action: "debounce",
+      debounceMs: 120_000,
+    });
+
+    await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
+      text: "ok",
+    }));
+    const msg = createTestWebInboundMessage({
+      admission: {
+        accountId: "default",
+        account: { accountId: "default" },
+        conversation: { id: "120363@g.us", kind: "group", groupSessionId: "120363@g.us" },
+        sender: { id: "15550001111@s.whatsapp.net" },
+        ingress: { admission: "dispatch", decision: "allow" },
+      },
+      event: { id: "rich-1" },
+      payload: {
+        body: "<media:image>",
+        media: { path: "/tmp/inbound.jpg", type: "image/jpeg" },
+      },
+      platform: {
+        chatJid: "120363@g.us",
+        senderJid: "15550001111@s.whatsapp.net",
+        sendComposing,
+        reply,
+        sendMedia,
+      },
+    });
+
+    await expect(capture.getLastOptions()?.resolveDebounceDecision?.(msg)).resolves.toEqual({
+      action: "debounce",
+      debounceMs: 120_000,
+    });
+    expect(inboundDebounceHookMocks.runInboundDebounce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        debounceKey: "default:120363@g.us:15550001111@s.whatsapp.net",
+        defaultAction: "bypass",
+        conversationKind: "group",
+        message: { hasMedia: true, hasLocation: false, hasQuote: false },
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        accountId: "default",
+        conversationId: "120363@g.us",
+        senderId: "15550001111@s.whatsapp.net",
+      }),
+    );
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {

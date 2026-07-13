@@ -3,5 +3,6 @@
 export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
+  type InboundDebounceDecision,
   type InboundDebounceCreateParams,
 } from "../auto-reply/inbound-debounce.js";

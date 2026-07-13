@@ -14,7 +14,10 @@ import {
   formatInboundMediaUnavailableText,
   formatLocationText,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import {
+  createInboundDebouncer,
+  type InboundDebounceDecision,
+} from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -339,6 +342,10 @@ type MonitorWebInboxOptions = {
   appendReplyWindow?: AppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
+  /** Optional policy decision. An explicit result overrides shouldDebounce. */
+  resolveDebounceDecision?: (
+    msg: AdmittedWebInboundCallbackMessage,
+  ) => InboundDebounceDecision | undefined | Promise<InboundDebounceDecision | undefined>;
   /** Optional shared socket reference so reply closures can follow reconnects. */
   socketRef?: { current: WASocket | null };
   /** Whether send retries should wait for a reconnect. */
@@ -362,11 +369,14 @@ type MonitorWebInboxOptions = {
 
 type AttachWebInboxToSocketOptions = Omit<
   MonitorWebInboxOptions,
-  "onMessage" | "shouldDebounce" | "socketTiming"
+  "onMessage" | "resolveDebounceDecision" | "shouldDebounce" | "socketTiming"
 > & {
   socketTiming: Required<WhatsAppSocketTimingOptions>;
   onMessage: (msg: WebInboundMessageInput) => Promise<void>;
   shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  resolveDebounceDecision?: (
+    msg: WebInboundMessageInput,
+  ) => InboundDebounceDecision | undefined | Promise<InboundDebounceDecision | undefined>;
 };
 
 export async function attachWebInboxToSocket(
@@ -462,13 +472,18 @@ export async function attachWebInboxToSocket(
   type QueuedInboundMessage = AdmittedWebInboundCallbackMessage & QueuedInboundMessageMetadata;
   const durableInboundJournal = createWhatsAppDurableInboundReceiveJournal(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
-  const pendingDebounceKeys = new Set<string>();
+  const pendingDebounceKeys = new Map<string, number>();
+  const pendingInboundEnqueues = new Set<Promise<void>>();
+  const claimedInboundDeliveries = new WeakSet<QueuedInboundMessage>();
   const activeInboundFlushes = new Set<Promise<void>>();
   const pendingMessageHandlers = new Set<Promise<void>>();
   let nextReceiveOrder = 0;
   const publishPendingWorkState = (at = Date.now()) => {
     options.onPendingWorkChanged?.(
-      pendingMessageHandlers.size + pendingDebounceKeys.size + activeInboundFlushes.size,
+      pendingMessageHandlers.size +
+        pendingInboundEnqueues.size +
+        Array.from(pendingDebounceKeys.values()).reduce((sum, count) => sum + count, 0) +
+        activeInboundFlushes.size,
       at,
     );
   };
@@ -490,6 +505,8 @@ export async function attachWebInboxToSocket(
   };
   const shouldDebounceInboundMessage = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
+  const resolveInboundDebounceDecision = (msg: AdmittedWebInboundCallbackMessage) =>
+    options.resolveDebounceDecision?.(msg);
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
     entries.toSorted((a, b) => {
       const timestampDiff = (a.event.timestamp ?? 0) - (b.event.timestamp ?? 0);
@@ -542,7 +559,14 @@ export async function attachWebInboxToSocket(
     debounceMs: inboundDebounceMs,
     buildKey: (msg) => msg.debounceKey ?? buildInboundDebounceKey(msg),
     shouldDebounce: shouldDebounceInboundMessage,
+    resolveDecision: resolveInboundDebounceDecision,
+    canCombine: (entries, next) =>
+      (!next.quote || !entries.some((entry) => Boolean(entry.quote))) &&
+      (!next.payload.location || !entries.some((entry) => Boolean(entry.payload.location))),
     onFlush: async (entries) => {
+      for (const entry of entries) {
+        claimedInboundDeliveries.add(entry);
+      }
       let finishFlush!: () => void;
       const flushTask = new Promise<void>((resolve) => {
         finishFlush = resolve;
@@ -575,6 +599,16 @@ export async function attachWebInboxToSocket(
             .map((entry) => entry.payload.commandBody ?? entry.payload.body)
             .filter(Boolean)
             .join("\n");
+          const combinedStructuredContext = orderedEntries.flatMap(
+            (entry) => entry.payload.untrustedStructuredContext ?? [],
+          );
+          const combinedMediaItems = orderedEntries.flatMap(
+            (entry) =>
+              entry.payload.mediaItems ?? (entry.payload.media ? [entry.payload.media] : []),
+          );
+          const firstLocation = orderedEntries.find((entry) => entry.payload.location)?.payload
+            .location;
+          const firstQuote = orderedEntries.find((entry) => entry.quote)?.quote;
           const combinedMentions =
             mentioned.size > 0
               ? {
@@ -595,7 +629,13 @@ export async function attachWebInboxToSocket(
               ...last.payload,
               body: combinedBody,
               commandBody: combinedCommandBody,
+              media: combinedMediaItems[0],
+              mediaItems: combinedMediaItems.length > 0 ? combinedMediaItems : undefined,
+              location: firstLocation,
+              untrustedStructuredContext:
+                combinedStructuredContext.length > 0 ? combinedStructuredContext : undefined,
             },
+            quote: firstQuote,
             group: combinedGroup,
             event: {
               ...last.event,
@@ -611,7 +651,12 @@ export async function attachWebInboxToSocket(
       } finally {
         for (const entry of entries) {
           if (entry.debounceKey) {
-            pendingDebounceKeys.delete(entry.debounceKey);
+            const remaining = (pendingDebounceKeys.get(entry.debounceKey) ?? 1) - 1;
+            if (remaining > 0) {
+              pendingDebounceKeys.set(entry.debounceKey, remaining);
+            } else {
+              pendingDebounceKeys.delete(entry.debounceKey);
+            }
           }
         }
         activeInboundFlushes.delete(flushTask);
@@ -1508,10 +1553,8 @@ export async function attachWebInboxToSocket(
     const debounceKey = buildInboundDebounceKey(inboundMessage);
     if (debounceKey) {
       inboundMessage.debounceKey = debounceKey;
-      if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
-        pendingDebounceKeys.add(debounceKey);
-        publishPendingWorkState();
-      }
+      pendingDebounceKeys.set(debounceKey, (pendingDebounceKeys.get(debounceKey) ?? 0) + 1);
+      publishPendingWorkState();
     }
     if (inboundMessage.event.id) {
       const admission = requireWhatsAppInboundAdmission(inboundMessage);
@@ -1532,10 +1575,30 @@ export async function attachWebInboxToSocket(
     }
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
+      pendingInboundEnqueues.add(task);
+      publishPendingWorkState();
       void task.catch((err: unknown) => {
+        if (debounceKey && !claimedInboundDeliveries.has(inboundMessage)) {
+          const remaining = (pendingDebounceKeys.get(debounceKey) ?? 1) - 1;
+          if (remaining > 0) {
+            pendingDebounceKeys.set(debounceKey, remaining);
+          } else {
+            pendingDebounceKeys.delete(debounceKey);
+          }
+        }
         inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
         inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
       });
+      void task.then(
+        () => {
+          pendingInboundEnqueues.delete(task);
+          publishPendingWorkState();
+        },
+        () => {
+          pendingInboundEnqueues.delete(task);
+          publishPendingWorkState();
+        },
+      );
     } catch (err) {
       inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
       inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
@@ -1586,8 +1649,17 @@ export async function attachWebInboxToSocket(
     }
   };
   const drainDebouncedInboundMessages = async () => {
-    while (pendingDebounceKeys.size > 0 || activeInboundFlushes.size > 0) {
-      const debounceKeys = Array.from(pendingDebounceKeys);
+    while (
+      pendingInboundEnqueues.size > 0 ||
+      pendingDebounceKeys.size > 0 ||
+      activeInboundFlushes.size > 0
+    ) {
+      const enqueues = Array.from(pendingInboundEnqueues);
+      if (enqueues.length > 0) {
+        await Promise.allSettled(enqueues);
+      }
+
+      const debounceKeys = Array.from(pendingDebounceKeys.keys());
       if (debounceKeys.length > 0) {
         await Promise.all(debounceKeys.map((key) => debouncer.flushKey(key)));
       }
@@ -1839,6 +1911,7 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     throw err;
   }
   const shouldDebounce = options.shouldDebounce;
+  const resolveDebounceDecision = options.resolveDebounceDecision;
   const normalizeAdmittedWebInboundMessage = (
     msg: WebInboundMessageInput,
   ): AdmittedWebInboundCallbackMessage =>
@@ -1852,6 +1925,9 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     },
     shouldDebounce: shouldDebounce
       ? (msg) => shouldDebounce(normalizeAdmittedWebInboundMessage(msg))
+      : undefined,
+    resolveDebounceDecision: resolveDebounceDecision
+      ? (msg) => resolveDebounceDecision(normalizeAdmittedWebInboundMessage(msg))
       : undefined,
     socketTiming,
     sock,

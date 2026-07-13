@@ -458,6 +458,31 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
+  it("projects every media item preserved by an inbound debounce batch", async () => {
+    const ctx = await buildWhatsAppInboundContext({
+      combinedBody: "<media:image>\n<media:image>",
+      msg: makeMsg({
+        payload: {
+          body: "<media:image>\n<media:image>",
+          media: { path: "/tmp/first.jpg", type: "image/jpeg" },
+          mediaItems: [
+            { path: "/tmp/first.jpg", type: "image/jpeg" },
+            { path: "/tmp/second.png", type: "image/png" },
+          ],
+        },
+      }),
+      route: makeRoute(),
+      sender: { e164: "+1000" },
+    });
+
+    expectRecordFields(requireRecord(ctx, "multi media inbound context"), {
+      MediaPath: "/tmp/first.jpg",
+      MediaPaths: ["/tmp/first.jpg", "/tmp/second.png"],
+      MediaType: "image/jpeg",
+      MediaTypes: ["image/jpeg", "image/png"],
+    });
+  });
+
   it("marks authorized text slash commands as text command turns", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "/status",

@@ -6,8 +6,11 @@ import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { PluginHookInboundDebounceResult } from "openclaw/plugin-sdk/plugin-entry";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -27,7 +30,9 @@ import {
   WHATSAPP_WATCHDOG_TIMEOUT_ERROR,
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
+import { getPrimaryIdentityId } from "../identity.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
+import { requireWhatsAppInboundAdmission } from "../inbound/admission.js";
 import { WHATSAPP_INBOUND_DEDUPE_TTL_MS } from "../inbound/dedupe.js";
 import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import {
@@ -263,18 +268,74 @@ export async function monitorWebChannel(
           accountId: account.accountId,
         }),
       });
-      const shouldDebounce = (msg: WebInboundMessageInput) => {
+      const shouldDebounceByDefault = (msg: WebInboundMessageInput) => {
         const normalized = normalizeWebInboundMessage(msg);
         return shouldDebounceTextInbound({
           text: normalized.payload.commandBody ?? normalized.payload.body,
           cfg,
-          hasMedia: Boolean(normalized.payload.media?.path || normalized.payload.media?.type),
+          hasMedia: Boolean(
+            normalized.payload.media?.path ||
+            normalized.payload.media?.type ||
+            normalized.payload.media?.url ||
+            normalized.payload.mediaItems?.length,
+          ),
           allowDebounce: !(
             normalized.payload.location ||
             normalized.quote?.id ||
             normalized.quote?.body
           ),
         });
+      };
+      const resolveDebounceDecision = (
+        msg: WebInboundMessageInput,
+      ): PluginHookInboundDebounceResult | Promise<PluginHookInboundDebounceResult> => {
+        const normalized = normalizeWebInboundMessage(msg);
+        if (
+          isControlCommandMessage(normalized.payload.commandBody ?? normalized.payload.body, cfg)
+        ) {
+          return { action: "bypass" };
+        }
+        const admission = requireWhatsAppInboundAdmission(normalized);
+        const senderKey =
+          admission.conversation.kind === "group"
+            ? (getPrimaryIdentityId(normalized.platform.sender ?? null) ??
+              normalized.platform.senderJid ??
+              normalized.platform.senderE164 ??
+              normalized.platform.senderName ??
+              admission.sender.id)
+            : admission.conversation.id;
+        const defaultAction = shouldDebounceByDefault(normalized) ? "debounce" : "bypass";
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("inbound_debounce")) {
+          return hookRunner
+            .runInboundDebounce(
+              {
+                debounceKey: `${admission.accountId}:${admission.conversation.id}:${senderKey}`,
+                defaultAction,
+                defaultDebounceMs: inboundDebounceMs,
+                conversationKind: admission.conversation.kind,
+                message: {
+                  hasMedia: Boolean(
+                    normalized.payload.media?.path ||
+                    normalized.payload.media?.type ||
+                    normalized.payload.media?.url ||
+                    normalized.payload.mediaItems?.length,
+                  ),
+                  hasLocation: Boolean(normalized.payload.location),
+                  hasQuote: Boolean(normalized.quote?.id || normalized.quote?.body),
+                },
+              },
+              {
+                channelId: "whatsapp",
+                accountId: admission.accountId,
+                conversationId: admission.conversation.id,
+                messageId: normalized.event.id,
+                senderId: admission.sender.id,
+              },
+            )
+            .then((pluginDecision) => pluginDecision ?? { action: defaultAction });
+        }
+        return { action: defaultAction };
       };
 
       let connection;
@@ -324,7 +385,8 @@ export async function monitorWebChannel(
                     maxAgeMs: reconnectCatchUpWindowMs,
                   }
                 : undefined,
-              shouldDebounce,
+              resolveDebounceDecision,
+              shouldDebounce: shouldDebounceByDefault,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
               disconnectRetryPolicy: reconnectPolicy,

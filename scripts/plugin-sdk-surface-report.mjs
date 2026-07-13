@@ -218,7 +218,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
-      10612,
+      // +7: inbound debounce event/result and debouncer decision exports.
+      10619,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

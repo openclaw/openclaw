@@ -962,6 +962,73 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it("waits for a plugin debounce decision before draining on close", async () => {
+    let releaseDecision!: () => void;
+    const decisionPending = new Promise<void>((resolve) => {
+      releaseDecision = resolve;
+    });
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 0,
+      resolveDebounceDecision: async () => {
+        await decisionPending;
+        return { action: "debounce", debounceMs: 50 };
+      },
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("plugin-debounce-close"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "held",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+
+    const closePromise = listener.close();
+    await Promise.resolve();
+    expect(onMessage).not.toHaveBeenCalled();
+    releaseDecision();
+    await closePromise;
+    await waitForMessageCalls(onMessage, 1);
+    expect(inboundMessage(onMessage).payload.body).toBe("held");
+  });
+
+  it("preserves all media when a plugin-selected rich batch is flushed", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 50,
+      resolveDebounceDecision: async () => ({ action: "debounce" }),
+    });
+    for (const id of ["rich-image-a", "rich-image-b"]) {
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              id: nextMessageId(id),
+              fromMe: false,
+              remoteJid: "999@s.whatsapp.net",
+            },
+            message: { imageMessage: { mimetype: "image/jpeg" } },
+            messageTimestamp: 1_700_000_000,
+            pushName: "Tester",
+          },
+        ],
+      });
+    }
+
+    await listener.close();
+    await waitForMessageCalls(onMessage, 1);
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.payload.body).toBe("<media:image>\n<media:image>");
+    expect(inbound.payload.mediaItems).toEqual([
+      expect.objectContaining({ path: expect.any(String), type: "image/jpeg" }),
+      expect.objectContaining({ path: expect.any(String), type: "image/jpeg" }),
+    ]);
+  });
+
   it("lets a drained debounced inbound reply before closing the socket", async () => {
     vi.useFakeTimers();
     try {

@@ -24,6 +24,8 @@ import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundDebounceEvent,
+  PluginHookInboundDebounceResult,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -66,6 +68,8 @@ export type {
 export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundDebounceEvent,
+  PluginHookInboundDebounceResult,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -94,6 +98,7 @@ export type PluginHookName =
   | "after_compaction"
   | "before_reset"
   | "inbound_claim"
+  | "inbound_debounce"
   | "channel_pairing_requested"
   | "message_received"
   | "message_sending"
@@ -143,6 +148,7 @@ export const PLUGIN_HOOK_NAMES = [
   "after_compaction",
   "before_reset",
   "inbound_claim",
+  "inbound_debounce",
   "channel_pairing_requested",
   "message_received",
   "message_sending",
@@ -1179,6 +1185,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,
   ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
+  inbound_debounce: (
+    event: PluginHookInboundDebounceEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<PluginHookInboundDebounceResult | void> | PluginHookInboundDebounceResult | void;
   channel_pairing_requested: (
     event: PluginHookChannelPairingRequestedEvent,
     ctx: PluginHookChannelPairingContext,

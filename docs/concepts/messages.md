@@ -49,7 +49,7 @@ Rapid consecutive text messages from the same sender can be batched into one age
 }
 ```
 
-- Debounce applies to text-only messages; media/attachments flush immediately.
+- Debounce applies to text-only messages; media/attachments flush immediately unless an installed plugin explicitly opts them into the channel's `inbound_debounce` policy.
 - Control commands (stop/abort/status, etc.) bypass debouncing so they dispatch immediately.
 - Disabled by default: `messages.inbound.debounceMs` has no built-in default, so debouncing only activates once you set it (globally or per channel).
 - iMessage's `coalesceSameSenderDms` opt-in is the one exception: it holds all same-sender DM text (commands included) long enough for Apple's command+URL split-send to arrive as one turn. Group chats always dispatch instantly regardless of this setting.
