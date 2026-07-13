@@ -42,6 +42,7 @@ import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, isTimeoutError, resolveFailoverStatus } from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+import { LIVE_SESSION_LIMITS } from "./claude-live-session-limits.js";
 import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import { createCliOutputFailoverError } from "./output-error.js";
@@ -127,8 +128,6 @@ type ClaudeLiveToolTerminalOutcome =
   | { outcome: "blocked"; deniedReason: string; reason?: string }
   | { outcome: "cancelled" | "failed" | "timed_out" | "unknown" };
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
-const CLAUDE_LIVE_MAX_SESSIONS = 16;
-const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, ClaudeLiveSessionCreate>();
@@ -1181,7 +1180,7 @@ async function createClaudeLiveSession(params: {
       onStderr: (chunk) => {
         if (session) {
           session.stderr += chunk;
-          if (session.stderr.length > CLAUDE_LIVE_MAX_STDERR_CHARS) {
+          if (session.stderr.length > LIVE_SESSION_LIMITS.maxStderrChars) {
             closeLiveSession(
               session,
               "abort",
@@ -1320,7 +1319,7 @@ function ensureLiveSessionCapacity(key: string, context: PreparedCliRunContext):
   if (
     liveSessions.has(key) ||
     liveSessionCreates.has(key) ||
-    liveSessions.size + liveSessionCreates.size < CLAUDE_LIVE_MAX_SESSIONS
+    liveSessions.size + liveSessionCreates.size < LIVE_SESSION_LIMITS.maxSessions
   ) {
     return;
   }

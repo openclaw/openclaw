@@ -106,6 +106,7 @@ import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
+import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, resolveNodeClaudePlacement } from "./prepare-claude.js";
 import {
   buildCliSessionHistoryPrompt,
   hasCliSessionTranscript,
@@ -115,6 +116,11 @@ import {
 } from "./session-history.js";
 import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
+function resolveClaudeCliContextModelId(modelId: string): string {
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
+}
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the Crestodian orchestrator. */
   crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
@@ -411,26 +417,6 @@ async function resolveCliSkillsPrompt(params: {
   });
 }
 
-const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
-  opus: "claude-opus-4-8",
-  "opus-4.8": "claude-opus-4-8",
-  "opus-4-8": "claude-opus-4-8",
-  "opus-4.7": "claude-opus-4-7",
-  "opus-4-7": "claude-opus-4-7",
-  "opus-4.6": "claude-opus-4-6",
-  "opus-4-6": "claude-opus-4-6",
-  sonnet: "claude-sonnet-5",
-  "sonnet-5": "claude-sonnet-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "sonnet-4-6": "claude-sonnet-4-6",
-};
-
-function resolveClaudeCliContextModelId(modelId: string): string {
-  const trimmed = modelId.trim();
-  const lower = trimmed.toLowerCase();
-  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
-}
-
 /** Overrides preparation dependencies for CLI runner tests. */
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
@@ -498,17 +484,11 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
-  if (
-    backendResolved.id === "claude-cli" &&
-    params.sessionEntry?.execHost === "node" &&
-    !params.sessionEntry.execNode?.trim()
-  ) {
-    throw new Error("node-placed Claude CLI session is missing execNode");
-  }
-  const nodeClaudePlacement =
-    backendResolved.id === "claude-cli" &&
-    params.sessionEntry?.execHost === "node" &&
-    Boolean(params.sessionEntry.execNode?.trim());
+  const nodeClaudePlacement = resolveNodeClaudePlacement({
+    backendId: backendResolved.id,
+    execHost: params.sessionEntry?.execHost,
+    execNode: params.sessionEntry?.execNode,
+  });
   if (
     params.cliToolAvailability !== undefined &&
     (backendResolved.nativeToolMode !== "selectable" || !backendResolved.resolveExecutionArgs)

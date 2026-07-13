@@ -309,8 +309,6 @@ import {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   NodePresenceAlivePayloadSchema,
-  NodePresenceAliveReasonSchema,
-  NodePresenceActivityPayloadSchema,
   NodeInvokeParamsSchema,
   NodeInvokeProgressParamsSchema,
   NodeInvokeResultParamsSchema,
@@ -356,6 +354,7 @@ import {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
 } from "./plugins.js";
+import { NodePresenceProtocolSchemas } from "./protocol-schemas-node-presence.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
   SecretsReloadParamsSchema,
@@ -590,8 +589,7 @@ export const ProtocolSchemas = {
   NodeEventParams: NodeEventParamsSchema,
   NodeEventResult: NodeEventResultSchema,
   NodePresenceAlivePayload: NodePresenceAlivePayloadSchema,
-  NodePresenceAliveReason: NodePresenceAliveReasonSchema,
-  NodePresenceActivityPayload: NodePresenceActivityPayloadSchema,
+  ...NodePresenceProtocolSchemas,
   NodePendingDrainParams: NodePendingDrainParamsSchema,
   NodePendingDrainResult: NodePendingDrainResultSchema,
   NodePendingEnqueueParams: NodePendingEnqueueParamsSchema,

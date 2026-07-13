@@ -3,10 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeHostClient } from "./client.js";
-import {
-  decodeClaudeCliNodeRunParams,
-  runClaudeCliNodeCommand,
-} from "./invoke-agent-cli-claude.js";
+import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
+import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
 
 const tempDirs: string[] = [];

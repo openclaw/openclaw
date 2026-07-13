@@ -37,11 +37,13 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
 type RuntimeSessionStoreReadParams = {
   agentId?: string;
+
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
@@ -85,16 +87,6 @@ type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
 );
-
-function resolveRuntimeThinkingCatalog(
-  params: Parameters<PluginRuntime["agent"]["resolveThinkingPolicy"]>[0],
-) {
-  if (params.catalog) {
-    return params.catalog;
-  }
-  const configuredCatalog = buildConfiguredModelCatalog({ cfg: getRuntimeConfig() });
-  return configuredCatalog.length > 0 ? configuredCatalog : undefined;
-}
 
 function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
   // Keep plugin runtime parameters aligned with the public SDK wrapper while
@@ -484,7 +476,9 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
       const profile = resolveThinkingProfile({
         ...params,
         agentRuntime: effectiveRuntime,
-        catalog: resolveRuntimeThinkingCatalog(params),
+        catalog: resolveRuntimeThinkingCatalog(params, () =>
+          buildConfiguredModelCatalog({ cfg: getRuntimeConfig() }),
+        ),
       });
       const policy: Omit<
         ReturnType<PluginRuntime["agent"]["resolveThinkingPolicy"]>,

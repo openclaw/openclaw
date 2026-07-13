@@ -15,9 +15,11 @@ import {
 } from "../infra/node-commands.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
+import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
 import type { NodeSession } from "./node-registry.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
+
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 
 const SCREEN_COMMANDS = ["screen.snapshot"];
@@ -27,13 +29,8 @@ const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 // macOS but invocable only with explicit allowCommands opt-in (arming).
 const COMPUTER_DANGEROUS_COMMANDS = ["computer.act"];
 
-const LOCATION_COMMANDS = ["location.get"];
-const NOTIFICATION_COMMANDS = ["notifications.list"];
-const ANDROID_NOTIFICATION_COMMANDS = [...NOTIFICATION_COMMANDS, "notifications.actions"];
-
-const DEVICE_COMMANDS = ["device.info", "device.status"];
 const ANDROID_DEVICE_COMMANDS = [
-  ...DEVICE_COMMANDS,
+  ...MOBILE_NODE_COMMANDS.device,
   "device.permissions",
   "device.health",
   "device.apps",
@@ -87,7 +84,7 @@ const DESKTOP_HOST_COMMANDS = new Set<string>([
 ]);
 const UNKNOWN_PLATFORM_COMMANDS = [
   ...CAMERA_COMMANDS,
-  ...LOCATION_COMMANDS,
+  ...MOBILE_NODE_COMMANDS.location,
   NODE_SYSTEM_NOTIFY_COMMAND,
 ];
 
@@ -107,8 +104,8 @@ export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
 const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ios: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.device,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,
@@ -116,11 +113,11 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...IOS_SYSTEM_COMMANDS,
   ],
-  watchos: [...DEVICE_COMMANDS, ...IOS_SYSTEM_COMMANDS],
+  watchos: [...MOBILE_NODE_COMMANDS.device, ...IOS_SYSTEM_COMMANDS],
   android: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...ANDROID_NOTIFICATION_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.androidNotification,
     NODE_SYSTEM_NOTIFY_COMMAND,
     ...ANDROID_DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
@@ -132,8 +129,8 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ],
   macos: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.device,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,
@@ -149,8 +146,8 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   linux: [...SYSTEM_COMMANDS],
   windows: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.device,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
   ],

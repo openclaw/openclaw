@@ -1,5 +1,6 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
+import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   meta: "Metadata",
@@ -418,11 +419,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.nodes.pairing": "Gateway Node Pairing",
   "gateway.nodes.pairing.autoApproveCidrs": "Gateway Node Pairing Auto-Approve CIDRs",
   "gateway.nodes.pairing.sshVerify": "Gateway Node Pairing SSH Verification",
-  "gateway.nodes.pluginTools": "Gateway Node Plugin Tools",
-  "gateway.nodes.pluginTools.enabled": "Gateway Node Plugin Tools Enabled",
-  "gateway.nodes.skills": "Gateway Node Skills",
-  "gateway.nodes.skills.enabled": "Gateway Node Skills Enabled",
-  "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
+  ...NODE_CAPABILITY_FIELD_LABELS,
   "gateway.nodes.denyCommands": "Gateway Node Denylist",
   nodeHost: "Node Host",
   "nodeHost.agentRuns": "Node Agent Runs",

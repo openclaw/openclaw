@@ -16,11 +16,8 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
-import {
-  coerceNodeInvokeCancelPayload,
-  coerceNodeInvokePayload,
-  buildNodeInvokeResultParams,
-} from "./invoke.js";
+import { coerceNodeInvokeCancelPayload, coerceNodeInvokePayload } from "./invoke-payload.js";
+import { buildNodeInvokeResultParams } from "./invoke.js";
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
 
 export { buildNodeInvokeResultParams };

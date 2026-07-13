@@ -14,12 +14,18 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
 export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
 export const CLAUDE_CLI_NODE_RUN_COMMAND = "agent.cli.claude.run.v1";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
+import {
+  collectTranscriptText,
+  parseTranscriptLine,
+  type ClaudeTranscriptItem,
+} from "./session-catalog-transcript.js";
+
+export type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
 const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
 const DEFAULT_PAGE_LIMIT = 50;
@@ -30,17 +36,18 @@ const MAX_HOSTS = 100;
 const MAX_STRING_LENGTH = 4096;
 const MAX_SEARCH_LENGTH = 500;
 const MAX_CURSOR_LENGTH = 256;
+
 const MAX_CATALOG_DISCOVERY_FILES = 10_000;
 const CLAUDE_METADATA_PREFIX_BYTES = 1024 * 1024;
 const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
 const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
 const TRANSCRIPT_READ_CHUNK_BYTES = 128 * 1024;
 const MAX_TRANSCRIPT_SCAN_BYTES = 64 * 1024 * 1024;
-const MAX_TRANSCRIPT_ITEM_BYTES = 4 * 1024 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
-const MAX_TRANSCRIPT_TEXT_LENGTH = 1_000_000;
+
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
 const CLAUDE_ADOPTED_SESSION_KEY_PREFIX = "plugin:anthropic:catalog-adopt:claude:";
+
 const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 
@@ -85,16 +92,6 @@ export type ClaudeSessionCatalogHost = ClaudeSessionCatalogPage & {
 
 export type ClaudeSessionCatalogResult = {
   hosts: ClaudeSessionCatalogHost[];
-};
-
-export type ClaudeTranscriptItem = {
-  type: string;
-  text?: string;
-  content?: unknown;
-  timestamp?: string;
-  model?: string;
-  uuid?: string;
-  truncated?: true;
 };
 
 export type ClaudeSessionTranscriptPage = {
@@ -607,92 +604,17 @@ export async function listLocalClaudeSessionPage(
   };
 }
 
-function transcriptItemType(role: string, content: unknown): string {
-  if (!Array.isArray(content)) {
-    return role === "user" ? "userMessage" : "agentMessage";
+function parseNodeParams(paramsJSON?: string | null): unknown {
+  if (!paramsJSON) {
+    return undefined;
   }
-  const types = content.flatMap((block) =>
-    isRecord(block) && typeof block.type === "string" ? [block.type] : [],
-  );
-  if (types.length > 0 && types.every((type) => type === "tool_result")) {
-    return "toolResult";
-  }
-  if (types.length > 0 && types.every((type) => type === "tool_use")) {
-    return "toolCall";
-  }
-  if (types.length > 0 && types.every((type) => type === "thinking")) {
-    return "reasoning";
-  }
-  return role === "user" ? "userMessage" : "agentMessage";
-}
-
-function collectTranscriptText(value: unknown, fragments: string[]): void {
-  if (typeof value === "string") {
-    if (value.trim()) {
-      fragments.push(value);
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectTranscriptText(item, fragments);
-    }
-    return;
-  }
-  if (!isRecord(value)) {
-    return;
-  }
-  for (const key of ["text", "thinking", "content", "input"]) {
-    if (key in value) {
-      collectTranscriptText(value[key], fragments);
-    }
-  }
-}
-
-function parseTranscriptLine(line: Buffer): ClaudeTranscriptItem | undefined {
-  let raw: unknown;
   try {
-    raw = JSON.parse(line.toString("utf8")) as unknown;
-  } catch {
-    return undefined;
+    return JSON.parse(paramsJSON) as unknown;
+  } catch (error) {
+    throw new ClaudeCatalogParamsError("Claude session parameters must be valid JSON", {
+      cause: error,
+    });
   }
-  if (!isRecord(raw) || raw.isSidechain === true || !isRecord(raw.message)) {
-    return undefined;
-  }
-  const role = raw.message.role;
-  if ((role !== "user" && role !== "assistant") || raw.type !== role) {
-    return undefined;
-  }
-  const content = raw.message.content;
-  if (typeof content !== "string" && !Array.isArray(content)) {
-    return undefined;
-  }
-  const fragments: string[] = [];
-  collectTranscriptText(content, fragments);
-  const text = [...new Set(fragments)].join("\n\n");
-  const item: ClaudeTranscriptItem = {
-    type: transcriptItemType(role, content),
-    ...(text ? { text } : {}),
-    content,
-    ...(optionalString(raw.timestamp, 128)
-      ? { timestamp: optionalString(raw.timestamp, 128) }
-      : {}),
-    ...(optionalString(raw.message.model, 256)
-      ? { model: optionalString(raw.message.model, 256) }
-      : {}),
-    ...(optionalString(raw.uuid, 256) ? { uuid: optionalString(raw.uuid, 256) } : {}),
-  };
-  if (Buffer.byteLength(JSON.stringify(item), "utf8") <= MAX_TRANSCRIPT_ITEM_BYTES) {
-    return item;
-  }
-  return {
-    type: item.type,
-    text: `${truncateUtf16Safe(text, MAX_TRANSCRIPT_TEXT_LENGTH)}\n\n[oversized Claude item truncated]`,
-    ...(item.timestamp ? { timestamp: item.timestamp } : {}),
-    ...(item.model ? { model: item.model } : {}),
-    ...(item.uuid ? { uuid: item.uuid } : {}),
-    truncated: true,
-  };
 }
 
 function readTranscriptParams(
@@ -767,7 +689,7 @@ export async function readLocalClaudeTranscriptPage(
         const segment = chunk.subarray(index + 1, right);
         if (segment.length > 0 || fragments.length > 0) {
           const line = Buffer.concat([segment, ...fragments.toReversed()]);
-          const item = parseTranscriptLine(line);
+          const item = parseTranscriptLine(line, optionalString);
           fragments = [];
           if (item) {
             found.push({ item, start: position + index + 1 });
@@ -785,7 +707,7 @@ export async function readLocalClaudeTranscriptPage(
       if (position === 0) {
         if (prefix.length > 0 || fragments.length > 0) {
           const line = Buffer.concat([prefix, ...fragments.toReversed()]);
-          const item = parseTranscriptLine(line);
+          const item = parseTranscriptLine(line, optionalString);
           if (item) {
             found.push({ item, start: 0 });
           }
