@@ -1,18 +1,14 @@
 /** Runs doctor-owned SQLite file compaction for migrated session stores. */
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
+import {
+  assertOpenClawAgentDatabaseForMaintenance,
+  ensureOpenClawAgentDatabasePermissions,
+  isOpenClawAgentDatabaseOpen,
+} from "../state/openclaw-agent-db.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import type { DoctorSessionSqliteCompactReport } from "./doctor-session-sqlite-types.js";
-
-type SqliteFileCompactSnapshot = {
-  dbSizeBytes: number;
-  freelistPages: number;
-  pageSizeBytes: number;
-  walSizeBytes: number;
-};
+import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 
 /** Reclaim free pages from one agent session SQLite database. */
 export function compactDoctorSessionSqliteTarget(
@@ -20,7 +16,8 @@ export function compactDoctorSessionSqliteTarget(
 ): DoctorSessionSqliteCompactReport {
   const sqlitePath = resolveTargetSqlitePath(target);
   const beforeFileSizes = readSqliteFileSizes(sqlitePath);
-  if (!fs.existsSync(sqlitePath)) {
+  const stat = readSessionDatabaseStat(sqlitePath);
+  if (!stat) {
     return {
       dbSizeAfterBytes: 0,
       dbSizeBeforeBytes: 0,
@@ -33,68 +30,50 @@ export function compactDoctorSessionSqliteTarget(
       walSizeBeforeBytes: beforeFileSizes.walSizeBytes,
     };
   }
-
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(sqlitePath);
-  try {
-    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    checkpointTruncate(database);
-    const before = readCompactSnapshot(database, sqlitePath);
-    // Doctor's offline VACUUM is the one sanctioned window to retrofit
-    // incremental auto-vacuum onto databases created before the pragma
-    // existed; runtime maintenance then releases pages in bounded passes.
-    database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
-    database.exec("VACUUM;");
-    checkpointTruncate(database);
-    const after = readCompactSnapshot(database, sqlitePath);
-    return {
-      dbSizeAfterBytes: after.dbSizeBytes,
-      dbSizeBeforeBytes: before.dbSizeBytes,
-      freelistAfterPages: after.freelistPages,
-      freelistBeforePages: before.freelistPages,
-      pageSizeBytes: before.pageSizeBytes || after.pageSizeBytes,
-      reclaimedBytes: Math.max(0, before.dbSizeBytes - after.dbSizeBytes),
-      skipped: false,
-      walSizeAfterBytes: after.walSizeBytes,
-      walSizeBeforeBytes: before.walSizeBytes,
-    };
-  } finally {
-    database.close();
+  if (!stat.isFile()) {
+    throw new Error(`OpenClaw agent database is not a regular file: ${sqlitePath}`);
   }
-}
+  if (isOpenClawAgentDatabaseOpen(sqlitePath)) {
+    throw new Error(
+      `OpenClaw agent database ${sqlitePath} is already open in this process. Stop OpenClaw and retry.`,
+    );
+  }
 
-function checkpointTruncate(database: DatabaseSync): void {
-  database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-}
-
-function readCompactSnapshot(
-  database: DatabaseSync,
-  sqlitePath: string,
-): SqliteFileCompactSnapshot {
-  const sizes = readSqliteFileSizes(sqlitePath);
+  const compact = compactDoctorSqliteFile({
+    afterMutation: () =>
+      ensureOpenClawAgentDatabasePermissions(sqlitePath, {
+        agentId: target.agentId,
+        path: sqlitePath,
+      }),
+    sqlitePath,
+    validateBeforeMutation: (database) =>
+      assertOpenClawAgentDatabaseForMaintenance(database, {
+        agentId: target.agentId,
+        pathname: sqlitePath,
+      }),
+  });
   return {
-    dbSizeBytes: sizes.dbSizeBytes,
-    freelistPages: readPragmaNumber(database, "freelist_count"),
-    pageSizeBytes: readPragmaNumber(database, "page_size"),
-    walSizeBytes: sizes.walSizeBytes,
+    dbSizeAfterBytes: compact.after.dbSizeBytes,
+    dbSizeBeforeBytes: compact.before.dbSizeBytes,
+    freelistAfterPages: compact.after.freelistPages,
+    freelistBeforePages: compact.before.freelistPages,
+    pageSizeBytes: compact.before.pageSizeBytes || compact.after.pageSizeBytes,
+    reclaimedBytes: compact.reclaimedBytes,
+    skipped: false,
+    walSizeAfterBytes: compact.after.walSizeBytes,
+    walSizeBeforeBytes: compact.before.walSizeBytes,
   };
 }
 
-function readPragmaNumber(
-  database: DatabaseSync,
-  pragmaName: "freelist_count" | "page_size",
-): number {
-  const row = database.prepare(`PRAGMA ${pragmaName};`).get() as
-    | Record<string, unknown>
-    | undefined;
-  const value = row?.[pragmaName] ?? (row ? Object.values(row)[0] : undefined);
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
+function readSessionDatabaseStat(sqlitePath: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(sqlitePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
   }
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return 0;
 }
 
 function readSqliteFileSizes(sqlitePath: string): { dbSizeBytes: number; walSizeBytes: number } {

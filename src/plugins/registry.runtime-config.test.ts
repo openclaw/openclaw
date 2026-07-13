@@ -1,6 +1,9 @@
 // Verifies plugin registry behavior with runtime config inputs.
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveUserPath } from "../utils.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -21,6 +24,27 @@ function createTestRegistry(runtime: PluginRuntime) {
 }
 
 describe("plugin registry runtime config scope", () => {
+  it("resolves plugin API paths against the plugin root", () => {
+    const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
+    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const record = createPluginRecord({
+      id: "path-plugin",
+      name: "Path Plugin",
+      source: path.join(pluginRoot, "index.js"),
+      rootDir: pluginRoot,
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    const absolute = path.resolve(pluginRoot, "..", "outside.txt");
+
+    expect(api.resolvePath("data/cache.json")).toBe(path.join(pluginRoot, "data", "cache.json"));
+    expect(api.resolvePath("./data/cache.json")).toBe(path.join(pluginRoot, "data", "cache.json"));
+    expect(api.resolvePath(absolute)).toBe(absolute);
+    expect(api.resolvePath("~/openclaw/plugin.txt")).toBe(resolveUserPath("~/openclaw/plugin.txt"));
+  });
+
   it("adds plugin context to lazy runtime resolution failures", () => {
     const runtime = new Proxy({} as PluginRuntime, {
       get() {
@@ -304,6 +328,71 @@ describe("plugin registry runtime config scope", () => {
       }),
     ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
     expect(createSessionEntry).toHaveBeenCalledTimes(2);
+  });
+
+  it("limits CLI session creation to the owning plugin namespace", async () => {
+    const runtime = createPluginRuntime();
+    const createSessionEntry = vi.fn(async (params) => ({
+      key: params.key,
+      agentId: "main",
+      sessionId: "session-1",
+      entry: { sessionId: "session-1", updatedAt: 1 },
+    }));
+    runtime.agent.session.createSessionEntry = createSessionEntry;
+    const pluginRegistry = createTestRegistry(runtime);
+    const record = createPluginRecord({
+      id: "anthropic",
+      source: "/plugins/anthropic/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
+    api.registerAgentHarness({
+      id: "anthropic-harness",
+      label: "Anthropic",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+    });
+    const initialEntry = {
+      cliBackendId: "claude-cli",
+      model: "claude-opus-4-8",
+      modelSelectionLocked: true as const,
+      cliSessionBinding: { sessionId: "source", forkNextResume: true as const },
+    };
+
+    await expect(
+      api.runtime.agent.session.createSessionEntry({
+        cfg: {},
+        key: "plugin:anthropic:catalog-adopt:claude:source",
+        initialEntry,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
+    expect(createSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialEntry: expect.objectContaining({ pluginOwnerId: "anthropic" }),
+      }),
+    );
+    await expect(
+      api.runtime.agent.session.createSessionEntry({
+        cfg: {},
+        key: "agent:main:ordinary",
+        initialEntry,
+      }),
+    ).rejects.toThrow('must start with "plugin:anthropic:"');
+    await expect(
+      api.runtime.agent.session.createSessionEntry({
+        cfg: {},
+        key: "agent:main:ordinary",
+        initialEntry: {
+          ...initialEntry,
+          agentHarnessId: "anthropic-harness",
+        } as never,
+      }),
+    ).rejects.toThrow("requires exactly one runtime owner");
   });
 
   it("limits locked harness session mutation and execution to the harness owner", async () => {

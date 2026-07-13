@@ -88,7 +88,7 @@ var localeRules = map[string]string{
 	"vi": `Locale rules:
 - Write standard Vietnamese in a neutral technical tone. Use “bạn” consistently when direct address is necessary and avoid unnecessary English outside protected terms.`,
 	"nl": `Locale rules:
-- Write standard Dutch in a concise, neutral technical tone. Keep forms of address consistent and avoid unnecessary English outside protected terms.`,
+- Write standard Dutch in a concise, neutral technical tone. Use informal “je/jouw” consistently for direct address; do not switch to formal “u/uw” except inside protected literal quotations. Avoid unnecessary English outside protected terms.`,
 	"fa": `Locale rules:
 - Write standard Iranian Persian in a neutral technical tone. Use Persian ی and ک rather than Arabic ي and ك, and use standard Persian half-spaces where required.
 - Keep prose naturally right-to-left without reordering or altering left-to-right code, commands, URLs, placeholders, or product names.`,
@@ -129,9 +129,11 @@ Rules:
 - Preserve YAML structure inside <frontmatter>; translate only values.
 - Preserve every [[[FM_*]]] marker exactly and translate only text between its START/END pair.
 - Preserve Markdown structure exactly: headings, list nesting, tables, links, emphasis, and line-level content order.
+- Preserve Markdown list nodes exactly: ordered versus unordered kind, nesting, item count, and ordered-list starting number. Do not let translated prose accidentally become a list item; for example, if a wrapped date would begin a line with “1.”, rephrase it or keep it on the preceding line when the source is not a list.
 - Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly. Never change resource or behavior attributes such as “href”, “src”, “id”, “icon”, “path”, “type”, or “default”.
 - Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”, unless a higher-precedence literal UI-label rule protects that value. Do not translate code-like attribute values.
-- Do not translate or modify code spans, code blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
+- Do not translate or modify code spans, executable code or config blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
+- Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule: preserve angle-bracket placeholders, square-bracket config/protocol markers, and double-bracket directive tokens exactly, but translate ordinary human prose, including prose surrounding protected directive tokens.
 - Do not alter URLs, anchors, path fragments, or identifier spelling.
 - Do not remove, reorder, merge, summarize, or duplicate content.
 - Use fluent, idiomatic technical language in the target language with a neutral documentation tone; avoid slang and jokes.
@@ -141,7 +143,7 @@ Rules:
 
 - Glossary terms are mandatory under the label precedence rules above. When a source term matches a glossary entry, use its target exactly, including headings, link labels, and short UI-style labels.
 - If a glossary target is identical to the source text, preserve that term exactly as written.
-- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal. When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Inferrs, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice. Translate the same words normally when the source clearly uses them as ordinary prose instead of a name.
 - Never output an empty response; if unsure, return the source text unchanged.
 
 %s

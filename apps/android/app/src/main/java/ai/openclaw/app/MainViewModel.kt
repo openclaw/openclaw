@@ -21,6 +21,7 @@ import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.voice.VoiceConversationEntry
 import android.Manifest
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
@@ -30,6 +31,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -47,6 +49,67 @@ data class ChatDraft(
   val text: String,
   val placement: ChatDraftPlacement,
 )
+
+data class ChatShareDraft(
+  val id: Long,
+  val text: String?,
+  val imageUris: List<Uri>,
+  val droppedImageCount: Int,
+)
+
+internal const val MAX_PENDING_CHAT_SHARES = 16
+
+/** Bounded process-local queue whose stable head survives Activity recreation with the ViewModel. */
+internal class ChatShareDraftQueue(
+  private val capacity: Int = MAX_PENDING_CHAT_SHARES,
+) {
+  private val lock = Any()
+  private val drafts = ArrayDeque<ChatShareDraft>()
+  private val headLease = Mutex()
+  private val _head = MutableStateFlow<ChatShareDraft?>(null)
+  val head: StateFlow<ChatShareDraft?> = _head.asStateFlow()
+
+  init {
+    require(capacity > 0)
+  }
+
+  fun enqueue(draft: ChatShareDraft): Boolean =
+    synchronized(lock) {
+      if (drafts.size >= capacity) return@synchronized false
+      drafts.addLast(draft)
+      _head.value = drafts.first()
+      true
+    }
+
+  /** Only the active loader may advance the queue; stale effects cannot acknowledge a newer head. */
+  fun acknowledgeHead(id: Long): Boolean =
+    synchronized(lock) {
+      if (drafts.firstOrNull()?.id != id) return@synchronized false
+      drafts.removeFirst()
+      _head.value = drafts.firstOrNull()
+      true
+    }
+
+  /** Serializes loaders across overlapping Activity instances while rechecking the stable head. */
+  suspend fun withHeadLease(
+    id: Long,
+    block: suspend () -> Unit,
+  ): Boolean =
+    headLease.withLock {
+      if (synchronized(lock) { drafts.firstOrNull()?.id } != id) return@withLock false
+      block()
+      true
+    }
+
+  fun clear() {
+    synchronized(lock) {
+      drafts.clear()
+      _head.value = null
+    }
+  }
+
+  internal fun size(): Int = synchronized(lock) { drafts.size }
+}
 
 internal fun shouldStartRuntimeOnForeground(
   foreground: Boolean,
@@ -87,6 +150,10 @@ class MainViewModel(
   private val gatewayConfigOperationSeq = AtomicLong()
   private val gatewayConfigOperationMutex = Mutex()
 
+  // Multiple MainActivity instances can overlap across sender tasks; the process owns one queue.
+  private val chatShareDraftSeq = nodeApp.chatShareDraftSeq
+  private val chatShareDraftQueue = nodeApp.chatShareDraftQueue
+
   // One bounded heap-only slot follows the ViewModel across Activity recreation.
   // Detail disposal clears it; process death drops it with the ViewModel.
   internal val cronEditorDraftMemory = CronEditorDraftMemory()
@@ -104,6 +171,7 @@ class MainViewModel(
   val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
   private val _chatDraft = MutableStateFlow<ChatDraft?>(null)
   val chatDraft: StateFlow<ChatDraft?> = _chatDraft
+  val chatShareDraft: StateFlow<ChatShareDraft?> = chatShareDraftQueue.head
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
   private val _assistantAutoSendInFlight = MutableStateFlow(false)
@@ -210,6 +278,9 @@ class MainViewModel(
   val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
   val gatewayUpdateAvailable: StateFlow<GatewayUpdateAvailableSummary?> = runtimeState(initial = null) { it.gatewayUpdateAvailable }
   val modelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.modelCatalog }
+  val providerModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.providerModelCatalog }
+  val providerModelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.providerModelCatalogRefreshing }
+  val providerModelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.providerModelCatalogErrorText }
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
   val modelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.modelCatalogRefreshing }
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
@@ -234,6 +305,11 @@ class MainViewModel(
   val skillsSummary: StateFlow<GatewaySkillsSummary> = runtimeState(initial = GatewaySkillsSummary(skills = emptyList())) { it.skillsSummary }
   val skillsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillsRefreshing }
   val skillsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillsErrorText }
+  val clawHubSkillMethodsAvailable: StateFlow<Boolean> =
+    runtimeState(initial = false) { it.clawHubSkillMethodsAvailable }
+  val skillMutationKeys: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.skillMutationKeys }
+  val clawHubSkillSearchState: StateFlow<GatewayClawHubSkillSearchState> =
+    runtimeState(initial = GatewayClawHubSkillSearchState()) { it.clawHubSkillSearchState }
   val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> =
     runtimeState(initial = GatewaySkillWorkshopSummary(proposals = emptyList())) { it.skillWorkshopSummary }
   val skillWorkshopRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillWorkshopRefreshing }
@@ -324,6 +400,7 @@ class MainViewModel(
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
   val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
   val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
+  val execApprovalsNotice: StateFlow<GatewayExecApprovalNotice?> = runtimeState(initial = null) { it.execApprovalsNotice }
 
   val canvas: CanvasController
     get() = ensureRuntime().canvas
@@ -472,16 +549,6 @@ class MainViewModel(
     }
   }
 
-  /** Per-gateway proxy credential headers; values are secrets and must never be logged. */
-  fun gatewayCustomHeaders(stableId: String): Map<String, String> = prefs.loadGatewayCustomHeaders(stableId)
-
-  fun setGatewayCustomHeaders(
-    stableId: String,
-    headers: Map<String, String>,
-  ) {
-    prefs.saveGatewayCustomHeaders(stableId, headers)
-  }
-
   /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
   fun setOnboardingCompleted(value: Boolean) {
     if (value) {
@@ -563,6 +630,7 @@ class MainViewModel(
   /** Routes assistant intents into chat, either as a draft or queued auto-send prompt. */
   fun handleAssistantLaunch(request: AssistantLaunchRequest) {
     _requestedHomeDestination.value = HomeDestination.Chat
+    chatShareDraftQueue.clear()
     if (request.autoSend) {
       _pendingAssistantAutoSend.value = request.prompt
       _chatDraft.value = null
@@ -570,6 +638,24 @@ class MainViewModel(
     }
     _pendingAssistantAutoSend.value = null
     _chatDraft.value = request.prompt?.let { ChatDraft(text = it, placement = ChatDraftPlacement.Replace) }
+  }
+
+  /** Opens shared content as a fresh composer draft; sending still requires an explicit tap. */
+  fun handleShareLaunch(request: ShareLaunchRequest): Boolean {
+    val accepted =
+      chatShareDraftQueue.enqueue(
+        ChatShareDraft(
+          id = chatShareDraftSeq.incrementAndGet(),
+          text = request.text,
+          imageUris = request.imageUris,
+          droppedImageCount = request.droppedImageCount,
+        ),
+      )
+    if (!accepted) return false
+    _requestedHomeDestination.value = HomeDestination.Chat
+    _pendingAssistantAutoSend.value = null
+    _chatDraft.value = null
+    return true
   }
 
   fun clearRequestedHomeDestination() {
@@ -583,6 +669,15 @@ class MainViewModel(
   fun clearChatDraft() {
     _chatDraft.value = null
   }
+
+  fun acknowledgeChatShareDraft(id: Long) {
+    chatShareDraftQueue.acknowledgeHead(id)
+  }
+
+  suspend fun withChatShareDraftLease(
+    id: Long,
+    block: suspend () -> Unit,
+  ): Boolean = chatShareDraftQueue.withHeadLease(id, block)
 
   fun setChatReplyDraft(value: String) {
     _pendingAssistantAutoSend.value = null
@@ -666,12 +761,6 @@ class MainViewModel(
   }
 
   fun connect(endpoint: GatewayEndpoint) {
-    viewModelScope.launch(Dispatchers.Default) {
-      ensureRuntime().connectSwitchingGateway(endpoint)
-    }
-  }
-
-  fun connectInBackground(endpoint: GatewayEndpoint) {
     viewModelScope.launch(Dispatchers.Default) {
       ensureRuntime().connectSwitchingGateway(endpoint)
     }
@@ -764,6 +853,10 @@ class MainViewModel(
 
   fun refreshModelCatalog() {
     ensureRuntime().refreshModelCatalog()
+  }
+
+  fun refreshProviderModels() {
+    ensureRuntime().refreshProviderModels()
   }
 
   fun refreshTalkSetupReadiness() {
@@ -864,6 +957,37 @@ class MainViewModel(
     ensureRuntime().clearSkillWorkshopMessage()
   }
 
+  fun setSkillEnabled(
+    skillKey: String,
+    enabled: Boolean,
+  ) {
+    ensureRuntime().setSkillEnabled(skillKey, enabled)
+  }
+
+  fun searchClawHubSkills(query: String) {
+    ensureRuntime().searchClawHubSkills(query)
+  }
+
+  fun reviewClawHubSkillInstall(skill: GatewayClawHubSkillSummary) {
+    ensureRuntime().reviewClawHubSkillInstall(skill)
+  }
+
+  fun dismissClawHubSkillInstallReview() {
+    ensureRuntime().dismissClawHubSkillInstallReview()
+  }
+
+  fun installClawHubSkill(
+    slug: String,
+    acknowledgeClawHubRisk: Boolean = false,
+    version: String? = null,
+  ) {
+    ensureRuntime().installClawHubSkill(slug, acknowledgeClawHubRisk, version)
+  }
+
+  fun clearClawHubSkillMessage() {
+    ensureRuntime().clearClawHubSkillMessage()
+  }
+
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
   }
@@ -877,6 +1001,10 @@ class MainViewModel(
     decision: String,
   ) {
     ensureRuntime().resolveExecApproval(id = id, decision = decision)
+  }
+
+  fun dismissExecApprovalsNotice(expected: GatewayExecApprovalNotice) {
+    ensureRuntime().dismissExecApprovalsNotice(expected)
   }
 
   fun refreshChannels() {

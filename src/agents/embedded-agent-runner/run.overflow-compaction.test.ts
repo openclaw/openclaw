@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -141,7 +142,6 @@ function makeForwardedRuntimePlan(overrides: RuntimePlanOverrides = {}): AgentRu
     preserveNativeAnthropicToolUseIds: false,
     repairToolUseResultPairing: true,
     preserveSignatures: false,
-    sanitizeThinkingSignatures: true,
     dropThinkingBlocks: false,
     applyGoogleTurnOrdering: false,
     validateGeminiTurns: false,
@@ -1579,9 +1579,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expectRecordFields(authProfiles["openai:work"], { provider: "openai" });
     expect(harnessParams.toolAuthProfileStore).toBe(codexAuthStore);
     expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledTimes(1);
-    const [[successParams]] = mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<
-      [{ provider?: string; profileId?: string }]
-    >;
+    const [successParams] = expectDefined(
+      (
+        mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<
+          [{ provider?: string; profileId?: string }]
+        >
+      )[0],
+      "(mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<\n        [{ provider?: string; profileId?: string }]\n      >)[0] test invariant",
+    );
     expect(successParams.provider).toBe("openai");
     expect(successParams.profileId).toBe("openai:work");
   });
@@ -1923,6 +1928,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
+    expect(mockedResolveModelAsync).toHaveBeenCalledTimes(1);
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(authStorage.setRuntimeApiKey).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
@@ -2842,11 +2848,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       authStorage,
     });
     queueOpenAIResolvedModel({
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      authStorage,
-    });
-    queueOpenAIResolvedModel({
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       authStorage,
@@ -2907,6 +2908,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).toHaveBeenCalledOnce();
+    expect(mockedResolveModelAsync).toHaveBeenCalledTimes(3);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(2);
     const firstAttempt = mockCallArg(pluginRunAttempt) as EmbeddedRunAttemptParams;
     const secondAttempt = mockCallArg(pluginRunAttempt, 1) as EmbeddedRunAttemptParams;

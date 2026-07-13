@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
@@ -11,8 +12,15 @@ import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import {
+  applyConfigEnvVars,
+  cloneEnvWithPlatformSemantics,
+  createConfigRuntimeEnvBase,
+  getPublishedConfigRuntimeEnvState,
+} from "./config-env-vars.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
+import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
   ConfigIncludeError,
   hashConfigIncludeRaw,
@@ -40,15 +48,18 @@ import { resolveConfigPath } from "./paths.js";
 import {
   createRuntimeConfigWriteNotification,
   finalizeRuntimeSnapshotWrite,
+  hasManagedRuntimeConfigWriteOwner,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotRefreshHandler,
   getRuntimeConfigSourceSnapshot,
   notifyRuntimeConfigWriteListeners,
+  preflightManagedRuntimeConfigWrite,
   preflightRuntimeSnapshotWrite,
   resolveConfigWriteAfterWrite,
   resolveConfigWriteFollowUp,
   type ConfigWriteAfterWrite,
   type ConfigWriteFollowUp,
+  type RuntimeConfigWritePreparedCandidate,
 } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -151,6 +162,28 @@ type ConfigMutationOwnership = {
   assertConfigPathForWrite?: () => void;
 };
 
+function resolveManagedRuntimeEnvBaseline(): {
+  generation: number;
+  sourceConfig: OpenClawConfig;
+} {
+  // Accepted restart candidates publish env before the runtime snapshot advances.
+  // Managed writes must stay on that publication generation to avoid mixed env refs.
+  const published = getPublishedConfigRuntimeEnvState();
+  return {
+    generation: published.generation,
+    sourceConfig: published.sourceConfig ?? getRuntimeConfigSourceSnapshot() ?? {},
+  };
+}
+
+function assertManagedRuntimeEnvGeneration(generation: number): void {
+  if (getPublishedConfigRuntimeEnvState().generation !== generation) {
+    throw new ConfigMutationConflictError(
+      "active config environment changed while preparing write",
+      { currentHash: null },
+    );
+  }
+}
+
 function assertBaseHashMatches(snapshot: ConfigFileSnapshot, expectedHash?: string): string | null {
   const currentHash = resolveConfigSnapshotHash(snapshot) ?? null;
   if (expectedHash !== undefined && expectedHash !== currentHash) {
@@ -215,10 +248,23 @@ async function readConfigSnapshotForMutation(params: {
     return await params.io.readConfigFileSnapshotForWrite(options);
   }
   if (params.ownedConfigPathForWrite) {
-    return await createConfigIO({
+    const ioOptions = {
       configPath: params.ownedConfigPathForWrite,
       ...(params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
-    }).readConfigFileSnapshotForWrite();
+    };
+    const io = hasManagedRuntimeConfigWriteOwner(params.ownedConfigPathForWrite)
+      ? createConfigIO({
+          ...ioOptions,
+          env: createConfigRuntimeEnvBase(
+            resolveManagedRuntimeEnvBaseline().sourceConfig,
+            process.env,
+            {
+              preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
+            },
+          ),
+        })
+      : createConfigIO(ioOptions);
+    return await io.readConfigFileSnapshotForWrite();
   }
   return await readConfigFileSnapshotForWrite(options);
 }
@@ -577,7 +623,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     return null;
   }
 
-  const key = changedKeys[0];
+  const key = expectDefined(changedKeys[0], "changed keys entry at 0");
   const includePath = getSingleTopLevelIncludeTarget({ snapshot: params.snapshot, key });
   if (!includePath || !isRecord(nextConfig) || !(key in nextConfig)) {
     return null;
@@ -669,10 +715,29 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       );
     }
   }
-  const runtimeConfigToWrite = {
-    ...nextConfig,
-    [key]: resolveConfigEnvVars(includedValueToWrite, writeEnv, { onMissing: () => {} }),
-  } as OpenClawConfig;
+  const deferRuntimeActivation = hasManagedRuntimeConfigWriteOwner(params.snapshot.path);
+  const runtimeEnvBaseline = deferRuntimeActivation
+    ? resolveManagedRuntimeEnvBaseline()
+    : undefined;
+  const runtimeCandidateEnv = runtimeEnvBaseline
+    ? createConfigRuntimeEnvBase(runtimeEnvBaseline.sourceConfig, process.env, {
+        preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
+      })
+    : cloneEnvWithPlatformSemantics(writeEnv);
+  const authoredRuntimeCandidate = restoreEnvVarRefs(
+    nextConfig,
+    params.snapshot.parsed,
+    envForRestore,
+  ) as OpenClawConfig;
+  applyConfigEnvVars(authoredRuntimeCandidate, runtimeCandidateEnv);
+  const runtimeConfigToWrite = resolveConfigEnvVars(
+    {
+      ...authoredRuntimeCandidate,
+      [key]: includedValueToWrite,
+    },
+    runtimeCandidateEnv,
+    { onMissing: () => {} },
+  ) as OpenClawConfig;
   const validated = validateConfigObjectWithPlugins(
     runtimeConfigToWrite,
     params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : undefined,
@@ -688,16 +753,27 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
-  const runtimePreflightResult = await preflightRuntimeSnapshotWrite({
-    nextSourceConfig: runtimeConfigToWrite,
-    refreshOptions: params.writeOptions?.runtimeRefresh,
-    formatRefreshError: (error) => formatErrorMessage(error),
-    createRefreshError: (detail, cause) =>
-      new Error(
-        `Config write blocked before committing ${includePath}: active SecretRef resolution failed: ${detail}`,
-        { cause },
-      ),
-  });
+  let managedPreparedCandidates = new Map<symbol, RuntimeConfigWritePreparedCandidate>();
+  let runtimePreflightResult: unknown;
+  if (runtimeEnvBaseline) {
+    managedPreparedCandidates = await preflightManagedRuntimeConfigWrite(
+      params.snapshot.path,
+      runtimeConfigToWrite,
+      params.writeOptions?.runtimeRefresh,
+    );
+    assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+  } else {
+    runtimePreflightResult = await preflightRuntimeSnapshotWrite({
+      nextSourceConfig: runtimeConfigToWrite,
+      refreshOptions: params.writeOptions?.runtimeRefresh,
+      formatRefreshError: (error) => formatErrorMessage(error),
+      createRefreshError: (detail, cause) =>
+        new Error(
+          `Config write blocked before committing ${includePath}: active SecretRef resolution failed: ${detail}`,
+          { cause },
+        ),
+    });
+  }
   const committedIncludeRaw = formatJsonFileValue(includedValueToWrite);
   const committedIncludeHash = hashConfigIncludeRaw(committedIncludeRaw);
   const callerPreCommit = params.writeOptions?.preCommitRuntimePreflight;
@@ -718,9 +794,15 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     expectedRaw: includeRawAtCommit,
     rootSnapshot: params.snapshot,
     assertConfigPathForWrite,
-    preCommitRuntimePreflight: callerPreCommit
-      ? () => callerPreCommit(runtimeConfigToWrite)
-      : undefined,
+    preCommitRuntimePreflight:
+      runtimeEnvBaseline || callerPreCommit
+        ? async () => {
+            if (runtimeEnvBaseline) {
+              assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+            }
+            await callerPreCommit?.(runtimeConfigToWrite);
+          }
+        : undefined,
   });
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;
@@ -761,16 +843,37 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
 
     const notifyCommittedWrite = () => {
       const currentRuntimeConfig = getRuntimeConfigSnapshot();
-      if (!currentRuntimeConfig) {
+      const notificationRuntimeConfig = deferRuntimeActivation
+        ? refreshedSnapshot.runtimeConfig
+        : currentRuntimeConfig;
+      if (!notificationRuntimeConfig) {
         return;
       }
+      const notificationPreparedCandidates = new Map(
+        [...managedPreparedCandidates].map(([ownerId, candidate]) => [
+          ownerId,
+          {
+            ...candidate,
+            runtimeConfig:
+              candidate.reapplyRuntimeOverlays?.(refreshedSnapshot.runtimeConfig) ??
+              candidate.runtimeConfig,
+            compareConfig:
+              candidate.reapplyCompareOverlays?.(refreshedSnapshot.sourceConfig) ??
+              candidate.compareConfig,
+          },
+        ]),
+      );
       notifyRuntimeConfigWriteListeners(
         createRuntimeConfigWriteNotification({
           configPath: params.snapshot.path,
           sourceConfig: refreshedSnapshot.sourceConfig,
-          runtimeConfig: currentRuntimeConfig,
+          runtimeConfig: notificationRuntimeConfig,
           persistedHash,
           afterWrite: params.afterWrite ?? params.writeOptions?.afterWrite,
+          runtimeRefresh: params.writeOptions?.runtimeRefresh,
+          ...(notificationPreparedCandidates.size > 0
+            ? { preparedCandidatesByOwner: notificationPreparedCandidates }
+            : {}),
         }),
       );
     };
@@ -782,6 +885,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       loadFreshConfig: () => refreshedSnapshot.runtimeConfig,
       notifyCommittedWrite,
       preflightResult: runtimePreflightResult,
+      deferRuntimeActivation,
       formatRefreshError: (error) => formatErrorMessage(error),
       createRefreshError: (detail, cause) =>
         new Error(

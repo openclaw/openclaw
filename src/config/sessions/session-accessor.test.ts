@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -19,14 +20,17 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   markSessionAbortTarget,
+  onSessionIdentityMutation,
   openSessionEntryReadView,
   patchSessionEntry,
   patchSessionEntryTarget,
   persistSessionResetLifecycle,
   persistSessionTranscriptTurn,
+  readTranscriptStatsSync,
   readSessionUpdatedAt,
   recordInboundSessionMeta,
   replaceSessionEntry,
+  resetSessionEntryLifecycle,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionTranscriptReadTarget,
@@ -346,6 +350,8 @@ describe("session accessor seam", () => {
       },
     );
 
+    const notify = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(notify);
     const patched = await patchSessionEntryTarget(
       {
         storePath,
@@ -362,7 +368,6 @@ describe("session accessor seam", () => {
         };
       },
     );
-
     expect(patched).toMatchObject({
       label: "patched",
       sessionId: "legacy-session",
@@ -375,6 +380,27 @@ describe("session accessor seam", () => {
           sessionId: "legacy-session",
         }),
       },
+    ]);
+    const sessionKey = "agent:main:other";
+    const scope = { sessionKey, storePath };
+    await replaceSessionEntry(scope, { sessionId: "created", updatedAt: 10 });
+    await patchSessionEntry(scope, () => ({ label: "same identity" }));
+    await replaceSessionEntry(scope, { sessionId: "replaced", updatedAt: 20 });
+    const target = { canonicalKey: sessionKey, storeKeys: [sessionKey] };
+    await resetSessionEntryLifecycle({
+      buildNextEntry: () => ({ sessionId: "reset", updatedAt: 30 }),
+      storePath,
+      target,
+    });
+    await deleteSessionEntryLifecycle({ archiveTranscript: false, storePath, target });
+    unsubscribe();
+
+    expect(notify.mock.calls.map(([event]) => event.kind)).toEqual([
+      "move",
+      "create",
+      "replace",
+      "reset",
+      "delete",
     ]);
   });
 
@@ -1635,12 +1661,19 @@ describe("session accessor seam", () => {
       },
     ]);
 
+    const notify = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(notify);
     const result = await applySessionEntryLifecycleMutation({
       storePath,
       removals: [{ expectedSessionId: scope.sessionId, sessionKey: scope.sessionKey }],
     });
+    unsubscribe();
 
     expect(result.removedEntries).toBe(1);
+    expect(notify).toHaveBeenCalledWith({
+      kind: "delete",
+      previous: { sessionId: scope.sessionId, sessionKeys: [scope.sessionKey] },
+    });
     expect(result.archivedTranscriptDirectories).toEqual([]);
     expect(loadSessionEntry(scope)).toBeUndefined();
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
@@ -1803,7 +1836,13 @@ describe("session accessor seam", () => {
       .filter((file) => file.startsWith("previous-session.jsonl.reset."));
     expect(archivedPreviousTranscripts).toHaveLength(1);
     const [archivedPreviousTranscriptName] = archivedPreviousTranscripts;
-    const archivedPreviousTranscript = path.join(tempDir, archivedPreviousTranscriptName);
+    const archivedPreviousTranscript = path.join(
+      tempDir,
+      expectDefined(
+        archivedPreviousTranscriptName,
+        "archivedPreviousTranscriptName test invariant",
+      ),
+    );
     expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain(
       '"id":"previous-session"',
     );
@@ -2422,6 +2461,55 @@ describe("session accessor seam", () => {
         storePath,
       })?.entry.sessionFile,
     ).toBe(`sqlite:main:session-1:${path.join(tempDir, "openclaw-agent.sqlite")}`);
+  });
+
+  it("tracks replacement and deletion transcript mutations", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const scope = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    await replaceSqliteTranscriptEvents(scope, [
+      { sessionId: scope.sessionId, type: "session" },
+      { timestamp: "1970-01-01T00:00:00.001Z", type: "custom" },
+    ]);
+
+    const replaced = readTranscriptStatsSync(scope);
+    expect(replaced).toMatchObject({
+      eventCount: 2,
+      lastMutationAtMs: expect.any(Number),
+    });
+    expect(replaced.lastMutationAtMs).toBeGreaterThanOrEqual(1_700_000_000_000);
+
+    await importSqliteSessionRows({
+      agentId: scope.agentId,
+      entry: {
+        sessionId: scope.sessionId,
+        updatedAt: 10,
+      },
+      sessionKey: scope.sessionKey,
+      storePath: scope.storePath,
+      transcriptMtimeMs: 1_600_000_000_000,
+    });
+    const imported = readTranscriptStatsSync(scope);
+    expect(imported.lastMutationAtMs).toBe(replaced.lastMutationAtMs);
+    expect(imported.lastObservedMutationAtMs).toBe(replaced.lastMutationAtMs);
+
+    await replaceSqliteTranscriptEvents(scope, []);
+
+    const cleared = readTranscriptStatsSync(scope);
+    dateNow.mockRestore();
+    expect(cleared).toMatchObject({
+      eventCount: 0,
+      lastMutationAtMs: expect.any(Number),
+    });
+    expect(cleared.lastMutationAtMs).toBeGreaterThan(imported.lastMutationAtMs ?? 0);
   });
 
   it("resolves an explicit read transcript file without agent identity", () => {

@@ -36,6 +36,12 @@ export const pluginSdkDocMetadata = {
   "approval-delivery-runtime": {
     category: "runtime",
   },
+  "approval-gateway-runtime": {
+    category: "runtime",
+  },
+  "approval-reference-runtime": {
+    category: "runtime",
+  },
   "approval-native-runtime": {
     category: "runtime",
   },
@@ -162,7 +168,3 @@ export const pluginSdkDocMetadata = {
 } as const satisfies Record<string, PluginSdkDocMetadata>;
 
 export type PluginSdkDocEntrypoint = keyof typeof pluginSdkDocMetadata;
-
-export function resolvePluginSdkDocImportSpecifier(entrypoint: PluginSdkDocEntrypoint): string {
-  return entrypoint === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entrypoint}`;
-}

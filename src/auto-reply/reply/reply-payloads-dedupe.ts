@@ -56,8 +56,15 @@ export function filterMessagingToolMediaDuplicates(params: {
   }
 
   let nextPayloads: ReplyPayload[] | undefined;
-  for (let index = 0; index < payloads.length; index++) {
-    const payload = payloads[index];
+  for (const [index, payload] of payloads.entries()) {
+    // Delivery operations apply to the message created by this payload. Keep
+    // its content intact so dedupe cannot silently skip the operation.
+    if (hasEnabledDeliveryOperation(payload)) {
+      if (nextPayloads) {
+        nextPayloads.push(payload);
+      }
+      continue;
+    }
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
     const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
@@ -65,8 +72,7 @@ export function filterMessagingToolMediaDuplicates(params: {
     let filteredUrls: string[] | undefined;
     let strippedMediaUrls = false;
     if (mediaUrls?.length) {
-      for (let mediaIndex = 0; mediaIndex < mediaUrls.length; mediaIndex++) {
-        const url = mediaUrls[mediaIndex];
+      for (const [mediaIndex, url] of mediaUrls.entries()) {
         if (sentSet.has(normalizeMediaForDedupe(url))) {
           strippedMediaUrls = true;
           if (!filteredUrls) {
@@ -87,10 +93,15 @@ export function filterMessagingToolMediaDuplicates(params: {
       continue;
     }
 
+    const nextMediaUrl = stripSingle ? undefined : mediaUrl;
+    const nextMediaUrls = filteredUrls?.length ? filteredUrls : undefined;
     const nextPayload = copyReplyPayloadMetadata(payload, {
       ...payload,
-      mediaUrl: stripSingle ? undefined : mediaUrl,
-      mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
+      mediaUrl: nextMediaUrl,
+      mediaUrls: nextMediaUrls,
+      ...(payload.audioAsVoice === true && !nextMediaUrl && !nextMediaUrls
+        ? { audioAsVoice: undefined }
+        : {}),
     });
     if (!nextPayloads) {
       nextPayloads = payloads.slice(0, index);
@@ -99,6 +110,11 @@ export function filterMessagingToolMediaDuplicates(params: {
   }
 
   return nextPayloads ?? payloads;
+}
+
+export function hasEnabledDeliveryOperation(payload: ReplyPayload): boolean {
+  const pin = payload.delivery?.pin;
+  return pin === true || (typeof pin === "object" && pin.enabled);
 }
 
 function normalizeMediaForDedupe(value: string): string {
@@ -392,13 +408,14 @@ export function resolveMessagingToolPayloadDedupe(params: {
       Array.isArray(target.mediaUrls) &&
       target.mediaUrls.some((url) => typeof url === "string" && Boolean(url.trim())),
   );
+  const allTargetsMatchRoute = matchingRoute && matchingTargets.length === sentTargets.length;
 
   return {
     shouldDedupePayloads: matchingRoute || sentTargets.length === 0,
     matchingRoute,
     routeSentTexts,
     routeSentMediaUrls,
-    useGlobalSentTextEvidenceFallback: matchingRoute && !hasTargetTextEvidence,
-    useGlobalSentMediaUrlEvidenceFallback: matchingRoute && !hasTargetMediaUrlEvidence,
+    useGlobalSentTextEvidenceFallback: allTargetsMatchRoute && !hasTargetTextEvidence,
+    useGlobalSentMediaUrlEvidenceFallback: allTargetsMatchRoute && !hasTargetMediaUrlEvidence,
   };
 }

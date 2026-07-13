@@ -7,7 +7,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  formatSqliteSessionFileMarker,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -431,18 +434,23 @@ describe("memory index", () => {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
-    const timestamps = params.messages
-      .map((message) =>
-        typeof message.timestamp === "number" ? message.timestamp : Date.parse(message.timestamp),
-      )
-      .filter((timestamp) => Number.isFinite(timestamp));
-    const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : Date.now();
+    // Message timestamps are behavioral inputs; entry freshness only keeps the
+    // fixture out of real session-retention maintenance as wall time advances.
+    const updatedAt = Date.now();
     await fs.mkdir(sessionsDir, { recursive: true });
     await upsertSessionEntry({
       agentId: "main",
       sessionKey,
       storePath,
-      entry: { sessionId: params.sessionId, updatedAt },
+      entry: {
+        sessionId: params.sessionId,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: params.sessionId,
+          storePath,
+        }),
+        updatedAt,
+      },
     });
     for (const message of params.messages) {
       await appendSessionTranscriptMessageByIdentity({
@@ -760,6 +768,30 @@ describe("memory index", () => {
     }
   });
 
+  it("disables batch immediately when the provider reports it unavailable", async () => {
+    providerRuntimeBatchErrors = [
+      Object.assign(new Error("provider batch unavailable"), {
+        code: "embedding_batch_unavailable",
+      }),
+    ];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(embedBatchCalls).toBe(1);
+      expect(manager.status().batch).toMatchObject({
+        enabled: false,
+        failures: 2,
+        lastError: "provider batch unavailable",
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it.each([
     ["frozen errors", Object.freeze(new Error("provider runtime retry failed"))],
     ["primitive rejections", "provider runtime retry failed"],
@@ -856,7 +888,7 @@ describe("memory index", () => {
 
       expect(providerRuntimeBatchCalls).toHaveLength(3);
       expect(providerRuntimeBatchCalls.every((call) => call.length === 1)).toBe(true);
-      expect(providerRuntimeBatchCalls.map((call) => call[0]).toSorted()).toEqual(
+      expect(providerRuntimeBatchCalls.map((call) => call[0] ?? "").toSorted()).toEqual(
         [
           "# Log\nAlpha memory line.\nZebra memory line.",
           "# Log\nBeta memory line.",
@@ -2965,10 +2997,16 @@ describe("memory index", () => {
     const stateDirName = ".state-status-dirty-test";
     setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
     try {
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "status-dirty-test.jsonl");
-      await fs.writeFile(transcriptPath, JSON.stringify({ type: "test", ts: 1 }) + "\n");
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "status-dirty-test",
+        messages: [
+          {
+            role: "user",
+            timestamp: 1,
+            content: "Unindexed session transcript.",
+          },
+        ],
+      });
 
       const manager = await getFreshManager(cfg, "status");
       managersForCleanup.add(manager);

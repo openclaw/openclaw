@@ -4,11 +4,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
+  copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
   discoverStaticExtensionAssets,
 } from "../../scripts/lib/static-extension-assets.mjs";
 import {
-  copyStaticExtensionAssets,
   listStaticExtensionAssetOutputs,
   rewriteRootRuntimeImportsToStableAliases,
   runRuntimePostBuild,

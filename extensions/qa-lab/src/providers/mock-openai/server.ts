@@ -6,7 +6,9 @@ import { escapeRegExp, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utilit
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
+import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
+import { listMockOpenAiServerModelIds } from "../shared/mock-model-config.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -97,6 +99,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
 }
 
 type MockOpenAiRequestSnapshot = {
+  cursor: number;
   raw: string;
   body: Record<string, unknown>;
   prompt: string;
@@ -112,6 +115,8 @@ type MockOpenAiRequestSnapshot = {
   toolOutputCallId?: string;
   toolOutputStructuredError?: true;
 };
+
+type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
 // Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
 // This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
@@ -239,6 +244,8 @@ const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small projec
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
+const QA_RESTART_CODE_MODE_WAIT_PROMPT_RE = /code mode restart wait qa check/i;
+const QA_RESTART_RECOVERY_PROMPT_RE = /previous turn was interrupted by a gateway restart/i;
 const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
@@ -322,6 +329,34 @@ function writeSse(res: ServerResponse, events: StreamEvent[]) {
   res.end(body);
 }
 
+function isRemoteCompactionV2Request(input: ResponsesInputItem[]) {
+  // Codex sends compaction through /responses with a trigger item. Keep it
+  // outside scenario dispatch so maintenance calls never become tool evidence.
+  return input.some((item) => item.type === "compaction_trigger");
+}
+
+function buildRemoteCompactionV2Events(): [
+  Extract<StreamEvent, { type: "response.output_item.done" }>,
+  Extract<StreamEvent, { type: "response.completed" }>,
+] {
+  const item = {
+    type: "compaction",
+    encrypted_content: "QA_MOCK_REMOTE_COMPACTION_SUMMARY",
+  };
+  return [
+    { type: "response.output_item.done", item },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_mock_compaction_1",
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
+      },
+    },
+  ];
+}
+
 async function writeSseWithPreviewPause(
   res: ServerResponse,
   events: StreamEvent[],
@@ -392,15 +427,15 @@ function extractEmbeddingInputTexts(input: unknown): string[] {
 function buildDeterministicEmbedding(text: string, dimensions = 16) {
   const values = Array.from({ length: dimensions }, () => 0);
   for (let index = 0; index < text.length; index += 1) {
-    values[index % dimensions] += text.charCodeAt(index) / 255;
+    const embeddingIndex = index % dimensions;
+    values[embeddingIndex] = (values[embeddingIndex] ?? 0) + text.charCodeAt(index) / 255;
   }
   const magnitude = Math.hypot(...values) || 1;
   return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
 function extractLastUserText(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
+  for (const item of input.toReversed()) {
     if (item.role !== "user" || !Array.isArray(item.content)) {
       continue;
     }
@@ -413,16 +448,12 @@ function extractLastUserText(input: ResponsesInputItem[]) {
 }
 
 function findLastUserIndex(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    if (item.role !== "user" || !Array.isArray(item.content)) {
-      continue;
-    }
-    if (!isInternalRuntimeContextCarrierText(extractInputText(item.content))) {
-      return index;
-    }
-  }
-  return -1;
+  return input.findLastIndex(
+    (item) =>
+      item.role === "user" &&
+      Array.isArray(item.content) &&
+      !isInternalRuntimeContextCarrierText(extractInputText(item.content)),
+  );
 }
 
 function isInternalRuntimeContextCarrierText(text: string) {
@@ -524,19 +555,17 @@ function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
 
 function extractToolOutput(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return output;
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -554,19 +583,17 @@ function extractToolOutput(input: ResponsesInputItem[]) {
 
 function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return functionCallOutputIsStructuredError(item);
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -574,7 +601,7 @@ function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
         laterUserTexts.length > 0 &&
         laterUserTexts.every((text) => isToolOutputContinuationText(text))
       ) {
-        return functionCallOutputIsStructuredError(item);
+        return functionCallOutputIsStructuredError(candidateItem);
       }
     }
   }
@@ -583,19 +610,17 @@ function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
 
 function extractToolOutputCallId(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return extractFunctionCallOutputCallId(item);
     }
   }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    const output = extractFunctionCallOutputText(candidateItem);
     if (output) {
       const laterUserTexts = input
-        .slice(index + 1)
+        .slice(candidateIndex + 1)
         .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
         .map((laterItem) => extractInputText(laterItem.content as unknown[]))
         .filter(Boolean);
@@ -603,7 +628,7 @@ function extractToolOutputCallId(input: ResponsesInputItem[]) {
         laterUserTexts.length > 0 &&
         laterUserTexts.every((text) => isToolOutputContinuationText(text))
       ) {
-        return extractFunctionCallOutputCallId(item);
+        return extractFunctionCallOutputCallId(candidateItem);
       }
     }
   }
@@ -611,8 +636,7 @@ function extractToolOutputCallId(input: ResponsesInputItem[]) {
 }
 
 function extractLatestToolOutput(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
+  for (const item of input.toReversed()) {
     const output = extractFunctionCallOutputText(item);
     if (output) {
       return output;
@@ -629,13 +653,9 @@ function extractAllToolOutputText(input: ResponsesInputItem[]) {
 }
 
 function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]) {
-  let latestToolOutputIndex = -1;
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    if (extractFunctionCallOutputText(input[index])) {
-      latestToolOutputIndex = index;
-      break;
-    }
-  }
+  const latestToolOutputIndex = input.findLastIndex((item) =>
+    Boolean(extractFunctionCallOutputText(item)),
+  );
   if (latestToolOutputIndex < 0) {
     return "";
   }
@@ -1245,6 +1265,12 @@ function hasDeclaredTool(body: Record<string, unknown>, name: string) {
     return true;
   }
   return false;
+}
+
+function hasToolDefinition(body: Record<string, unknown>, name: string) {
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
+  return [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name));
 }
 
 function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
@@ -1986,10 +2012,11 @@ function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string):
           },
         ]
       : specsOrText;
-  const output = specs.map((spec) => buildAssistantOutputItem(spec));
+  const renderedSpecs = specs.map((spec) => ({ spec, item: buildAssistantOutputItem(spec) }));
+  const output = renderedSpecs.map(({ item }) => item);
   const events: StreamEvent[] = [];
 
-  for (const [outputIndex, spec] of specs.entries()) {
+  for (const [outputIndex, { spec, item }] of renderedSpecs.entries()) {
     events.push({
       type: "response.output_item.added",
       item: {
@@ -2021,7 +2048,7 @@ function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string):
     }
     events.push({
       type: "response.output_item.done",
-      item: output[outputIndex],
+      item,
     });
   }
 
@@ -2226,6 +2253,39 @@ async function buildResponsesPayload(
     if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
+  }
+  if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
+    if (QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+      if (toolOutput.includes("unsafe-probe-executed")) {
+        return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+      }
+      if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
+        return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
+      }
+      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
+    }
+    if (toolJson?.status === "completed" && toolJson.value === "RESTART-CODE-MODE-WAIT-OK") {
+      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
+    }
+    if (
+      toolJson?.status === "waiting" &&
+      typeof toolJson.runId === "string" &&
+      hasDeclaredTool(body, "wait")
+    ) {
+      return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+    }
+    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+      return buildToolCallEventsWithArgs("exec", {
+        language: "javascript",
+        restartSafe: true,
+        code: [
+          'const matches = await tools.search("qa_restart_wait");',
+          "await tools.call(matches[0].id, {});",
+          'return "RESTART-CODE-MODE-WAIT-OK";',
+        ].join("\n"),
+      });
+    }
+    return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
   }
   if (
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
@@ -2645,6 +2705,47 @@ async function buildResponsesPayload(
         : `QA-TELEGRAM-CURRENT-SESSION-BAD ${sessionKey || "missing-session-key"}`,
     );
   }
+  // Scenario workflow beats broad marker fallback: system context can contain unrelated exact-reply directives.
+  if (/dreaming shadow trial report check/i.test(allInputText)) {
+    const shadowTrialEvidenceText = extractAllToolOutputText(input);
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(shadowTrialEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Report: dreaming-shadow-trial-report.md",
+          "Promotion action: report-only",
+          "DREAMING-SHADOW-TRIAL-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !shadowTrialEvidenceText ||
+      (!shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+        !shadowTrialEvidenceText.includes("# Candidate evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_SHADOW_TRIAL_BRIEF.md" });
+    }
+    if (
+      shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+      shadowTrialEvidenceText.includes("# Candidate evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "dreaming-shadow-trial-report.md",
+        content: [
+          "Candidate: The user prefers release reports that include exact verification commands and remaining risk.",
+          "Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.",
+          "Baseline outcome: mentions tests passed but omits the exact command and remaining risk.",
+          "Candidate outcome: includes the exact verification command and calls out the remaining review risk.",
+          "Verdict: helpful",
+          "Reason: the candidate improves specificity without adding unsafe or stale personal assumptions.",
+          "Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.",
+          "Promotion action: report-only",
+        ].join("\n"),
+      });
+    }
+    if (shadowTrialEvidenceText.includes("# Dreaming shadow trial brief")) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_CANDIDATE_EVIDENCE.md" });
+    }
+  }
   if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
     return buildAssistantEvents(promptExactReplyDirective);
   }
@@ -2709,46 +2810,6 @@ async function buildResponsesPayload(
     }
     if (/release-handoff\.md/i.test(toolOutput)) {
       return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
-    }
-  }
-  if (/dreaming shadow trial report check/i.test(allInputText)) {
-    const shadowTrialEvidenceText = extractAllToolOutputText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(shadowTrialEvidenceText)) {
-      return buildAssistantEvents(
-        [
-          "Report: dreaming-shadow-trial-report.md",
-          "Promotion action: report-only",
-          "DREAMING-SHADOW-TRIAL-OK",
-        ].join("\n"),
-      );
-    }
-    if (
-      !shadowTrialEvidenceText ||
-      (!shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
-        !shadowTrialEvidenceText.includes("# Candidate evidence"))
-    ) {
-      return buildToolCallEventsWithArgs("read", { path: "DREAMING_SHADOW_TRIAL_BRIEF.md" });
-    }
-    if (
-      shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
-      shadowTrialEvidenceText.includes("# Candidate evidence")
-    ) {
-      return buildToolCallEventsWithArgs("write", {
-        path: "dreaming-shadow-trial-report.md",
-        content: [
-          "Candidate: The user prefers release reports that include exact verification commands and remaining risk.",
-          "Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.",
-          "Baseline outcome: mentions tests passed but omits the exact command and remaining risk.",
-          "Candidate outcome: includes the exact verification command and calls out the remaining review risk.",
-          "Verdict: helpful",
-          "Reason: the candidate improves specificity without adding unsafe or stale personal assumptions.",
-          "Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.",
-          "Promotion action: report-only",
-        ].join("\n"),
-      });
-    }
-    if (shadowTrialEvidenceText.includes("# Dreaming shadow trial brief")) {
-      return buildToolCallEventsWithArgs("read", { path: "DREAMING_CANDIDATE_EVIDENCE.md" });
     }
   }
   if (/personal share-safe diagnostics check/i.test(allInputText)) {
@@ -3733,6 +3794,7 @@ export async function startQaMockOpenAiServer(params?: {
   host?: string;
   port?: number;
   finalOnlyMarkerPauseMs?: number;
+  modelRefs?: readonly string[];
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
@@ -3743,6 +3805,16 @@ export async function startQaMockOpenAiServer(params?: {
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
+  let nextRequestCursor = 1;
+  const recordRequest = (snapshot: MockOpenAiRequestSnapshotInput) => {
+    const recorded = { ...snapshot, cursor: nextRequestCursor++ };
+    lastRequest = recorded;
+    requests.push(recorded);
+    if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
+      requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
+    }
+    return recorded;
+  };
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -3755,15 +3827,10 @@ export async function startQaMockOpenAiServer(params?: {
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {
         writeJson(res, 200, {
-          data: [
-            { id: "gpt-5.6-luna", object: "model" },
-            { id: "gpt-5.6-luna-alt", object: "model" },
-            { id: "gpt-image-1", object: "model" },
-            { id: "gpt-4o-transcribe", object: "model" },
-            { id: "text-embedding-3-small", object: "model" },
-            { id: "claude-opus-4-8", object: "model" },
-            { id: "claude-sonnet-4-6", object: "model" },
-          ],
+          data: listMockOpenAiServerModelIds(params?.modelRefs).map((id) => ({
+            id,
+            object: "model",
+          })),
         });
         return;
       }
@@ -3771,8 +3838,45 @@ export async function startQaMockOpenAiServer(params?: {
         writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
         return;
       }
+      if (req.method === "GET" && url.pathname === "/debug/request-cursor") {
+        writeJson(res, 200, { cursor: nextRequestCursor - 1 });
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/debug/requests") {
-        writeJson(res, 200, requests);
+        const afterText = url.searchParams.get("after");
+        if (afterText === null) {
+          writeJson(res, 200, requests);
+          return;
+        }
+        const after = parseQaDebugRequestCursor(afterText);
+        if (after === null) {
+          writeJson(res, 400, { error: "after must be a non-negative safe integer" });
+          return;
+        }
+        const latestCursor = nextRequestCursor - 1;
+        const oldestCursor = requests[0]?.cursor ?? nextRequestCursor;
+        if (after > latestCursor) {
+          writeJson(res, 409, {
+            error: "request cursor is ahead of the latest recorded request",
+            after,
+            latestCursor,
+          });
+          return;
+        }
+        if (after < oldestCursor - 1) {
+          writeJson(res, 409, {
+            error: "request cursor expired",
+            after,
+            oldestCursor,
+            latestCursor,
+          });
+          return;
+        }
+        writeJson(
+          res,
+          200,
+          requests.filter((request) => request.cursor > after),
+        );
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/inflight-requests") {
@@ -3845,6 +3949,15 @@ export async function startQaMockOpenAiServer(params?: {
           return;
         }
         const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+        if (isRemoteCompactionV2Request(input)) {
+          const events = buildRemoteCompactionV2Events();
+          if (body.stream === false) {
+            writeJson(res, 200, events[1].response);
+          } else {
+            writeSse(res, events);
+          }
+          return;
+        }
         const prompt = extractLastUserText(input);
         const allInputText = extractAllRequestTexts(input, body);
         const inflightRequestId = nextInflightRequestId++;
@@ -3856,7 +3969,7 @@ export async function startQaMockOpenAiServer(params?: {
           inflightRequests.delete(inflightRequestId);
         }
         const resolvedModel = typeof body.model === "string" ? body.model : "";
-        lastRequest = {
+        recordRequest({
           raw,
           body,
           prompt,
@@ -3871,11 +3984,7 @@ export async function startQaMockOpenAiServer(params?: {
           plannedToolArgs: extractPlannedToolArgs(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        };
-        requests.push(lastRequest);
-        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-        }
+        });
         if (body.stream === false) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {
@@ -3918,7 +4027,7 @@ export async function startQaMockOpenAiServer(params?: {
         // is what lets a single parity run diff assertions across both lanes.
         // Reuse the normalized model so an empty-string body.model no longer
         // leaks through to `lastRequest.model`.
-        lastRequest = {
+        recordRequest({
           raw,
           body: body as Record<string, unknown>,
           prompt: extractLastUserText(input),
@@ -3932,11 +4041,7 @@ export async function startQaMockOpenAiServer(params?: {
           plannedToolArgs: extractPlannedToolArgs(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        };
-        requests.push(lastRequest);
-        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-        }
+        });
         if (body.stream === true) {
           writeAnthropicSse(res, streamEvents);
           return;

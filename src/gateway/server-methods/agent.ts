@@ -1351,6 +1351,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       idempotencyKey: string;
       sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
       disableMessageTool?: boolean;
+      forceRestartSafeTools?: boolean;
       timeout?: number;
       bestEffortDeliver?: boolean;
       cleanupBundleMcpOnRunEnd?: boolean;
@@ -3960,6 +3961,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                 ? restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
                 : request.sourceReplyDeliveryMode,
               disableMessageTool: request.disableMessageTool,
+              forceRestartSafeTools: request.forceRestartSafeTools,
               suppressPromptPersistence:
                 requestedPromptPersistenceSuppression ||
                 shouldSuppressAgentPromptPersistence({

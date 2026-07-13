@@ -55,6 +55,14 @@ type Ssh = WorkerEnvironmentSshEndpoint;
 type UnleasedRecord = { state: WorkerEnvironmentUnleasedState; leaseId: null; sshEndpoint: null };
 type LeasedRecord = { state: WorkerEnvironmentLeasedState; leaseId: string; sshEndpoint: Ssh };
 export type WorkerEnvironmentRecord = RecordBase & (UnleasedRecord | LeasedRecord);
+export class WorkerSessionAlreadyAttachedError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly environmentId: string,
+  ) {
+    super(`Session ${sessionId} is already attached to worker environment ${environmentId}`);
+  }
+}
 export type WorkerEnvironmentTransitionPatch = {
   leaseId?: string | null;
   sshEndpoint?: WorkerEnvironmentSshEndpoint | null;
@@ -63,7 +71,10 @@ export type WorkerEnvironmentTransitionPatch = {
   lastError?: string | null;
   credential?: CredentialInput;
 };
-type WorkerDb = Pick<StateDatabase, "worker_environment_credentials" | "worker_environments">;
+type WorkerDb = Pick<
+  StateDatabase,
+  "worker_environment_credentials" | "worker_environments" | "worker_transcript_commit_heads"
+>;
 type Row = Selectable<WorkerEnvironments>;
 type RowUpdate = Updateable<WorkerEnvironments>;
 type CredentialRow = Selectable<WorkerEnvironmentCredentials>;
@@ -285,6 +296,25 @@ function nextOwnerEpoch(ownerEpoch: number): number {
   }
   return next;
 }
+function nextGlobalOwnerEpoch(db: DatabaseSync): number {
+  // Transcript commit identity is (session, epoch, seq), so an ownership
+  // generation may never be reused when a session moves between environments.
+  const latestEnvironment = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom("worker_environments")
+      .select(({ fn }) => fn.max<number>("owner_epoch").as("owner_epoch")),
+  );
+  const latestTranscriptCommit = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom("worker_transcript_commit_heads")
+      .select(({ fn }) => fn.max<number>("run_epoch").as("run_epoch")),
+  );
+  return nextOwnerEpoch(
+    Math.max(latestEnvironment?.owner_epoch ?? 0, latestTranscriptCommit?.run_epoch ?? 0),
+  );
+}
 function fromRow(row: Row): WorkerEnvironmentRecord {
   const record = {
     environmentId: row.environment_id,
@@ -444,6 +474,57 @@ function listRows(db: DatabaseSync, reconcile: boolean): WorkerEnvironmentRecord
   ).rows.map(fromRow);
 }
 
+function compareAttachmentAuthority(
+  left: WorkerEnvironmentRecord,
+  right: WorkerEnvironmentRecord,
+): number {
+  if (left.ownerEpoch !== right.ownerEpoch) {
+    return left.ownerEpoch > right.ownerEpoch ? -1 : 1;
+  }
+  if (left.stateChangedAtMs !== right.stateChangedAtMs) {
+    return left.stateChangedAtMs > right.stateChangedAtMs ? -1 : 1;
+  }
+  if (left.environmentId === right.environmentId) {
+    return 0;
+  }
+  return left.environmentId < right.environmentId ? -1 : 1;
+}
+
+function reconcileAttachedSessionOwners(db: DatabaseSync, nowMs: number): void {
+  const ownersBySession = new Map<string, WorkerEnvironmentRecord[]>();
+  for (const record of listRows(db, false)) {
+    if (record.state !== "attached") {
+      continue;
+    }
+    const sessionId = record.attachedSessionIds[0];
+    if (!sessionId) {
+      continue;
+    }
+    const owners = ownersBySession.get(sessionId) ?? [];
+    owners.push(record);
+    ownersBySession.set(sessionId, owners);
+  }
+  for (const owners of ownersBySession.values()) {
+    if (owners.length < 2) {
+      continue;
+    }
+    const [, ...duplicates] = owners.toSorted(compareAttachmentAuthority);
+    for (const duplicate of duplicates) {
+      // Repair multiple owners admitted before attachment uniqueness.
+      // Demotion fences the loser before startup snapshots it.
+      update(db, duplicate.environmentId, "attached", {
+        owner_epoch: nextGlobalOwnerEpoch(db),
+        state: "idle",
+        attached_session_ids_json: json([]),
+        updated_at_ms: nowMs,
+        state_changed_at_ms: nowMs,
+        idle_since_at_ms: nowMs,
+      });
+      revokeCredential(db, duplicate.environmentId);
+    }
+  }
+}
+
 export function createWorkerEnvironmentStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
@@ -452,6 +533,7 @@ export function createWorkerEnvironmentStore(
   const read = () => openOpenClawStateDatabase({ path }).db;
   const write = <T>(operation: (db: DatabaseSync) => T): T =>
     runOpenClawStateWriteTransaction(({ db }) => operation(db), { path });
+  write((db) => reconcileAttachedSessionOwners(db, now()));
   const writeCredential = (
     input: CredentialInput & {
       environmentId: string;
@@ -666,6 +748,22 @@ export function createWorkerEnvironmentStore(
               ? current.attachedSessionIds
               : normalizeAttachedSessionIds(patch.attachedSessionIds);
         assertShape(to, leaseId, sshEndpoint, bootstrapReceipt, attachedSessionIds);
+        const [attachedSessionId] = attachedSessionIds;
+        if (to === "attached" && attachedSessionId) {
+          // Change session ownership atomically with worker state.
+          const existingOwner = listRows(db, false).find(
+            (record) =>
+              record.environmentId !== environmentId &&
+              record.state === "attached" &&
+              record.attachedSessionIds[0] === attachedSessionId,
+          );
+          if (existingOwner) {
+            throw new WorkerSessionAlreadyAttachedError(
+              attachedSessionId,
+              existingOwner.environmentId,
+            );
+          }
+        }
         const revokesCredential =
           clearsBootstrapReceipt ||
           to === "attached" ||
@@ -684,11 +782,9 @@ export function createWorkerEnvironmentStore(
             to === "orphaned");
         const ownerEpoch = acceptsBootstrapReceipt
           ? Math.max(1, current.ownerEpoch)
-          : acceptsAttachedCredential
-            ? nextOwnerEpoch(current.ownerEpoch)
-            : ownerEndingTransition
-              ? nextOwnerEpoch(current.ownerEpoch)
-              : current.ownerEpoch;
+          : acceptsAttachedCredential || ownerEndingTransition
+            ? nextGlobalOwnerEpoch(db)
+            : current.ownerEpoch;
         const record = update(db, environmentId, from, {
           lease_id: leaseId,
           ssh_host: sshEndpoint?.host ?? null,

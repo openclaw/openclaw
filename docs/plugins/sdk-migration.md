@@ -324,6 +324,7 @@ SDK.
     | Transport readiness waits | `openclaw/plugin-sdk/transport-ready-runtime` |
     | Secure token helpers | `openclaw/plugin-sdk/secure-random-runtime` |
     | Bounded async task concurrency | `openclaw/plugin-sdk/concurrency-runtime` |
+    | Required-value assertions for provable invariants | `openclaw/plugin-sdk/expect-runtime` |
     | Numeric coercion | `openclaw/plugin-sdk/number-runtime` |
     | Process-local async lock | `openclaw/plugin-sdk/async-lock-runtime` |
     | File locks | `openclaw/plugin-sdk/file-lock` |
@@ -425,7 +426,8 @@ SDK.
   | `plugin-sdk/approval-auth-runtime` | Approval auth helpers | Approver resolution, same-chat action auth |
   | `plugin-sdk/approval-client-runtime` | Approval client helpers | Native exec approval profile/filter helpers |
   | `plugin-sdk/approval-delivery-runtime` | Approval delivery helpers | Native approval capability/delivery adapters |
-  | `plugin-sdk/approval-gateway-runtime` | Approval gateway helpers | Shared approval gateway-resolution helper |
+  | `plugin-sdk/approval-gateway-runtime` | Approval gateway helpers | Shared approval gateway resolver |
+  | `plugin-sdk/approval-reference-runtime` | Approval transport references | Deterministic durable-locator helper for transport-limited callbacks |
   | `plugin-sdk/approval-handler-adapter-runtime` | Approval adapter helpers | Lightweight native approval adapter loading helpers for hot channel entrypoints |
   | `plugin-sdk/approval-handler-runtime` | Approval handler helpers | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
   | `plugin-sdk/approval-native-runtime` | Approval target helpers | Native approval target/account binding helpers |
@@ -804,15 +806,17 @@ major release. Every entry maps the old API to its canonical replacement.
   </Accordion>
 
   <Accordion title="Removed session and transcript file APIs">
-    The SQLite session/transcript flip removes plugin-facing APIs that exposed
-    active `sessions.json` stores, JSONL transcript paths, or lists of session
-    files. Runtime plugins should use session identity and SDK runtime helpers
-    instead of resolving or mutating active files.
+    The SQLite session/transcript flip removes or deprecates plugin-facing APIs
+    that exposed active `sessions.json` stores, JSONL transcript paths, or lists
+    of session files. Runtime plugins should use session identity and SDK runtime
+    helpers instead of resolving or mutating active files.
 
-    | Removed surface | Replacement |
-    | ---------------- | ----------- |
-    | `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)` | Gateway-owned session runtime APIs; plugin code should request session state through documented runtime/context helpers instead of reading the active store file. |
-    | `resolveSessionFilePath(...)`, `resolveSessionTranscriptPathInDir(...)`, `resolveAndPersistSessionFile(...)` | Session identity (`sessionKey`, `sessionId`, and SDK runtime target helpers) plus Gateway methods that operate on the current session. |
+    | Migrating surface | Replacement |
+    | ----------------- | ----------- |
+    | Deprecated `loadSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionStoreEntry(...)` | `getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations. |
+    | Deprecated `resolveSessionFilePath(...)` | Session identity (`sessionKey`, `sessionId`, and SDK runtime target helpers) plus Gateway methods that operate on the current session. |
+    | Removed `saveSessionStore(...)` | Gateway-owned session runtime APIs; plugin code should request or mutate session state through documented runtime/context helpers instead of writing the active store file. |
+    | Removed `resolveSessionTranscriptPathInDir(...)` and `resolveAndPersistSessionFile(...)` | Session identity and Gateway methods that operate on the current session. |
     | `readLatestAssistantTextFromSessionTranscript(...)` | Identity-backed transcript readers exposed by the current runtime context, or Gateway history/session methods when the plugin is outside the transcript owner path. |
     | `SessionTranscriptUpdate.sessionFile` | `SessionTranscriptUpdate.target` with `agentId`, `sessionKey`, and `sessionId`. |
     | Memory sync inputs such as `sessionFiles` | Identity-backed transcript/session sources provided by the host; do not crawl active JSONL files for live sessions. |
@@ -821,6 +825,12 @@ major release. Every entry maps the old API to its canonical replacement.
     Legacy JSONL transcript files remain valid as import, archive, export, and
     support artifacts. They are no longer the steady-state runtime contract for
     active sessions.
+
+    Official plugins released with `v2026.7.1-beta.5` imported the four
+    deprecated helpers above. `openclaw/plugin-sdk/session-store-runtime` keeps
+    that exact bridge through 2026-10-12; new plugins must use the replacements.
+    `resolveStorePath(...)` remains a supported SDK helper and is not part of
+    this deprecation.
 
     `openclaw plugins inspect --all --runtime` reports non-bundled plugins whose
     load errors or diagnostics still reference these removed file APIs. The

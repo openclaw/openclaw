@@ -1,10 +1,9 @@
 import Foundation
-@testable import OpenClaw
-@testable import OpenClawIPC
-import OpenClawKit
-@testable import OpenClawMacCLI
 import OpenClawProtocol
 import Testing
+@testable import OpenClaw
+@testable import OpenClawKit
+@testable import OpenClawMacCLI
 
 private func makeGatewayGenerationSnapshot(version: String) -> HelloOk {
     HelloOk(
@@ -680,6 +679,7 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         let params = json?["params"] as? [String: Any]
         #expect(params?["thinking"] == nil)
         #expect(params?["expectedSessionRoutingContract"] as? String == "per-sender|main|main")
+        #expect(params?["timeoutMs"] == nil)
     }
 
     @Test func `routing identity decodes agent and contract from one response`() throws {
@@ -736,7 +736,7 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
             let unscopedToken = "legacy-unscoped-token"
             let routeAToken = "route-a-device-token"
             let routeAAuth = try await self.connectAuth(

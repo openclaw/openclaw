@@ -132,6 +132,7 @@ import {
 } from "../../net.js";
 import { filterLegacyNodeProtocolFeatures } from "../../node-command-policy.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
+import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
@@ -472,6 +473,11 @@ function resolvePinnedClientMetadata(params: {
     claimedPlatform !== "" &&
     normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
       normalizeLegacyNodeHostPlatformPin(pairedPlatform);
+  const isNodeHostUsingMacAppPlatformPin =
+    params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+    (claimedPlatform === "darwin" || claimedPlatform === "macos") &&
+    /^macos \d+(?:\.\d+){0,2}$/.test(pairedPlatform);
   const claimedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
     params.clientId,
     claimedPlatform,
@@ -484,12 +490,16 @@ function resolvePinnedClientMetadata(params: {
     hasPinnedPlatform &&
     claimedPlatform !== "" &&
     claimedPlatform !== pairedPlatform &&
-    claimedNativeAppPlatformFamily !== undefined &&
-    claimedNativeAppPlatformFamily === pairedNativeAppPlatformFamily;
+    ((claimedNativeAppPlatformFamily !== undefined &&
+      claimedNativeAppPlatformFamily === pairedNativeAppPlatformFamily) ||
+      (params.clientId === GATEWAY_CLIENT_IDS.MACOS_APP &&
+        claimedNativeAppPlatformFamily === "macos" &&
+        (pairedPlatform === "darwin" || pairedPlatform === "macos")));
   const platformMismatch =
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
     !isLegacyNodeHostPlatformPin &&
+    !isNodeHostUsingMacAppPlatformPin &&
     !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
   const pinnedPlatform =
@@ -497,9 +507,11 @@ function resolvePinnedClientMetadata(params: {
       ? params.pairedPlatform
       : isLegacyNodeHostPlatformPin
         ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
-        : isNativeAppPlatformVersionRefresh
-          ? params.claimedPlatform
-          : undefined;
+        : isNodeHostUsingMacAppPlatformPin
+          ? params.pairedPlatform
+          : isNativeAppPlatformVersionRefresh
+            ? params.claimedPlatform
+            : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,
@@ -2234,7 +2246,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
           connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
         let trustedAgentRuntimeIdentity:
-          | ReturnType<typeof verifyAgentRuntimeIdentityToken>
+          | Awaited<ReturnType<typeof verifyAgentRuntimeIdentityToken>>
           | undefined;
         if (typeof agentRuntimeIdentityToken === "string") {
           if (!canAcceptAgentRuntimeIdentity) {
@@ -2249,7 +2261,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             close(1008, truncateCloseReason(message));
             return;
           }
-          trustedAgentRuntimeIdentity = verifyAgentRuntimeIdentityToken(agentRuntimeIdentityToken);
+          trustedAgentRuntimeIdentity =
+            await verifyAgentRuntimeIdentityToken(agentRuntimeIdentityToken);
           if (!trustedAgentRuntimeIdentity) {
             const message = "invalid agent runtime identity token";
             markHandshakeFailure("agent-runtime-identity-invalid", {
@@ -2575,6 +2588,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           deviceId: device?.id,
         });
         advanceHandshakePhase("ready");
+        if (role === "node") {
+          const context = buildRequestContext();
+          const nodeId = connectParams.device?.id ?? connectParams.client.id;
+          const nodeSession = context.nodeRegistry.get(nodeId);
+          // Only a current session that received hello-ok counts as connected;
+          // failed or replaced handshakes must not alert or consume cooldown.
+          if (nodeSession?.connId === connId) {
+            scheduleNodeConnectionNotification(context.nodeRegistry, nodeSession);
+          }
+        }
         if (pendingNodePairingCleanup) {
           const context = buildRequestContext();
           const cleanupClaim = pendingNodePairingCleanup;

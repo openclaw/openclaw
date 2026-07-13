@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -82,7 +83,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "5425ee9e6c59cc18c1fd52a65df09fbc758381a7";
+    const kovaRef = "2b02b7d33418db0c6952c4cf8fe8a608e7964859";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
 
@@ -102,6 +103,20 @@ describe("OpenClaw performance workflow", () => {
     ).toBeLessThan(installRun.indexOf('cat > "$HOME/.local/bin/kova"'));
     expect(workflow).toContain("PERFORMANCE_MODEL_ID: gpt-5.6");
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
+  });
+
+  it("pins the OCM release archive and checksum", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const installRun = findStep("Install OCM and Kova").run ?? "";
+
+    expect(workflow).toContain("OCM_VERSION: v0.2.25");
+    expect(workflow).toContain(
+      "OCM_LINUX_X64_SHA256: 57530199d21eb5bfa29695749928b40fd2869484c7edff69b7c65bfc84f2f1aa",
+    );
+    expect(installRun).toContain(
+      '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
+    );
+    expect(installRun).toContain('echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -');
   });
 
   it("resolves each target once before benchmark and publication fan out", () => {
@@ -645,7 +660,9 @@ esac
     const plan = findStep("Kova version and plan sanity");
     const runKova = findStep("Run Kova");
     const matrixEntries = kovaMatrixEntries();
-    const includeFilters = matrixEntries.map((entry) => entry.include_filters);
+    const includeFilters = matrixEntries.map((entry, index) =>
+      expectDefined(entry.include_filters, `Kova matrix include filters ${index}`),
+    );
     const expectedReleaseEntries = matrixEntries.map((entry) => entry.expected_release_entries);
 
     expect(includeFilters).toEqual([

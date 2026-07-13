@@ -219,6 +219,10 @@ const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
 );
+const loadSessionCatalogHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-catalog.js"),
+  (module) => module.sessionCatalogHandlers,
+);
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
   (module) => module.skillsHandlers,
@@ -250,6 +254,10 @@ const loadToolsEffectiveHandlers = lazyHandlerModule(
 const loadToolsInvokeHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-invoke.js"),
   (module) => module.toolsInvokeHandlers,
+);
+const loadMcpAppHandlers = lazyHandlerModule(
+  () => import("./server-methods/mcp-app.js"),
+  (module) => module.mcpAppHandlers,
 );
 const loadTtsHandlers = lazyHandlerModule(
   () => import("./server-methods/tts.js"),
@@ -584,6 +592,17 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "mcp.app.view",
+      "mcp.app.callTool",
+      "mcp.app.listTools",
+      "mcp.app.listResources",
+      "mcp.app.listResourceTemplates",
+      "mcp.app.readResource",
+    ],
+    loadHandlers: loadMcpAppHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "tts.status",
       "tts.enable",
       "tts.disable",
@@ -627,7 +646,17 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "sessions.catalog.list",
+      "sessions.catalog.read",
+      "sessions.catalog.continue",
+      "sessions.catalog.archive",
+    ],
+    loadHandlers: loadSessionCatalogHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "sessions.list",
+      "sessions.search",
       "sessions.cleanup",
       "sessions.subscribe",
       "sessions.unsubscribe",
@@ -753,7 +782,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadArtifactsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.files.list", "sessions.files.get"],
+    methods: ["sessions.files.list", "sessions.files.get", "sessions.files.set"],
     loadHandlers: loadSessionsFilesHandlers,
   }),
   ...createLazyCoreHandlers({

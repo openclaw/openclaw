@@ -1,6 +1,7 @@
 /** Resolves the exact root and entry selected by the plugin runtime loader. */
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 function safeRealpathOrResolve(value: string): string {
@@ -96,11 +97,12 @@ function resolvePackageLocalDistRuntimeArtifact(params: {
   return null;
 }
 
-export function resolvePreferredBuiltRuntimeArtifact(params: {
+function resolvePreferredBuiltRuntimeArtifact(params: {
   source: string;
   rootDir: string;
   origin: PluginOrigin;
   preferBuiltPluginArtifacts: boolean;
+  packageManifest?: OpenClawPackageManifest;
 }): { source: string; rootDir: string } {
   const rootDir = safeRealpathOrResolve(params.rootDir);
   const source = safeRealpathOrResolve(params.source);
@@ -112,6 +114,9 @@ export function resolvePreferredBuiltRuntimeArtifact(params: {
     if (artifactSource) {
       return { source: artifactSource, rootDir };
     }
+    return { source, rootDir };
+  }
+  if (params.packageManifest?.build?.bundledDist === false) {
     return { source, rootDir };
   }
   const packageLocalArtifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
@@ -155,6 +160,7 @@ export function resolvePluginRuntimeArtifact(params: {
   rootDir: string;
   origin: PluginOrigin;
   preferBuiltPluginArtifacts: boolean;
+  packageManifest?: OpenClawPackageManifest;
 }): { source: string; rootDir: string } {
   const preferred = resolvePreferredBuiltRuntimeArtifact(params);
   return {

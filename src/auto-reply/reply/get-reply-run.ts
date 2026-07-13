@@ -33,7 +33,6 @@ import {
   formatSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesSession,
 } from "../../config/sessions/sqlite-marker.js";
-import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -113,6 +112,7 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
@@ -142,7 +142,7 @@ type InternalGetReplyOptions = BaseInternalGetReplyOptions & {
 };
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
-type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "nodeCwd">;
 const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
 function hasResolvedThinkingCatalogEntry(params: {
@@ -1077,7 +1077,23 @@ export async function runPreparedReply(
     }
   }
   const providedReplyOperation = opts?.replyOperation;
+  // Native command turns reserve their operation under the slash SOURCE key so
+  // commands never contend with the target's active run (#104144). When such a
+  // turn continues into a full agent turn (/steer fallback, /goal, /learn,
+  // unhandled body), it mutates the TARGET session: it must adopt the target's
+  // run slot before running or concurrent target inbounds double-admit and
+  // split the session (#104844).
+  const commandTurnContinuationTargetKey =
+    providedReplyOperation !== undefined &&
+    providedReplyOperation.result === null &&
+    providedReplyOperation.phase === "queued" &&
+    sessionKey !== undefined &&
+    providedReplyOperation.key !== sessionKey &&
+    resolveCommandTurnTargetSessionKey(ctx) !== undefined
+      ? sessionKey
+      : undefined;
   if (
+    commandTurnContinuationTargetKey === undefined &&
     providedReplyOperation !== undefined &&
     providedReplyOperation.result === null &&
     providedReplyOperation.phase === "queued" &&
@@ -1086,7 +1102,9 @@ export async function runPreparedReply(
   ) {
     // Dispatch reserves a queued operation before session init. If stale init
     // rotates the session, move the reservation so later steer/abort paths
-    // target the session that will actually run.
+    // target the session that will actually run. Command-turn continuations
+    // rebind after slot adoption below: rebinding first would collide with a
+    // still-active target operation that owns the same session ID.
     providedReplyOperation.updateSessionId(sessionId);
   }
   const isOwnPreDispatchOperationSession = (candidateSessionId: string | undefined): boolean =>
@@ -1101,12 +1119,19 @@ export async function runPreparedReply(
     sessionId: string;
     sessionFile: string;
   } => {
+    // Working-set exact key first; disk alias resolve only when storePath known.
+    // No whole-map scan — that encodes the store layout the accessor hides.
     const latestSessionEntry =
       sessionStore && sessionKey
-        ? (resolveSessionStoreEntry({
-            store: sessionStore,
-            sessionKey,
-          }).existing ?? sessionEntry)
+        ? (sessionStore[sessionKey] ??
+          (storePath
+            ? loadSessionEntry({
+                storePath,
+                sessionKey,
+                readConsistency: "latest",
+              })
+            : undefined) ??
+          sessionEntry)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
     opts?.onSessionPrepared?.({
@@ -1289,6 +1314,35 @@ export async function runPreparedReply(
           isReplyRunStreamingForSessionId(replyOperationActiveSessionId)),
     };
   };
+  if (commandTurnContinuationTargetKey && providedReplyOperation) {
+    const adoption = await admitReplyTurn({
+      sessionKey: commandTurnContinuationTargetKey,
+      sessionId: providedReplyOperation.sessionId,
+      expectedSessionId: preparedSessionState.sessionEntry?.sessionId,
+      storePath,
+      kind: "visible",
+      resetTriggered: effectiveResetTriggered,
+      routeThreadId: currentRouteThreadId,
+      upstreamAbortSignal: opts?.abortSignal,
+      // Never wait on the target's active turn: a blocked continuation would
+      // re-create the #104142 command-lane wedge. When the slot is owned, the
+      // queue policy below sees the target-keyed owner and steers/queues this
+      // turn instead of running it concurrently.
+      waitForActive: false,
+      adoptOperation: providedReplyOperation,
+    });
+    if (adoption.status === "skipped" && adoption.reason === "aborted") {
+      typing.cleanup();
+      return undefined;
+    }
+    if (
+      adoption.status === "owned" &&
+      sessionId !== undefined &&
+      sessionId !== providedReplyOperation.sessionId
+    ) {
+      providedReplyOperation.updateSessionId(sessionId);
+    }
+  }
   const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const isHeartbeatRun = opts?.isHeartbeat === true;

@@ -380,6 +380,8 @@ type SessionWorkspaceFileEntry = {
   size?: number;
   updatedAtMs?: number;
   content?: string;
+  /** sha256 hex of the file bytes; the CAS token for sessions.files.set. */
+  hash?: string;
 };
 
 type SessionWorkspaceBrowserEntry = {
@@ -425,6 +427,12 @@ export type SessionWorkspaceGetResult = {
   file: SessionWorkspaceFileEntry;
 };
 
+export type SessionWorkspaceSetResult = {
+  sessionKey: string;
+  root?: string;
+  file: SessionWorkspaceFileEntry;
+};
+
 export type ArtifactDownloadResult = {
   artifact: SessionWorkspaceArtifactEntry;
   encoding?: "base64";
@@ -441,7 +449,7 @@ type SessionCompactionCheckpointReason =
   | "overflow-retry"
   | "timeout-retry";
 
-export type SessionCompactionTranscriptReference = {
+type SessionCompactionTranscriptReference = {
   sessionId: string;
   sessionFile?: string;
   leafId?: string;
@@ -514,6 +522,8 @@ export type GatewaySessionRow = {
   status?: SessionRunStatus;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** An enabled cron job is bound to this session (runs in it or delivers to it). */
+  hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -581,12 +591,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
 };
 
 export type {
-  CostUsageDailyEntry,
   CostUsageSummary,
-  SessionsUsageEntry,
   SessionsUsageResult,
-  SessionsUsageTotals,
-  SessionUsageTimePoint,
   SessionUsageTimeSeries,
 } from "../pages/usage/data-types.ts";
 
@@ -635,7 +641,7 @@ export type CronPayload =
       bestEffortDeliver?: boolean;
     };
 
-export type CronDelivery = {
+type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
@@ -857,16 +863,3 @@ export type ModelAuthStatusProvider =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProvider;
 export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
-
-// ── Attention ───────────────────────────────────────
-
-type AttentionSeverity = "error" | "warning" | "info";
-
-export type AttentionItem = {
-  severity: AttentionSeverity;
-  icon: string;
-  title: string;
-  description: string;
-  href?: string;
-  external?: boolean;
-};

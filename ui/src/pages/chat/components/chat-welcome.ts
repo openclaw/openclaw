@@ -1,4 +1,5 @@
 // Control UI chat module implements chat welcome behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import {
@@ -26,6 +27,10 @@ type ChatWelcomeProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  /** Hero hint override; defaults to the chat slash-command hint. */
+  hint?: unknown;
+  /** Rendered between the hero and the recents (the new-session draft composer). */
+  composer?: unknown;
   sessions?: SessionsListResult | null;
   sessionKey?: string;
   sessionHost?: UiSessionDefaultsHost | null;
@@ -66,7 +71,7 @@ export function resolveAssistantDisplayAvatar(
  * minus channel-originated sessions — those live in their channel sections and
  * are not something the user "starts" from here.
  */
-export function selectWelcomeRecentSessions(
+function selectWelcomeRecentSessions(
   props: Pick<ChatWelcomeProps, "sessions" | "sessionKey" | "sessionHost">,
 ): GatewaySessionRow[] {
   if (!props.sessions) {
@@ -95,7 +100,8 @@ export function selectWelcomeRecentSessions(
 // big and borderless with its own gentle idle loop (see layout.css).
 function renderWelcomeClawd() {
   const palette =
-    LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson") ?? LOBSTER_PET_PALETTES[0];
+    LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson") ??
+    expectDefined(LOBSTER_PET_PALETTES[0], "welcome lobster palette");
   const look = canonicalLobsterLook(palette);
   return html`
     <div
@@ -108,7 +114,7 @@ function renderWelcomeClawd() {
   `;
 }
 
-function renderRecentSessions(
+function renderWelcomeRecentSessions(
   rows: GatewaySessionRow[],
   onOpenSession: ((sessionKey: string) => void) | undefined,
 ) {
@@ -131,7 +137,7 @@ function renderRecentSessions(
   `;
 }
 
-function renderSuggestions(props: Pick<ChatWelcomeProps, "onDraftChange" | "onSend">) {
+function renderWelcomeSuggestions(props: Pick<ChatWelcomeProps, "onDraftChange" | "onSend">) {
   return html`
     <div class="agent-chat__suggestions">
       ${WELCOME_SUGGESTION_KEYS.map((key) => {
@@ -153,29 +159,47 @@ function renderSuggestions(props: Pick<ChatWelcomeProps, "onDraftChange" | "onSe
   `;
 }
 
-export function renderWelcomeState(props: ChatWelcomeProps) {
+function renderWelcomeHero(
+  props: Pick<ChatWelcomeProps, "assistantName" | "assistantAvatar" | "assistantAvatarUrl"> & {
+    hint: unknown;
+  },
+) {
   const name = props.assistantName || "Assistant";
   const avatar = resolveAssistantAvatarUrl(props);
   const avatarText = avatar ? null : resolveAssistantTextAvatar(props.assistantAvatar);
+  return html`
+    ${avatar
+      ? html`<img class="agent-chat__welcome-avatar" src=${avatar} alt=${name} />`
+      : avatarText
+        ? html`<div class="agent-chat__avatar agent-chat__avatar--text" aria-label=${name}>
+            ${avatarText}
+          </div>`
+        : renderWelcomeClawd()}
+    <h2>${name}</h2>
+    <p class="agent-chat__hint">${props.hint}</p>
+  `;
+}
+
+/** The start-screen welcome block, shared by the empty chat and the new-session draft. */
+export function renderWelcomeState(props: ChatWelcomeProps) {
   const recentSessions = selectWelcomeRecentSessions(props);
 
   return html`
     <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
-      ${avatar
-        ? html`<img class="agent-chat__welcome-avatar" src=${avatar} alt=${name} />`
-        : avatarText
-          ? html`<div class="agent-chat__avatar agent-chat__avatar--text" aria-label=${name}>
-              ${avatarText}
-            </div>`
-          : renderWelcomeClawd()}
-      <h2>${name}</h2>
-      <p class="agent-chat__hint">
-        ${t("chat.welcome.hintBeforeShortcut")} <kbd>/</kbd>
-        ${t("chat.welcome.hintAfterShortcut")}
-      </p>
+      ${renderWelcomeHero({
+        assistantName: props.assistantName,
+        assistantAvatar: props.assistantAvatar,
+        assistantAvatarUrl: props.assistantAvatarUrl,
+        hint:
+          props.hint ??
+          html`${t("chat.welcome.hintBeforeShortcut")} <kbd>/</kbd> ${t(
+              "chat.welcome.hintAfterShortcut",
+            )}`,
+      })}
+      ${props.composer ?? nothing}
       ${recentSessions.length > 0
-        ? renderRecentSessions(recentSessions, props.onOpenSession)
-        : renderSuggestions(props)}
+        ? renderWelcomeRecentSessions(recentSessions, props.onOpenSession)
+        : renderWelcomeSuggestions(props)}
     </div>
   `;
 }

@@ -52,7 +52,6 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./engine-storage",
   "./multimodal",
   "./query",
-  "./runtime",
   "./runtime-cli",
   "./runtime-core",
   "./runtime-files",

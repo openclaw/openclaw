@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Outbound delivery core runs plugin hooks, queue durability, channel adapter
 // sends, commit hooks, diagnostics, transcript mirroring, and payload outcomes.
 import { hasTrustedMessageAuditListeners } from "../../audit/message-audit-events.js";
@@ -869,7 +870,7 @@ function emitMessageDeliveryError(params: {
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text })) {
+    if (!hasReplyPayloadContent({ ...payload, text }, { extraContent: payload.location != null })) {
       return null;
     }
     if (text) {
@@ -1878,7 +1879,12 @@ async function deliverOutboundPayloadsCore(
                 availableReportedIndices.has(reported.resultIndex) &&
                 !coveredIndices.includes(reported.resultIndex) &&
                 results[reported.resultIndex]?.channel === delivery.channel &&
-                resultPlatformIds(results[reported.resultIndex]).has(receiptId),
+                resultPlatformIds(
+                  expectDefined(
+                    results[reported.resultIndex],
+                    "results entry at reported.result index",
+                  ),
+                ).has(receiptId),
             )
             .map((reported) => reported.resultIndex);
           // One receipt part covers one progress result. Repeated parts preserve
@@ -2264,12 +2270,19 @@ async function deliverOutboundPayloadsCore(
         deliveryHandler.sendPayload &&
         ((effectivePayload.isError === true &&
           deliveryHandler.sendTextOnlyErrorPayloads === true) ||
-          hasReplyPayloadContent({
-            presentation: effectivePayload.presentation,
-            interactive: effectivePayload.interactive,
-            channelData: effectivePayload.channelData,
-          }) ||
-          effectivePayload.audioAsVoice === true)
+          hasReplyPayloadContent(
+            {
+              presentation: effectivePayload.presentation,
+              interactive: effectivePayload.interactive,
+              channelData: effectivePayload.channelData,
+              location: effectivePayload.location,
+            },
+            {
+              extraContent: effectivePayload.location != null,
+            },
+          ) ||
+          effectivePayload.audioAsVoice === true ||
+          effectivePayload.videoAsNote === true)
       ) {
         const beforeCount = results.length;
         const delivery = await deliveryHandler.sendPayload(

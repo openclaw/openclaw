@@ -11,7 +11,12 @@ A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that conne
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway's WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac). In remote gateway mode, browser automation is handled by the CLI node host (`openclaw node run` or the installed node service), not by the native app node.
+macOS can also run in **node mode**: the menu bar app connects to the Gateway's
+WS server as one node (so `openclaw nodes …` works against this Mac). The app
+adds native Canvas, camera, screen, notification, and computer-control commands
+to the same node-host command surface used by `openclaw node run`. Do not start a
+second CLI node on that Mac; the app runs the matching CLI node-host runtime as
+an internal worker and remains the sole Gateway connection and node identity.
 
 Nodes are **peripherals**, not gateways: they don't run the gateway service, and channel messages (Telegram, WhatsApp, etc.) land on the gateway, not on nodes.
 
@@ -32,6 +37,12 @@ openclaw nodes describe --node <idOrNameOrIp>
 Pending pairing requests expire 5 minutes after the device's last retry — a device that keeps reconnecting keeps its one pending request (and `requestId`) alive instead of minting a new prompt every few minutes; see [Node pairing](/gateway/pairing) for the full request/approve lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — clients get a `device.pair.resolved` event for the superseded request, and you should re-run `openclaw devices list` before approving.
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
+- A connected native Mac with Accessibility permission can report coalesced
+  physical-input activity. The Gateway marks the freshest eligible Mac as
+  `active`, gives the agent a stable node-id hint, and routes node connection
+  alerts there before a delayed fallback. See
+  [Active computer presence](/nodes/presence) for setup, privacy, timing, and
+  troubleshooting.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
 - `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate, gateway-owned node pairing store that tracks the node's approved command/capability surface across reconnects. It does **not** gate transport authentication — device pairing does that.
 - `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
@@ -203,8 +214,13 @@ node skill files; the node host does not watch the skills directory.
 
 Node-hosted skill entries identify their node and carry their execution
 location. Skill files, referenced relative paths, and binaries remain on that
-node. Load instructions and run commands with
-`exec host=node node=<node-id>` so relative paths resolve on the node rather
+node. The agent reads the advertised `node://.../SKILL.md` location with the
+normal `read` tool. `file_fetch` accepts operator-approved absolute node paths,
+not node skill locators; runtimes without the normal read tool can instead run
+`cat SKILL.md` through `exec host=node node=<node-id>` with the advertised
+`node://.../skills/<name>` directory as `workdir`. Referenced files and binaries
+use the same exec target and workdir. The node host resolves that locator against
+its active OpenClaw state directory, so relative paths resolve on the node rather
 than the Gateway machine. The publishing node must have approved `system.run`,
 and the agent's exec policy must allow `host=node`; otherwise the skill stays
 out of that agent's snapshot.
@@ -270,11 +286,12 @@ A desktop or server node can expose chat-capable models from an Ollama server ru
 
 ### Codex sessions and transcripts
 
-The official `codex` plugin can expose non-archived Codex sessions
-on a headless node host or native macOS node.
-Enable `plugins.entries.codex.config.supervision.enabled` independently in the
-node's local config and on the Gateway. The node setting is local consent;
-enabling only the Gateway cannot read another computer's Codex state.
+The official `codex` plugin can expose non-archived Codex sessions on a
+headless node host or native macOS node. Catalog registration no longer depends
+on `supervision.enabled`; that option gates the agent-facing supervision tools.
+The plugin must still be active on both computers, and the node setting remains
+local consent: enabling only the Gateway cannot read another computer's Codex
+state.
 
 The node advertises the versioned read-only
 `codex.appServer.threads.list.v1` and
@@ -282,8 +299,9 @@ The node advertises the versioned read-only
 upgrade when those commands first appear. The Gateway invokes them through the
 normal plugin node policy and isolates failures by host.
 
-Paired-node rows appear in the main sidebar and **Codex Sessions**. Selecting a
-row reads its persisted transcript through bounded, cursor-paginated
+Paired-node rows appear as a **Codex** group in the normal sessions sidebar.
+Selecting a row opens the normal Chat pane and reads its persisted transcript
+through bounded, cursor-paginated
 `thread/turns/list` calls with full item projection. The node invoke transport is request/response only and cannot
 carry the streaming turns, live events, or approvals required to continue a
 native thread through the Codex harness. **Continue** and **Archive** are
@@ -314,9 +332,12 @@ session or loading an older page does not read the whole JSONL history into one
 Gateway response.
 
 Both node commands are read-only. They expose catalog metadata and transcript
-content only to an authenticated operator connection with `operator.write`,
-which is required by the shared `node.invoke` transport. OpenClaw does not
-modify Claude's files or start a Claude runner on the paired computer.
+content only through the generic `sessions.catalog.list` and
+`sessions.catalog.read` methods to an authenticated operator connection with
+`operator.write`. Paired-node rows stay view-only. A Gateway-local Claude CLI
+row can be adopted from the normal Chat composer: OpenClaw imports bounded
+visible history, resumes with `--fork-session` on the first turn, and leaves the
+source transcript untouched. Claude Desktop rows remain view-only.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
@@ -458,6 +479,7 @@ Notes:
 - Mobile nodes use a bundled app-owned A2UI page for action-capable rendering.
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
 - iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
+- macOS can dispatch actions from the exact capability-scoped Gateway A2UI page selected by the app. Other HTTP/HTTPS pages remain render-only.
 
 ## Photos + videos (node camera)
 

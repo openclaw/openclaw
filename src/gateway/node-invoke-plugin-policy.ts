@@ -18,7 +18,6 @@ import {
   bindApprovalRequesterMetadata,
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
-  registerPendingApprovalRecord,
 } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
@@ -116,15 +115,11 @@ function createApprovalRuntime(params: {
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
-      const decisionPromise = registerPendingApprovalRecord({
-        manager,
-        record,
-        timeoutMs,
-        respond,
-      });
-      if (!decisionPromise) {
-        return { id: record.id, decision: null };
-      }
+      // Register directly: persistence and presentation-validation failures
+      // must throw so the plugin policy fails closed before any request
+      // routing. The RPC storage-unavailable respond path does not apply to
+      // this runtime-internal caller.
+      const decisionPromise = manager.register(record, timeoutMs);
       const requestEvent = buildRequestedApprovalEvent(record);
       await handlePendingApprovalRequest({
         manager,
@@ -150,7 +145,16 @@ function createApprovalRuntime(params: {
           });
         },
       });
-      return { id: record.id, decision: await decisionPromise };
+      const decision = await decisionPromise;
+      // This return hands execution authority to the plugin policy. Claim a
+      // one-shot decision here so observation or retry cannot replay it.
+      if (
+        decision === "allow-once" &&
+        !manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`)
+      ) {
+        return { id: record.id, decision: null };
+      }
+      return { id: record.id, decision };
     },
   };
 }

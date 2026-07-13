@@ -5,6 +5,8 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
+  persistSessionToken,
+  resolvePageGatewaySettings,
   resolveApplicationStartupSettings,
   saveSettings,
   type UiSettings,
@@ -59,7 +61,7 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 258,
-    sidebarPinnedRoutes: ["overview"],
+    sidebarPinnedRoutes: [],
     sidebarMoreExpanded: false,
     ...overrides,
   };
@@ -127,6 +129,32 @@ describe("loadSettings default gateway URL derivation", () => {
     setControlUiBasePath(" /openclaw/ ");
 
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/openclaw"));
+  });
+
+  it("binds standalone documents to the page Gateway without persisting a selection", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/openclaw/approve/exec%3A1",
+    });
+    setControlUiBasePath("/openclaw");
+    const remote = makeSettings("wss://remote.example:8443", {
+      sessionKey: "agent:remote:main",
+      lastActiveSessionKey: "agent:remote:main",
+    });
+    const sessionCredential = ["page", "session", "credential"].join("-");
+    persistSessionToken(expectedGatewayUrl("/openclaw"), sessionCredential);
+    const before = [...Array(localStorage.length)].map((_, index) => localStorage.key(index));
+
+    expect(resolvePageGatewaySettings(remote)).toMatchObject({
+      gatewayUrl: expectedGatewayUrl("/openclaw"),
+      token: sessionCredential,
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    });
+    expect([...Array(localStorage.length)].map((_, index) => localStorage.key(index))).toEqual(
+      before,
+    );
   });
 
   it("defaults chat auto-scroll to near-bottom", () => {
@@ -233,7 +261,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
       textScale: 100,
     });
@@ -265,7 +293,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
     });
 
@@ -282,7 +310,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
     });
 
@@ -311,7 +339,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
     });
     const settings = loadSettings();
@@ -330,7 +358,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
       textScale: 100,
       sessionsByGateway: {
@@ -384,7 +412,7 @@ describe("loadSettings default gateway URL derivation", () => {
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarPinnedRoutes).toEqual(["overview"]);
+    expect(loadSettings().sidebarPinnedRoutes).toEqual(["usage", "cron", "plugins"]);
     expect(loadSettings().sidebarMoreExpanded).toBe(false);
     expect(loadSettings().navWidth).toBe(258);
   });
@@ -503,7 +531,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
     });
     saveSettings({
@@ -518,7 +546,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
     });
 
@@ -546,7 +574,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 320,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
     });
 
@@ -617,7 +645,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
       customTheme,
     });
@@ -647,7 +675,7 @@ describe("loadSettings default gateway URL derivation", () => {
         splitRatio: 0.6,
         navCollapsed: false,
         navWidth: 258,
-        sidebarPinnedRoutes: ["overview"],
+        sidebarPinnedRoutes: [],
         sidebarMoreExpanded: false,
         customTheme: {
           sourceUrl: "https://tweakcn.com/themes/broken",
@@ -691,7 +719,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
     });
 
@@ -734,7 +762,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["overview"],
+      sidebarPinnedRoutes: [],
       sidebarMoreExpanded: false,
     });
 

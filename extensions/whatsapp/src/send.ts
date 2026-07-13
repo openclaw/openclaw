@@ -16,8 +16,7 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
 } from "./accounts.js";
-import { registerWhatsAppApprovalReactionTargetForOutboundMessage } from "./approval-reactions.js";
-import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
+import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
 import { isWhatsAppNewsletterJid } from "./normalize.js";
@@ -95,8 +94,7 @@ function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; account
 } {
   const accountId = resolveOutboundWhatsAppAccountId(params);
   const resolvedAccountId = accountId ?? resolveDefaultWhatsAppAccountId(params.cfg);
-  const listener =
-    getRegisteredWhatsAppConnectionController(resolvedAccountId)?.getActiveListener() ?? null;
+  const listener = getWhatsAppConnectionController(resolvedAccountId)?.getActiveListener() ?? null;
   if (!listener) {
     const cause = new Error(
       `No active WhatsApp Web listener (account: ${resolvedAccountId}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${resolvedAccountId}`)}.`,
@@ -261,14 +259,6 @@ export async function sendMessageWhatsApp(
       await options.onDeliveryResult?.({
         messageId: (captionResult as { messageId?: string })?.messageId ?? "unknown",
         toJid: resolveActualSentRemoteJid(captionResult, jid),
-      });
-    }
-    if (messageId && messageId !== "unknown" && text) {
-      registerWhatsAppApprovalReactionTargetForOutboundMessage({
-        accountId: resolvedAccountId,
-        remoteJid: sentRemoteJid,
-        messageId,
-        text,
       });
     }
     const durationMs = Date.now() - startedAt;

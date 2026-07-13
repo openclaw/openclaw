@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing as sessionMcpTesting,
@@ -11,6 +12,7 @@ import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  appendTranscriptEvent,
   listSessionEntries,
   loadSessionEntry,
   replaceSessionEntry,
@@ -385,17 +387,23 @@ async function writeTerminalTranscriptSessionStore(params: {
   omitStatus?: boolean;
   updatedAt: number;
   endedAt: number;
-  transcriptMtimeMs: number;
+  transcriptMutationOrder: "after-registry" | "before-registry";
 }): Promise<void> {
   const sessionFile = `${params.sessionId}.jsonl`;
-  const transcriptPath = path.join(path.dirname(params.storePath), sessionFile);
-  await fs.writeFile(
-    transcriptPath,
-    `${JSON.stringify({ type: "session", id: params.sessionId })}\n`,
-    "utf-8",
-  );
-  await fs.utimes(transcriptPath, params.transcriptMtimeMs / 1000, params.transcriptMtimeMs / 1000);
   const status = params.status ?? (params.omitStatus ? undefined : "done");
+  const appendTranscript = () =>
+    appendTranscriptEvent(
+      {
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
+    );
+  if (params.transcriptMutationOrder === "before-registry") {
+    await appendTranscript();
+  }
   await writeSessionStoreFast(params.storePath, {
     [params.sessionKey]: {
       sessionId: params.sessionId,
@@ -407,6 +415,9 @@ async function writeTerminalTranscriptSessionStore(params: {
       ...(status ? { status } : {}),
     },
   });
+  if (params.transcriptMutationOrder === "after-registry") {
+    await appendTranscript();
+  }
 }
 
 function setMinimalCurrentConversationBindingRegistryForTests(): void {
@@ -2344,36 +2355,36 @@ describe("initSessionState reset policy", () => {
 
   it.each([
     {
-      name: "non-main terminal rows ignore transcript mtime",
+      name: "non-main terminal rows ignore later transcript mutations",
       sessionKey: "agent:main:whatsapp:dm:terminal-entry",
       updatedAtOffsetMs: -5_000,
       endedAtOffsetMs: -6_000,
-      transcriptMtimeOffsetMs: -3_000,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: false,
     },
     {
-      name: "main status-done terminal rows reuse when transcript is newer than updatedAt",
+      name: "main status-done terminal rows reuse after a later transcript mutation",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: false,
     },
     {
-      name: "main killed terminal rows rotate when transcript is newer than updatedAt",
+      name: "main killed terminal rows rotate after a later transcript mutation",
       sessionKey: "agent:main:main",
       status: "killed" as const,
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: true,
     },
     {
-      name: "main endedAt-only rows rotate when transcript is newer than updatedAt",
+      name: "main endedAt-only rows rotate after a later transcript mutation",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
       omitStatus: true,
       expectNewSession: true,
     },
@@ -2383,32 +2394,16 @@ describe("initSessionState reset policy", () => {
       status: "failed" as const,
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: false,
       expectRecovered: true,
     },
     {
-      name: "main terminal rows reuse when updatedAt already reflects the transcript",
+      name: "main terminal rows reuse when the registry observes the transcript mutation",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -1_000,
       endedAtOffsetMs: -6_000,
-      transcriptMtimeOffsetMs: -4_000,
-      expectNewSession: false,
-    },
-    {
-      name: "main terminal rows reuse when transcript mtime differs only by sub-millisecond precision",
-      sessionKey: "agent:main:main",
-      updatedAtOffsetMs: -4_000,
-      endedAtOffsetMs: -6_000,
-      transcriptMtimeOffsetMs: -3_999.5,
-      expectNewSession: false,
-    },
-    {
-      name: "main terminal rows reuse when transcript is not newer than updatedAt",
-      sessionKey: "agent:main:main",
-      updatedAtOffsetMs: -10_000,
-      endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: -15_000,
+      transcriptMutationOrder: "before-registry" as const,
       expectNewSession: false,
     },
   ])("$name", async (scenario) => {
@@ -2427,7 +2422,7 @@ describe("initSessionState reset policy", () => {
       omitStatus: scenario.omitStatus,
       updatedAt: terminalUpdatedAt,
       endedAt: terminalEndedAt,
-      transcriptMtimeMs: now + scenario.transcriptMtimeOffsetMs,
+      transcriptMutationOrder: scenario.transcriptMutationOrder,
     });
 
     const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -3468,12 +3463,15 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       ]);
 
       const stored = readSessionStoreFast(storePath);
-      expect(stored[sessionKey].usageFamilyKey, testCase.name).toBe("family:user-usage-family");
-      expect(stored[sessionKey].usageFamilySessionIds, testCase.name).toEqual([
-        "ancestor-session",
-        existingSessionId,
-        result.sessionId,
-      ]);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").usageFamilyKey,
+        testCase.name,
+      ).toBe("family:user-usage-family");
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant")
+          .usageFamilySessionIds,
+        testCase.name,
+      ).toEqual(["ancestor-session", existingSessionId, result.sessionId]);
     }
   });
 
@@ -3554,9 +3552,15 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
 
       const stored = readSessionStoreFast(storePath);
-      expect(stored[sessionKey].cliSessionIds).toBeUndefined();
-      expect(stored[sessionKey].cliSessionBindings).toBeUndefined();
-      expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
+      ).toBeUndefined();
     }
   });
 
@@ -3829,25 +3833,60 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionEntry.verboseLevel, testCase.name).toBe(runtimeModelCache.verboseLevel);
 
       const stored = readSessionStoreFast(storePath);
-      expect(stored[sessionKey].modelProvider, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].model, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].cacheRead, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].cacheWrite, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].fallbackNoticeSelectedModel, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].fallbackNoticeActiveModel, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].fallbackNoticeReason, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].systemPromptReport, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].providerOverride, testCase.name).toBe(
-        explicitUserOverride.providerOverride,
-      );
-      expect(stored[sessionKey].modelOverride, testCase.name).toBe(
-        explicitUserOverride.modelOverride,
-      );
-      expect(stored[sessionKey].modelOverrideSource, testCase.name).toBe(
-        explicitUserOverride.modelOverrideSource,
-      );
-      expect(stored[sessionKey].contextTokens, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].verboseLevel, testCase.name).toBe(runtimeModelCache.verboseLevel);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant")
+          .fallbackNoticeSelectedModel,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant")
+          .fallbackNoticeActiveModel,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").fallbackNoticeReason,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").systemPromptReport,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").providerOverride,
+        testCase.name,
+      ).toBe(explicitUserOverride.providerOverride);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelOverride,
+        testCase.name,
+      ).toBe(explicitUserOverride.modelOverride);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelOverrideSource,
+        testCase.name,
+      ).toBe(explicitUserOverride.modelOverrideSource);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextTokens,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").verboseLevel,
+        testCase.name,
+      ).toBe(runtimeModelCache.verboseLevel);
     }
   });
 
@@ -4177,8 +4216,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       ),
     );
     const runRollover = async (index: number) => {
-      const admission = admissions[index];
-      const controller = controllers[index];
+      const admission = expectDefined(admissions[index], "admissions[index] test invariant");
+      const controller = expectDefined(controllers[index], "controllers[index] test invariant");
       try {
         return await admission.run(
           async () =>
@@ -4920,10 +4959,18 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(12_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBe(180_000);
-    expect(stored[sessionKey].outputTokens).toBe(10_000);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      12_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      180_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(10_000);
   });
 
   it("keeps the prior total stale when last-call context is unavailable", async () => {
@@ -4956,10 +5003,18 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(148_874);
-    expect(stored[sessionKey].totalTokensFresh).toBe(false);
-    expect(stored[sessionKey].inputTokens).toBe(12);
-    expect(stored[sessionKey].cacheRead).toBe(819_661);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      148_874,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(false);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      12,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      819_661,
+    );
   });
 
   it("marks a fresh zero stale when a completed run has no context snapshot", async () => {
@@ -4984,8 +5039,12 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(0);
-    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      0,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(false);
   });
 
   it("preserves fresh post-compaction totalTokens across model-only updates", async () => {
@@ -5011,8 +5070,12 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(42_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      42_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
   });
 
   it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
@@ -5151,10 +5214,18 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].inputTokens).toBe(100_000);
-    expect(stored[sessionKey].outputTokens).toBe(8_000);
-    expect(stored[sessionKey].cacheRead).toBe(18_000);
-    expect(stored[sessionKey].cacheWrite).toBe(4_000);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      100_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(8_000);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      18_000,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
+      4_000,
+    );
   });
 
   it("marks totalTokens as unknown when no fresh context snapshot is available", async () => {
@@ -5174,8 +5245,12 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBeUndefined();
-    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens,
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(false);
   });
 
   it("preserves fresh post-compaction totalTokens across stale usage updates", async () => {
@@ -5201,8 +5276,12 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(42_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      42_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
   });
 
   it("marks older fresh totalTokens stale when no compaction preservation is requested", async () => {
@@ -5227,8 +5306,12 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(42_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      42_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(false);
   });
 
   it("uses promptTokens when available without lastCallUsage", async () => {
@@ -5249,8 +5332,12 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(42_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      42_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
   });
 
   it("treats CLI usage as a fresh context snapshot when requested", async () => {
@@ -5278,10 +5365,22 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(32_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
-    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      32_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "claude-cli"
+      ],
+    ).toBe("cli-session-1");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "claude-cli"
+      ],
+    ).toEqual({
       sessionId: "cli-session-1",
       authProfileId: "anthropic:default",
       extraSystemPromptHash: "prompt-hash",
@@ -5326,13 +5425,31 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(stored[sessionKey].cliSessionIds?.["codex-cli"]).toBe("codex-session");
-    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(stored[sessionKey].cliSessionBindings?.["codex-cli"]).toEqual({
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "claude-cli"
+      ],
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "codex-cli"
+      ],
+    ).toBe("codex-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "claude-cli"
+      ],
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "codex-cli"
+      ],
+    ).toEqual({
       sessionId: "codex-session",
     });
-    expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
+    ).toBeUndefined();
   });
 
   it("prefers fresh final usage over zero compactionTokensAfter", async () => {
@@ -5365,12 +5482,24 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(1_794_391);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBe(20);
-    expect(stored[sessionKey].outputTokens).toBe(10_855);
-    expect(stored[sessionKey].cacheRead).toBe(1_761_324);
-    expect(stored[sessionKey].cacheWrite).toBe(33_047);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      1_794_391,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      20,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(10_855);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      1_761_324,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
+      33_047,
+    );
   });
 
   it("prefers fresh lastCallUsage over positive compactionTokensAfter", async () => {
@@ -5398,11 +5527,21 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(95_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBe(100_000);
-    expect(stored[sessionKey].outputTokens).toBe(3_000);
-    expect(stored[sessionKey].cacheRead).toBe(4_000);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      95_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      100_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(3_000);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      4_000,
+    );
   });
 
   it("uses positive compactionTokensAfter when final usage has no prompt total", async () => {
@@ -5451,12 +5590,24 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(80_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBeUndefined();
-    expect(stored[sessionKey].outputTokens).toBeUndefined();
-    expect(stored[sessionKey].cacheRead).toBeUndefined();
-    expect(stored[sessionKey].contextBudgetStatus).toBeUndefined();
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      80_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens,
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead,
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextBudgetStatus,
+    ).toBeUndefined();
   });
 
   it("persists totalTokens from promptTokens when usage is unavailable", async () => {
@@ -5482,10 +5633,18 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(39_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBe(1_234);
-    expect(stored[sessionKey].outputTokens).toBe(456);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      39_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      1_234,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(456);
   });
 
   it("keeps non-clamped lastCallUsage totalTokens when exceeding context window", async () => {
@@ -5506,8 +5665,12 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].totalTokens).toBe(250_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      250_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
   });
 
   it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
@@ -5557,7 +5720,9 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored1 = readSessionStoreFast(storePath);
-    expect(stored1[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
+    expect(
+      expectDefined(stored1[sessionKey], "stored1[sessionKey] test invariant").estimatedCostUsd,
+    ).toBeCloseTo(0.007725, 8);
 
     // Second persist with SAME cumulative usage (e.g., heartbeat or redundant persist)
     // Before fix: cost would accumulate to $0.0155 (2x)
@@ -5575,7 +5740,9 @@ describe("persistSessionUsageUpdate", () => {
 
     const stored2 = readSessionStoreFast(storePath);
     // Cost should still be $0.007725, NOT $0.01545
-    expect(stored2[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
+    expect(
+      expectDefined(stored2[sessionKey], "stored2[sessionKey] test invariant").estimatedCostUsd,
+    ).toBeCloseTo(0.007725, 8);
   });
 
   it("preserves the displayed session model when heartbeat usage uses a heartbeat model", async () => {
@@ -5604,12 +5771,24 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].modelProvider).toBe("openai");
-    expect(stored[sessionKey].model).toBe("gpt-5.4");
-    expect(stored[sessionKey].inputTokens).toBe(1_200);
-    expect(stored[sessionKey].outputTokens).toBe(100);
-    expect(stored[sessionKey].cacheRead).toBe(200);
-    expect(stored[sessionKey].totalTokens).toBe(1_105);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
+    ).toBe("openai");
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
+      "gpt-5.4",
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      1_200,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(100);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      200,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      1_105,
+    );
   });
 
   it("persists heartbeat CLI binding while preserving displayed session model", async () => {
@@ -5649,14 +5828,28 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].modelProvider).toBe("openai");
-    expect(stored[sessionKey].model).toBe("gpt-5.4");
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("new-heartbeat-cli-session");
-    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
+    ).toBe("openai");
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
+      "gpt-5.4",
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "claude-cli"
+      ],
+    ).toBe("new-heartbeat-cli-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "claude-cli"
+      ],
+    ).toEqual({
       sessionId: "new-heartbeat-cli-session",
       authProfileId: "anthropic:heartbeat",
     });
-    expect(stored[sessionKey].claudeCliSessionId).toBe("new-heartbeat-cli-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
+    ).toBe("new-heartbeat-cli-session");
   });
 
   it("honors heartbeat CLI binding clears while preserving displayed session model", async () => {
@@ -5695,15 +5888,37 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].modelProvider).toBe("openai");
-    expect(stored[sessionKey].model).toBe("gpt-5.4");
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(stored[sessionKey].cliSessionIds?.["codex-cli"]).toBe("codex-cli-session");
-    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(stored[sessionKey].cliSessionBindings?.["codex-cli"]).toEqual({
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
+    ).toBe("openai");
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
+      "gpt-5.4",
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "claude-cli"
+      ],
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "codex-cli"
+      ],
+    ).toBe("codex-cli-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "claude-cli"
+      ],
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "codex-cli"
+      ],
+    ).toEqual({
       sessionId: "codex-cli-session",
     });
-    expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
+    ).toBeUndefined();
   });
 
   it("preserves the displayed session model when an internal announce uses fallback", async () => {
@@ -5762,22 +5977,52 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].modelProvider).toBe("openai");
-    expect(stored[sessionKey].model).toBe("gpt-5.5");
-    expect(stored[sessionKey].contextTokens).toBe(200_000);
-    expect(stored[sessionKey].inputTokens).toBe(1_234);
-    expect(stored[sessionKey].outputTokens).toBe(56);
-    expect(stored[sessionKey].cacheRead).toBe(7);
-    expect(stored[sessionKey].cacheWrite).toBe(8);
-    expect(stored[sessionKey].totalTokens).toBe(1_305);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].estimatedCostUsd).toBe(0.123);
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("visible-cli-session");
-    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
+    ).toBe("openai");
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
+      "gpt-5.5",
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextTokens,
+    ).toBe(200_000);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      1_234,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(56);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      7,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
+      8,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      1_305,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").estimatedCostUsd,
+    ).toBe(0.123);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "claude-cli"
+      ],
+    ).toBe("visible-cli-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "claude-cli"
+      ],
+    ).toEqual({
       sessionId: "visible-cli-session",
       authProfileId: "anthropic:visible",
     });
-    expect(stored[sessionKey].claudeCliSessionId).toBe("visible-cli-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
+    ).toBe("visible-cli-session");
   });
 
   it("persists zero estimatedCostUsd for free priced models", async () => {
@@ -5823,7 +6068,9 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(stored[sessionKey].estimatedCostUsd).toBe(0);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").estimatedCostUsd,
+    ).toBe(0);
   });
 });
 

@@ -42,8 +42,12 @@ func TestTranslationPromptUsesSharedContractAndLocaleOverlayForEverySupportedLoc
 				"Keep authentication, authorization, credentials, tokens, passwords, secrets, identities, and accounts distinct",
 				"Preserve actors, objects, temporal order, negation, conditions, scope, singular/plural meaning, and requirement strength",
 				"Preserve every factual value exactly, including numbers, units, versions, ports, limits, durations, paths, and comparison operators",
+				"Preserve Markdown list nodes exactly: ordered versus unordered kind, nesting, item count, and ordered-list starting number",
 				"Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly",
+				"Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule",
 				"Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”",
+				"When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Inferrs, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice",
+				"Translate the same words normally when the source clearly uses them as ordinary prose instead of a name",
 				"Locale rules:",
 			} {
 				if !strings.Contains(prompt, want) {
@@ -140,6 +144,7 @@ func TestTranslationPromptAddsRepresentativeLocaleRules(t *testing.T) {
 		{locale: "ja-JP", wants: []string{"technical Japanese", "〜でございます", "「 and 」"}},
 		{locale: "de", wants: []string{"Sie/Ihr/Ihnen", "du/dein/dir"}},
 		{locale: "pt-BR", wants: []string{"Brazilian Portuguese, not European Portuguese"}},
+		{locale: "nl", wants: []string{"Use informal “je/jouw” consistently", "do not switch to formal “u/uw” except inside protected literal quotations"}},
 		{locale: "fa", wants: []string{"Persian ی and ک", "right-to-left"}},
 		{locale: "uk", wants: []string{"Ukrainian terminology rather than Russian calques"}},
 		{locale: "th", wants: []string{"Do not insert spaces between every Thai word"}},

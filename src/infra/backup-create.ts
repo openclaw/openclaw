@@ -7,7 +7,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pipeline } from "node:stream/promises";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -22,8 +21,9 @@ import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { sleep } from "../utils/sleep.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { formatErrorMessage } from "./errors.js";
 import { writeJson } from "./json-files.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
@@ -538,11 +538,35 @@ const SQLITE_BACKUP_EXCLUDED_SUFFIXES = [".reindex-lock.sqlite"] as const;
 const SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN =
   /\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
+function isCanonicalAgentSqlitePathOrAncestor(sourcePath: string, stateDir: string): boolean {
+  const relativePath = path.relative(path.resolve(stateDir), path.resolve(sourcePath));
+  const segments = relativePath.split(path.sep);
+  if (segments[0] !== "agents" || !segments[1]) {
+    return false;
+  }
+  if (segments.length === 2) {
+    return true;
+  }
+  if (segments[2] !== "agent") {
+    return false;
+  }
+  if (segments.length === 3) {
+    return true;
+  }
+  if (segments.length !== 4) {
+    return false;
+  }
+  return SQLITE_BACKUP_SOURCE_SUFFIXES.some(
+    (suffix) => segments[3] === `openclaw-agent.sqlite${suffix}`,
+  );
+}
+
 function isStatePackageContentPath(sourcePath: string, stateDir: string): boolean {
   const resolvedStateDir = path.resolve(stateDir);
   const resolvedSourcePath = path.resolve(sourcePath);
   return (
     isPathWithin(resolvedSourcePath, resolvedStateDir) &&
+    !isCanonicalAgentSqlitePathOrAncestor(resolvedSourcePath, resolvedStateDir) &&
     path.relative(resolvedStateDir, resolvedSourcePath).split(path.sep).includes("node_modules")
   );
 }
@@ -605,7 +629,6 @@ function tableExistsSql(db: DatabaseSync, tableName: string): boolean {
 function sanitizeGlobalStateSqliteSnapshot(db: DatabaseSync): void {
   if (tableExistsSql(db, "delivery_queue_entries")) {
     db.prepare("DELETE FROM delivery_queue_entries").run();
-    db.exec("VACUUM;");
   }
 }
 
@@ -634,7 +657,11 @@ async function listStateSqlitePaths(params: {
         if (extensionsFilter(entryPath) && !isStatePackageContentPath(entryPath, params.stateDir)) {
           await visit(entryPath);
         }
-      } else if (entry.isFile() && extensionsFilter(entryPath)) {
+      } else if (
+        entry.isFile() &&
+        extensionsFilter(entryPath) &&
+        !isStatePackageContentPath(entryPath, params.stateDir)
+      ) {
         const resolvedEntryPath = path.resolve(entryPath);
         if (resolveSqliteBackupDatabasePath(resolvedEntryPath)) {
           discoveredSourcePaths.add(resolvedEntryPath);
@@ -708,7 +735,6 @@ async function createStateSqliteBackupPlan(params: {
     stateDir: params.stateDir,
     globalStateSqlitePath,
   });
-  const sqlite = requireNodeSqlite();
   const snapshots: SqliteBackupAsset[] = [];
   for (const archiveSourcePath of discovery.snapshotPaths) {
     // A discovered *.sqlite file that SQLite cannot snapshot aborts backup.
@@ -719,29 +745,21 @@ async function createStateSqliteBackupPlan(params: {
       path.resolve(archiveSourcePath) === globalStateSqlitePath
         ? await fs.realpath(archiveSourcePath)
         : archiveSourcePath;
-    const source = new sqlite.DatabaseSync(sourceDatabasePath, {
-      allowExtension: true,
-      readOnly: true,
-    });
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
     try {
-      source.exec("PRAGMA busy_timeout = 30000;");
-      // VACUUM INTO removes deleted-page remnants before the snapshot enters
-      // the archive. Load sqlite-vec best-effort so memory indexes using vec0
-      // can still be compacted without weakening that privacy property.
-      await loadSqliteVecExtension({ db: source });
-      source.prepare("VACUUM INTO ?").run(sourcePath);
-    } finally {
-      source.close();
-    }
-    await fs.chmod(sourcePath, 0o600);
-    if (path.resolve(archiveSourcePath) === globalStateSqlitePath) {
-      const snapshot = new sqlite.DatabaseSync(sourcePath);
-      try {
-        sanitizeGlobalStateSqliteSnapshot(snapshot);
-      } finally {
-        snapshot.close();
-      }
+      await createVerifiedSqliteSnapshot({
+        sourcePath: sourceDatabasePath,
+        targetPath: sourcePath,
+        transform:
+          path.resolve(archiveSourcePath) === globalStateSqlitePath
+            ? sanitizeGlobalStateSqliteSnapshot
+            : undefined,
+      });
+    } catch (err) {
+      throw new Error(
+        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(err)}. The source must pass full integrity checks and VACUUM INTO with its required SQLite capabilities; raw page backup was refused because it can retain deleted data.`,
+        { cause: err },
+      );
     }
     snapshots.push({
       sourcePath,
