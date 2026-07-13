@@ -463,11 +463,9 @@ export async function materializeBundleMcpToolsForRun(params: {
           return toJsonAgentToolResult({
             serverName,
             operation: "resources_read",
-            value: await params.runtime.readResource?.(
-              serverName,
-              requireStringArg(input, "uri"),
-              { signal },
-            ),
+            value: await params.runtime.readResource?.(serverName, requireStringArg(input, "uri"), {
+              signal,
+            }),
           });
         }
       : undefined,

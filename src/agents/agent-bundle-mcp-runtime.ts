@@ -908,7 +908,10 @@ export function createSessionMcpRuntime(params: {
       return await runGuardedServerRequest(
         serverName,
         async () =>
-          await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs, signal: options?.signal }),
+          await session.client.readResource(
+            { uri },
+            { timeout: session.requestTimeoutMs, signal: options?.signal },
+          ),
         options,
       );
     },
