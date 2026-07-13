@@ -1,3 +1,7 @@
+import {
+  identityHasStableSessionId,
+  resolveSessionIdentityFromMeta,
+} from "@openclaw/acp-core/runtime/session-identity";
 // Reconciles stale or lost task registry records during maintenance passes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
@@ -534,6 +538,13 @@ function isParentOwnedAcpSessionEntry(acpEntry: Pick<AcpSessionStoreEntry, "entr
   return getAcpSessionParentKeys(acpEntry).length > 0;
 }
 
+function isResumableOneShotAcpSession(acpEntry: AcpSessionStoreEntry): boolean {
+  return (
+    acpEntry.acp?.mode === "oneshot" &&
+    identityHasStableSessionId(resolveSessionIdentityFromMeta(acpEntry.acp))
+  );
+}
+
 function hasActiveSessionBinding(sessionKey: string): boolean {
   const listBindings = taskRegistryMaintenanceRuntime.listSessionBindingsBySession;
   if (!listBindings) {
@@ -571,7 +582,7 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
     return false;
   }
   if (acpEntry.acp.mode === "oneshot") {
-    return true;
+    return !isResumableOneShotAcpSession(acpEntry);
   }
   return !hasActiveSessionBinding(sessionKey);
 }
@@ -588,7 +599,7 @@ function shouldCloseOrphanedParentOwnedAcpSession(acpEntry: AcpSessionStoreEntry
     return false;
   }
   if (acpEntry.acp.mode === "oneshot") {
-    return true;
+    return !isResumableOneShotAcpSession(acpEntry);
   }
   return !hasActiveSessionBinding(sessionKey);
 }
