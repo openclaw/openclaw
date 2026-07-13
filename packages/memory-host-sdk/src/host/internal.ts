@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import pMap from "p-map";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
@@ -24,7 +25,6 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   detectMime,
   estimateStringChars,
-  runTasksWithConcurrency,
   truncateUtf16Safe,
 } from "./openclaw-runtime-io.js";
 import {
@@ -543,13 +543,8 @@ export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
-  const { results, firstError, hasError } = await runTasksWithConcurrency({
-    tasks,
-    limit,
-    errorMode: "stop",
+  return await pMap(tasks, (task) => task(), {
+    concurrency: Math.max(1, Math.floor(limit)),
+    stopOnError: true,
   });
-  if (hasError) {
-    throw firstError;
-  }
-  return results;
 }

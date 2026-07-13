@@ -14,7 +14,6 @@ export {
   resolveGlobalSingleton,
   resolveUserPath,
   resolveWindowsSpawnProgram,
-  runTasksWithConcurrency,
   shortenHomeInString,
   shortenHomePath,
   splitShellArgs,

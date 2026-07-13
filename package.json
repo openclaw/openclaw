@@ -2042,6 +2042,8 @@
     "node-edge-tts": "1.2.10",
     "openai": "6.45.0",
     "partial-json": "0.1.7",
+    "p-limit": "7.3.0",
+    "p-map": "7.0.5",
     "playwright-core": "1.61.1",
     "proper-lockfile": "4.1.2",
     "qrcode": "1.5.4",

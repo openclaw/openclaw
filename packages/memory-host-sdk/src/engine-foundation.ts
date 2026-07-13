@@ -28,7 +28,6 @@ export { detectMime } from "./host/openclaw-runtime-io.js";
 export { resolveGlobalSingleton } from "./host/openclaw-runtime-io.js";
 export { onSessionTranscriptUpdate } from "./host/openclaw-runtime-session.js";
 export { splitShellArgs } from "./host/openclaw-runtime-io.js";
-export { runTasksWithConcurrency } from "./host/openclaw-runtime-io.js";
 export {
   shortenHomeInString,
   shortenHomePath,

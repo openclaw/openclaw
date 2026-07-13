@@ -160,6 +160,12 @@ importers:
       openai:
         specifier: 6.45.0
         version: 6.45.0(@aws-sdk/credential-provider-node@3.972.61)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)(ws@8.21.0)(zod@4.4.3)
+      p-limit:
+        specifier: 7.3.0
+        version: 7.3.0
+      p-map:
+        specifier: 7.0.5
+        version: 7.0.5
       partial-json:
         specifier: 0.1.7
         version: 0.1.7
@@ -581,19 +587,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/workspaces:
-    dependencies:
-      typebox:
-        specifier: 1.3.3
-        version: 1.3.3
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
-
   extensions/crabbox:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -703,6 +696,9 @@ importers:
       libopus-wasm:
         specifier: 0.2.0
         version: 0.2.0
+      p-map:
+        specifier: 7.0.5
+        version: 7.0.5
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1321,6 +1317,9 @@ importers:
 
   extensions/openshell:
     dependencies:
+      p-limit:
+        specifier: 7.3.0
+        version: 7.3.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1387,6 +1386,12 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
+      p-limit:
+        specifier: 7.3.0
+        version: 7.3.0
+      p-map:
+        specifier: 7.0.5
+        version: 7.0.5
       playwright-core:
         specifier: 1.61.1
         version: 1.61.1
@@ -1446,6 +1451,9 @@ importers:
       mpg123-decoder:
         specifier: 1.0.3
         version: 1.0.3
+      p-map:
+        specifier: 7.0.5
+        version: 7.0.5
       silk-wasm:
         specifier: 3.7.1
         version: 3.7.1
@@ -1530,6 +1538,9 @@ importers:
       '@slack/web-api':
         specifier: 7.18.0
         version: 7.18.0
+      p-map:
+        specifier: 7.0.5
+        version: 7.0.5
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1811,6 +1822,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/workspaces:
+    dependencies:
+      typebox:
+        specifier: 1.3.3
+        version: 1.3.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/xai:
     dependencies:
       typebox:
@@ -1964,6 +1988,9 @@ importers:
       '@openclaw/retry':
         specifier: workspace:*
         version: link:../retry
+      p-map:
+        specifier: 7.0.5
+        version: 7.0.5
 
   packages/model-catalog-core: {}
 
@@ -6680,6 +6707,10 @@ packages:
     resolution: {integrity: sha512-//88mFWSJx8lxCzwdAABTJL2MyWB12+eIY7MDL2SqLmAkeKU9qxRvWuSyTjm3FUmpBEMuFfckAIqEaVGUDxb6w==}
     engines: {node: '>=6'}
 
+  p-limit@7.3.0:
+    resolution: {integrity: sha512-7cIXg/Z0M5WZRblrsOla88S4wAK+zOQQWeBYfV3qJuJXMr+LnbYjaadrFaS0JILfEDPVqHyKnZ1Z/1d6J9VVUw==}
+    engines: {node: '>=20'}
+
   p-locate@4.1.0:
     resolution: {integrity: sha512-R79ZZ/0wAxKGu3oYMlz8jy/kbhsNrS7SKZ7PxEHBgJ5+F2mtFW2fK2cOtBh1cHYkQsbzFV7I+EoRKe6Yt0oK7A==}
     engines: {node: '>=8'}
@@ -7244,13 +7275,13 @@ packages:
     resolution: {integrity: sha512-stxByr12oeeOyY2BlviTNQlYV5xOj47GirPr4yA1hE9JCtxfQN0+tVbkxwCtYDQWhEKWFHsEK48ORg5jrouCAg==}
     engines: {node: '>=20'}
 
-  smol-toml@1.7.0:
-    resolution: {integrity: sha512-aqVvWoyO21L23mb+drl4RmMXbf6N7FdHjAhTRA9ZBL7apWBgfWC16KjrASI+1p9GAroljyMHj6fK67i0UiTNvQ==}
-    engines: {node: '>=18'}
-
   smart-buffer@4.2.0:
     resolution: {integrity: sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==}
     engines: {node: '>= 6.0.0', npm: '>= 3.0.0'}
+
+  smol-toml@1.7.0:
+    resolution: {integrity: sha512-aqVvWoyO21L23mb+drl4RmMXbf6N7FdHjAhTRA9ZBL7apWBgfWC16KjrASI+1p9GAroljyMHj6fK67i0UiTNvQ==}
+    engines: {node: '>= 18'}
 
   socks-proxy-agent@8.0.5:
     resolution: {integrity: sha512-HehCEsotFqbPW9sJ8WVYB6UbmIMv7kUUORIF2Nncq4VQvBfNBLibW9YZR5dlYCSUhwcD628pRllm7n+E+YTzJw==}
@@ -7907,6 +7938,10 @@ packages:
   yargs@17.7.3:
     resolution: {integrity: sha512-GZtjxm/J/4TSxuL3FNYjCmLktBTnIw/rVmKSIyKeYAZpmJB2ig9VauCC5xsa82GNKVKDAqpOn3KVzNt0zmrU0g==}
     engines: {node: '>=12'}
+
+  yocto-queue@1.2.2:
+    resolution: {integrity: sha512-4LCcse/U2MHZ63HAJVE+v71o7yOdIe4cZ70Wpf8D/IyjDKYQLV5GD46B+hSTjJsvV5PztjvHoU580EftxjDZFQ==}
+    engines: {node: '>=12.20'}
 
   yoctocolors@2.1.2:
     resolution: {integrity: sha512-CzhO+pFNo8ajLM2d2IW/R93ipy99LWjtwblvC1RsoSUMZgyLbYFr221TnSNT7GjGdYui6P459mw9JH/g/zW2ug==}
@@ -9402,6 +9437,15 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@modelcontextprotocol/ext-apps@1.7.4(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(zod@4.4.3)':
+    dependencies:
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@standard-schema/spec': 1.1.0
+      zod: 4.4.3
+    optionalDependencies:
+      react: 19.2.4
+      react-dom: 19.2.4(react@19.2.4)
+
   '@modelcontextprotocol/sdk@1.29.0(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.25)
@@ -9423,15 +9467,6 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
-
-  '@modelcontextprotocol/ext-apps@1.7.4(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(zod@4.4.3)':
-    dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
-      '@standard-schema/spec': 1.1.0
-      zod: 4.4.3
-    optionalDependencies:
-      react: 19.2.4
-      react-dom: 19.2.4(react@19.2.4)
 
   '@mozilla/readability@0.6.0': {}
 
@@ -13124,6 +13159,10 @@ snapshots:
     dependencies:
       p-try: 2.2.0
 
+  p-limit@7.3.0:
+    dependencies:
+      yocto-queue: 1.2.2
+
   p-locate@4.1.0:
     dependencies:
       p-limit: 2.3.0
@@ -13785,9 +13824,9 @@ snapshots:
       is-fullwidth-code-point: 5.1.0
     optional: true
 
-  smol-toml@1.7.0: {}
-
   smart-buffer@4.2.0: {}
+
+  smol-toml@1.7.0: {}
 
   socks-proxy-agent@8.0.5:
     dependencies:
@@ -14387,6 +14426,8 @@ snapshots:
       string-width: 4.2.3
       y18n: 5.0.8
       yargs-parser: 21.1.1
+
+  yocto-queue@1.2.2: {}
 
   yoctocolors@2.1.2:
     optional: true

@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import pMap from "p-map";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import {
   extractMediaUserText,
@@ -20,7 +21,6 @@ import { renderFileContextBlock } from "../media/file-context.js";
 import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
 import { resolveAttachmentKind } from "./attachments.js";
-import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
 import {
@@ -577,7 +577,20 @@ export async function applyMediaUnderstanding(params: {
       });
     });
 
-    const results = await runWithConcurrency(tasks, resolveConcurrency(cfg));
+    const results = await pMap(
+      tasks,
+      async (task) => {
+        try {
+          return await task();
+        } catch (err) {
+          if (shouldLogVerbose()) {
+            logVerbose(`Media understanding task failed: ${String(err)}`);
+          }
+          return undefined;
+        }
+      },
+      { concurrency: resolveConcurrency(cfg), stopOnError: false },
+    );
     const outputs: MediaUnderstandingOutput[] = [];
     const decisions: MediaUnderstandingDecision[] = [];
     for (const entry of results) {
