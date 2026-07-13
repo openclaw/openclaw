@@ -991,6 +991,7 @@ class ChatController internal constructor(
     val settingsKey = queuedMutation.settingsKey
     val pending = queuedMutation.pending
     var succeeded = false
+    var drainedLane = false
     return try {
       queuedMutation.previous?.await()
       // A queued mutation captured a concrete gateway generation. Never let it
@@ -1005,7 +1006,8 @@ class ChatController internal constructor(
     } finally {
       synchronized(gatewayScopeApplyLock) {
         incrementSettingsMutationRevision(settingsKey.gatewayScope)
-        if (pendingSettingsMutations.remove(settingsKey, pending)) {
+        drainedLane = pendingSettingsMutations.remove(settingsKey, pending)
+        if (drainedLane) {
           // These baselines bridge adjacent operations in one lane only. After
           // drain, refreshed session metadata is authoritative rollback state.
           latestAcceptedThinkingStates.remove(settingsKey)
@@ -1016,6 +1018,11 @@ class ChatController internal constructor(
       // Publish only after registry cleanup so a resumed scope waiter cannot
       // repeatedly observe this completed mutation before finally removes it.
       pending.complete(succeeded)
+      if (drainedLane && succeeded && _healthOk.value) {
+        // A failed predecessor can stop a reconnect flush while its successor is queued.
+        // The successful lane tail must hand durable rows back to the flush owner.
+        requestOutboxFlush()
+      }
     }
   }
 
