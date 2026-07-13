@@ -337,7 +337,7 @@ describe("preview widget", () => {
     const frame = container.querySelector<HTMLIFrameElement>(
       '[data-test-id="workspace-preview-frame"]',
     );
-    const setAttribute = vi.spyOn(expectDefined(frame), "setAttribute");
+    const setAttribute = vi.spyOn(expectDefined(frame, "preview frame"), "setAttribute");
     container
       .querySelector<HTMLButtonElement>('[data-test-id="workspace-preview-reload"]')
       ?.click();
