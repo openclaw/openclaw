@@ -1390,10 +1390,9 @@ final class NodeAppModel {
                   sourceStore.gatewayID == sourceGatewayID,
                   let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
             else { return }
+            let request = OpenClawChatGatewayRequests.agentsList(timeoutMs: 8000)
             let res = try await operatorGateway.request(
-                method: "agents.list",
-                paramsJSON: "{}",
-                timeoutSeconds: 8,
+                request,
                 ifCurrentRoute: sourceRoute)
             let decoded = try JSONDecoder().decode(AgentsListResult.self, from: res)
             let routingIdentity = OpenClawChatSessionRoutingIdentity(
@@ -4991,11 +4990,6 @@ extension NodeAppModel {
     }
 
     private func refreshShareRouteFromGateway(shouldApply: () -> Bool = { true }) async {
-        struct Params: Codable {
-            var includeGlobal: Bool
-            var includeUnknown: Bool
-            var limit: Int
-        }
         struct SessionRow: Decodable {
             var key: String
             var updatedAt: Double?
@@ -5012,13 +5006,12 @@ extension NodeAppModel {
         }
 
         do {
-            let data = try JSONEncoder().encode(
-                Params(includeGlobal: true, includeUnknown: false, limit: 80))
-            guard let json = String(data: data, encoding: .utf8) else { return }
-            let response = try await operatorGateway.request(
-                method: "sessions.list",
-                paramsJSON: json,
-                timeoutSeconds: 10)
+            let request = OpenClawChatGatewayRequests.sessionsList(
+                limit: 80,
+                search: nil,
+                archived: false,
+                timeoutMs: 10000)
+            let response = try await operatorGateway.request(request)
             let decoded = try JSONDecoder().decode(SessionsListResult.self, from: response)
             let currentKey = self.mainSessionKey
             let sorted = decoded.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
