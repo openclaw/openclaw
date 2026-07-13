@@ -3113,7 +3113,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/gateway/session-transcript-readers.ts: readRecentSessionUsageFromTranscriptAsync",
   "src/gateway/session-transcript-readers.ts: readSessionMessageCount",
   "src/gateway/session-transcript-readers.ts: readSessionMessages",
-  "src/gateway/session-transcript-readers.ts: ResolvedTranscriptReadTarget",
   "src/gateway/session-transcript-readers.ts: visitSessionMessages",
   "src/gateway/session-utils.fs.ts: archiveFileOnDisk",
   "src/gateway/session-utils.fs.ts: archiveSessionTranscripts",
