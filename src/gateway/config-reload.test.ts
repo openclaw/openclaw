@@ -2,6 +2,7 @@
 // plugin registry refresh, skill snapshot invalidation, and watcher behavior.
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type {
   ConfigFileSnapshot,
@@ -9,6 +10,7 @@ import type {
   OpenClawConfig,
 } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -18,7 +20,10 @@ import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
-import { diffConfigPaths } from "./config-diff.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
+import { buildGatewayReloadPlan, resolveConfigReloadMetadata } from "./config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import {
   type GatewayConfigReloadTransactionOwnership,
   type GatewayReloadPlan,
@@ -119,6 +124,112 @@ describe("diffConfigPaths", () => {
       "plugins.installs.lossless.resolvedAt",
       "plugins.installs.lossless.resolvedAt",
     ]);
+  });
+
+  it.each([
+    { prev: {}, next: { mcp: { apps: { enabled: true } } } },
+    { prev: { mcp: { apps: { enabled: true } } }, next: {} },
+  ])("preserves the Apps restart boundary for whole MCP changes", ({ prev, next }) => {
+    const changedPaths = diffGatewayReloadPaths(prev, next);
+    expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
+    expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
+  });
+});
+
+describe("buildGatewayReloadPlan", () => {
+  const emptyRegistry = createTestRegistry([]);
+  const telegramPlugin: ChannelPlugin = {
+    id: "telegram",
+    meta: {
+      id: "telegram",
+      label: "Telegram",
+      selectionLabel: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({}),
+    },
+    reload: { configPrefixes: ["channels.telegram"] },
+  };
+  const registry = createTestRegistry([
+    { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+  ]);
+
+  beforeEach(() => {
+    setActivePluginRegistry(registry);
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(emptyRegistry);
+  });
+
+  it.each([
+    {
+      path: "mcp.apps.enabled",
+      restart: true,
+      reason: "mcp.apps.enabled",
+    },
+    {
+      path: "gateway.auth.token",
+      restart: true,
+      reason: "gateway.auth.token",
+    },
+    {
+      path: "models.pricing.enabled",
+      restart: true,
+      reason: "models.pricing.enabled",
+    },
+    {
+      path: "auth.cooldowns.billingBackoffHours",
+      restart: false,
+      hot: "auth.cooldowns.billingBackoffHours",
+    },
+    {
+      path: "agents.defaults.model",
+      restart: false,
+      hot: "agents.defaults.model",
+      restartHeartbeat: true,
+    },
+    {
+      path: "unknownField",
+      restart: true,
+      reason: "unknownField",
+    },
+  ])("classifies reload path: $path", (testCase) => {
+    const plan = buildGatewayReloadPlan([testCase.path]);
+    expect(plan.restartGateway).toBe(testCase.restart);
+    if (testCase.reason) {
+      expect(plan.restartReasons).toContain(testCase.reason);
+    }
+    if (testCase.hot) {
+      expect(plan.hotReasons).toContain(testCase.hot);
+      expect(resolveConfigReloadMetadata(testCase.path).kind).toBe("hot");
+    }
+    if (testCase.restartHeartbeat) {
+      expect(plan.restartHeartbeat).toBe(true);
+    }
+  });
+
+  it("restarts the matching channel for channel config changes", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it("reloads loaded channel plugins when plugin entry state changes", () => {
+    const plan = buildGatewayReloadPlan(["plugins.entries.telegram.enabled"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it("uses default reload settings when config is unset", () => {
+    expect(resolveGatewayReloadSettings({})).toMatchObject({ mode: "hybrid", debounceMs: 300 });
   });
 });
 

@@ -13,7 +13,7 @@ import {
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
-import { diffConfigPaths } from "./config-diff.js";
+import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
@@ -67,23 +67,6 @@ function matchesSkillsInvalidationPrefix(path: string): boolean {
 
 function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
   return changedPaths.find(matchesSkillsInvalidationPrefix);
-}
-
-function diffGatewayReloadPaths(prevConfig: OpenClawConfig, nextConfig: OpenClawConfig): string[] {
-  const changedPaths = diffConfigPaths(prevConfig, nextConfig);
-  if (!changedPaths.includes("mcp")) {
-    return changedPaths;
-  }
-  // Adding or removing the whole `mcp` object collapses to the broad `mcp`
-  // path. Preserve the startup-only Apps boundary so that transition still
-  // restarts the listener instead of only disposing cached MCP runtimes.
-  return [
-    ...changedPaths,
-    ...diffConfigPaths(
-      { mcp: { apps: prevConfig.mcp?.apps } },
-      { mcp: { apps: nextConfig.mcp?.apps } },
-    ),
-  ];
 }
 
 function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {

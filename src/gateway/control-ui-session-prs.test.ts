@@ -8,6 +8,7 @@ import {
   loadControlUiSessionPullRequests,
   parseControlUiSessionPullRequestsParams,
 } from "./control-ui-session-prs.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
 
 type GitContext = { owner: string; repo: string; branch: string };
 
@@ -62,6 +63,23 @@ const context: GitContext = {
 const resolveGitContext = async () => context;
 let cacheEpochMs = Date.now();
 let cacheEvictionEpoch = 0;
+
+describe("parseGitHubRemoteUrl", () => {
+  it("parses https, scp-like, and ssh remotes", () => {
+    const expected = { owner: "openclaw", repo: "openclaw" };
+    expect(parseGitHubRemoteUrl("https://github.com/openclaw/openclaw.git")).toEqual(expected);
+    expect(parseGitHubRemoteUrl("https://github.com/openclaw/openclaw")).toEqual(expected);
+    expect(parseGitHubRemoteUrl("git@github.com:openclaw/openclaw.git")).toEqual(expected);
+    expect(parseGitHubRemoteUrl("ssh://git@github.com/openclaw/openclaw.git")).toEqual(expected);
+  });
+
+  it("rejects non-GitHub and malformed remotes", () => {
+    expect(parseGitHubRemoteUrl("https://gitlab.com/openclaw/openclaw.git")).toBeNull();
+    expect(parseGitHubRemoteUrl("git@github.com:openclaw")).toBeNull();
+    expect(parseGitHubRemoteUrl("https://github.com/openclaw/openclaw/extra")).toBeNull();
+    expect(parseGitHubRemoteUrl("/local/path/repo.git")).toBeNull();
+  });
+});
 
 async function evictPullRequestCache(): Promise<void> {
   const epoch = (cacheEvictionEpoch += 1);

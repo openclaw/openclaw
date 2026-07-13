@@ -38,4 +38,29 @@ describe("control-plane-rate-limit", () => {
   test("pruneStaleControlPlaneBuckets is safe on empty map", () => {
     expect(pruneStaleControlPlaneBuckets()).toBe(0);
   });
+
+  test("control-plane bucket map evicts the oldest identity at its hard cap", () => {
+    const baseMs = 2_000_000;
+    const consume = (id: string) =>
+      consumeControlPlaneWriteBudget({
+        client: {
+          connect: { device: { id } },
+          clientIp: "1.2.3.4",
+        } as never,
+        nowMs: baseMs,
+      });
+
+    expect(consume("oldest").allowed).toBe(true);
+    expect(consume("oldest").allowed).toBe(true);
+    expect(consume("oldest").allowed).toBe(true);
+    expect(consume("oldest").allowed).toBe(false);
+
+    for (let index = 0; index < 10_000; index += 1) {
+      consume(`new-${index}`);
+    }
+
+    // A fresh budget proves the oldest bucket was evicted, without exposing
+    // the internal map solely for tests.
+    expect(consume("oldest")).toMatchObject({ allowed: true, remaining: 2 });
+  });
 });
