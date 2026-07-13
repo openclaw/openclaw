@@ -41,7 +41,7 @@ const CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS = 30_000;
 /** Timeout for image-understanding style dynamic tool calls. */
 export const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 /** Timeout for message-delivery dynamic tool calls. */
-export const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 120_000;
+export const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
 const LOG_FIELD_MAX_LENGTH = 160;
 
 type DynamicToolTimeoutDetails = {
@@ -478,6 +478,11 @@ export function resolveDynamicToolCallTimeoutMs(params: {
 }): number {
   if (params.call.tool === "computer") {
     return clampDynamicToolTimeoutMs(readComputerToolTimeoutMs(params.call.arguments));
+  }
+  // The message tool's `timeoutMs` is a Gateway transport budget. Its outer
+  // watchdog must also cover bounded same-key reconciliation after that timer.
+  if (params.call.tool === "message") {
+    return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
   }
   return clampDynamicToolTimeoutMs(
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
