@@ -361,10 +361,11 @@ describe("streamOpenAICodexResponses transport", () => {
     vi.stubGlobal("WebSocket", DelayedBlobWebSocket);
     vi.stubGlobal("fetch", vi.fn());
 
+    const mockJwt = createJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+    });
     const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
+      apiKey: mockJwt,
       transport: "websocket",
     });
     const textDeltas: string[] = [];
@@ -441,10 +442,11 @@ describe("streamOpenAICodexResponses transport", () => {
     vi.stubGlobal("WebSocket", EagerCloseWebSocket);
     vi.stubGlobal("fetch", vi.fn());
 
+    const mockJwt = createJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+    });
     const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
+      apiKey: mockJwt,
       transport: "websocket",
     }).result();
 
