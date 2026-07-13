@@ -3500,7 +3500,6 @@ export const zh_CN: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "调度器",
       tasks: "任务",
       failing: "失败",
       nextWake: "下次唤醒",

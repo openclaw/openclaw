@@ -3514,7 +3514,6 @@ export const th: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "ตัวกำหนดเวลา",
       tasks: "งาน",
       failing: "ล้มเหลว",
       nextWake: "ปลุกครั้งถัดไป",

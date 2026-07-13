@@ -3580,7 +3580,6 @@ export const ja_JP: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "スケジューラー",
       tasks: "タスク",
       failing: "失敗中",
       nextWake: "次回の起動",

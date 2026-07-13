@@ -81,6 +81,7 @@ type CronProps = {
   deliveryToSuggestions: string[];
   accountSuggestions: string[];
   onListTabChange: (tab: CronListTab) => void;
+  onShowFailingRuns: () => void;
   onDetailTabChange: (tab: CronDetailTab) => void;
   onFormChange: (patch: Partial<CronFormState>) => void;
   onRefresh: () => void;
@@ -189,11 +190,17 @@ function renderFilterDropdown(params: {
   onClear: () => void;
 }) {
   return html`
-    <div class="field cron-filter-dropdown" data-filter=${params.id}>
-      <span>${params.title}</span>
+    <div class="cron-filter-dropdown" data-filter=${params.id}>
       <details class="cron-filter-dropdown__details">
-        <summary class="btn cron-filter-dropdown__trigger">
+        <summary
+          class="btn btn--sm cron-filter-dropdown__trigger ${params.selected.length > 0
+            ? "active"
+            : ""}"
+          title=${params.title}
+          aria-label=${params.title}
+        >
           <span>${params.summary}</span>
+          ${icon("chevronDown")}
         </summary>
         <div class="cron-filter-dropdown__panel">
           <div class="cron-filter-dropdown__list">
@@ -447,8 +454,16 @@ const ENABLED_TABS: Array<{ value: CronJobsEnabledFilter; labelKey: string }> = 
 function renderListView(props: CronProps) {
   return html`
     <section class="cron-page" data-panel-mode="overview">
-      ${renderStats(props)} ${renderListTabs(props)}
+      ${renderStats(props)}
+      ${props.status && !props.status.enabled
+        ? html`
+            <div class="cron-error-banner" data-test-id="cron-scheduler-banner">
+              <strong>${t("cron.list.schedulerOff")}</strong> ${t("cron.runNotStarted.stopped")}
+            </div>
+          `
+        : nothing}
       ${props.error ? html`<div class="cron-error-banner">${props.error}</div>` : nothing}
+      ${renderToolbar(props)}
       ${props.listTab === "activity"
         ? html`<div class="cron-activity card">${renderRunsSection(props)}</div>`
         : renderTasksPanel(props)}
@@ -467,7 +482,13 @@ function renderStats(props: CronProps) {
         <span class="cron-stat__label">${t("cron.stats.tasks")}</span>
         <span class="cron-stat__value">${total}</span>
       </div>
-      <div class="cron-stat card">
+      <button
+        type="button"
+        class="cron-stat cron-stat--action card"
+        data-test-id="cron-stat-failing"
+        title=${t("cron.list.activityTab")}
+        @click=${props.onShowFailingRuns}
+      >
         <span class="cron-stat__label">${t("cron.stats.failing")}</span>
         <span
           class="cron-stat__value ${typeof failing === "number" && failing > 0
@@ -476,17 +497,8 @@ function renderStats(props: CronProps) {
         >
           ${failing ?? t("common.na")}
         </span>
-      </div>
-      <div class="cron-stat card">
-        <span class="cron-stat__label">${t("cron.stats.scheduler")}</span>
-        <span class="cron-stat__value cron-stat__value--chip">
-          ${props.status
-            ? props.status.enabled
-              ? html`<span class="chip chip-ok">${t("common.enabled")}</span>`
-              : html`<span class="chip chip-danger">${t("cron.list.schedulerOff")}</span>`
-            : t("common.na")}
-        </span>
-      </div>
+        <span class="cron-stat__go" aria-hidden="true">${icon("chevronRight")}</span>
+      </button>
       <div class="cron-stat card">
         <span class="cron-stat__label">${t("cron.stats.nextWake")}</span>
         <span class="cron-stat__value cron-stat__value--time">
@@ -497,91 +509,107 @@ function renderStats(props: CronProps) {
   `;
 }
 
-function renderListTabs(props: CronProps) {
-  const tabs: Array<{ value: CronListTab; label: string; testId: string }> = [
+// One toolbar row for both list tabs: view switch on the left, tab-specific
+// filters in the middle, refresh + New automation pinned right.
+function renderToolbar(props: CronProps) {
+  const viewTabs: Array<{ value: CronListTab; label: string; testId: string }> = [
     { value: "tasks", label: t("cron.list.tasksTab"), testId: "cron-list-tab-tasks" },
     { value: "activity", label: t("cron.list.activityTab"), testId: "cron-list-tab-activity" },
   ];
-  return html`
-    <div class="cron-tabs cron-view-tabs" role="tablist">
-      ${tabs.map(
-        (tab) => html`
-          <button
-            type="button"
-            role="tab"
-            class="cron-tab ${props.listTab === tab.value ? "cron-tab--active" : ""}"
-            aria-selected=${props.listTab === tab.value ? "true" : "false"}
-            data-test-id=${tab.testId}
-            @click=${() => props.onListTabChange(tab.value)}
-          >
-            ${tab.label}
-          </button>
-        `,
-      )}
-    </div>
-  `;
-}
-
-function renderTasksPanel(props: CronProps) {
   const hasAdvancedJobsFilters =
     props.jobsScheduleKindFilter !== "all" ||
     props.jobsLastStatusFilter !== "all" ||
     props.jobsSortBy !== "nextRunAtMs" ||
     props.jobsSortDir !== "asc";
-  const hasAnyJobsFilters =
-    hasAdvancedJobsFilters ||
-    props.jobsQuery.trim().length > 0 ||
-    props.jobsEnabledFilter !== "all";
   return html`
     <div class="cron-toolbar">
       <div class="cron-tabs" role="tablist">
-        ${ENABLED_TABS.map(
+        ${viewTabs.map(
           (tab) => html`
             <button
               type="button"
               role="tab"
-              class="cron-tab ${props.jobsEnabledFilter === tab.value ? "cron-tab--active" : ""}"
-              aria-selected=${props.jobsEnabledFilter === tab.value ? "true" : "false"}
-              data-test-id=${`cron-tab-${tab.value}`}
-              @click=${() => props.onJobsFiltersChange({ cronJobsEnabledFilter: tab.value })}
+              class="cron-tab ${props.listTab === tab.value ? "cron-tab--active" : ""}"
+              aria-selected=${props.listTab === tab.value ? "true" : "false"}
+              data-test-id=${tab.testId}
+              @click=${() => props.onListTabChange(tab.value)}
             >
-              ${t(tab.labelKey)}
+              ${tab.label}
             </button>
           `,
         )}
       </div>
-      <div class="cron-search-box">
-        <span class="cron-search-box__icon" aria-hidden="true">${icon("search")}</span>
-        <input
-          type="search"
-          .value=${props.jobsQuery}
-          placeholder=${t("cron.list.searchPlaceholder")}
-          @input=${(e: Event) =>
-            props.onJobsFiltersChange({
-              cronJobsQuery: (e.target as HTMLInputElement).value,
-            })}
-        />
+      ${props.listTab === "tasks"
+        ? html`
+            <div class="cron-tabs" role="tablist">
+              ${ENABLED_TABS.map(
+                (tab) => html`
+                  <button
+                    type="button"
+                    role="tab"
+                    class="cron-tab ${props.jobsEnabledFilter === tab.value
+                      ? "cron-tab--active"
+                      : ""}"
+                    aria-selected=${props.jobsEnabledFilter === tab.value ? "true" : "false"}
+                    data-test-id=${`cron-tab-${tab.value}`}
+                    @click=${() => props.onJobsFiltersChange({ cronJobsEnabledFilter: tab.value })}
+                  >
+                    ${t(tab.labelKey)}
+                  </button>
+                `,
+              )}
+            </div>
+            <div class="cron-search-box">
+              <span class="cron-search-box__icon" aria-hidden="true">${icon("search")}</span>
+              <input
+                type="search"
+                .value=${props.jobsQuery}
+                aria-label=${t("cron.list.searchPlaceholder")}
+                placeholder=${t("cron.list.searchPlaceholder")}
+                @input=${(e: Event) =>
+                  props.onJobsFiltersChange({
+                    cronJobsQuery: (e.target as HTMLInputElement).value,
+                  })}
+              />
+            </div>
+            ${renderJobsFilterPopover(props, hasAdvancedJobsFilters)}
+          `
+        : nothing}
+      <div class="cron-toolbar__end">
+        <button
+          type="button"
+          class="btn btn--sm btn--ghost cron-refresh ${props.loading
+            ? "cron-refresh--loading"
+            : ""}"
+          ?disabled=${props.loading}
+          title=${props.loading ? t("cron.list.refreshing") : t("cron.list.refresh")}
+          aria-label=${t("cron.list.refresh")}
+          @click=${props.onRefresh}
+        >
+          ${icon("refresh")}
+        </button>
+        <button
+          type="button"
+          class="btn primary btn--sm cron-new-task"
+          data-test-id="cron-new-task"
+          @click=${() => props.onOpenCreate()}
+        >
+          ${icon("plus")} ${t("cron.list.newTask")}
+        </button>
       </div>
-      ${renderJobsFilterPopover(props, hasAdvancedJobsFilters)}
-      <button
-        type="button"
-        class="btn btn--sm btn--ghost cron-refresh ${props.loading ? "cron-refresh--loading" : ""}"
-        ?disabled=${props.loading}
-        title=${props.loading ? t("cron.list.refreshing") : t("cron.list.refresh")}
-        aria-label=${t("cron.list.refresh")}
-        @click=${props.onRefresh}
-      >
-        ${icon("refresh")}
-      </button>
-      <button
-        type="button"
-        class="btn primary btn--sm cron-new-task"
-        data-test-id="cron-new-task"
-        @click=${() => props.onOpenCreate()}
-      >
-        ${icon("plus")} ${t("cron.list.newTask")}
-      </button>
     </div>
+  `;
+}
+
+function renderTasksPanel(props: CronProps) {
+  const hasAnyJobsFilters =
+    props.jobsScheduleKindFilter !== "all" ||
+    props.jobsLastStatusFilter !== "all" ||
+    props.jobsSortBy !== "nextRunAtMs" ||
+    props.jobsSortDir !== "asc" ||
+    props.jobsQuery.trim().length > 0 ||
+    props.jobsEnabledFilter !== "all";
+  return html`
     ${renderJobsTable(props, hasAnyJobsFilters)}
     ${hasAnyJobsFilters ? nothing : renderSuggestions(props)}
   `;
@@ -761,7 +789,22 @@ function renderJobRow(job: CronJob, props: CronProps) {
         @click=${(e: Event) => e.stopPropagation()}
         @keydown=${(e: Event) => e.stopPropagation()}
       >
-        ${renderJobMenu(props, job, { rowActions: true })}
+        <button
+          type="button"
+          class="btn btn--sm btn--ghost cron-row-run"
+          data-test-id=${`cron-row-run-${job.id}`}
+          title=${t("cron.actions.runNow")}
+          aria-label=${t("cron.actions.runNow")}
+          ?disabled=${props.busy}
+          @click=${() => props.onRun(job, "force")}
+        >
+          ${icon("play")}
+        </button>
+        ${renderEnabledSwitch(props, job, {
+          compact: true,
+          testId: `cron-row-toggle-${job.id}`,
+        })}
+        ${renderJobMenu(props, job)}
       </span>
     </div>
   `;
@@ -794,7 +837,9 @@ function renderLastRunCell(job: CronJob) {
   `;
 }
 
-function renderJobMenu(props: CronProps, job: CronJob, opts: { rowActions: boolean }) {
+// Run now and pause/resume are visible controls (rows and detail header);
+// the menu only carries the low-traffic actions.
+function renderJobMenu(props: CronProps, job: CronJob) {
   return html`
     <details class="cron-job-menu">
       <summary
@@ -807,17 +852,7 @@ function renderJobMenu(props: CronProps, job: CronJob, opts: { rowActions: boole
         ${icon("moreHorizontal")}
       </summary>
       <div class="cron-job-menu__panel" role="menu">
-        ${opts.rowActions
-          ? html`
-              ${renderMenuItem(props, t("cron.actions.runNow"), () => props.onRun(job, "force"))}
-              ${renderMenuItem(props, t("cron.actions.runIfDue"), () => props.onRun(job, "due"))}
-              ${renderMenuItem(
-                props,
-                job.enabled ? t("cron.actions.pause") : t("cron.actions.resume"),
-                () => props.onToggle(job, !job.enabled),
-              )}
-            `
-          : renderMenuItem(props, t("cron.actions.runIfDue"), () => props.onRun(job, "due"))}
+        ${renderMenuItem(props, t("cron.actions.runIfDue"), () => props.onRun(job, "due"))}
         ${renderMenuItem(props, t("cron.actions.clone"), () => props.onClone(job))}
         ${renderMenuItem(props, t("cron.actions.remove"), () => props.onRemove(job), {
           danger: true,
@@ -920,7 +955,7 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
               >
                 ${icon("play")} ${t("cron.actions.runNow")}
               </button>
-              ${renderJobMenu(props, selectedJob, { rowActions: false })}
+              ${renderJobMenu(props, selectedJob)}
             `
           : nothing}
       </div>
@@ -928,23 +963,29 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
   `;
 }
 
-function renderEnabledSwitch(props: CronProps, job: CronJob) {
+function renderEnabledSwitch(
+  props: CronProps,
+  job: CronJob,
+  opts?: { compact?: boolean; testId?: string },
+) {
+  const stateLabel = job.enabled ? t("cron.detail.active") : t("cron.detail.paused");
+  const actionLabel = job.enabled ? t("cron.actions.pause") : t("cron.actions.resume");
   return html`
     <button
       type="button"
       class="cron-switch ${job.enabled ? "cron-switch--on" : ""}"
       role="switch"
       aria-checked=${job.enabled ? "true" : "false"}
-      data-test-id="cron-toggle-enabled"
+      aria-label=${opts?.compact ? actionLabel : nothing}
+      title=${opts?.compact ? actionLabel : nothing}
+      data-test-id=${opts?.testId ?? "cron-toggle-enabled"}
       ?disabled=${props.busy}
       @click=${() => props.onToggle(job, !job.enabled)}
     >
       <span class="cron-switch__track" aria-hidden="true">
         <span class="cron-switch__thumb"></span>
       </span>
-      <span class="cron-switch__label">
-        ${job.enabled ? t("cron.detail.active") : t("cron.detail.paused")}
-      </span>
+      ${opts?.compact ? nothing : html`<span class="cron-switch__label">${stateLabel}</span>`}
     </button>
   `;
 }
@@ -1875,15 +1916,17 @@ function renderRunsSection(props: CronProps) {
   return html`
     <div class="cron-runs">
       <div class="cron-run-filters">
-        <label class="field cron-run-filter-search">
-          <span>${t("cron.runs.searchRuns")}</span>
+        <div class="cron-search-box cron-run-filter-search">
+          <span class="cron-search-box__icon" aria-hidden="true">${icon("search")}</span>
           <input
+            type="search"
             .value=${props.runsQuery}
+            aria-label=${t("cron.runs.searchRuns")}
             placeholder=${t("cron.runs.searchPlaceholder")}
             @input=${(e: Event) =>
               props.onRunsFiltersChange({ cronRunsQuery: (e.target as HTMLInputElement).value })}
           />
-        </label>
+        </div>
         ${renderFilterDropdown({
           id: "status",
           title: t("cron.runs.status"),
@@ -1916,19 +1959,19 @@ function renderRunsSection(props: CronProps) {
             void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
           },
         })}
-        <label class="field">
-          <span>${t("cron.jobs.sort")}</span>
-          <select
-            .value=${props.runsSortDir}
-            @change=${(e: Event) =>
-              props.onRunsFiltersChange({
-                cronRunsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
-              })}
-          >
-            <option value="desc">${t("cron.runs.newestFirst")}</option>
-            <option value="asc">${t("cron.runs.oldestFirst")}</option>
-          </select>
-        </label>
+        <select
+          class="cron-run-sort"
+          aria-label=${t("cron.jobs.sort")}
+          title=${t("cron.jobs.sort")}
+          .value=${props.runsSortDir}
+          @change=${(e: Event) =>
+            props.onRunsFiltersChange({
+              cronRunsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
+            })}
+        >
+          <option value="desc">${t("cron.runs.newestFirst")}</option>
+          <option value="asc">${t("cron.runs.oldestFirst")}</option>
+        </select>
       </div>
       ${runs.length === 0
         ? hasRunFilters

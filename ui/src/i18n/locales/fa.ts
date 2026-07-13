@@ -3566,7 +3566,6 @@ export const fa: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "زمان‌بند",
       tasks: "وظایف",
       failing: "ناموفق",
       nextWake: "بیداری بعدی",

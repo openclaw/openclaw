@@ -3602,7 +3602,6 @@ export const de: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Zeitplaner",
       tasks: "Aufgaben",
       failing: "Fehlgeschlagen",
       nextWake: "Nächste Ausführung",

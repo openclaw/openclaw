@@ -3574,7 +3574,6 @@ export const id: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Penjadwal",
       tasks: "Tugas",
       failing: "Gagal",
       nextWake: "Bangun berikutnya",

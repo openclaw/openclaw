@@ -3580,7 +3580,6 @@ export const pt_BR: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Agendador",
       tasks: "Tarefas",
       failing: "Com falha",
       nextWake: "Próximo despertar",

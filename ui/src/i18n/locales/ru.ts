@@ -3595,7 +3595,6 @@ export const ru: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Планировщик",
       tasks: "Задачи",
       failing: "С ошибками",
       nextWake: "Следующее пробуждение",

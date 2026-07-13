@@ -3538,7 +3538,6 @@ export const hi: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "शेड्यूलर",
       tasks: "कार्य",
       failing: "विफल",
       nextWake: "अगला वेक",

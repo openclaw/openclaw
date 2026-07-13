@@ -3547,7 +3547,6 @@ export const en: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Scheduler",
       tasks: "Automations",
       failing: "Failing",
       nextWake: "Next wake",

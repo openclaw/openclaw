@@ -3606,7 +3606,6 @@ export const it: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Pianificatore",
       tasks: "Attività",
       failing: "Con errori",
       nextWake: "Prossima attivazione",

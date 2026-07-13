@@ -3625,7 +3625,6 @@ export const fr: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Planificateur",
       tasks: "Tâches",
       failing: "En échec",
       nextWake: "Prochain réveil",

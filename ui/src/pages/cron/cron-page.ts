@@ -421,6 +421,17 @@ class CronPage extends OpenClawLightDomElement {
           onListTabChange: (tab) => {
             this.listTab = tab;
           },
+          onShowFailingRuns: () => {
+            // Failing stat card drills into run history pre-filtered to errors.
+            this.listTab = "activity";
+            void this.runCronTask(async (cronState) => {
+              updateCronRunsFilter(cronState, { cronRunsStatuses: ["error"] });
+              await loadCronRuns(
+                cronState,
+                cronState.cronRunsScope === "all" ? null : cronState.cronRunsJobId,
+              );
+            });
+          },
           onDetailTabChange: (tab) => {
             this.detailTab = tab;
           },

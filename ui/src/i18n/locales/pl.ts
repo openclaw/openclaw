@@ -3591,7 +3591,6 @@ export const pl: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Harmonogram",
       tasks: "Zadania",
       failing: "Nieudane",
       nextWake: "Następne uruchomienie",

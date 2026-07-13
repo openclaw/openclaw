@@ -3542,7 +3542,6 @@ export const ar: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "المجدول",
       tasks: "المهام",
       failing: "متعطّلة",
       nextWake: "التشغيل التالي",

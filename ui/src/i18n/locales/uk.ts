@@ -3578,7 +3578,6 @@ export const uk: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Планувальник",
       tasks: "Завдання",
       failing: "З помилками",
       nextWake: "Наступне пробудження",

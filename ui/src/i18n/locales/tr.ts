@@ -3591,7 +3591,6 @@ export const tr: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Zamanlayıcı",
       tasks: "Görevler",
       failing: "Başarısız",
       nextWake: "Sonraki uyanma",

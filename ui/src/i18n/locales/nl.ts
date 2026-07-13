@@ -3585,7 +3585,6 @@ export const nl: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Planner",
       tasks: "Taken",
       failing: "Mislukt",
       nextWake: "Volgende activering",

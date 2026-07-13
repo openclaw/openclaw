@@ -3561,7 +3561,6 @@ export const vi: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Bộ lập lịch",
       tasks: "Tác vụ",
       failing: "Đang lỗi",
       nextWake: "Lần chạy tiếp theo",

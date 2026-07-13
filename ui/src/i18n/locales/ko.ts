@@ -3557,7 +3557,6 @@ export const ko: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "스케줄러",
       tasks: "작업",
       failing: "실패 중",
       nextWake: "다음 실행",
