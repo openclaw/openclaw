@@ -2,10 +2,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { toErrorObject } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveCliName } from "./cli-name.js";
 import {
   asBoolean,
@@ -144,13 +144,14 @@ export async function writeUrlToFile(
       throw new Error(`failed to download ${url}: ${res.status} ${res.statusText}`);
     }
 
-    const contentLengthRaw = res.headers.get("content-length");
-    const contentLength = parseStrictNonNegativeInteger(contentLengthRaw);
-    if (
-      typeof contentLength === "number" &&
-      Number.isFinite(contentLength) &&
-      contentLength > MAX_CAMERA_URL_DOWNLOAD_BYTES
-    ) {
+    let contentLength: number | null;
+    try {
+      contentLength = parseMediaContentLength(res.headers.get("content-length"));
+    } catch (err) {
+      await cancelIgnoredResponseBody(res);
+      throw err;
+    }
+    if (contentLength !== null && contentLength > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
       await cancelIgnoredResponseBody(res);
       throw new Error(
         `writeUrlToFile: content-length ${contentLength} exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,

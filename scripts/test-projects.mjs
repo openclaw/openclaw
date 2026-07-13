@@ -122,7 +122,9 @@ function runPnpmSpecCommand(spec, pnpmArgs, label) {
 
 async function runVitestSpec(spec) {
   if (spec.includeFilePath && spec.includePatterns) {
-    writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
+    writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns, {
+      expandGlobs: !spec.watchMode,
+    });
   }
   try {
     if (spec.preflightPnpmArgs) {
