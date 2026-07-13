@@ -111,6 +111,8 @@ export function isExecutableFile(filePath: string, options?: { env?: NodeJS.Proc
   }
 }
 
+const WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);
+
 export function resolveExecutableFromPathEnv(
   executable: string,
   pathEnv: string,
@@ -124,15 +126,16 @@ export function resolveExecutableFromPathEnv(
     env,
     options?.includeExtensionless,
   );
-  const hasExplicitWindowsExtension =
-    process.platform === "win32" && path.extname(executable).length > 0;
+  const hasNativeWindowsExtension =
+    process.platform === "win32" &&
+    WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS.has(
+      normalizeLowercaseStringOrEmpty(path.extname(executable)),
+    );
   for (const entry of entries) {
     for (const ext of extensions) {
       const candidate = path.join(entry, executable + ext);
       if (
-        hasExplicitWindowsExtension
-          ? isRegularFile(candidate)
-          : isExecutableFile(candidate, { env })
+        hasNativeWindowsExtension ? isRegularFile(candidate) : isExecutableFile(candidate, { env })
       ) {
         return candidate;
       }
@@ -159,8 +162,6 @@ export function resolveExecutablePath(
   return resolveExecutableFromPathEnv(candidate, envPath, options?.env);
 }
 
-const KNOWN_PATHEXT = new Set([".com", ".exe", ".bat", ".cmd"]);
-
 /**
  * On Windows, resolves a bare command name to its full .cmd or .exe path by
  * probing PATH/PATHEXT without executing another resolver. On non-Windows this
@@ -170,7 +171,9 @@ export function resolveExecutable(cmd: string): string {
   if (process.platform !== "win32") {
     return cmd;
   }
-  if (KNOWN_PATHEXT.has(normalizeLowercaseStringOrEmpty(path.extname(cmd)))) {
+  if (
+    WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(cmd)))
+  ) {
     return cmd;
   }
 
