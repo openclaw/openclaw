@@ -105,7 +105,7 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 		}
 		if !insideFence {
 			if match := listMarkerRe.FindStringSubmatchIndex(line); len(match) >= 6 {
-				listRanges = append(listRanges, [2]int{offset + match[4], offset + match[5]})
+				listRanges = append(listRanges, [2]int{offset + match[0], offset + match[1]})
 			}
 		}
 		offset += len(line)

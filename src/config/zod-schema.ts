@@ -1137,6 +1137,18 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    worktrees: z
+      .object({
+        cleanup: z
+          .object({
+            maxCount: z.number().int().min(0).optional(),
+            maxTotalSizeGb: z.number().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     transcripts: z
       .object({
         enabled: z.boolean().optional(),
