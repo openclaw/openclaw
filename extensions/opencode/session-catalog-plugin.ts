@@ -133,6 +133,53 @@ function unwrapNodePayload(value: unknown): unknown {
     : value;
 }
 
+type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
+
+async function listOpenCodeNodeHost(
+  runtime: PluginRuntime,
+  query: Parameters<SessionCatalogProvider["list"]>[0],
+  node: CatalogNode,
+): Promise<SessionCatalogHost> {
+  const hostId = `node:${node.nodeId}`;
+  const common = {
+    hostId,
+    label: nodeLabel(node),
+    kind: "node" as const,
+    connected: node.connected === true,
+    nodeId: node.nodeId,
+  };
+  if (node.connected !== true) {
+    return {
+      ...common,
+      sessions: [],
+      error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+    };
+  }
+  try {
+    const raw = await runtime.nodes.invoke({
+      nodeId: node.nodeId,
+      command: OPENCODE_SESSIONS_LIST_COMMAND,
+      params: {
+        ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
+        ...(query.search ? { searchTerm: query.search } : {}),
+        ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
+      },
+      timeoutMs: NODE_TIMEOUT_MS,
+      scopes: ["operator.write"],
+    });
+    return { ...common, ...parseNodeSessionPage(unwrapNodePayload(raw)) };
+  } catch {
+    return {
+      ...common,
+      sessions: [],
+      error: {
+        code: "NODE_INVOKE_FAILED",
+        message: "Paired node OpenCode sessions are unavailable",
+      },
+    };
+  }
+}
+
 function parseNodeSessionPage(value: unknown): OpenCodeSessionPage {
   if (
     !isRecord(value) ||
@@ -217,46 +264,7 @@ async function listOpenCodeHosts(
     .slice(0, MAX_HOSTS - hosts.length)
     .toSorted((left, right) => nodeLabel(left).localeCompare(nodeLabel(right)));
   const nodeHosts = await Promise.all(
-    eligible.map(async (node): Promise<SessionCatalogHost> => {
-      const hostId = `node:${node.nodeId}`;
-      const common = {
-        hostId,
-        label: nodeLabel(node),
-        kind: "node" as const,
-        connected: node.connected === true,
-        nodeId: node.nodeId,
-      };
-      if (node.connected !== true) {
-        return {
-          ...common,
-          sessions: [],
-          error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
-        };
-      }
-      try {
-        const raw = await runtime.nodes.invoke({
-          nodeId: node.nodeId,
-          command: OPENCODE_SESSIONS_LIST_COMMAND,
-          params: {
-            ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-            ...(query.search ? { searchTerm: query.search } : {}),
-            ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
-          },
-          timeoutMs: NODE_TIMEOUT_MS,
-          scopes: ["operator.write"],
-        });
-        return { ...common, ...parseNodeSessionPage(unwrapNodePayload(raw)) };
-      } catch {
-        return {
-          ...common,
-          sessions: [],
-          error: {
-            code: "NODE_INVOKE_FAILED",
-            message: "Paired node OpenCode sessions are unavailable",
-          },
-        };
-      }
-    }),
+    eligible.map((node) => listOpenCodeNodeHost(runtime, query, node)),
   );
   return [...hosts, ...nodeHosts];
 }

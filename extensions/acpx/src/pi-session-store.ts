@@ -169,7 +169,8 @@ async function mapConcurrent<T, R>(
   limit: number,
   mapper: (value: T) => Promise<R>,
 ): Promise<R[]> {
-  const results = new Array<R>(values.length);
+  const results: R[] = [];
+  results.length = values.length;
   let nextIndex = 0;
   const workers = Array.from({ length: Math.min(limit, values.length) }, async () => {
     while (nextIndex < values.length) {
