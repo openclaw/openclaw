@@ -282,7 +282,10 @@ function mergeCatalogEntries(
   options?: { preserveBaseName?: boolean },
 ): void {
   const indexByKey = new Map(
-    models.map((entry, index) => [catalogEntryDedupeKey(entry.provider, entry.id, entry.profileId), index]),
+    models.map((entry, index) => [
+      catalogEntryDedupeKey(entry.provider, entry.id, entry.profileId),
+      index,
+    ]),
   );
   for (const entry of entries) {
     const key = catalogEntryDedupeKey(entry.provider, entry.id, entry.profileId);
