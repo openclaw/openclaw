@@ -262,7 +262,7 @@ describe("workboard gateway methods", () => {
     );
   });
 
-  it("threads a validated maxStarts gateway parameter into dispatch", async () => {
+  it("threads maxStarts while the legacy method keeps its default cap", async () => {
     type RegisteredMethod = {
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
       opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
@@ -281,27 +281,44 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
     const store = new WorkboardStore(createMemoryStore());
-    await store.create({
-      title: "Ready A",
-      status: "ready",
-      priority: "urgent",
-      agentId: "agent-a",
-    });
-    await store.create({
-      title: "Ready B",
-      status: "ready",
-      priority: "urgent",
-      agentId: "agent-b",
-    });
+    await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        store.create({
+          title: `Capped ${index}`,
+          status: "ready",
+          priority: "urgent",
+          agentId: `capped-${index}`,
+          boardId: "capped",
+        }),
+      ),
+    );
     registerWorkboardGatewayMethods({ api, store });
     const handler = methods.get("workboard.cards.dispatchWithOptions")?.handler;
 
     const respond = vi.fn();
-    await handler?.({ params: { maxStarts: 1 }, respond } as never);
+    await handler?.({ params: { boardId: "capped", maxStarts: 4 }, respond } as never);
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(respond.mock.calls[0]?.[1]?.started).toHaveLength(1);
-    expect(run).toHaveBeenCalledOnce();
+    expect(respond.mock.calls[0]?.[1]?.started).toHaveLength(4);
+    expect(run).toHaveBeenCalledTimes(4);
+
+    await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        store.create({
+          title: `Legacy ${index}`,
+          status: "ready",
+          priority: "urgent",
+          agentId: `legacy-${index}`,
+          boardId: "legacy",
+        }),
+      ),
+    );
+    const defaultRespond = vi.fn();
+    await methods
+      .get("workboard.cards.dispatch")
+      ?.handler({ params: { boardId: "legacy" }, respond: defaultRespond } as never);
+    expect(defaultRespond.mock.calls[0]?.[1]?.started).toHaveLength(3);
+    expect(run).toHaveBeenCalledTimes(7);
 
     const legacyRespond = vi.fn();
     await methods

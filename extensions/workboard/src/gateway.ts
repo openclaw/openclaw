@@ -1,58 +1,17 @@
 // Workboard plugin module implements gateway behavior.
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "../api.js";
-import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import {
+  assertNoCursorAdvance,
+  createWorkboardDispatchHandler,
+  readId,
+  readPatch,
+  respondError,
+} from "./gateway-helpers.js";
 import { WorkboardStore } from "./store.js";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "./types.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
-
-type GatewayMethodContext = Parameters<
-  Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
->[0];
-type GatewayRespond = GatewayMethodContext["respond"];
-
-function respondError(respond: GatewayRespond, error: unknown) {
-  respond(false, undefined, {
-    code: "workboard_error",
-    message: formatErrorMessage(error),
-  });
-}
-
-function readId(params: Record<string, unknown>): string {
-  const value = params.id;
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  throw new Error("id is required.");
-}
-
-function readOptionalPositiveInteger(value: unknown, fieldName: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const parsed = parseStrictPositiveInteger(value);
-  if (typeof value !== "number" || parsed === undefined) {
-    throw new Error(`${fieldName} must be a positive integer.`);
-  }
-  return parsed;
-}
-
-function readPatch(params: Record<string, unknown>): Record<string, unknown> {
-  const patch = params.patch;
-  if (patch && typeof patch === "object" && !Array.isArray(patch)) {
-    return patch as Record<string, unknown>;
-  }
-  return params;
-}
-
-function assertNoCursorAdvance(params: Record<string, unknown>) {
-  if (params.advance === true) {
-    throw new Error("notification cursor advancement requires workboard.notifications.advance.");
-  }
-}
 
 function redactClaimToken(card: WorkboardCard): WorkboardCard {
   const claim = card.metadata?.claim;
@@ -84,48 +43,11 @@ export function registerWorkboardGatewayMethods(params: {
 }) {
   const { api } = params;
   const store = params.store ?? WorkboardStore.openSqlite();
-  const dispatchCards = async (
-    { params: requestParams, respond, client }: GatewayMethodContext,
-    options: { supportsMaxStarts: boolean },
-  ) => {
-    try {
-      const boardId =
-        requestParams && typeof requestParams === "object" && "boardId" in requestParams
-          ? requestParams.boardId
-          : undefined;
-      const rawMaxStarts =
-        requestParams && typeof requestParams === "object" && "maxStarts" in requestParams
-          ? requestParams.maxStarts
-          : undefined;
-      if (!options.supportsMaxStarts && rawMaxStarts !== undefined) {
-        throw new Error("maxStarts requires workboard.cards.dispatchWithOptions.");
-      }
-      const maxStarts = options.supportsMaxStarts
-        ? readOptionalPositiveInteger(rawMaxStarts, "maxStarts")
-        : undefined;
-      const result = await dispatchAndStartWorkboardCards({
-        store,
-        subagent: api.runtime.subagent,
-        worktrees: api.runtime.worktrees,
-        options: {
-          boardId: typeof boardId === "string" ? boardId : undefined,
-          ...(maxStarts !== undefined ? { maxStarts } : {}),
-          allowManagedWorktrees:
-            Array.isArray(client?.connect?.scopes) &&
-            client.connect.scopes.includes("operator.admin"),
-        },
-      });
-      respond(true, {
-        ...result,
-        promoted: result.promoted.map(redactClaimToken),
-        reclaimed: result.reclaimed.map(redactClaimToken),
-        blocked: result.blocked.map(redactClaimToken),
-        orchestrated: result.orchestrated.map(redactClaimToken),
-      });
-    } catch (error) {
-      respondError(respond, error);
-    }
-  };
+  const dispatchCards = createWorkboardDispatchHandler({
+    api,
+    store,
+    redactCard: redactClaimToken,
+  });
 
   api.registerGatewayMethod(
     "workboard.cards.list",
