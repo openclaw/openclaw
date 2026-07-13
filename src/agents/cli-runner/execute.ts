@@ -29,6 +29,7 @@ import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
+import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import type { RunExit } from "../../process/supervisor/types.js";
@@ -456,6 +457,7 @@ export async function executePreparedCliRun(
         workspaceDir: context.workspaceDir,
         images: params.images,
         imageOrder: params.imageOrder,
+        maxBytes: resolveGeneratedMediaMaxBytes(context.contextEngineConfig, "image"),
       });
   prompt = promptWithImages;
 
