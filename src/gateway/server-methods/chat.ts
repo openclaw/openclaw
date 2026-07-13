@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { isAudioFileName } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -36,7 +35,6 @@ import {
   isReplyPayloadStatusNotice,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -54,7 +52,6 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import {
   retainGatewayRootWorkAdmissionContinuation,
   runWithGatewayIndependentRootWorkContinuation,
@@ -63,7 +60,6 @@ import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/se
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   parseInlineDirectives,
-  stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
   sanitizeReplyDirectiveId,
 } from "../../utils/directive-tags.js";
@@ -85,7 +81,6 @@ import {
   registerQueuedChatTurn,
   retireQueuedChatTurnCancellation,
 } from "../chat-queued-turns.js";
-import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   isDashboardSessionTitleCandidate,
   maybeGenerateDashboardSessionTitle,
@@ -119,7 +114,6 @@ import {
   hasManagedOutgoingAssistantContent,
   hasSensitiveMediaPayload,
   hasVisibleAssistantFinalMessage,
-  isMediaBearingPayload,
   replaceAssistantContentTextBlocks,
   sanitizeAssistantDisplayText,
   scheduleChatHistoryManagedImageCleanup,
@@ -159,6 +153,10 @@ import {
   respondChatSessionRoutingChanged,
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
+import {
+  buildTranscriptReplyText,
+  createChatSendReplyDispatch,
+} from "./chat-send-reply-dispatch.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
 import { applyChatSendManagedMediaFields, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
@@ -179,11 +177,7 @@ import {
   type SourceReplyContentState,
   type SourceReplyTranscriptMirrorMetadata,
 } from "./chat-transcript-persistence.js";
-import {
-  buildMediaOnlyTtsSupplementTranscriptMarker,
-  buildTtsSupplementTranscriptMarker,
-  stripVisibleTextFromTtsSupplement,
-} from "./chat-tts-markers.js";
+import { buildMediaOnlyTtsSupplementTranscriptMarker } from "./chat-tts-markers.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 import {
@@ -429,52 +423,6 @@ export {
 } from "./chat-history-budget.js";
 
 const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
-function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
-  const chunks = payloads
-    .map((payload) => {
-      if (payload.isReasoning === true) {
-        return "";
-      }
-      const parts = resolveSendableOutboundReplyParts(payload);
-      const lines: string[] = [];
-      const parsedText = payload.text?.includes("[[")
-        ? parseInlineDirectives(payload.text)
-        : undefined;
-      const replyToId =
-        sanitizeReplyDirectiveId(payload.replyToId) ??
-        sanitizeReplyDirectiveId(parsedText?.replyToExplicitId);
-      if (replyToId) {
-        lines.push(`[[reply_to:${replyToId}]]`);
-      } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
-        lines.push("[[reply_to_current]]");
-      }
-      const text = payload.text
-        ? stripInlineDirectiveTagsForDelivery(payload.text).text.trim()
-        : "";
-      if (text && !isSuppressedControlReplyText(text)) {
-        lines.push(text);
-      }
-      for (const mediaUrl of parts.mediaUrls) {
-        if (payload.sensitiveMedia === true) {
-          continue;
-        }
-        const trimmed = mediaUrl.trim();
-        if (trimmed) {
-          lines.push(`Attachment: ${trimmed}`);
-        }
-      }
-      if (
-        (payload.audioAsVoice || parsedText?.audioAsVoice) &&
-        parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))
-      ) {
-        lines.push("[[audio_as_voice]]");
-      }
-      return lines.join("\n").trim();
-    })
-    .filter(Boolean);
-  return chunks.join("\n\n").trim();
-}
-
 function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
   totalMessages: number;
@@ -1297,14 +1245,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         userTurn,
       });
 
-      const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
-        cfg,
-        agentId,
-        channel: INTERNAL_MESSAGE_CHANNEL,
-      });
-      const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
-      let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
+      const { deliveredReplies, dispatcher, onModelSelected } = createChatSendReplyDispatch({
+        accountId,
+        isAgentRunStarted: () => agentRunStarted,
+        logGateway: context.logGateway,
+        session: preparedSession.value,
+        userTurnRecorder,
+      });
       let queuedFollowupEnqueued = false;
       let pendingDispatchLifecycleError:
         | {
@@ -1315,126 +1263,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
         | undefined;
       let persistDispatchErrorUserTurn: (() => Promise<void>) | undefined;
-      const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
-        if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
-          return;
-        }
-        if (isSourceReplyTranscriptMirrorPayload(payload)) {
-          return;
-        }
-        const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
-        const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
-          cfg,
-          sessionKey,
-          agentId,
-          accountId,
-          payloads: [stripVisibleTextFromTtsSupplement(payload)],
-        });
-        if (!transcriptPayload) {
-          return;
-        }
-        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-          sessionKey,
-          sessionLoadOptions,
-        );
-        const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-        const mediaLocalRoots = appendLocalMediaParentRoots(
-          getAgentScopedMediaLocalRoots(cfg, agentId),
-          latestStorePath ? [latestStorePath] : undefined,
-        );
-        const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-          sessionKey,
-          agentId,
-          payloads: [transcriptPayload],
-          managedImageLocalRoots: mediaLocalRoots,
-          includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
-          onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-          },
-          onManagedImagePrepareError: (message) => {
-            context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
-          },
-        });
-        const mediaMessage = await buildWebchatAssistantMediaMessage([transcriptPayload], {
-          localRoots: mediaLocalRoots,
-          onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-          },
-        });
-        const persistedAssistantContent = replaceAssistantContentTextBlocks(
-          assistantContent,
-          mediaMessage,
-        );
-        const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
-          ? persistedAssistantContent
-          : undefined;
-        if (!persistedContentForAppend?.length) {
-          return;
-        }
-        const transcriptReply =
-          mediaMessage?.transcriptText ??
-          extractAssistantDisplayTextFromContent(assistantContent) ??
-          buildTranscriptReplyText([transcriptPayload]);
-        if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
-          return;
-        }
-        const appended = await appendAssistantTranscriptMessage({
-          sessionKey,
-          message: transcriptReply,
-          ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
-          sessionId,
-          storePath: latestStorePath,
-          sessionFile: latestEntry?.sessionFile,
-          agentId,
-          createIfMissing: true,
-          idempotencyKey: `${clientRunId}:assistant-media`,
-          ttsSupplement: ttsSupplementMarker,
-          cfg,
-        });
-        if (appended.ok) {
-          if (appended.messageId && assistantContent?.length) {
-            await attachManagedOutgoingImagesToMessage({
-              messageId: appended.messageId,
-              blocks: assistantContent,
-            });
-          }
-          appendedWebchatAgentMedia = true;
-          return;
-        }
-        context.logGateway.warn(
-          `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
-        );
-      };
-      const dispatcher = createReplyDispatcher({
-        ...replyPipeline,
-        onError: (err) => {
-          context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
-        },
-        deliver: async (payload, info) => {
-          if (getReplyPayloadMetadata(payload)?.beforeAgentRunBlocked === true) {
-            userTurnRecorder.markBlocked();
-          }
-          switch (info.kind) {
-            case "block":
-            case "final":
-              deliveredReplies.push({ payload, kind: info.kind });
-              await appendWebchatAgentMediaTranscriptIfNeeded(payload);
-              break;
-            case "tool":
-              // Tool results that carry audio (e.g. the TTS tool) must be promoted
-              // to "final" so the downstream audio extraction path can pick them up.
-              // Strip text to avoid leaking tool summary into the combined reply.
-              if (isMediaBearingPayload(payload)) {
-                deliveredReplies.push({
-                  payload: { ...payload, text: undefined },
-                  kind: "final",
-                });
-              }
-              break;
-          }
-        },
-      });
-
       const emitServerTiming = (
         phase: ChatSendServerTimingPhase,
         extra?: Record<string, string | number>,
