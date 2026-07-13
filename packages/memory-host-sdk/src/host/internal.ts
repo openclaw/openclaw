@@ -4,7 +4,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import pMap from "p-map";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
@@ -35,6 +34,7 @@ import { retryTransientMemoryRead } from "./read-retry.js";
 import { normalizeStringEntries, uniqueStrings } from "./string-utils.js";
 
 export { hashText } from "./hash.js";
+export { runWithConcurrency } from "./concurrency.js";
 import { hashText } from "./hash.js";
 
 export type MemoryFileEntry = {
@@ -537,33 +537,4 @@ export function cosineSimilarity(a: number[], b: number[]): number {
     return 0;
   }
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-export async function runWithConcurrency<T>(
-  tasks: Array<() => Promise<T>>,
-  limit: number,
-): Promise<T[]> {
-  const inFlight = new Set<Promise<T>>();
-  try {
-    return await pMap(
-      tasks,
-      (task) => {
-        const run = Promise.resolve().then(task);
-        inFlight.add(run);
-        void run.then(
-          () => inFlight.delete(run),
-          () => inFlight.delete(run),
-        );
-        return run;
-      },
-      {
-        concurrency: Math.max(1, Math.floor(limit)),
-        stopOnError: true,
-      },
-    );
-  } catch (error) {
-    // p-map stops dequeuing on error, but active memory writes must drain before callers recover.
-    await Promise.allSettled([...inFlight]);
-    throw error;
-  }
 }
