@@ -30,6 +30,12 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
+import {
+  createInjectedClientDiscoverySdk,
+  loadBedrockDiscoverySdk,
+  sendBedrockDiscoveryCommand,
+  type BedrockDiscoverySdk,
+} from "./discovery-sdk.js";
 import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { resolveBedrockNativeThinkingLevelMap } from "./thinking-policy.js";
 
@@ -38,7 +44,6 @@ const log = createSubsystemLogger("bedrock-discovery");
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
 const DEFAULT_CONTEXT_WINDOW = 32_000;
 const DEFAULT_MAX_TOKENS = 4096;
-const BEDROCK_DISCOVERY_REQUEST_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // Known model context windows (Bedrock API does not expose token limits)
@@ -209,38 +214,6 @@ type InferenceProfileSummary = NonNullable<
   ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
 >[number];
 
-type BedrockDiscoverySdk = {
-  createClient(region: string): BedrockClient;
-  createListFoundationModelsCommand(): unknown;
-  createListInferenceProfilesCommand(input: { nextToken?: string }): unknown;
-};
-
-async function loadBedrockDiscoverySdk(): Promise<BedrockDiscoverySdk> {
-  const { BedrockClient, ListFoundationModelsCommand, ListInferenceProfilesCommand } =
-    await import("@aws-sdk/client-bedrock");
-  return {
-    createClient: (region) => new BedrockClient({ region }),
-    createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
-    createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
-  };
-}
-
-function createInjectedClientDiscoverySdk(): BedrockDiscoverySdk {
-  class ListFoundationModelsCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
-  }
-  class ListInferenceProfilesCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
-  }
-  return {
-    createClient() {
-      throw new Error("clientFactory is required for injected Bedrock discovery commands");
-    },
-    createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
-    createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
-  };
-}
-
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
   value?: ModelDefinitionConfig[];
@@ -253,29 +226,6 @@ let hasLoggedBedrockError = false;
 // ---------------------------------------------------------------------------
 // Helper utilities
 // ---------------------------------------------------------------------------
-
-function createBedrockDiscoveryTimeoutError(operation: string): Error {
-  const error = new Error(`${operation} timed out after ${BEDROCK_DISCOVERY_REQUEST_TIMEOUT_MS}ms`);
-  error.name = "TimeoutError";
-  return error;
-}
-
-async function sendBedrockDiscoveryCommand<T>(
-  client: BedrockClient,
-  command: unknown,
-  operation: string,
-): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => {
-    controller.abort(createBedrockDiscoveryTimeoutError(operation));
-  }, BEDROCK_DISCOVERY_REQUEST_TIMEOUT_MS);
-  timeout.unref?.();
-  try {
-    return (await client.send(command as never, { abortSignal: controller.signal })) as T;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
 
 function normalizeProviderFilter(filter?: string[]): string[] {
   if (!filter || filter.length === 0) {
