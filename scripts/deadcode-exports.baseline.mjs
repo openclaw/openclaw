@@ -175,7 +175,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/llama-cpp/src/embedding-provider.ts: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL",
   "extensions/llama-cpp/src/embedding-provider.ts: formatLlamaCppSetupError",
   "extensions/lmstudio/src/stream.ts: resetLmstudioPreloadCooldownForTest",
-  "extensions/lobster/src/lobster-runner.ts: loadEmbeddedToolRuntimeFromPackage",
   "extensions/logbook/src/analyze.ts: clockToMs",
   "extensions/logbook/src/analyze.ts: extractJsonPayload",
   "extensions/matrix/src/approval-reactions.ts: clearMatrixApprovalReactionTargetsForTest",
