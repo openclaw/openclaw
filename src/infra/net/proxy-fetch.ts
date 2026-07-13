@@ -64,6 +64,114 @@ function normalizeInitForUndici(
   return { ...initWithNormalizedHeaders, headers, body: form as unknown as BodyInit };
 }
 
+// Hop-by-hop and framing headers that must not be forwarded to upstream
+// servers when normalizing/proxying requests (request smuggling risk).
+const STRIP_HEADERS = new Set([
+  "connection",
+  "content-length",
+  "host",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+function isRequestLike(input: unknown): input is {
+  url: string;
+  method?: string;
+  headers?: HeadersInit;
+  body?: BodyInit | null;
+  signal?: AbortSignal | null;
+} {
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    "url" in input &&
+    typeof (input as { url: unknown }).url === "string" &&
+    (input as { url: string }).url.trim().length > 0
+  );
+}
+
+function stripRequestHeaders(src: HeadersInit | undefined): Headers | undefined {
+  if (src === undefined) {
+    return undefined;
+  }
+  const h = new Headers(src);
+  for (const key of Array.from(h.keys())) {
+    if (STRIP_HEADERS.has(key.toLowerCase())) {
+      h.delete(key);
+    }
+  }
+  return h;
+}
+
+function toRequestLikeInit(
+  input: {
+    url: string;
+    method?: string;
+    headers?: HeadersInit;
+    body?: BodyInit | null;
+    signal?: AbortSignal | null;
+  },
+  init?: RequestInit,
+): RequestInit | undefined {
+  const merged: Record<string, unknown> = { ...init };
+  if (merged.body === undefined && input.body !== undefined) {
+    merged.body = input.body;
+  }
+  const signal = init?.signal ?? input.signal;
+  if (signal !== undefined) {
+    merged.signal = signal;
+  }
+  // Per the Fetch spec, when init.headers is supplied it entirely replaces the
+  // Request's own headers (matching `new Request(req, { headers })` behaviour
+  // in Node/undici which discards req.headers when init.headers is present).
+  // Only fall back to input.headers when init provides no headers at all.
+  const headers = stripRequestHeaders(init?.headers !== undefined ? init.headers : input.headers);
+  if (headers) {
+    merged.headers = headers;
+  }
+  const method = typeof init?.method === "string" ? init.method : input.method;
+  if (typeof method === "string" && method) {
+    merged.method = method;
+  }
+  if (merged.body != null && merged.duplex === undefined) {
+    merged.duplex = "half";
+  }
+  return Object.keys(merged).length > 0 ? (merged as RequestInit) : undefined;
+}
+
+function normalizeProxyFetchInput(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): { input: string | URL; init: RequestInit | undefined } {
+  if (typeof input === "string" || input instanceof URL) {
+    return { input, init };
+  }
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    return {
+      input: input.url,
+      init: toRequestLikeInit(
+        input as unknown as {
+          url: string;
+          headers: HeadersInit;
+          body: BodyInit | null;
+          signal: AbortSignal | null;
+          method: string;
+        },
+        init,
+      ),
+    };
+  }
+  if (isRequestLike(input)) {
+    return { input: input.url, init: toRequestLikeInit(input, init) };
+  }
+  return { input: input as string | URL, init };
+}
+
 /**
  * Create a fetch function that routes requests through the given HTTP proxy.
  * Uses undici's ProxyAgent under the hood.
@@ -81,13 +189,13 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
     }
     return agent;
   };
-  // undici's fetch is runtime-compatible with global fetch but the types diverge
-  // on stream/body internals. Single cast at the boundary keeps the rest type-safe.
-  const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
-    undiciFetch(input as string | URL, {
-      ...(normalizeInitForUndici(init, UndiciFormData) as Record<string, unknown>),
+  const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const normalized = normalizeProxyFetchInput(input, init);
+    return undiciFetch(normalized.input, {
+      ...(normalizeInitForUndici(normalized.init, UndiciFormData) as Record<string, unknown>),
       dispatcher: resolveAgent(),
-    }) as unknown as Promise<Response>) as ProxyFetchWithMetadata;
+    }) as unknown as Promise<Response>;
+  }) as ProxyFetchWithMetadata;
   Object.defineProperty(proxyFetch, PROXY_FETCH_PROXY_URL, {
     value: proxyUrl,
     enumerable: false,
@@ -127,11 +235,13 @@ export function resolveProxyFetchFromEnv(
       fetch: undiciFetch,
     } = loadUndiciRuntimeDeps();
     const agent = new EnvHttpProxyAgent(proxyOptions);
-    return ((input: RequestInfo | URL, init?: RequestInit) =>
-      undiciFetch(input as string | URL, {
-        ...(normalizeInitForUndici(init, UndiciFormData) as Record<string, unknown>),
+    return ((input: RequestInfo | URL, init?: RequestInit) => {
+      const normalized = normalizeProxyFetchInput(input, init);
+      return undiciFetch(normalized.input, {
+        ...(normalizeInitForUndici(normalized.init, UndiciFormData) as Record<string, unknown>),
         dispatcher: agent,
-      }) as unknown as Promise<Response>) as typeof fetch;
+      }) as unknown as Promise<Response>;
+    }) as typeof fetch;
   } catch (err) {
     logWarn(
       `Proxy env var set but agent creation failed — falling back to direct fetch: ${formatErrorMessage(err)}`,
