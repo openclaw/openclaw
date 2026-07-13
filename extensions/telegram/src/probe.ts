@@ -2,7 +2,6 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import {
@@ -11,6 +10,7 @@ import {
   type TelegramTransport,
 } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
+import { readTelegramResponseBodyWithTimeout } from "./response-body-timeout.js";
 
 export type TelegramProbe = BaseProbeResult & {
   status?: number | null;
@@ -121,6 +121,20 @@ function normalizeBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
+async function readTelegramDiagnosticBody(
+  response: Response,
+  timeoutMs: number,
+): Promise<Buffer> {
+  return await readTelegramResponseBodyWithTimeout(response, {
+    maxBytes: TELEGRAM_BOT_API_MAX_RESPONSE_BYTES,
+    timeoutMs,
+    onIdleTimeout: ({ timeoutMs: idleTimeoutMs }) =>
+      new Error(`Telegram diagnostic response body stalled for ${idleTimeoutMs}ms`),
+    onDeadlineTimeout: ({ timeoutMs: deadlineTimeoutMs }) =>
+      new Error(`Telegram diagnostic response body timed out after ${deadlineTimeoutMs}ms`),
+  });
+}
+
 export async function probeTelegram(
   token: string,
   timeoutMs: number,
@@ -193,7 +207,12 @@ export async function probeTelegram(
     }
 
     const meJson = JSON.parse(
-      (await readResponseWithLimit(meRes, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString("utf8"),
+      (
+        await readTelegramDiagnosticBody(
+          meRes,
+          Math.min(timeoutBudgetMs, resolveRemainingBudgetMs()),
+        )
+      ).toString("utf8"),
     ) as {
       ok?: boolean;
       description?: string;
@@ -238,9 +257,12 @@ export async function probeTelegram(
             fetcher,
           );
           const webhookJson = JSON.parse(
-            (await readResponseWithLimit(webhookRes, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString(
-              "utf8",
-            ),
+            (
+              await readTelegramDiagnosticBody(
+                webhookRes,
+                Math.min(timeoutBudgetMs, resolveRemainingBudgetMs()),
+              )
+            ).toString("utf8"),
           ) as {
             ok?: boolean;
             result?: { url?: string; has_custom_certificate?: boolean };

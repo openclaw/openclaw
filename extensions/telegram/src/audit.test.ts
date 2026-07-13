@@ -41,6 +41,21 @@ async function auditSingleGroup() {
   });
 }
 
+function makeStallingJsonResponse(payload: unknown, cancel: (reason?: unknown) => void): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+      },
+      cancel,
+    }),
+    {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    },
+  );
+}
+
 describe("telegram audit", () => {
   beforeAll(async () => {
     vi.doMock("./fetch.js", () => ({
@@ -85,5 +100,35 @@ describe("telegram audit", () => {
     expect(res.ok).toBe(false);
     expect(res.groups[0]?.ok).toBe(false);
     expect(res.groups[0]?.status).toBe("left");
+  });
+
+  it("reports stalled getChatMember response bodies quickly", async () => {
+    const cancel = vi.fn();
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      makeStallingJsonResponse({ ok: true, result: { status: "member" } }, cancel),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const auditPromise = auditTelegramGroupMembership({
+        token: "t",
+        botId: 123,
+        groupIds: ["-1001"],
+        timeoutMs: 50,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60);
+
+      const res = await auditPromise;
+      expect(res.ok).toBe(false);
+      expect(res.groups[0]?.ok).toBe(false);
+      expect(res.groups[0]?.error).toBe(
+        "Telegram membership audit response body stalled for 25ms",
+      );
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

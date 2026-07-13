@@ -1,6 +1,5 @@
 // Telegram plugin module implements audit membership runtime behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
@@ -10,6 +9,7 @@ import type {
 } from "./audit.types.js";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
+import { readTelegramResponseBodyWithTimeout } from "./response-body-timeout.js";
 
 type TelegramApiOk<T> = { ok: true; result: T };
 type TelegramApiErr = { ok: false; description?: string };
@@ -17,6 +17,20 @@ type TelegramGroupMembershipAuditData = Omit<TelegramGroupMembershipAudit, "elap
 // Telegram getChatMember responses are tiny (< 1 KiB). 4 MiB guards against hostile endpoints.
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 type TelegramChatMemberResult = { status?: string };
+
+async function readTelegramMembershipAuditBody(
+  response: Response,
+  timeoutMs: number,
+): Promise<Buffer> {
+  return await readTelegramResponseBodyWithTimeout(response, {
+    maxBytes: TELEGRAM_BOT_API_MAX_RESPONSE_BYTES,
+    timeoutMs,
+    onIdleTimeout: ({ timeoutMs: idleTimeoutMs }) =>
+      new Error(`Telegram membership audit response body stalled for ${idleTimeoutMs}ms`),
+    onDeadlineTimeout: ({ timeoutMs: deadlineTimeoutMs }) =>
+      new Error(`Telegram membership audit response body timed out after ${deadlineTimeoutMs}ms`),
+  });
+}
 
 export async function auditTelegramGroupMembershipImpl(
   params: AuditTelegramGroupMembershipParams,
@@ -34,7 +48,7 @@ export async function auditTelegramGroupMembershipImpl(
       const url = `${base}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(String(params.botId))}`;
       const res = await fetchWithTimeout(url, {}, params.timeoutMs, fetcher);
       const json = JSON.parse(
-        (await readResponseWithLimit(res, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString("utf8"),
+        (await readTelegramMembershipAuditBody(res, params.timeoutMs)).toString("utf8"),
       ) as TelegramApiOk<TelegramChatMemberResult> | TelegramApiErr;
       if (!res.ok || !isRecord(json) || !json.ok) {
         const desc =
