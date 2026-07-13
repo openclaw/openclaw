@@ -1310,6 +1310,21 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   text-align: center;
 }
 
+.sidebar-session-group-count--error {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warning);
+}
+
+.sidebar-session-group-count--error svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
 .sidebar-session-catalog-load-more {
   display: block;
   width: calc(100% - 20px);

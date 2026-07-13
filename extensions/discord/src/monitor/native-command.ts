@@ -34,6 +34,7 @@ import {
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import {
+  resolveDiscordCommandOwnerAllowFrom,
   resolveDiscordChannelPolicyCommandAuthorizer,
   resolveDiscordOwnerAccess,
 } from "./allow-list.js";
@@ -42,7 +43,6 @@ import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import {
-  resolveDiscordCommandOwnerAllowFrom,
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
   resolveDiscordNativeCommandChannelAccessContext,
