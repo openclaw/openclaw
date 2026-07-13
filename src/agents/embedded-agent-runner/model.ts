@@ -57,10 +57,10 @@ import {
 } from "./model.inline-provider.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 import {
-  canonicalizeManifestModelCatalogProviderAlias,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
-  resolveManifestModelCatalogProviderTransport,
+  resolveManifestModelCatalogProviderAliasMetadata,
+  type ManifestModelCatalogProviderAliasMetadata,
 } from "./model.static-catalog.js";
 
 type ProviderRuntimeHooks = {
@@ -621,18 +621,14 @@ function applyConfiguredProviderOverrides(params: {
   providerConfig?: InlineProviderConfig;
   modelId: string;
   cfg?: OpenClawConfig;
+  manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   runtimeHooks?: ProviderRuntimeHooks;
   preferDiscoveredModelMetadata?: boolean;
   preferDiscoveredTransport?: boolean;
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
-  const manifestAliasTransport = resolveManifestModelCatalogProviderTransport({
-    provider: params.provider,
-    modelId,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
+  const manifestAliasTransport = params.manifestAlias.transport;
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const defaultModelParams = findConfiguredAgentModelParams({
     cfg: params.cfg,
@@ -671,6 +667,7 @@ function applyConfiguredProviderOverrides(params: {
       ...discoveredModel,
       ...(manifestAliasTransport
         ? {
+            provider: params.provider,
             api: requestConfig.api ?? discoveredModel.api,
             baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
           }
@@ -929,6 +926,7 @@ function resolveExplicitModelWithRegistry(params: {
   modelRegistry: CoreModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): ExplicitModelResolution | undefined {
@@ -982,6 +980,7 @@ function resolveExplicitModelWithRegistry(params: {
           providerConfig,
           modelId,
           cfg,
+          manifestAlias: params.manifestAlias,
           runtimeHooks,
           workspaceDir,
           preferDiscoveredTransport: true,
@@ -1039,6 +1038,7 @@ function resolveExplicitModelWithRegistry(params: {
           providerConfig,
           modelId,
           cfg,
+          manifestAlias: params.manifestAlias,
           runtimeHooks,
           workspaceDir,
         }),
@@ -1168,6 +1168,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   agentRuntimeId?: string;
+  manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   workspaceDir?: string;
   authProfileId?: string;
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
@@ -1226,6 +1227,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
     providerConfig,
     modelId,
     cfg,
+    manifestAlias: params.manifestAlias,
     runtimeHooks,
     workspaceDir,
     preferDiscoveredModelMetadata,
@@ -1247,6 +1249,7 @@ function resolveRuntimePreferredSuppressedModel(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   agentRuntimeId?: string;
+  manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   workspaceDir?: string;
   authProfileId?: string;
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
@@ -1286,6 +1289,7 @@ function resolveConfiguredFallbackModel(params: {
   modelId: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
@@ -1330,6 +1334,8 @@ function resolveConfiguredFallbackModel(params: {
   const providerConfiguredApi = normalizeResolvedTransportApi(providerConfig?.api);
   const configuredModelBaseUrl = normalizeTransportBaseUrl(configuredModel?.baseUrl);
   const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig?.baseUrl);
+  const manifestAliasTransport = params.manifestAlias.transport;
+  const manifestAliasBaseUrl = normalizeTransportBaseUrl(manifestAliasTransport?.baseUrl);
   const staticCatalogBaseUrl = normalizeTransportBaseUrl(staticCatalogModel?.baseUrl);
   const fallbackTransport = resolveProviderTransport({
     provider,
@@ -1337,6 +1343,7 @@ function resolveConfiguredFallbackModel(params: {
     api:
       normalizeResolvedTransportApi(configuredModel?.api) ??
       providerConfiguredApi ??
+      manifestAliasTransport?.api ??
       normalizeResolvedTransportApi(staticCatalogModel?.api) ??
       resolveConfiguredProviderDefaultApi({
         provider,
@@ -1346,7 +1353,11 @@ function resolveConfiguredFallbackModel(params: {
         runtimeHooks,
       }) ??
       "openai-responses",
-    baseUrl: configuredModelBaseUrl ?? providerConfiguredBaseUrl ?? staticCatalogBaseUrl,
+    baseUrl:
+      configuredModelBaseUrl ??
+      providerConfiguredBaseUrl ??
+      manifestAliasBaseUrl ??
+      staticCatalogBaseUrl,
     cfg,
     workspaceDir,
     runtimeHooks,
@@ -1541,20 +1552,28 @@ function normalizeProviderModelRef(params: {
   modelId: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-}): { provider: string; model: string } {
-  const provider = canonicalizeManifestModelCatalogProviderAlias({
+}): {
+  provider: string;
+  model: string;
+  manifestAlias: ManifestModelCatalogProviderAliasMetadata;
+} {
+  const manifestAlias = resolveManifestModelCatalogProviderAliasMetadata({
     provider: params.provider,
     modelId: params.modelId,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
   });
   return {
-    provider,
-    model: normalizeStaticProviderModelId(normalizeProviderId(provider), params.modelId),
+    provider: manifestAlias.provider,
+    model: normalizeStaticProviderModelId(
+      normalizeProviderId(manifestAlias.provider),
+      params.modelId,
+    ),
+    manifestAlias,
   };
 }
 
-export function resolveModelWithRegistry(params: {
+type ResolveModelWithRegistryParams = {
   provider: string;
   modelId: string;
   modelRegistry: CoreModelRegistry;
@@ -1567,53 +1586,62 @@ export function resolveModelWithRegistry(params: {
   preferredProfile?: string;
   runtimeHooks?: ProviderRuntimeHooks;
   skipConfiguredFallback?: boolean;
-}): Model | undefined {
-  const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
-  const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
-  const normalizedParams = {
-    ...params,
-    provider: normalizedRef.provider,
-    modelId: normalizedRef.model,
-  };
+};
+
+function resolveModelWithPreparedRegistry(
+  params: ResolveModelWithRegistryParams & {
+    manifestAlias: ManifestModelCatalogProviderAliasMetadata;
+  },
+): Model | undefined {
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const scopedParams = {
-    ...normalizedParams,
-    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
-  };
-  const explicitModel = resolveExplicitModelWithRegistry(scopedParams);
+  const explicitModel = resolveExplicitModelWithRegistry(params);
   if (explicitModel?.kind === "suppressed") {
-    return resolveRuntimePreferredSuppressedModel(scopedParams);
+    return resolveRuntimePreferredSuppressedModel(params);
   }
   if (explicitModel?.kind === "resolved") {
     if (
       !shouldCompareProviderRuntimeResolvedModel({
-        provider: scopedParams.provider,
-        modelId: scopedParams.modelId,
-        cfg: scopedParams.cfg,
-        agentDir: scopedParams.agentDir,
-        workspaceDir,
+        provider: params.provider,
+        modelId: params.modelId,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         runtimeHooks,
       })
     ) {
       return explicitModel.model;
     }
     return (
-      resolvePluginDynamicModelWithRegistry(scopedParams) ??
+      resolvePluginDynamicModelWithRegistry(params) ??
       (shouldDropRuntimePreferredExplicitMiss({
-        provider: scopedParams.provider,
-        modelId: scopedParams.modelId,
+        provider: params.provider,
+        modelId: params.modelId,
         explicitModel,
       })
         ? undefined
         : explicitModel.model)
     );
   }
-  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(scopedParams);
+  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(params);
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
 
-  return params.skipConfiguredFallback ? undefined : resolveConfiguredFallbackModel(scopedParams);
+  return params.skipConfiguredFallback ? undefined : resolveConfiguredFallbackModel(params);
+}
+
+export function resolveModelWithRegistry(
+  params: ResolveModelWithRegistryParams,
+): Model | undefined {
+  const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
+  const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
+  return resolveModelWithPreparedRegistry({
+    ...params,
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
+    manifestAlias: normalizedRef.manifestAlias,
+    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
+  });
 }
 
 export function resolveModel(
@@ -1654,12 +1682,13 @@ export function resolveModel(
       ...(workspaceDir ? { workspaceDir } : {}),
     });
   const runtimeHooks = resolveRuntimeHooks(options);
-  const model = resolveModelWithRegistry({
+  const model = resolveModelWithPreparedRegistry({
     provider: normalizedRef.provider,
     modelId: normalizedRef.model,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
+    manifestAlias: normalizedRef.manifestAlias,
     workspaceDir,
     authProfileId: options?.authProfileId,
     authProfileMode: options?.authProfileMode,
@@ -1741,6 +1770,7 @@ export async function resolveModelAsync(
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
+    manifestAlias: normalizedRef.manifestAlias,
     workspaceDir,
     runtimeHooks,
   });
@@ -1752,6 +1782,7 @@ export async function resolveModelAsync(
       cfg,
       agentDir: resolvedAgentDir,
       ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
+      manifestAlias: normalizedRef.manifestAlias,
       workspaceDir,
       authProfileId: options?.authProfileId,
       authProfileMode: options?.authProfileMode,
@@ -1819,6 +1850,7 @@ export async function resolveModelAsync(
       providerConfig,
       modelId: normalizedRef.model,
       cfg,
+      manifestAlias: normalizedRef.manifestAlias,
       runtimeHooks,
       workspaceDir,
       preferDiscoveredModelMetadata: true,
@@ -1850,13 +1882,14 @@ export async function resolveModelAsync(
         ...authProfile,
       },
     });
-    return resolveModelWithRegistry({
+    return resolveModelWithPreparedRegistry({
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
       ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
+      manifestAlias: normalizedRef.manifestAlias,
       workspaceDir,
       authProfileId: options?.authProfileId,
       authProfileMode: options?.authProfileMode,
@@ -1893,6 +1926,7 @@ export async function resolveModelAsync(
       modelId: normalizedRef.model,
       cfg,
       agentDir: resolvedAgentDir,
+      manifestAlias: normalizedRef.manifestAlias,
       workspaceDir,
       runtimeHooks,
     });

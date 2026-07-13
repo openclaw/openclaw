@@ -380,6 +380,45 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     ).toEqual({ api: "azure-openai-responses" });
   });
 
+  it("accepts activated config-load-path alias owners", () => {
+    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "config-provider",
+          origin: "config",
+          providers: ["custom-openai"],
+          modelCatalog: {
+            aliases: {
+              "custom-openai-alias": {
+                provider: "custom-openai",
+                api: "openai-responses",
+                baseUrl: "https://config-provider.example.com/v1",
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(
+      canonicalizeManifestModelCatalogProviderAlias({
+        provider: "custom-openai-alias",
+        modelId: "custom-model",
+        cfg: {},
+      }),
+    ).toBe("custom-openai-alias");
+    expect(
+      resolveManifestModelCatalogProviderTransport({
+        provider: "custom-openai-alias",
+        modelId: "custom-model",
+        cfg: {},
+      }),
+    ).toEqual({
+      api: "openai-responses",
+      baseUrl: "https://config-provider.example.com/v1",
+    });
+  });
+
   it("fails closed when activated plugins claim the same provider alias", () => {
     setConflictingAzureAliasPlugins();
     const cfg = {

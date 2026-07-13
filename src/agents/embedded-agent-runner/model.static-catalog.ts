@@ -309,6 +309,11 @@ export type ManifestModelCatalogProviderTransport = Readonly<
   Pick<ModelCatalogAlias, "api" | "baseUrl">
 >;
 
+export type ManifestModelCatalogProviderAliasMetadata = {
+  readonly provider: string;
+  readonly transport?: ManifestModelCatalogProviderTransport;
+};
+
 type ManifestModelCatalogProviderAliasClaim = {
   readonly pluginId: string;
   readonly targetProvider: string;
@@ -341,7 +346,9 @@ function listEligibleManifestModelCatalogAliasPlugins(params: {
       return false;
     }
     return (
-      isBundledManifestOwner(plugin) || hasExplicitManifestOwnerTrust({ plugin, normalizedConfig })
+      isBundledManifestOwner(plugin) ||
+      plugin.origin === "config" ||
+      hasExplicitManifestOwnerTrust({ plugin, normalizedConfig })
     );
   });
 }
@@ -433,13 +440,13 @@ function resolveManifestModelCatalogProviderAlias(params: {
   };
 }
 
-function resolveManifestModelCatalogProviderAliasMetadata(params: {
+export function resolveManifestModelCatalogProviderAliasMetadata(params: {
   provider: string;
   modelId?: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): { provider: string; transport?: ManifestModelCatalogProviderTransport } {
+}): ManifestModelCatalogProviderAliasMetadata {
   const provider = normalizeProviderId(params.provider);
   if (!provider) {
     return { provider: params.provider };

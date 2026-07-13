@@ -507,6 +507,34 @@ describe("resolveModel forward-compat errors and overrides", () => {
     });
   });
 
+  it("uses retained azure alias transport defaults for provider-level deployment names", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "azure-openai-responses",
+      "customer-gpt-deployment",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "azure-openai-responses",
+      id: "customer-gpt-deployment",
+      api: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    });
+  });
+
   it("rejects provider-level azure codex-only aliases through the openai owner", () => {
     const cfg = {
       models: {
