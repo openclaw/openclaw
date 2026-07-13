@@ -16,7 +16,6 @@ import {
   ChatStateController,
   handlePageGatewayEvent,
   refreshChatMetadata,
-  requestChatPageUpdate,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
   resolveChatAvatarUrl,
@@ -59,11 +58,28 @@ describe("ChatStateController render lifecycle", () => {
       frames.delete(id);
     });
     const requestUpdate = vi.fn();
-    const state = { chatStreamRenderFrame: null, requestUpdate };
+    const state = {
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamStartedAt: 1,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate,
+      sessionKey: "main",
+    } as unknown as ChatPageHost;
+    const emitDelta = (deltaText: string) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
+      });
 
-    requestChatPageUpdate(state, "animation-frame");
-    requestChatPageUpdate(state, "animation-frame");
-    requestChatPageUpdate(state, "animation-frame");
+    emitDelta("A");
+    emitDelta("B");
+    emitDelta("C");
 
     expect(frames.size).toBe(1);
     expect(requestUpdate).not.toHaveBeenCalled();
@@ -73,9 +89,10 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).toHaveBeenCalledOnce();
     expect(state.chatStreamRenderFrame).toBeNull();
 
-    requestChatPageUpdate(state, "animation-frame");
+    emitDelta("D");
     const staleFrame = frames.get(2);
-    requestChatPageUpdate(state);
+    vi.stubGlobal("requestAnimationFrame", undefined);
+    emitDelta("E");
     staleFrame?.(0);
 
     expect(cancelFrame).toHaveBeenCalledWith(2);
