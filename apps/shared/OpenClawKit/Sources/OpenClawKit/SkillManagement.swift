@@ -153,26 +153,6 @@ public struct SkillInstallResult: Codable, Sendable {
     public let slug: String?
     public let version: String?
     public let warning: String?
-
-    public init(
-        ok: Bool,
-        message: String,
-        stdout: String? = nil,
-        stderr: String? = nil,
-        code: Int? = nil,
-        slug: String? = nil,
-        version: String? = nil,
-        warning: String? = nil)
-    {
-        self.ok = ok
-        self.message = message
-        self.stdout = stdout
-        self.stderr = stderr
-        self.code = code
-        self.slug = slug
-        self.version = version
-        self.warning = warning
-    }
 }
 
 public struct SkillUpdateResult: Codable, Sendable {
@@ -198,13 +178,6 @@ public struct ClawHubSkillSummary: Codable, Identifiable, Hashable, Sendable {
 
     public var id: String {
         self.slug
-    }
-
-    public init(slug: String, displayName: String, summary: String?, version: String?) {
-        self.slug = slug
-        self.displayName = displayName
-        self.summary = summary
-        self.version = version
     }
 }
 
@@ -244,14 +217,6 @@ public struct ClawHubSkillInstallReview: Identifiable, Hashable, Sendable {
         "\(self.slug)@\(self.version)"
     }
 
-    public init(slug: String, displayName: String, summary: String?, version: String, author: String) {
-        self.slug = slug
-        self.displayName = displayName
-        self.summary = summary
-        self.version = version
-        self.author = author
-    }
-
     public init?(detail: ClawHubSkillDetail, fallback: ClawHubSkillSummary) {
         guard let version = detail.latestVersion?.version ?? fallback.version else { return nil }
         let detailSlug = detail.skill?.slug?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -286,10 +251,6 @@ public struct ClawHubSkillInstallRejection: Equatable, Sendable {
 }
 
 public enum SkillManagementContract {
-    public static func supportsClawHub(methods: Set<String>) -> Bool {
-        methods.isSuperset(of: clawHubSkillGatewayMethods)
-    }
-
     public static func installed(_ skills: [SkillStatus], slug: String, version: String) -> Bool {
         guard let reference = clawHubReference(slug) else { return false }
         return skills.contains {

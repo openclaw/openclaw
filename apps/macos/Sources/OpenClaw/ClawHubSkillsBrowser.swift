@@ -322,7 +322,9 @@ private final class ClawHubSkillsBrowserModel {
                 self.sheet = nil
                 self.notice = Notice(
                     title: "Install result unknown",
+                    // swiftlint:disable line_length
                     message: "Reconnect, refresh Skills, then retry. The Gateway safely joins a matching install still running.",
+                    // swiftlint:enable line_length
                     warning: result.warning,
                     isError: true)
                 return nil

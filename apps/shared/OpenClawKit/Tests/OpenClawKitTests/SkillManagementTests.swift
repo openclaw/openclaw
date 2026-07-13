@@ -8,14 +8,13 @@ struct SkillManagementTests {
         let data = Data(
             #"{"skill":{"displayName":"Weather","summary":"Forecasts"},"latestVersion":{"version":"2.0.0"},"owner":{"handle":"molly","displayName":"Molly"}}"#
                 .utf8)
+        let fallbackData = Data(
+            #"{"slug":"weather","displayName":"Old Weather","summary":null,"version":"1.0.0"}"#.utf8)
         let detail = try JSONDecoder().decode(ClawHubSkillDetail.self, from: data)
+        let fallback = try JSONDecoder().decode(ClawHubSkillSummary.self, from: fallbackData)
         let review = try #require(ClawHubSkillInstallReview(
             detail: detail,
-            fallback: ClawHubSkillSummary(
-                slug: "weather",
-                displayName: "Old Weather",
-                summary: nil,
-                version: "1.0.0")))
+            fallback: fallback))
 
         #expect(review.slug == "@molly/weather")
         #expect(review.displayName == "Weather")
