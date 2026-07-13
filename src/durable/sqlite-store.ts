@@ -405,7 +405,7 @@ function mergeWakeControlMetadata(
     ...metadata,
     durableWakeControl: decision,
     durableWakeControls: [...existingControls, decision],
-    ...(extras ?? {}),
+    ...extras,
   };
 }
 
@@ -1109,9 +1109,11 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       wakeId: input.wakeId,
       status: "superseded",
       failedReason: input.reason ?? "superseded",
-      metadata: mergeWakeControlMetadata(current.metadata_json, decision, {
-        ...(input.supersededByRef ? { supersededByRef: input.supersededByRef } : {}),
-      }),
+      metadata: mergeWakeControlMetadata(
+        current.metadata_json,
+        decision,
+        input.supersededByRef ? { supersededByRef: input.supersededByRef } : undefined,
+      ),
       now,
     });
   };
