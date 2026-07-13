@@ -346,7 +346,7 @@ describe("Windows command execution", () => {
     });
   });
 
-  it("still rejects a Windows shim launch error without an exit state", async () => {
+  it("sanitizes a Windows shim launch error without an exit state", async () => {
     const command = createMockSubprocess({ autoFinish: false });
     execaMock.mockReturnValueOnce(command);
 
@@ -361,7 +361,10 @@ describe("Windows command execution", () => {
         failed: true,
       });
 
-      await expect(resultPromise).rejects.toThrow("Failed to launch command: pnpm");
+      await expect(resultPromise).rejects.toMatchObject({
+        code: "ENOENT",
+        message: "Command failed during launch or output capture (ENOENT)",
+      });
     });
   });
 
@@ -383,6 +386,30 @@ describe("Windows command execution", () => {
         ["/PID", "1234", "/T"],
       ]);
       expect(command.kill).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(300);
+      expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      command.finish({ signal: "SIGKILL" });
+
+      await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
+    });
+  });
+
+  it("keeps forced Windows tree escalation after graceful taskkill returns nonzero", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    execaMock
+      .mockImplementationOnce(() => command)
+      .mockImplementationOnce(() => createMockSubprocess({ exitCode: 1 }))
+      .mockImplementation(() => createMockSubprocess());
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+        killProcessTree: true,
+        timeoutMs: 80,
+      });
+      await vi.advanceTimersByTimeAsync(81);
+      expect(requireExecaCall(1)[1]).toEqual(["/PID", "1234", "/T"]);
 
       await vi.advanceTimersByTimeAsync(300);
       expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
