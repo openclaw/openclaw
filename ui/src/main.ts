@@ -1,5 +1,4 @@
 // Control UI module implements main behavior.
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "./styles.css";
 import "./app/app-host.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
