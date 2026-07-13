@@ -756,6 +756,7 @@ function applyConfiguredProviderOverrides(params: {
       providerDefaultApi)
     : (metadataOverrideModel?.api ??
       providerConfig.api ??
+      normalizeResolvedTransportApi(params.provider) ??
       discoveredModel.api ??
       configuredStaticCatalogModel?.api ??
       providerDefaultApi);

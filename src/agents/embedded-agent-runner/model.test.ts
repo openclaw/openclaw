@@ -2879,13 +2879,12 @@ describe("resolveModel", () => {
     });
   });
 
-  it("keeps provider-level Azure transport aliases on the requested provider", async () => {
+  it("infers provider-level Azure transport aliases from the configured endpoint", async () => {
     const cfg = {
       models: {
         providers: {
           "azure-openai-responses": {
             baseUrl: "https://example.openai.azure.com/openai/v1",
-            api: "azure-openai-responses",
           },
         },
       },
