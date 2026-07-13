@@ -2,7 +2,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { warn: warnMock } = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: warnMock }),
+}));
+
 import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
@@ -20,6 +29,7 @@ let transcriptPath = "";
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-stream-"));
   transcriptPath = path.join(tempDir, "session.jsonl");
+  warnMock.mockReset();
 });
 
 afterEach(() => {
@@ -58,12 +68,32 @@ describe("streamSessionTranscriptLines", () => {
     expect(lines).toEqual([]);
   });
 
-  it("returns an empty iterator and logs a warning when stat fails with a permission error", async () => {
-    // Use a path under /root which should fail with EACCES for non-root users.
-    // If running as root, this test still passes — just exercises the ENOENT path.
-    const lines = await collect(streamSessionTranscriptLines("/root/nonexistent-transcript.jsonl"));
+  it("logs a warning when stat fails with EACCES", async () => {
+    const statSpy = vi
+      .spyOn(fs.promises, "stat")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
+      );
+
+    const lines = await collect(streamSessionTranscriptLines("/some/protected/transcript.jsonl"));
 
     expect(lines).toEqual([]);
+    expect(warnMock).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to stat transcript /some/protected/transcript.jsonl"),
+    );
+    statSpy.mockRestore();
+  });
+
+  it("does not log a warning when stat fails with ENOENT (missing file)", async () => {
+    const statSpy = vi
+      .spyOn(fs.promises, "stat")
+      .mockRejectedValueOnce(Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" }));
+
+    const lines = await collect(streamSessionTranscriptLines("/tmp/missing-transcript.jsonl"));
+
+    expect(lines).toEqual([]);
+    expect(warnMock).not.toHaveBeenCalled();
+    statSpy.mockRestore();
   });
 
   it("forwards malformed JSON lines as raw text so callers can choose to skip them", async () => {
@@ -120,6 +150,40 @@ describe("streamSessionTranscriptLinesReverse", () => {
     );
 
     expect(lines).toEqual([]);
+  });
+
+  it("logs a warning when open fails with EACCES (permission denied)", async () => {
+    const openSpy = vi
+      .spyOn(fs.promises, "open")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
+      );
+
+    const lines = await collect(
+      streamSessionTranscriptLinesReverse("/some/protected/transcript.jsonl"),
+    );
+
+    expect(lines).toEqual([]);
+    expect(warnMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Failed to open transcript /some/protected/transcript.jsonl for reverse streaming",
+      ),
+    );
+    openSpy.mockRestore();
+  });
+
+  it("does not log a warning when open fails with ENOENT (missing file)", async () => {
+    const openSpy = vi
+      .spyOn(fs.promises, "open")
+      .mockRejectedValueOnce(Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" }));
+
+    const lines = await collect(
+      streamSessionTranscriptLinesReverse("/tmp/missing-transcript.jsonl"),
+    );
+
+    expect(lines).toEqual([]);
+    expect(warnMock).not.toHaveBeenCalled();
+    openSpy.mockRestore();
   });
 
   it("preserves complete lines across chunk boundaries", async () => {

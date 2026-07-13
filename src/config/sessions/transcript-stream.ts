@@ -45,7 +45,9 @@ export async function* streamSessionTranscriptLines(
   try {
     stat = await fs.promises.stat(filePath);
   } catch (err) {
-    transcriptLog.warn(`Failed to stat transcript ${filePath}: ${formatErrorMessage(err)}`);
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      transcriptLog.warn(`Failed to stat transcript ${filePath}: ${formatErrorMessage(err)}`);
+    }
     return;
   }
   if (!stat.isFile() || stat.size <= 0) {
@@ -94,9 +96,11 @@ export async function* streamSessionTranscriptLinesReverse(
   try {
     fileHandle = await fs.promises.open(filePath, "r");
   } catch (err) {
-    transcriptLog.warn(
-      `Failed to open transcript ${filePath} for reverse streaming: ${formatErrorMessage(err)}`,
-    );
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      transcriptLog.warn(
+        `Failed to open transcript ${filePath} for reverse streaming: ${formatErrorMessage(err)}`,
+      );
+    }
     return;
   }
   try {
