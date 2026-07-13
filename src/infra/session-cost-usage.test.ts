@@ -16,6 +16,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import * as formatDatetime from "./format-time/format-datetime.js";
+import { sessionCostUsageCacheTestApi } from "./session-cost-usage-cache.sqlite.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
@@ -53,6 +54,16 @@ describe("session cost usage", () => {
       throw new Error(message);
     }
     return value;
+  };
+  const readUsageCostCache = <T>(parse: (raw: string) => T = (raw) => JSON.parse(raw) as T): T => {
+    const raw = sessionCostUsageCacheTestApi.readCacheJson();
+    if (!raw) {
+      throw new Error("expected SQLite usage-cost cache row");
+    }
+    return parse(raw);
+  };
+  const writeUsageCostCache = (value: unknown, agentId?: string): void => {
+    sessionCostUsageCacheTestApi.writeCacheJson(agentId, JSON.stringify(value));
   };
 
   beforeAll(async () => {
@@ -804,10 +815,9 @@ describe("session cost usage", () => {
       // Simulate a durable cache written by a build from before the current cache
       // semantics: refresh under the current code, then stamp an older version.
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
+      const cache = readUsageCostCache<{ version: number }>();
       cache.version = 6;
-      await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
+      writeUsageCostCache(cache);
 
       // The pre-upgrade cache must be treated as stale (not served), forcing a rebuild
       // under current cost semantics instead of reusing old complete-$0 totals.
@@ -1364,10 +1374,9 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       await refreshCostUsageCache();
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const beforeCache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+      const beforeCache = readUsageCostCache<{
         files: Record<string, { parsedRecords: number; countedRecords: number }>;
-      };
+      }>();
       expect(beforeCache.files[sessionFile]?.parsedRecords).toBe(1);
 
       await fs.appendFile(
@@ -1385,9 +1394,9 @@ describe("session cost usage", () => {
         endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
         requestRefresh: false,
       });
-      const afterCache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+      const afterCache = readUsageCostCache<{
         files: Record<string, { parsedRecords: number; countedRecords: number }>;
-      };
+      }>();
 
       expect(summary.totals.totalTokens).toBe(60);
       expect(summary.totals.totalCost).toBeCloseTo(0.06, 5);
@@ -1560,11 +1569,10 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       await refreshCostUsageCache({ config: configFor(1, 1) });
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+      const cache = readUsageCostCache<{
         pricingFingerprint?: unknown;
         files: Record<string, Record<string, unknown>>;
-      };
+      }>();
       expect(typeof cache.pricingFingerprint).toBe("string");
       expect(cache.files[sessionFile]).not.toHaveProperty("pricingFingerprint");
       expect(cache.files[sessionFile]).not.toHaveProperty("filePath");
@@ -1591,14 +1599,14 @@ describe("session cost usage", () => {
     });
   });
 
-  it("reclaims stale usage cache temp files before refreshing", async () => {
-    const root = await makeSessionCostRoot("cost-cache-temp-cleanup");
+  it("does not create usage cache sidecar files", async () => {
+    const root = await makeSessionCostRoot("cost-cache-no-sidecars");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "sess-cache-temp-cleanup.jsonl");
+    const sessionFile = path.join(sessionsDir, "sess-cache-no-sidecars.jsonl");
     await fs.writeFile(
       sessionFile,
-      transcriptText("sess-cache-temp-cleanup", {
+      transcriptText("sess-cache-no-sidecars", {
         type: "message",
         timestamp: "2026-02-05T12:00:00.000Z",
         message: {
@@ -1616,36 +1624,12 @@ describe("session cost usage", () => {
       "utf-8",
     );
 
-    const staleLegacyTempPath = path.join(sessionsDir, ".usage-cost-cache.json.12345.tmp");
-    const staleCurrentTempPath = path.join(sessionsDir, ".usage-cost-cache.12345.tmp");
-    const recentTempPath = path.join(sessionsDir, ".usage-cost-cache.67890.tmp");
-    const lockTempPath = path.join(sessionsDir, ".usage-cost-cache.json.lock.12345.tmp");
-    await Promise.all(
-      [staleLegacyTempPath, staleCurrentTempPath, recentTempPath, lockTempPath].map((tempPath) =>
-        fs.writeFile(tempPath, "partial\n", "utf-8"),
-      ),
-    );
-    const staleTime = new Date(Date.now() - 60_000);
-    await Promise.all(
-      [staleLegacyTempPath, staleCurrentTempPath, lockTempPath].map((tempPath) =>
-        fs.utimes(tempPath, staleTime, staleTime),
-      ),
-    );
-
-    const exists = async (filePath: string): Promise<boolean> =>
-      await fs.stat(filePath).then(
-        () => true,
-        () => false,
-      );
-
     await withStateDir(root, async () => {
       const result = await refreshCostUsageCache();
       expect(result).toBe("refreshed");
-
-      expect(await exists(staleLegacyTempPath)).toBe(false);
-      expect(await exists(staleCurrentTempPath)).toBe(false);
-      expect(await exists(recentTempPath)).toBe(true);
-      expect(await exists(lockTempPath)).toBe(true);
+      expect(
+        (await fs.readdir(sessionsDir)).filter((name) => name.includes("usage-cost-cache")),
+      ).toEqual([]);
 
       const summary = await loadCostUsageSummaryFromCache({
         startMs: Date.UTC(2026, 1, 5),
@@ -1657,7 +1641,7 @@ describe("session cost usage", () => {
     });
   });
 
-  it("keeps queued durable aggregate refresh state scoped to the cache path", async () => {
+  it("keeps queued durable aggregate refresh state scoped to the agent database", async () => {
     const firstRoot = await makeSessionCostRoot("cost-cache-queued-first");
     const secondRoot = await makeSessionCostRoot("cost-cache-queued-second");
     const writeSession = async (root: string, sessionId: string) => {
@@ -1800,11 +1784,10 @@ describe("session cost usage", () => {
       });
 
       expect(summary.totals.totalTokens).toBe(30);
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
       await waitFor(async () => {
-        const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        const cache = readUsageCostCache<{
           files: Record<string, unknown>;
-        };
+        }>();
         return Boolean(cache.files[oldSessionFile]);
       });
     });
@@ -1975,10 +1958,9 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
+      const cache = readUsageCostCache<{ version: number }>();
       cache.version = 2;
-      await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
+      writeUsageCostCache(cache);
 
       const summary = await loadSessionCostSummaryFromCache({
         sessionId: "sess-cache-version",
@@ -2232,10 +2214,9 @@ describe("session cost usage", () => {
     await withStateDir(root, async () => {
       await refreshCostUsageCache();
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+      const cache = readUsageCostCache<{
         files: Record<string, { sessionSummary?: unknown }>;
-      };
+      }>();
 
       expect(cache.files[sessionFile]).toHaveProperty("sessionSummary");
       expect(cache.files[otherSessionFile]?.sessionSummary).toBeUndefined();
@@ -2266,24 +2247,20 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await fs.writeFile(
-        lockPath,
-        `${JSON.stringify({
-          pid: process.pid,
-          startedAt: Date.now() - 60 * 60 * 1000,
-        })}\n`,
-        "utf-8",
-      );
+      sessionCostUsageCacheTestApi.writeRefreshLock(undefined, {
+        pid: process.pid,
+        startedAt: Date.now() - 60 * 60 * 1000,
+        ownerNonce: "live-owner",
+      });
 
       const result = await refreshCostUsageCache();
       expect(result).toBe("busy");
-      expect(await fs.readFile(lockPath, "utf-8")).toContain(String(process.pid));
+      expect(sessionCostUsageCacheTestApi.readRefreshLock()).toMatchObject({ pid: process.pid });
+      sessionCostUsageCacheTestApi.clearRefreshLock();
     });
   });
 
-  it("treats in-progress usage cache lock writes as busy", async () => {
+  it("reclaims malformed SQLite usage cache locks", async () => {
     const root = await makeSessionCostRoot("cost-cache-malformed-lock-recent");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -2307,17 +2284,10 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await fs.writeFile(lockPath, "", "utf-8");
-
-      try {
-        const result = await refreshCostUsageCache();
-        expect(result).toBe("busy");
-        expect(await fs.readFile(lockPath, "utf-8")).toBe("");
-      } finally {
-        await fs.rm(lockPath, { force: true });
-      }
+      sessionCostUsageCacheTestApi.writeMalformedRefreshLock(undefined, "{");
+      const result = await refreshCostUsageCache();
+      expect(result).toBe("refreshed");
+      expect(sessionCostUsageCacheTestApi.readRefreshLock()).toBeNull();
     });
   });
 
@@ -2345,16 +2315,11 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await fs.writeFile(
-        lockPath,
-        `${JSON.stringify({
-          pid: 2_147_483_647,
-          startedAt: Date.now(),
-        })}\n`,
-        "utf-8",
-      );
+      sessionCostUsageCacheTestApi.writeRefreshLock(undefined, {
+        pid: 2_147_483_647,
+        startedAt: Date.now(),
+        ownerNonce: "abandoned-owner",
+      });
 
       const result = await refreshCostUsageCache();
       expect(result).toBe("refreshed");
@@ -2400,11 +2365,7 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await fs.writeFile(lockPath, "{", "utf-8");
-      const old = new Date(Date.now() - 60_000);
-      await fs.utimes(lockPath, old, old);
+      sessionCostUsageCacheTestApi.writeMalformedRefreshLock(undefined, "{");
 
       const result = await refreshCostUsageCache();
       expect(result).toBe("refreshed");
@@ -2426,11 +2387,10 @@ describe("session cost usage", () => {
     });
   });
 
-  it("throttles cache writes during a large stale refresh and skips writes when nothing changed", async () => {
+  it("checkpoints a large SQLite cache refresh and skips writes when nothing changed", async () => {
     const root = await makeSessionCostRoot("cost-cache-throttle");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
 
     const sessionCount = 300; // > USAGE_COST_CACHE_CHECKPOINT_FILES (256)
     const baseTimestamp = "2026-02-05T12:00:00.000Z";
@@ -2461,40 +2421,19 @@ describe("session cost usage", () => {
     }
 
     await withStateDir(root, async () => {
-      const renameSpy = vi.spyOn(fs, "rename");
-      const cacheRenamesBefore = renameSpy.mock.calls.length;
-      try {
-        await refreshCostUsageCache();
-        const cacheRenamesAfterCold = renameSpy.mock.calls.filter(
-          ([, dest]) => dest === cachePath,
-        ).length;
+      await refreshCostUsageCache();
+      const updatedAt = readUsageCostCache<{ updatedAt: number }>().updatedAt;
 
-        // Without throttling this cold refresh would rewrite once per file plus a final flush.
-        // With checkpointing it must be far fewer than the file count.
-        expect(cacheRenamesAfterCold).toBeGreaterThan(0);
-        expect(cacheRenamesAfterCold).toBeLessThan(sessionCount / 4);
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      expect(summary.totals.totalTokens).toBe(sessionCount);
+      expect(summary.cacheStatus?.status).toBe("fresh");
 
-        const summary = await loadCostUsageSummaryFromCache({
-          startMs: Date.UTC(2026, 1, 5),
-          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
-          requestRefresh: false,
-        });
-        expect(summary.totals.totalTokens).toBe(sessionCount);
-        expect(summary.cacheStatus?.status).toBe("fresh");
-
-        // No-op refresh: nothing stale, nothing deleted -> no cache rewrite.
-        const renamesBeforeNoOp = renameSpy.mock.calls.filter(
-          ([, dest]) => dest === cachePath,
-        ).length;
-        await refreshCostUsageCache();
-        const renamesAfterNoOp = renameSpy.mock.calls.filter(
-          ([, dest]) => dest === cachePath,
-        ).length;
-        expect(renamesAfterNoOp).toBe(renamesBeforeNoOp);
-      } finally {
-        renameSpy.mockRestore();
-        void cacheRenamesBefore;
-      }
+      await refreshCostUsageCache();
+      expect(readUsageCostCache<{ updatedAt: number }>().updatedAt).toBe(updatedAt);
     });
   });
 
@@ -2618,10 +2557,9 @@ describe("session cost usage", () => {
         );
       });
 
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+      const cache = readUsageCostCache<{
         files: Record<string, { sessionSummary?: unknown }>;
-      };
+      }>();
       expect(cache.files).toHaveProperty(firstSessionFile);
       expect(cache.files).toHaveProperty(secondSessionFile);
       expect(cache.files[firstSessionFile]).toHaveProperty("sessionSummary");
@@ -2656,13 +2594,11 @@ describe("session cost usage", () => {
     try {
       await withStateDir(root, async () => {
         await refreshCostUsageCache();
-        const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-        const lockPath = `${cachePath}.lock`;
-        await fs.writeFile(
-          lockPath,
-          `${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`,
-          "utf-8",
-        );
+        sessionCostUsageCacheTestApi.writeRefreshLock(undefined, {
+          pid: process.pid,
+          startedAt: Date.now(),
+          ownerNonce: "queued-owner",
+        });
 
         try {
           const cold = await loadSessionCostSummaryFromCache({
@@ -2679,7 +2615,7 @@ describe("session cost usage", () => {
           });
           expect(stillMissing.summary).toBeNull();
         } finally {
-          await fs.rm(lockPath, { force: true });
+          sessionCostUsageCacheTestApi.clearRefreshLock();
         }
 
         await vi.waitFor(
