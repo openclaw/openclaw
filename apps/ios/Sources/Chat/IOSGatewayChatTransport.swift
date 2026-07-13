@@ -206,10 +206,14 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             agentID: target.agentID,
             model: patch.model,
             thinkingLevel: patch.thinkingLevel)
-        let response = try await self.gateway.request(
-            request,
-            ifCurrentRoute: expectedRoute,
-            distinguishPreDispatchRouteChange: expectedRoute != nil)
+        let response = if let expectedRoute {
+            try await self.gateway.request(
+                request,
+                ifCurrentRoute: expectedRoute,
+                distinguishPreDispatchRouteChange: true)
+        } else {
+            try await self.requestSessionMutation(request)
+        }
         return try Self.decodeModelPatchResult(response)
     }
 
