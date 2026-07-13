@@ -3,12 +3,12 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   countPhysicalLines,
-  findLocBaselineUpdateViolations,
+  filterPreexistingBaseDriftViolations,
   findLocRatchetViolations,
   findVersionedBaselineViolations,
   isProductionTypeScriptFile,
   parseArgs,
-  scopeLocRatchetViolations,
+  splitNullDelimitedPaths,
 } from "../../scripts/check-ts-max-loc.js";
 
 function runCheckTsMaxLoc(args: string[]) {
@@ -42,24 +42,6 @@ describe("scripts/check-ts-max-loc", () => {
       baseRef: "refs/remotes/origin/pr-base",
     });
     expect(() => parseArgs(["--base-ref", "main^{tree}"])).toThrow("--base-ref requires a git ref");
-  });
-
-  it("parses an explicit changed-path set without altering valid filenames", () => {
-    expect(parseArgs(["--changed-paths-json", '["src/é.ts"," src/space.ts "]'])).toMatchObject({
-      changedPaths: ["src/é.ts", " src/space.ts "],
-    });
-    expect(parseArgs(["--changed-paths-file", ".tmp/changed-paths.json"])).toMatchObject({
-      changedPathsFile: ".tmp/changed-paths.json",
-    });
-    expect(() => parseArgs(["--changed-paths-json", "{}"])).toThrow(
-      "--changed-paths-json requires a JSON string array",
-    );
-    expect(() =>
-      parseArgs(["--changed-paths-file", ".tmp/changed-paths.json", "--changed-paths-json", "[]"]),
-    ).toThrow("choose only one changed-path input");
-    expect(() =>
-      parseArgs(["--changed-paths-json", "[]", "--changed-paths-file", ".tmp/changed-paths.json"]),
-    ).toThrow("choose only one changed-path input");
   });
 
   it("fails closed when a comparison ref does not exist", () => {
@@ -105,33 +87,19 @@ describe("scripts/check-ts-max-loc", () => {
     ]);
   });
 
-  it("scopes pre-existing ratchet debt to files changed from the comparison base", () => {
-    const violations = [
-      { filePath: "src/changed.ts", lines: 701, baselineLines: 700, reason: "grew" as const },
-      { filePath: "src/unrelated.ts", lines: 702, baselineLines: 700, reason: "grew" as const },
-    ];
-
-    expect(
-      scopeLocRatchetViolations({
-        baselinePath: "scripts/ts-max-loc-baseline.json",
-        changedPaths: ["src/changed.ts"],
-        violations,
-      }),
-    ).toEqual([violations[0]]);
-    expect(
-      scopeLocRatchetViolations({
-        baselinePath: "scripts/ts-max-loc-baseline.json",
-        changedPaths: ["scripts/ts-max-loc-baseline.json"],
-        violations,
-      }),
-    ).toEqual(violations);
-  });
-
   it("counts physical lines without treating a terminal newline as another line", () => {
     expect(countPhysicalLines("")).toBe(0);
     expect(countPhysicalLines("one")).toBe(1);
     expect(countPhysicalLines("one\n")).toBe(1);
     expect(countPhysicalLines("one\ntwo\n")).toBe(2);
+  });
+
+  it("parses git paths without quoting or newline ambiguity", () => {
+    expect(splitNullDelimitedPaths("src/normal.ts\0src/café.ts\0src/line\nbreak.ts\0")).toEqual([
+      "src/normal.ts",
+      "src/café.ts",
+      "src/line\nbreak.ts",
+    ]);
   });
 
   it("excludes repository test and test-support naming conventions", () => {
@@ -158,44 +126,86 @@ describe("scripts/check-ts-max-loc", () => {
     expect(isProductionTypeScriptFile("ui/src/i18n/lib/translate.ts")).toBe(true);
   });
 
-  it("allows baseline updates only for decreases and removals", () => {
-    const violations = findLocBaselineUpdateViolations({
-      maxLines: 500,
-      baseline: {
+  it("allows base drift reconciliation but rejects changed-source growth", () => {
+    const violations = findVersionedBaselineViolations({
+      baseBaseline: {
         "src/grew.ts": 700,
+        "src/readded.ts": 700,
         "src/shrank.ts": 700,
-        "src/removed.ts": 700,
+        "src/preexisting-drift.ts": 700,
       },
-      results: [
-        { filePath: "src/grew.ts", lines: 701 },
-        { filePath: "src/shrank.ts", lines: 650 },
-        { filePath: "src/new.ts", lines: 501 },
-      ],
+      baseline: {
+        "src/grew.ts": 701,
+        "src/readded.ts": 650,
+        "src/shrank.ts": 650,
+        "src/new.ts": 501,
+        "src/preexisting-drift.ts": 710,
+        "src/preexisting-missing.ts": 510,
+      },
+      baseLinesByChangedPath: new Map([
+        ["src/grew.ts", 700],
+        ["src/readded.ts", undefined],
+        ["src/shrank.ts", 700],
+        ["src/new.ts", undefined],
+      ]),
     });
 
     expect(violations).toEqual([
       { filePath: "src/grew.ts", lines: 701, baselineLines: 700, reason: "grew" },
+      { filePath: "src/readded.ts", lines: 650, baselineLines: 0, reason: "grew" },
       { filePath: "src/new.ts", lines: 501, reason: "baseline-missing" },
     ]);
   });
 
-  it("rejects versioned baseline additions and increases", () => {
-    const violations = findVersionedBaselineViolations({
+  it("ignores only drift already present on the comparison base", () => {
+    const violations = filterPreexistingBaseDriftViolations({
       baseBaseline: {
-        "src/grew.ts": 700,
-        "src/shrank.ts": 700,
-        "src/removed.ts": 700,
+        "src/changed.ts": 700,
+        "src/preexisting-growth.ts": 700,
+        "src/preexisting-shrink.ts": 700,
+        "src/removed-entry.ts": 700,
       },
       baseline: {
-        "src/grew.ts": 701,
-        "src/shrank.ts": 650,
-        "src/new.ts": 501,
+        "src/changed.ts": 700,
+        "src/preexisting-growth.ts": 700,
+        "src/preexisting-shrink.ts": 700,
+        "src/tampered.ts": 900,
       },
+      changedPaths: new Set(["src/changed.ts"]),
+      violations: [
+        { filePath: "src/changed.ts", lines: 701, baselineLines: 700, reason: "grew" },
+        {
+          filePath: "src/preexisting-growth.ts",
+          lines: 710,
+          baselineLines: 700,
+          reason: "grew",
+        },
+        {
+          filePath: "src/preexisting-shrink.ts",
+          lines: 690,
+          baselineLines: 700,
+          reason: "baseline-stale",
+        },
+        { filePath: "src/preexisting-new.ts", lines: 510, reason: "baseline-missing" },
+        { filePath: "src/removed-entry.ts", lines: 700, reason: "baseline-missing" },
+        {
+          filePath: "src/tampered.ts",
+          lines: 700,
+          baselineLines: 900,
+          reason: "baseline-stale",
+        },
+      ],
     });
 
     expect(violations).toEqual([
-      { filePath: "src/grew.ts", lines: 701, baselineLines: 700, reason: "grew" },
-      { filePath: "src/new.ts", lines: 501, reason: "baseline-missing" },
+      { filePath: "src/changed.ts", lines: 701, baselineLines: 700, reason: "grew" },
+      { filePath: "src/removed-entry.ts", lines: 700, reason: "baseline-missing" },
+      {
+        filePath: "src/tampered.ts",
+        lines: 700,
+        baselineLines: 900,
+        reason: "baseline-stale",
+      },
     ]);
   });
 });

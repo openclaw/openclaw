@@ -9,7 +9,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
-import { appendTranscriptEvent, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+  loadSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { appendSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -5266,6 +5271,179 @@ describe("gateway server chat", () => {
           .map(readOpenClawSeq)
           .toSorted((a, b) => (a ?? 0) - (b ?? 0)),
       ).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    });
+  });
+
+  test("chat.history centers a bounded page around a message id", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ type: "model_change", provider: "mock", modelId: "mock" }),
+        JSON.stringify({ type: "thinking_level_change", thinkingLevel: "off" }),
+      ]);
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      for (let index = 0; index < 7; index += 1) {
+        await appendTranscriptMessage(
+          {
+            agentId: "main",
+            sessionId: "sess-main",
+            sessionKey: "agent:main:main",
+            storePath,
+          },
+          {
+            eventId: `message-${index + 1}`,
+            message: {
+              role: index % 2 === 0 ? "user" : "assistant",
+              content: [{ type: "text", text: `message ${index + 1} ${"x".repeat(700)}` }],
+              timestamp: Date.now() + index,
+            },
+          },
+        );
+      }
+
+      const history = await rpcReq<{
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        hasMore?: boolean;
+        nextOffset?: number;
+        offset?: number;
+        totalMessages?: number;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 3,
+        messageId: "message-3",
+        sessionId: "sess-main",
+        maxChars: 100,
+      });
+
+      expect(history.ok).toBe(true);
+      expect(history.payload?.messages?.map(readOpenClawSeq)).toEqual([4, 5, 6]);
+      expect(history.payload?.offset).toBeUndefined();
+      expect(history.payload?.nextOffset).toBeUndefined();
+      expect(history.payload?.hasMore).toBeUndefined();
+      expect(history.payload?.totalMessages).toBeUndefined();
+
+      setMaxChatHistoryMessagesBytesForTest(1_000);
+      const capped = await rpcReq<{
+        messages?: Array<{ __openclaw?: { id?: string } }>;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 3,
+        messageId: "message-3",
+        sessionId: "sess-main",
+      });
+      expect(capped.ok).toBe(true);
+      expect(
+        capped.payload?.messages?.some((message) => message["__openclaw"]?.id === "message-3"),
+      ).toBe(true);
+    });
+  });
+
+  test("chat.history reopens a search anchor from a prior session id", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      const currentSessionStartedAt = Date.now();
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: futureFixtureUpdatedAt(),
+            sessionStartedAt: currentSessionStartedAt,
+          },
+        },
+      });
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      await appendSqliteTranscriptEvents(
+        {
+          agentId: "main",
+          sessionId: "sess-before-reset",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
+        [
+          {
+            type: "message",
+            id: "archived-1",
+            parentId: null,
+            message: {
+              role: "user",
+              provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+              content: "before anchor",
+              timestamp: currentSessionStartedAt - 2_000,
+            },
+          },
+          {
+            type: "message",
+            id: "archived-2",
+            parentId: "archived-1",
+            message: {
+              role: "assistant",
+              content: "matching anchor",
+              timestamp: currentSessionStartedAt - 1_000,
+            },
+          },
+          {
+            type: "message",
+            id: "archived-3",
+            parentId: "archived-2",
+            message: { role: "user", content: "after anchor" },
+          },
+        ],
+      );
+
+      const history = await rpcReq<{
+        messages?: Array<{ content?: string }>;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 3,
+        messageId: "archived-2",
+        sessionId: "sess-before-reset",
+      });
+
+      expect(history.ok).toBe(true);
+      expect(history.payload?.messages?.map((message) => message.content)).toEqual([
+        "matching anchor",
+        "after anchor",
+      ]);
+    });
+  });
+
+  test("chat.history rejects offset and message id together", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+
+      const history = await rpcReq(ws, "chat.history", {
+        sessionKey: "main",
+        offset: 0,
+        messageId: "message-1",
+      });
+
+      expect(history.ok).toBe(false);
+      expect((history.error as { message?: string } | undefined)?.message).toContain(
+        "offset and messageId cannot be used together",
+      );
+    });
+  });
+
+  test("chat.history rejects an anchored session id from another session key", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+
+      const history = await rpcReq(ws, "chat.history", {
+        sessionKey: "main",
+        messageId: "message-1",
+        sessionId: "unknown-session",
+      });
+
+      expect(history.ok).toBe(false);
+      expect((history.error as { message?: string } | undefined)?.message).toContain(
+        "sessionId does not belong to sessionKey",
+      );
     });
   });
 

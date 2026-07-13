@@ -314,12 +314,7 @@ export function createChangedCheckPlan(result, options = {}) {
   };
 
   add("conflict markers", ["check:no-conflict-markers"]);
-  add(
-    "TypeScript LOC ratchet",
-    options.locChangedPathsFile
-      ? ["check:loc", "--changed-paths-file", options.locChangedPathsFile]
-      : ["check:loc", "--changed-paths-json", JSON.stringify(result.paths)],
-  );
+  add("TypeScript LOC ratchet", ["check:loc"]);
   add("changelog attributions", ["check:changelog-attributions"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
@@ -627,30 +622,19 @@ function createTargetedOxlintCommand({
 async function runChangedCheck(result, options = {}) {
   const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
-  const locChangedPathsDir = options.dryRun
-    ? undefined
-    : mkdtempSync(path.join(tmpdir(), "openclaw-loc-changed-paths-"));
-  const locChangedPathsFile = locChangedPathsDir
-    ? path.join(locChangedPathsDir, "paths.json")
-    : undefined;
-  let releaseLock = () => {};
+  const plan = createChangedCheckPlan(result, {
+    ...options,
+    env: childEnv,
+  });
+  const releaseLock = options.dryRun
+    ? () => {}
+    : acquireLocalHeavyCheckLockSync({
+        cwd: process.cwd(),
+        env: baseEnv,
+        toolName: "check:changed",
+      });
 
   try {
-    if (locChangedPathsFile) {
-      writeFileSync(locChangedPathsFile, `${JSON.stringify(result.paths)}\n`, "utf8");
-    }
-    const plan = createChangedCheckPlan(result, {
-      ...options,
-      env: childEnv,
-      locChangedPathsFile,
-    });
-    releaseLock = options.dryRun
-      ? () => {}
-      : acquireLocalHeavyCheckLockSync({
-          cwd: process.cwd(),
-          env: baseEnv,
-          toolName: "check:changed",
-        });
     printPlan(result, plan, options);
 
     if (options.dryRun) {
@@ -670,9 +654,6 @@ async function runChangedCheck(result, options = {}) {
     return 0;
   } finally {
     releaseLock();
-    if (locChangedPathsDir) {
-      rmSync(locChangedPathsDir, { recursive: true, force: true });
-    }
   }
 }
 
