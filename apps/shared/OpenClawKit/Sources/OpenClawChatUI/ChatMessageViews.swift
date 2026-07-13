@@ -773,6 +773,8 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
     }
 }
 
+// Keep this explicit for SwiftPM toolchains where SwiftUI macro plugins are unavailable.
+// swiftformat:disable environmentEntry
 private struct OpenClawAssistantBubblesInCleanChromeKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -785,6 +787,8 @@ extension EnvironmentValues {
         set { self[OpenClawAssistantBubblesInCleanChromeKey.self] = newValue }
     }
 }
+
+// swiftformat:enable environmentEntry
 
 private struct AssistantBubbleContainerStyle: ViewModifier {
     let isClean: Bool
