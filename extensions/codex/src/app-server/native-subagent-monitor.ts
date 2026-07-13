@@ -14,7 +14,7 @@ import {
 import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import {
-  codexNativeSubagentNotifications,
+  codexNativeSubagentNotifications as nativeSubagentNotifications,
   type CodexNativeSubagentCompletion,
 } from "./native-subagent-notification.js";
 import {
@@ -142,11 +142,10 @@ const defaultRuntime: NativeSubagentMonitorRuntime = {
   deliverAgentHarnessTaskCompletion,
 };
 
-const monitors = new WeakMap<CodexAppServerClient, CodexNativeSubagentMonitor>();
+const monitors = new WeakMap<CodexAppServerClient, Monitor>();
 const completionDeliveryOwners = new Map<string, ChildState>();
 
-/** Registers or updates the sole monitor bound to an app-server client. */
-function registerCodexNativeSubagentMonitor(params: {
+function registerMonitor(params: {
   client: CodexAppServerClient;
   parentThreadId: string;
   requesterSessionKey?: string;
@@ -157,7 +156,7 @@ function registerCodexNativeSubagentMonitor(params: {
 }): { unregister: () => void } {
   let monitor = monitors.get(params.client);
   if (!monitor) {
-    monitor = new CodexNativeSubagentMonitor(params.client, params.runtime ?? defaultRuntime, {
+    monitor = new Monitor(params.client, params.runtime ?? defaultRuntime, {
       retainClient: params.retainClient,
     });
     monitors.set(params.client, monitor);
@@ -170,8 +169,7 @@ function registerCodexNativeSubagentMonitor(params: {
   });
 }
 
-/** Tracks native subagent notifications, history recovery, and parent delivery. */
-class CodexNativeSubagentMonitor {
+class Monitor {
   private readonly parentStates = new Map<string, ParentState>();
   private readonly childStates = new Map<string, ChildState>();
   private readonly childThreadIdsByAgentPath = new Map<string, string>();
@@ -657,9 +655,7 @@ class CodexNativeSubagentMonitor {
     if (!state) {
       return;
     }
-    for (const nativeCompletion of codexNativeSubagentNotifications.fromNotification(
-      notification,
-    )) {
+    for (const nativeCompletion of nativeSubagentNotifications.fromNotification(notification)) {
       const childThreadId = this.childThreadIdsByAgentPath.get(
         buildParentAgentPathKey(state.parentThreadId, nativeCompletion.agentPath),
       );
@@ -1434,10 +1430,7 @@ class CodexNativeSubagentMonitor {
   }
 }
 
-export const codexNativeSubagentMonitorRuntime = {
-  Monitor: CodexNativeSubagentMonitor,
-  register: registerCodexNativeSubagentMonitor,
-};
+export const codexNativeSubagentMonitorRuntime = { Monitor, register: registerMonitor };
 
 function readThreadTurnRecovery(
   thread: JsonObject,
