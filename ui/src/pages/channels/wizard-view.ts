@@ -242,6 +242,17 @@ function renderDoneBody(channels: readonly string[], props: ChannelWizardViewPro
   if (channels.includes("whatsapp")) {
     return renderWhatsAppLinking(props);
   }
+  if (channels.length === 0) {
+    return html`
+      <div class="channels-wizard__message">${t("channels.setup.doneNoChangesTitle")}</div>
+      <div class="channels-wizard__note">${t("channels.setup.doneNoChangesBody")}</div>
+      <div class="channels-wizard__footer">
+        <button type="button" class="btn primary" @click=${() => props.onClose()}>
+          ${t("common.close")}
+        </button>
+      </div>
+    `;
+  }
   return html`
     <div class="channels-wizard__message">${t("channels.setup.doneTitle")}</div>
     <div class="channels-wizard__note">${t("channels.setup.doneBody")}</div>

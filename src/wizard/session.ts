@@ -38,6 +38,7 @@ type WizardNextResult = {
   status: WizardSessionStatus;
   error?: string;
   channels?: string[];
+  accounts?: Array<{ channel: string; accountId: string }>;
 };
 
 function normalizeTextAnswer(value: unknown): string | undefined {
@@ -231,7 +232,7 @@ export class WizardSession {
   >();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
-  private configuredChannels: string[] | undefined;
+  private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
 
   constructor(
     private runner: (
@@ -271,17 +272,21 @@ export class WizardSession {
   }
 
   private terminalResult(): WizardNextResult {
+    if (!this.configuredAccounts) {
+      return { done: true, status: this.status, error: this.error };
+    }
     return {
       done: true,
       status: this.status,
       error: this.error,
-      ...(this.configuredChannels ? { channels: [...this.configuredChannels] } : {}),
+      channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
+      accounts: this.configuredAccounts.map((entry) => ({ ...entry })),
     };
   }
 
-  /** Record which channels the flow actually configured (channels flow only). */
-  setConfiguredChannels(channels: readonly string[]) {
-    this.configuredChannels = [...channels];
+  /** Record what the channels flow actually configured (channels flow only). */
+  setConfiguredAccounts(accounts: ReadonlyArray<{ channel: string; accountId: string }>) {
+    this.configuredAccounts = accounts.map((entry) => ({ ...entry }));
   }
 
   async answer(stepId: string, value: unknown): Promise<string | undefined> {

@@ -253,11 +253,18 @@ function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
     resolveChannelDetailLabel(props.snapshot, key) ?? t("channels.hub.guidedSetup");
   return html`
     <div class="settings-row channels-item">
-      ${renderChannelArt(key, label, "tile")}
-      <div class="settings-row__text">
-        <span class="settings-row__title">${label}</span>
-        <span class="settings-row__desc">${description}</span>
-      </div>
+      <button
+        type="button"
+        class="channels-item__detail"
+        title=${t("channels.hub.openDetails")}
+        @click=${() => props.onShowDetail(key)}
+      >
+        ${renderChannelArt(key, label, "tile")}
+        <span class="settings-row__text">
+          <span class="settings-row__title">${label}</span>
+          <span class="settings-row__desc">${description}</span>
+        </span>
+      </button>
       <div class="settings-row__control">
         <button type="button" class="btn btn--sm" @click=${() => props.onStartSetup(key)}>
           ${t("channels.hub.setUp")}

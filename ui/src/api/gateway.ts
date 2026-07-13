@@ -595,8 +595,12 @@ export class GatewayBrowserClient {
     });
   }
 
-  request<T = unknown>(method: string, params?: unknown): Promise<T> {
-    return this.client.request<T>(method, params);
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    opts?: { timeoutMs?: number | null; signal?: AbortSignal },
+  ): Promise<T> {
+    return this.client.request<T>(method, params, opts);
   }
 
   addEventListener(listener: GatewayEventListener): () => void {

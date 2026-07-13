@@ -191,7 +191,12 @@ export function renderChannelDetail(params: {
             </button>
           </div>
         </div>
-        <div class="channels-detail__body">${body}</div>
+        <div class="channels-detail__body">
+          ${params.props.setupBlockedByDirtyConfig && params.props.configFormDirty
+            ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
+            : nothing}
+          ${body}
+        </div>
       </div>
     </openclaw-modal-dialog>
   `;

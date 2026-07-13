@@ -32,8 +32,9 @@ type WizardNextResult = {
   step?: ChannelWizardStep;
   status?: "running" | "done" | "cancelled" | "error";
   error?: string;
-  // Channels the gateway flow actually configured (terminal result only).
+  // What the gateway flow actually configured (terminal result only).
   channels?: string[];
+  accounts?: Array<{ channel: string; accountId: string }>;
 };
 
 export type ChannelWizardState =
@@ -47,7 +48,12 @@ export type ChannelWizardState =
       busy: boolean;
       validationError: string | null;
     }
-  | { phase: "done"; channel: string | null; channels: readonly string[] }
+  | {
+      phase: "done";
+      channel: string | null;
+      channels: readonly string[];
+      accounts: ReadonlyArray<{ channel: string; accountId: string }>;
+    }
   | { phase: "error"; channel: string | null; message: string };
 
 // Long ceiling: a single step can wrap a slow gateway-side effect such as a
@@ -64,6 +70,10 @@ export class ChannelWizardController {
   constructor(
     private readonly getClient: () => WizardGatewayClient | null,
     private readonly onChange: () => void,
+    // Known channel ids from the status snapshot. Presentation only: lets a
+    // browse-all session title/link the wizard for the picked channel; the
+    // completion behavior keys off the gateway-reported accounts instead.
+    private readonly isKnownChannel: (value: string) => boolean = () => false,
   ) {}
 
   get state(): ChannelWizardState {
@@ -115,6 +125,9 @@ export class ChannelWizardController {
       return;
     }
     const generation = this.generation;
+    if (current.step.type === "select" && typeof value === "string" && this.isKnownChannel(value)) {
+      this.channel ??= value;
+    }
     this.setState({ ...current, busy: true, validationError: null });
     try {
       const result = await client.request<WizardNextResult>(
@@ -175,6 +188,7 @@ export class ChannelWizardController {
         phase: "done",
         channel: this.channel ?? channels[0] ?? null,
         channels,
+        accounts: result.accounts ?? [],
       });
       return;
     }

@@ -813,7 +813,7 @@ module.exports = {
             message: "channel",
             options: [{ value: opts.channel ?? "none", label: opts.channel ?? "none" }],
           });
-          opts.onConfigured?.([choice]);
+          opts.onConfigured?.([{ channel: choice, accountId: "default" }]);
           await prompter.outro(`configured ${choice}`);
         },
       });
@@ -831,6 +831,7 @@ module.exports = {
           status: "running" | "done" | "cancelled" | "error";
           step?: { id: string; type: string };
           channels?: string[];
+          accounts?: Array<{ channel: string; accountId: string }>;
         }>("wizard.start", { flow: "channels", channel: "telegram" });
         const sessionId = start.sessionId;
         expect(typeof sessionId).toBe("string");
@@ -857,6 +858,7 @@ module.exports = {
         expect(seenSteps).toContain("select");
         expect(channelRuns).toEqual(["telegram"]);
         expect(next.channels).toEqual(["telegram"]);
+        expect(next.accounts).toEqual([{ channel: "telegram", accountId: "default" }]);
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "wizard channels flow complete" });

@@ -258,3 +258,25 @@
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
+
+/* Text/tile area of an available row doubles as the detail opener. */
+.channels-item__detail {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.channels-item__detail:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}

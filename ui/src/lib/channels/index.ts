@@ -41,8 +41,8 @@ type LoadChannelsOptions = {
 export type ChannelCapability = {
   readonly state: ChannelsState;
   refresh: (probe?: boolean, options?: LoadChannelsOptions) => Promise<void>;
-  startWhatsApp: (force: boolean) => Promise<void>;
-  waitWhatsApp: () => Promise<void>;
+  startWhatsApp: (force: boolean, accountId?: string) => Promise<void>;
+  waitWhatsApp: (accountId?: string) => Promise<void>;
   logoutWhatsApp: () => Promise<void>;
   subscribe: (listener: (state: ChannelsState) => void) => () => void;
   dispose: () => void;
@@ -181,7 +181,11 @@ function isCurrentWhatsAppOperation(state: ChannelsState, operation: WhatsAppOpe
   );
 }
 
-async function startWhatsAppLogin(state: ChannelsState, force: boolean): Promise<boolean> {
+async function startWhatsAppLogin(
+  state: ChannelsState,
+  force: boolean,
+  accountId?: string,
+): Promise<boolean> {
   const operation = beginWhatsAppOperation(state);
   if (!operation) {
     return false;
@@ -194,6 +198,7 @@ async function startWhatsAppLogin(state: ChannelsState, force: boolean): Promise
     }>("web.login.start", {
       force,
       timeoutMs: 30000,
+      ...(accountId ? { accountId } : {}),
     });
     if (!isCurrentWhatsAppOperation(state, operation)) {
       return false;
@@ -216,7 +221,10 @@ async function startWhatsAppLogin(state: ChannelsState, force: boolean): Promise
   return true;
 }
 
-async function waitWhatsAppLogin(state: ChannelsState): Promise<boolean> {
+async function waitWhatsAppLogin(
+  state: ChannelsState,
+  accountId?: string,
+): Promise<boolean> {
   const operation = beginWhatsAppOperation(state);
   if (!operation) {
     return false;
@@ -230,6 +238,7 @@ async function waitWhatsAppLogin(state: ChannelsState): Promise<boolean> {
     }>("web.login.wait", {
       timeoutMs: 120000,
       currentQrDataUrl,
+      ...(accountId ? { accountId } : {}),
     });
     if (!isCurrentWhatsAppOperation(state, operation)) {
       return false;
@@ -380,15 +389,15 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       return state;
     },
     refresh: (probe, options) => run(() => loadChannels(state, probe ?? false, options)),
-    startWhatsApp: (force) =>
+    startWhatsApp: (force, accountId) =>
       run(async () => {
-        if (await startWhatsAppLogin(state, force)) {
+        if (await startWhatsAppLogin(state, force, accountId)) {
           await loadChannels(state, true);
         }
       }),
-    waitWhatsApp: () =>
+    waitWhatsApp: (accountId) =>
       run(async () => {
-        if (await waitWhatsAppLogin(state)) {
+        if (await waitWhatsAppLogin(state, accountId)) {
           await loadChannels(state, true);
         }
       }),

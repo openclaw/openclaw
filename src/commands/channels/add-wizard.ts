@@ -61,8 +61,8 @@ type ChannelsAddWizardFlowParams = {
    * setup surfaces must skip terminal-interactive login flows.
    */
   deferDeviceLinkToClient?: boolean;
-  /** Reports the channels that were actually configured, after config commit. */
-  onConfigured?: (channels: string[]) => void;
+  /** Reports the channel accounts actually configured, after config commit. */
+  onConfigured?: (accounts: Array<{ channel: string; accountId: string }>) => void;
 };
 
 /** Run the interactive channel-setup flow and persist the resulting config. */
@@ -220,7 +220,12 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       ? { beforePersistentEffect: params.beforePersistentEffect }
       : {}),
   });
-  params.onConfigured?.([...selection]);
+  params.onConfigured?.(
+    selection.map((channel) => ({
+      channel,
+      accountId: accountIds[channel] ?? DEFAULT_ACCOUNT_ID,
+    })),
+  );
   await prompter.outro("Channels updated.");
 }
 
@@ -229,7 +234,12 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
  * must never call runtime.exit — failures throw and surface as wizard errors.
  */
 export async function runChannelsSetupWizard(
-  opts: { channel?: string; onConfigured?: (channels: string[]) => void },
+  opts: {
+    channel?: string;
+    onConfigured?: (accounts: Array<{ channel: string; accountId: string }>) => void;
+    /** Revalidate/lock cancellation immediately before durable effects. */
+    beforePersistentEffect?: () => Promise<void>;
+  },
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ): Promise<void> {
@@ -251,5 +261,6 @@ export async function runChannelsSetupWizard(
     ...(initialChannel ? { initialChannel } : {}),
     deferDeviceLinkToClient: true,
     ...(opts.onConfigured ? { onConfigured: opts.onConfigured } : {}),
+    ...(opts.beforePersistentEffect ? { beforePersistentEffect: opts.beforePersistentEffect } : {}),
   });
 }

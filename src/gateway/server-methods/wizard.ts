@@ -25,7 +25,11 @@ export type SetupWizardRunner = (
 ) => Promise<void>;
 
 export type ChannelSetupWizardRunner = (
-  opts: { channel?: string; onConfigured?: (channels: string[]) => void },
+  opts: {
+    channel?: string;
+    onConfigured?: (accounts: Array<{ channel: string; accountId: string }>) => void;
+    beforePersistentEffect?: () => Promise<void>;
+  },
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ) => Promise<void>;
@@ -80,7 +84,10 @@ export const wizardHandlers: GatewayRequestHandlers = {
             context.channelWizardRunner(
               {
                 channel: readStringValue(params.channel),
-                onConfigured: (channels) => wizardSession.setConfiguredChannels(channels),
+                onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
+                // Durable effects (plugin installs, config commit) must finish
+                // even if the client cancels mid-write.
+                beforePersistentEffect: async () => wizardSession.lockCancellation(),
               },
               defaultRuntime,
               prompter,

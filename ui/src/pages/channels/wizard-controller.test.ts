@@ -32,7 +32,12 @@ describe("ChannelWizardController", () => {
         return { sessionId: "s1", done: false, status: "running", step: selectStep };
       }
       if (method === "wizard.next") {
-        return { done: true, status: "done", channels: ["telegram"] };
+        return {
+          done: true,
+          status: "done",
+          channels: ["telegram"],
+          accounts: [{ channel: "telegram", accountId: "default" }],
+        };
       }
       throw new Error(`unexpected ${method}`);
     });
@@ -55,6 +60,7 @@ describe("ChannelWizardController", () => {
       phase: "done",
       channel: "telegram",
       channels: ["telegram"],
+      accounts: [{ channel: "telegram", accountId: "default" }],
     });
     expect(request).toHaveBeenCalledWith(
       "wizard.next",
@@ -132,7 +138,15 @@ describe("ChannelWizardController", () => {
       if (method === "wizard.start") {
         return { sessionId: "s1", done: false, status: "running", step: selectStep };
       }
-      return { done: true, status: "done", channels: ["telegram", "whatsapp"] };
+      return {
+        done: true,
+        status: "done",
+        channels: ["telegram", "whatsapp"],
+        accounts: [
+          { channel: "telegram", accountId: "default" },
+          { channel: "whatsapp", accountId: "work" },
+        ],
+      };
     });
 
     await controller.start(null);
@@ -141,6 +155,10 @@ describe("ChannelWizardController", () => {
       phase: "done",
       channel: "telegram",
       channels: ["telegram", "whatsapp"],
+      accounts: [
+        { channel: "telegram", accountId: "default" },
+        { channel: "whatsapp", accountId: "work" },
+      ],
     });
   });
 
@@ -154,7 +172,12 @@ describe("ChannelWizardController", () => {
 
     await controller.start("whatsapp");
     await controller.answer("__skip__");
-    expect(controller.state).toEqual({ phase: "done", channel: "whatsapp", channels: [] });
+    expect(controller.state).toEqual({
+      phase: "done",
+      channel: "whatsapp",
+      channels: [],
+      accounts: [],
+    });
   });
 
   it("cancel clears the session and notifies the gateway", async () => {
@@ -189,12 +212,18 @@ describe("ChannelWizardController", () => {
     await Promise.resolve();
     await controller.answer("again");
     expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(1);
-    resolveNext({ done: true, status: "done", channels: ["telegram"] });
+    resolveNext({
+      done: true,
+      status: "done",
+      channels: ["telegram"],
+      accounts: [{ channel: "telegram", accountId: "default" }],
+    });
     await first;
     expect(controller.state).toEqual({
       phase: "done",
       channel: "telegram",
       channels: ["telegram"],
+      accounts: [{ channel: "telegram", accountId: "default" }],
     });
   });
 });

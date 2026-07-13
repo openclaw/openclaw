@@ -18,10 +18,18 @@ export class ChannelWizardHost {
   private lastPhase = "idle";
   private readonly controller: ChannelWizardController;
 
+  /** Account the completed wizard configured for WhatsApp QR pairing. */
+  whatsappAccountId: string | undefined;
+
   constructor(private readonly deps: WizardHostDeps) {
     this.controller = new ChannelWizardController(
       () => deps.getContext()?.gateway.snapshot.client ?? null,
       () => this.handleControllerChange(),
+      (value) =>
+        deps
+          .getContext()
+          ?.channels.state.channelsSnapshot?.channelMeta?.some((entry) => entry.id === value) ??
+        false,
     );
   }
 
@@ -38,6 +46,7 @@ export class ChannelWizardHost {
       return;
     }
     this.blockedByDirtyConfig = false;
+    this.whatsappAccountId = undefined;
     this.deps.clearSelection();
     void this.controller.start(channel);
   }
@@ -79,13 +88,15 @@ export class ChannelWizardHost {
           : [];
     }
     if (wizard.phase === "done" && this.lastPhase !== "done") {
-      void this.handleCompleted(wizard.channels);
+      void this.handleCompleted(wizard.accounts);
     }
     this.lastPhase = wizard.phase;
     this.deps.requestUpdate();
   }
 
-  private async handleCompleted(channels: readonly string[]): Promise<void> {
+  private async handleCompleted(
+    accounts: ReadonlyArray<{ channel: string; accountId: string }>,
+  ): Promise<void> {
     const context = this.deps.getContext();
     if (!context) {
       return;
@@ -93,9 +104,12 @@ export class ChannelWizardHost {
     // The wizard rewrote openclaw.json on the gateway; resync the local draft.
     await context.runtimeConfig.refresh({ discardPendingChanges: true });
     await context.channels.refresh(true);
-    if (channels.includes("whatsapp")) {
-      // Jump straight into QR pairing; the wizard modal renders the QR phase.
-      await context.channels.startWhatsApp(false);
+    const whatsapp = accounts.find((entry) => entry.channel === "whatsapp");
+    if (whatsapp) {
+      // Jump straight into QR pairing for the account the wizard configured;
+      // the wizard modal renders the QR phase.
+      this.whatsappAccountId = whatsapp.accountId;
+      await context.channels.startWhatsApp(false, whatsapp.accountId);
     }
   }
 }

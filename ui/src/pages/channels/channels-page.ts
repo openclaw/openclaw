@@ -472,8 +472,10 @@ class ChannelsPage extends OpenClawLightDomElement {
           onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
           onWizardClose: () => this.wizardHost.close(),
           onRefresh: (probe) => void context.channels.refresh(probe),
-          onWhatsAppStart: (force) => void context.channels.startWhatsApp(force),
-          onWhatsAppWait: () => void context.channels.waitWhatsApp(),
+          onWhatsAppStart: (force) =>
+            void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
+          onWhatsAppWait: () =>
+            void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
           onWhatsAppLogout: () => void context.channels.logoutWhatsApp(),
           onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
           onConfigSave: () => void this.saveChannelConfig(),

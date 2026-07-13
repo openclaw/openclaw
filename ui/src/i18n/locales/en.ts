@@ -164,6 +164,8 @@ export const en: TranslationMap = {
       doneTitle: "Channel configured",
       doneBody:
         "Configuration saved. The gateway reloads the channel automatically; check its card for live status.",
+      doneNoChangesTitle: "No changes made",
+      doneNoChangesBody: "Setup finished without configuring a channel. Nothing was saved.",
       whatsappScanTitle: "Link WhatsApp by scanning the QR code",
       whatsappScanHelp:
         "On your phone, open WhatsApp → Settings → Linked devices → Link a device, then scan this code.",
