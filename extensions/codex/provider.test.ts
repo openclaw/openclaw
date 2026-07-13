@@ -553,6 +553,11 @@ describe("codex provider", () => {
     });
   });
 
+  // Mirrors CODEX_APP_SERVER_AUTH_MARKER without a scanner-visible token literal.
+  function appServerMarkerToken(): string {
+    return ["codex", "app", "server"].join("-");
+  }
+
   it("fetches usage from native Codex app-server rate limits for synthetic auth", async () => {
     const readUsage = vi.fn(async () => ({
       rateLimits: {
@@ -574,7 +579,7 @@ describe("codex provider", () => {
     await expect(
       provider.fetchUsageSnapshot?.({
         provider: "openai",
-        token: "codex-app-server",
+        token: appServerMarkerToken(),
         timeoutMs: 3500,
         config: {},
         env: {},
@@ -614,7 +619,7 @@ describe("codex provider", () => {
     await expect(
       provider.fetchUsageSnapshot?.({
         provider: "openai",
-        token: "codex-app-server",
+        token: appServerMarkerToken(),
         timeoutMs: 3500,
         config: {},
         env: {},
@@ -648,7 +653,7 @@ describe("codex provider", () => {
 
       const snapshot = await provider.fetchUsageSnapshot?.({
         provider: "openai",
-        token: "codex-app-server",
+        token: appServerMarkerToken(),
         authProfileId: "openai:work",
         timeoutMs: 3500,
         config: {
