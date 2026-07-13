@@ -26,7 +26,4 @@ export {
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
-export type {
-  DeliverFn,
-  RecoveryLogger,
-} from "./delivery-queue-recovery.js";
+export type { DeliverFn, RecoveryLogger } from "./delivery-queue-recovery.js";

@@ -22,10 +22,7 @@ import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 /** Deliverable message channel id that can be selected for message actions. */
 type MessageChannelId = DeliverableMessageChannel;
 /** Source that explains how message channel selection chose its result. */
-type MessageChannelSelectionSource =
-  | "explicit"
-  | "tool-context-fallback"
-  | "single-configured";
+type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";
 
 const getMessageChannels = () => listDeliverableMessageChannels();
 
