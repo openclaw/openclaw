@@ -10679,4 +10679,18 @@ extension NodeAppModel {
     }
 }
 #endif
+
+extension NodeAppModel {
+    func clearGatewayProblemWhenSwitching(to stableID: String) {
+        guard let currentStableID = self.activeGatewayConnectConfig?.effectiveStableID
+            ?? self.connectedGatewayID,
+            !GatewayStableIdentifier.matches(currentStableID, stableID)
+        else { return }
+        // A retained problem belongs to its gateway. Clear it as soon as another target is chosen,
+        // or the replacement connection can briefly present the previous gateway's error.
+        self.operatorGatewayProblem = nil
+        self.clearGatewayConnectionProblem()
+    }
+}
+
 // swiftlint:enable type_body_length file_length

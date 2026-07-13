@@ -400,6 +400,29 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(appModel.gatewayStatusText == "Connected")
     }
 
+    @Test @MainActor func `retained gateway problem clears only when explicit target changes`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let currentConfig = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(currentConfig)
+        let problem = GatewayConnectionProblem(
+            kind: .connectionRefused,
+            owner: .network,
+            title: "Connection refused",
+            message: "The gateway refused the connection.",
+            retryable: true,
+            pauseReconnect: false)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        appModel.clearGatewayProblemWhenSwitching(to: currentConfig.effectiveStableID)
+        #expect(appModel.lastGatewayProblem == problem)
+
+        appModel.clearGatewayProblemWhenSwitching(to: "manual|replacement.example.com|443")
+        #expect(appModel.lastGatewayProblem == nil)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+    }
+
     @Test func `gateway connect config matches equivalent inputs`() {
         let lhs = Self.makeGatewayConnectConfig()
         let rhs = GatewayConnectConfig(
