@@ -693,7 +693,7 @@ export const FIELD_HELP: Record<string, string> = {
   "nodeHost.agentRuns":
     "Opt in to approval-gated native agent turns on this headless node host. Disabled by default.",
   "nodeHost.agentRuns.claude":
-    "Controls whether this headless node host may advertise Claude CLI agent turns.",
+    "Controls whether this headless node host may advertise Claude CLI agent turns to the gateway.",
   "nodeHost.agentRuns.claude.enabled":
     "Advertise paired-node Claude session continuation when the local claude binary is available (default: false). Runs still require node exec approval.",
   "nodeHost.browserProxy":
