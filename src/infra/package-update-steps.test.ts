@@ -1666,6 +1666,12 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
     {
       featureRelativePath: "dist/local-feature.js",
+      helperRelativePath: "dist/local-helper-AbC12345.js",
+      name: "content-hashed helper import",
+      source: 'import "./local-helper-AbC12345.js";\n',
+    },
+    {
+      featureRelativePath: "dist/local-feature.js",
       helperRelativePath: "dist/local-helper.js",
       name: "minified re-export",
       source: 'export*from"./local-helper.js";\n',
@@ -3690,10 +3696,9 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.steps.map((step) => step.name)).toEqual([
         "global update",
         "global install swap",
-        "local overrides",
       ]);
-      expect(result.localOverrides?.status).toBe("preserved");
-      expect(result.localOverrides?.added).toBe(1);
+      expect(result.localOverrides?.status).toBe("none");
+      expect(result.localOverrides?.added).toBe(0);
       await expectPathMissing(staleChunk);
     });
   });

@@ -682,6 +682,13 @@ async function copyOverridePayload(params: {
 
 const BEST_EFFORT_LOCAL_IMPORT_SPECIFIER_PATTERN =
   /(?:import|export)\b\s*(?:[^'"]*?\bfrom\s*)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|require\s*\(\s*["']([^"']+)["']\s*\)/gu;
+const CONTENT_HASHED_DIST_ARTIFACT_PATTERN = /-([A-Za-z0-9_]{8,})\.(?:cjs|css|js|mjs)(?:\.map)?$/u;
+
+function isLikelyContentHashedDistArtifact(relativePath: string): boolean {
+  const filename = path.posix.basename(normalizeDistPath(relativePath));
+  const hash = CONTENT_HASHED_DIST_ARTIFACT_PATTERN.exec(filename)?.[1] ?? "";
+  return hash.length > 0 && /[A-Z0-9_]/u.test(hash);
+}
 
 function resolveReferencedDistPath(params: {
   fromPath: string;
@@ -711,6 +718,7 @@ async function collectReferencedAddedOverridePaths(params: {
   changes: LocalPackageOverrideChange[];
   actualSet: Set<string>;
   baselineSet: Set<string>;
+  standaloneAddedPaths: string[];
 }): Promise<{
   addedPaths: string[];
   dependenciesByChangePath: Map<string, string[]>;
@@ -734,13 +742,11 @@ async function collectReferencedAddedOverridePaths(params: {
         rootPath: change.path,
         sourcePath: change.savedPath as string,
       })),
-    ...[...params.actualSet]
-      .filter((relativePath) => !params.baselineSet.has(relativePath))
-      .map((relativePath) => ({
-        path: relativePath,
-        rootPath: relativePath,
-        packageRelativePath: relativePath,
-      })),
+    ...params.standaloneAddedPaths.map((relativePath) => ({
+      path: relativePath,
+      rootPath: relativePath,
+      packageRelativePath: relativePath,
+    })),
   ];
 
   while (queue.length > 0) {
@@ -908,23 +914,23 @@ export async function captureLocalPackageOverrides(params: {
         mode: payload.mode,
       });
     }
+    const standaloneAddedPaths = actualFiles.filter(
+      (relativePath) =>
+        !baselineSet.has(relativePath) && !isLikelyContentHashedDistArtifact(relativePath),
+    );
     const referencedAdded = await collectReferencedAddedOverridePaths({
       packageFs,
       changes,
       actualSet,
       baselineSet,
+      standaloneAddedPaths,
     });
     for (const change of changes) {
       if (change.kind === "modified") {
         change.dependencies = referencedAdded.dependenciesByChangePath.get(change.path) ?? [];
       }
     }
-    const addedOverridePaths = new Set(referencedAdded.addedPaths);
-    for (const relativePath of actualFiles) {
-      if (!baselineSet.has(relativePath)) {
-        addedOverridePaths.add(relativePath);
-      }
-    }
+    const addedOverridePaths = new Set([...standaloneAddedPaths, ...referencedAdded.addedPaths]);
     for (const relativePath of [...addedOverridePaths].toSorted((left, right) =>
       left.localeCompare(right),
     )) {
