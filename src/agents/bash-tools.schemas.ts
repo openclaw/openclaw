@@ -22,6 +22,7 @@ export const execSchema = Type.Object({
   yieldMs: Type.Optional(
     Type.Integer({
       description: "Milliseconds to wait before backgrounding (default 10000)",
+      minimum: 0,
     }),
   ),
   background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
@@ -90,8 +91,8 @@ export const processSchema = Type.Object({
   text: Type.Optional(Type.String({ description: "Text to paste for paste" })),
   bracketed: Type.Optional(Type.Boolean({ description: "Wrap paste in bracketed mode" })),
   eof: Type.Optional(Type.Boolean({ description: "Close stdin after write" })),
-  offset: Type.Optional(Type.Integer({ description: "Log offset" })),
-  limit: Type.Optional(Type.Integer({ description: "Log length" })),
+  offset: Type.Optional(Type.Number({ description: "Log offset" })),
+  limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
     Type.Number({
       description:
