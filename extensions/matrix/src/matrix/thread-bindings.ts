@@ -709,9 +709,4 @@ export async function createMatrixThreadBindingManager(params: {
   });
   return manager;
 }
-export {
-  getMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-  setMatrixThreadBindingIdleTimeoutBySessionKey,
-  setMatrixThreadBindingMaxAgeBySessionKey,
-};
+export { getMatrixThreadBindingManager, resetMatrixThreadBindingsForTests };
