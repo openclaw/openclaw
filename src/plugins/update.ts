@@ -1427,15 +1427,8 @@ export async function updateNpmInstalledPlugins(params: {
     channelFallback?: PluginUpdateChannelFallback,
     code?: string,
   ) => {
-    // Metadata/environment failures are not plugin problems — skip disabling
-    // so the plugin keeps running and update can be retried after the env issue is resolved.
     if (code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE) {
-      outcomes.push({
-        pluginId,
-        status: "error",
-        message,
-        ...(channelFallback ? { channelFallback } : {}),
-      });
+      outcomes.push({ pluginId, status: "error", message });
       return;
     }
     if (params.disableOnFailure && !params.dryRun) {
