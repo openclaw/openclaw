@@ -1,8 +1,5 @@
 /**
- * OpenAI Responses streaming transport.
- *
- * Handles Responses, Azure variants, tool-call replay, reasoning events, and provider-specific
- * payload policy before converting SDK streams into OpenClaw assistant events.
+ * OpenAI Responses transport for Azure variants, replay, reasoning, and payload policy.
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -144,8 +141,6 @@ type OpenAIResponsesReplayContext = {
   sessionHash?: string;
   authProfileHash?: string;
 };
-
-export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 function stringifyUnknown(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
@@ -860,7 +855,7 @@ async function createResponsesStreamWithEncryptedContentRetry(params: {
   }
 }
 
-export function resolveAzureOpenAIApiVersion(env = process.env): string {
+function resolveAzureOpenAIApiVersion(env = process.env): string {
   return env.AZURE_OPENAI_API_VERSION?.trim() || DEFAULT_AZURE_OPENAI_API_VERSION;
 }
 
@@ -1934,7 +1929,7 @@ function readResponsesOutputMessageText(item: Record<string, unknown>): string {
     .join("");
 }
 
-export function resolveProviderTransportTurnState(
+function resolveProviderTransportTurnState(
   model: Model,
   params: {
     sessionId?: string;
@@ -2252,7 +2247,7 @@ function resolveOpenAIResponsesTextFormat(
   return responseFormat as unknown as ResponseFormatTextConfig;
 }
 
-export function buildOpenAIResponsesParams(
+function buildOpenAIResponsesParams(
   model: Model,
   context: Context,
   options: OpenAIResponsesOptions | undefined,
@@ -2551,7 +2546,7 @@ function buildAzureOpenAIResponsesParams(
   return params;
 }
 
-export type OpenAIResponsesRequestParams = {
+type OpenAIResponsesRequestParams = {
   model: string;
   input: ResponseInput;
   stream: true;
@@ -2579,6 +2574,7 @@ export type OpenAIResponsesRequestParams = {
 export const responsesTesting = {
   getCompat,
   assertCodeModeResponsesToolSurface,
+  buildOpenAIResponsesParams,
   buildOpenAIClientHeaders,
   buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
@@ -2594,6 +2590,7 @@ export const responsesTesting = {
   normalizeResponsesFailedEvent,
   prepareOpenAIResponsesReasoningItemForReplay,
   createResponsesStreamWithEncryptedContentRetry,
+  resolveAzureOpenAIApiVersion,
   stripResponsesRequestEncryptedContent,
   tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,
