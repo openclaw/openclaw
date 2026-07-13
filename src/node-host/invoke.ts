@@ -38,7 +38,11 @@ import {
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { NODE_FS_LIST_DIR_COMMAND, NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
+import {
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_FS_LIST_DIR_COMMAND,
+  NODE_MCP_TOOLS_CALL_COMMAND,
+} from "../infra/node-commands.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
@@ -46,6 +50,11 @@ import {
 import { logWarn } from "../logger.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
+import {
+  decodeClaudeCliNodeRunParams,
+  runClaudeCliNodeCommand,
+  type ClaudeCliNodeRunResult,
+} from "./invoke-agent-cli-claude.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -233,6 +242,12 @@ export type NodeInvokeRequestPayload = {
   paramsJSON?: string | null;
   timeoutMs?: number | null;
   idempotencyKey?: string | null;
+};
+
+export type NodeHostInvokeRuntime = {
+  claudePath?: string;
+  handleSystemRun?: typeof handleSystemRunInvoke;
+  signal?: AbortSignal;
 };
 
 export type { SkillBinsProvider } from "./invoke-types.js";
@@ -645,9 +660,10 @@ export async function handleInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
+  runtime: NodeHostInvokeRuntime = {},
 ) {
   try {
-    await dispatchInvoke(frame, client, skillBins, mcpManager);
+    await dispatchInvoke(frame, client, skillBins, mcpManager, runtime);
   } catch (err) {
     // Gateway events launch this handler without awaiting it. Consume unexpected
     // failures here so one bad request cannot terminate the node-host process.
@@ -671,6 +687,7 @@ async function dispatchInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
+  runtime: NodeHostInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
   if (command === "system.execApprovals.get") {
@@ -780,6 +797,123 @@ async function dispatchInvoke(
 
   if (command === NODE_MCP_TOOLS_CALL_COMMAND) {
     await handleMcpToolsCall(frame, client, mcpManager);
+    return;
+  }
+
+  if (command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND) {
+    if (!runtime.claudePath) {
+      await sendErrorResult(client, frame, "UNAVAILABLE", "Claude CLI agent runs are unavailable");
+      return;
+    }
+    const claudePath = runtime.claudePath;
+    let request: Awaited<ReturnType<typeof decodeClaudeCliNodeRunParams>>;
+    try {
+      request = await decodeClaudeCliNodeRunParams(frame.paramsJSON);
+    } catch (error) {
+      await sendInvalidRequestResult(client, frame, error);
+      return;
+    }
+    const approvalCommand = [claudePath, ...request.argv];
+    const preparedApproval = buildSystemRunApprovalPlan({
+      command: approvalCommand,
+      ...(request.cwd ? { cwd: request.cwd } : {}),
+      ...(request.agentId ? { agentId: request.agentId } : {}),
+      ...(request.sessionKey ? { sessionKey: request.sessionKey } : {}),
+    });
+    if (!preparedApproval.ok) {
+      await sendErrorResult(client, frame, "INVALID_REQUEST", preparedApproval.message);
+      return;
+    }
+    const { getRuntimeConfig: getNodeRuntimeConfig } = await import("../config/config.js");
+    const execPolicy = await resolveEffectiveSystemRunExecPolicy({
+      cfg: getNodeRuntimeConfig(),
+      agentId: request.agentId,
+      defaultSecurity: resolveExecSecurity(undefined),
+      defaultAsk: resolveExecAsk(undefined),
+      requireSocket: false,
+    });
+    const approvalPlan = {
+      ...preparedApproval.plan,
+      policySnapshot: createExecApprovalPolicySnapshot({
+        file: execPolicy.approvals.file,
+        agentId: request.agentId,
+      }),
+    };
+    let runResult: RunResult | undefined;
+    await (runtime.handleSystemRun ?? handleSystemRunInvoke)({
+      client,
+      // The command-specific validator is the execution boundary. Approval sees
+      // every executable argument; prompt/stdin content remains request input.
+      params: {
+        command: approvalCommand,
+        ...(request.cwd ? { cwd: request.cwd } : {}),
+        ...(request.env ? { env: request.env } : {}),
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+        ...(request.sessionKey ? { sessionKey: request.sessionKey } : {}),
+        ...(request.systemRunPlan ? { systemRunPlan: request.systemRunPlan } : {}),
+        ...(request.approvalDecision ? { approvalDecision: request.approvalDecision } : {}),
+        timeoutMs: request.timeoutMs,
+      },
+      skillBins,
+      execHostEnforced: false,
+      execHostFallbackAllowed: true,
+      resolveExecSecurity,
+      resolveExecAsk,
+      isCmdExeInvocation,
+      sanitizeEnv,
+      runCommand: async (approvalArgv, cwd, env, timeoutMs) => {
+        runResult = await runClaudeCliNodeCommand({
+          client,
+          frame,
+          request,
+          argv: approvalArgv,
+          cwd,
+          env,
+          timeoutMs,
+          signal: runtime.signal,
+        });
+        return runResult;
+      },
+      runViaMacAppExecHost,
+      // Agent runs already report through the agent-run stream. Suppress the
+      // system.run lifecycle side-channel, whose Gateway provenance is scoped
+      // exclusively to system.run invokes.
+      sendNodeEvent: async () => {},
+      buildExecEventPayload,
+      sendInvokeResult: async (result) => {
+        if (
+          !result.ok &&
+          !request.approvalDecision &&
+          result.error?.message?.includes("approval required")
+        ) {
+          await sendInvokeResult(client, frame, {
+            ok: true,
+            payloadJSON: JSON.stringify({
+              approvalRequired: true,
+              systemRunPlan: approvalPlan,
+              security: execPolicy.security,
+              ask: execPolicy.ask,
+            }),
+          });
+          return;
+        }
+        if (!result.ok || !runResult) {
+          await sendInvokeResult(client, frame, result);
+          return;
+        }
+        const payload: ClaudeCliNodeRunResult = {
+          exitCode: runResult.exitCode ?? 1,
+          stderrTail: runResult.stderr,
+          truncated: runResult.truncated,
+          ...(runResult.timedOut
+            ? { timeoutKind: runResult.noOutputTimedOut ? ("idle" as const) : ("hard" as const) }
+            : {}),
+        };
+        await sendInvokeResult(client, frame, { ok: true, payloadJSON: JSON.stringify(payload) });
+      },
+      sendExecFinishedEvent: async () => {},
+      preferMacAppExecHost: false,
+    });
     return;
   }
 
@@ -1123,6 +1257,18 @@ export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayl
     timeoutMs,
     idempotencyKey,
   };
+}
+
+export function coerceNodeInvokeCancelPayload(
+  payload: unknown,
+): { invokeId: string; nodeId: string } | null {
+  const value =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
+  return value && typeof value.invokeId === "string" && typeof value.nodeId === "string"
+    ? { invokeId: value.invokeId, nodeId: value.nodeId }
+    : null;
 }
 
 async function sendInvokeResult(

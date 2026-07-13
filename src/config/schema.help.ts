@@ -690,6 +690,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
+  "nodeHost.agentRuns":
+    "Opt in to approval-gated native agent turns on this headless node host. Disabled by default.",
+  "nodeHost.agentRuns.claude":
+    "Controls whether this headless node host may advertise Claude CLI agent turns.",
+  "nodeHost.agentRuns.claude.enabled":
+    "Advertise paired-node Claude session continuation when the local claude binary is available (default: false). Runs still require node exec approval.",
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":

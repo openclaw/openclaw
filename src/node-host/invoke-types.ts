@@ -29,6 +29,7 @@ export type SystemRunParams = {
 export type RunResult = {
   exitCode?: number;
   timedOut: boolean;
+  noOutputTimedOut?: boolean;
   success: boolean;
   stdout: string;
   stderr: string;

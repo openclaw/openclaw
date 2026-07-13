@@ -507,6 +507,17 @@ const NodeHostMcpServerNameSchema = z
 
 const NodeHostSchema = z
   .object({
+    agentRuns: z
+      .object({
+        claude: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     browserProxy: z
       .object({
         enabled: z.boolean().optional(),
