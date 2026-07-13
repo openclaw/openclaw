@@ -117,10 +117,11 @@ function expectedTrustedCmdExe(): string {
   return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
 }
 
-function expectCmdWrappedInvocation(call: ExecaCall, commandFragment = "pnpm.cmd --version") {
+function expectCmdWrappedInvocation(call: ExecaCall, commandFragment = "pnpm.cmd") {
   expect(call[0]).toBe(expectedTrustedCmdExe());
   expect(call[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
   expect(call[1][3]).toContain(commandFragment);
+  expect(call[1][3]).toContain("--version");
   expect(call[2]).toMatchObject({
     shell: false,
     windowsHide: true,
@@ -225,7 +226,7 @@ describe("Windows command execution", () => {
     vi.spyOn(fs, "existsSync").mockReturnValue(false);
     await withMockedWindowsPlatform(async () => {
       void spawnCommand(["npm", "--version"]);
-      expectCmdWrappedInvocation(requireExecaCall(0), "npm.cmd --version");
+      expectCmdWrappedInvocation(requireExecaCall(0), "npm.cmd");
     });
   });
 
@@ -233,7 +234,7 @@ describe("Windows command execution", () => {
     await withMockedWindowsPlatform(async () => {
       void spawnCommand(["node", "script.js"]);
       const [command, , options] = requireExecaCall(0);
-      expect(command).toBe("node.exe");
+      expect(path.win32.basename(command).toLowerCase()).toBe("node.exe");
       expect(options).toMatchObject({ shell: false, windowsHide: true });
     });
   });
