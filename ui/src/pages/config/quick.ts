@@ -8,25 +8,22 @@
 
 import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
 import {
   renderSettingsGroup,
-  renderSettingsNavRow,
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
-  renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsValue,
   type SettingsSectionProps,
 } from "../../components/settings-ui.ts";
 import { t, type Locale } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { BASE_THINKING_LEVELS } from "../../lib/chat/thinking.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { renderLanguageSelect } from "./language-select.ts";
+import { renderModelSection } from "./quick-model-section.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
 
@@ -39,6 +36,7 @@ type QuickSettingsProps = {
 
   // Model & Thinking
   currentModel: string;
+  modelCatalogMode?: "replace";
   thinkingLevel: string;
   fastMode: FastMode | undefined;
   onModelChange?: () => void;
@@ -68,10 +66,6 @@ type QuickSettingsProps = {
   version: string;
 };
 
-// The compact General hub intentionally omits "minimal"; the full list stays
-// available on session-level pickers.
-const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
-
 /** Section wrapper that keeps the stable settings-search scroll target ids. */
 function renderTargetSection(
   id: string,
@@ -83,19 +77,6 @@ function renderTargetSection(
 
 // ── Section renderers ──
 
-function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
-  return value === "auto" ? "auto" : value === "on";
-}
-
-function isConfigBusy(props: QuickSettingsProps): boolean {
-  return (
-    props.configLoading === true ||
-    props.configSaving === true ||
-    props.configApplying === true ||
-    props.configUpdating === true
-  );
-}
-
 function renderGeneralSection(props: QuickSettingsProps) {
   return renderSettingsSection({ title: t("nav.settingsGeneral") }, [
     renderSettingsRow({
@@ -104,61 +85,6 @@ function renderGeneralSection(props: QuickSettingsProps) {
       control: renderLanguageSelect(props.locale, props.onLocaleChange),
     }),
   ]);
-}
-
-function renderModelSection(props: QuickSettingsProps) {
-  const fastMode = formatFastModeValue(props.fastMode);
-  const configBusy = isConfigBusy(props);
-  return renderTargetSection(
-    GENERAL_SETTINGS_TARGET_IDS.model,
-    { title: t("quickSettings.model.title") },
-    [
-      renderSettingsNavRow({
-        title: t("quickSettings.model.model"),
-        control: renderSettingsValue(props.currentModel || "default", { mono: true }),
-        onClick: () => props.onModelChange?.(),
-      }),
-      props.modelCatalogMode === "replace"
-        ? renderSettingsRow({
-            title: t("chat.selectors.replaceModeHint"),
-            control: html`
-              <button type="button" class="btn" @click=${() => props.onModelChange?.()}>
-                ${t("chat.selectors.manageModels")}
-              </button>
-            `,
-          })
-        : nothing,
-      renderSettingsRow({
-        title: t("quickSettings.model.thinking"),
-        control: renderSettingsSegmented({
-          value: props.thinkingLevel,
-          options: THINKING_LEVELS.map((level) => ({
-            value: level,
-            label: t(`quickSettings.model.thinkingLevels.${level}`),
-          })),
-          disabled: configBusy,
-          onChange: (level) => props.onThinkingChange?.(level),
-        }),
-      }),
-      renderSettingsRow({
-        title: t("quickSettings.model.fastMode"),
-        control: renderSettingsSegmented<"auto" | "on" | "off">({
-          value: fastMode,
-          options: [
-            { value: "auto", label: t("quickSettings.model.fastModes.auto") },
-            { value: "on", label: t("quickSettings.model.fastModes.fast") },
-            { value: "off", label: t("quickSettings.model.fastModes.standard") },
-          ],
-          disabled: configBusy,
-          onChange: (value) => {
-            if (value !== fastMode) {
-              props.onFastModeChange?.(fastModeOptionValue(value));
-            }
-          },
-        }),
-      }),
-    ],
-  );
 }
 
 type SystemStat = {

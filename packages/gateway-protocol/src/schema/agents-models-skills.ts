@@ -245,7 +245,6 @@ export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
   catalogMode: Type.Optional(Type.Literal("replace")),
 });
-
 /** Runs a bounded live credential probe for one model provider. */
 export const ModelsProbeParamsSchema = closedObject({
   provider: NonEmptyString,

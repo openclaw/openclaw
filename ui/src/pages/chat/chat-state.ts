@@ -64,6 +64,7 @@ import {
   type ChatMetadataResult,
   type ChatState,
 } from "./chat-history.ts";
+import * as chatModelCatalog from "./chat-model-catalog.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   removeDeliveredQueuedChatSendForRun,
@@ -231,7 +232,7 @@ export type ChatPageHost = ChatHost &
     chatSideResultTerminalRuns: Set<string>;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelCatalog: ModelCatalogEntry[];
-    chatModelCatalogMode?: "replace";
+    chatModelCatalogMode?: chatModelCatalog.ChatModelCatalogMode;
     modelAuthStatusResult: ModelAuthStatusResult | null;
     modelAuthStatusError: string | null;
     sessionsResult: SessionsListResult | null;
@@ -750,8 +751,7 @@ function applyChatMetadataResult(
 ): ChatMetadataApplyResult {
   const models = applyModelCatalogResult(result.models);
   if (models) {
-    host.chatModelCatalog = models;
-    host.chatModelCatalogMode = result.catalogMode === "replace" ? "replace" : undefined;
+    chatModelCatalog.applyChatModelCatalog(host, models, result.catalogMode);
   }
   const commandsApplied = applyRemoteSlashCommandsResult({
     client,
@@ -760,7 +760,6 @@ function applyChatMetadataResult(
   });
   return { commands: commandsApplied, models: Boolean(models) };
 }
-
 function ownsChatMetadataRequest(
   host: ChatPageHost,
   client: GatewayBrowserClient,
@@ -774,7 +773,6 @@ function ownsChatMetadataRequest(
     resolveChatAgentId(host) === agentId
   );
 }
-
 async function refreshCompatibilityModelCatalog(
   host: ChatPageHost,
   client: GatewayBrowserClient,
@@ -783,8 +781,7 @@ async function refreshCompatibilityModelCatalog(
 ) {
   const result = await loadModels(client, { includeMetadata: true });
   if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
-    host.chatModelCatalog = result.models;
-    host.chatModelCatalogMode = result.catalogMode;
+    chatModelCatalog.applyChatModelCatalog(host, result.models, result.catalogMode);
   }
 }
 
@@ -815,8 +812,7 @@ export async function refreshChatMetadata(
   const requestVersion = ++host.chatMetadataRequestVersion;
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    host.chatModelCatalogMode = undefined;
+    chatModelCatalog.clearChatModelCatalog(host);
     return;
   }
   const client = host.client;
@@ -829,8 +825,7 @@ export async function refreshChatMetadata(
   try {
     if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
       if (shouldClearUnresolvedModels) {
-        host.chatModelCatalog = [];
-        host.chatModelCatalogMode = undefined;
+        chatModelCatalog.clearChatModelCatalog(host);
       }
       await Promise.allSettled([
         ...(shouldRefreshCompatibilityModels
@@ -850,8 +845,7 @@ export async function refreshChatMetadata(
     }
     const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
     if (!metadataApplied.models && shouldClearUnresolvedModels) {
-      host.chatModelCatalog = [];
-      host.chatModelCatalogMode = undefined;
+      chatModelCatalog.clearChatModelCatalog(host);
     }
     if (!metadataApplied.models || !metadataApplied.commands) {
       await Promise.allSettled([
@@ -866,8 +860,7 @@ export async function refreshChatMetadata(
   } catch {
     if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
       if (shouldClearUnresolvedModels) {
-        host.chatModelCatalog = [];
-        host.chatModelCatalogMode = undefined;
+        chatModelCatalog.clearChatModelCatalog(host);
       }
       await Promise.allSettled([
         ...(shouldRefreshCompatibilityModels
@@ -1332,7 +1325,6 @@ export function createPageState(
     chatModelsLoading: false,
     chatMetadataRequestVersion: 0,
     chatModelCatalog: [] as ModelCatalogEntry[],
-    chatModelCatalogMode: undefined,
     modelAuthStatusResult: null,
     modelAuthStatusError: null,
     sessionsResult: null,

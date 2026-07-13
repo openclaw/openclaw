@@ -66,15 +66,9 @@ type ApiKeyProviderCapabilities = {
   providers: ReadonlyMap<string, boolean>;
   resolveProvider(provider: string): string;
 };
-type ModelsListResult = {
-  models: ModelsListEntryWithCapabilities[];
-  catalogMode?: "replace";
-};
 type ModelsListAvailability = ModelAuthAvailability;
 type ModelsListEntryEvaluation = ModelAuthAvailabilityEvaluation;
-
 let loggedSlowModelsListCatalog = false;
-
 // Unknown views are rejected by protocol validation first; this helper keeps the
 // handler default explicit for older clients that omit the field.
 function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
@@ -449,7 +443,6 @@ function apiKeyProviderCapabilities(params: {
   }
   return { providers: capabilities, resolveProvider };
 }
-
 type BuildModelsListResultParams = {
   context: GatewayRequestContext;
   agentId?: string;
@@ -466,7 +459,7 @@ type BuildModelsListResultParams = {
 
 export async function buildModelsListResult(
   params: BuildModelsListResultParams,
-): Promise<ModelsListResult> {
+): Promise<{ models: ModelsListEntryWithCapabilities[]; catalogMode?: "replace" }> {
   const initialConfig = params.context.getRuntimeConfig();
   const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
   const view = resolveModelsListView(params.params);

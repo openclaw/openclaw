@@ -27,6 +27,7 @@ import {
   resolveChatThinkingSelectState,
 } from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import * as modelCatalogUi from "./chat-model-catalog-hint.ts";
 import { selectChatModelProvider } from "./chat-model-provider-menu.ts";
 
 export type ChatModelControlsProps = {
@@ -36,7 +37,6 @@ export type ChatModelControlsProps = {
   gatewayAvailable: boolean;
   loading: boolean;
   modelCatalog: ModelCatalogEntry[];
-  catalogMode?: "replace";
   modelSettingsHref?: string;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
@@ -246,12 +246,11 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     !props.gatewayAvailable ||
     (thinking.options.length === 0 && thinking.currentOverride === "");
   return renderChatModelReasoningSelect({
-    defaultModelLabel: formatCombinedPickerModelLabel(pickerDefaultLabel),
+    defaultModelLabel: modelCatalogUi.formatCombinedPickerModelLabel(pickerDefaultLabel),
     disabled,
     fastMode,
     modelSelectionLocked: props.modelSelectionLocked === true,
     modelOptions,
-    catalogMode: props.catalogMode,
     modelSettingsHref: props.modelSettingsHref,
     onRequestUpdate: props.onRequestUpdate,
     selectedModelValue: currentOverride,
@@ -271,11 +270,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   });
 }
 
-function formatCombinedPickerModelLabel(label: string): string {
-  const match = /^Default \((.+)\)$/u.exec(label);
-  return match?.[1] ?? label;
-}
-
 function formatCombinedPickerModelOptionLabel(option: ChatModelProviderOption): string {
   const label = option.label;
   const providerPrefixes = [
@@ -288,10 +282,6 @@ function formatCombinedPickerModelOptionLabel(option: ChatModelProviderOption): 
     }
   }
   return label;
-}
-
-function formatCombinedPickerThinkingLabel(label: string): string {
-  return label.replace(/^Inherited:\s*/u, "");
 }
 
 /**
@@ -360,7 +350,6 @@ function renderChatModelReasoningSelect(params: {
   disabled: boolean;
   modelSelectionLocked: boolean;
   modelOptions: ChatModelProviderOption[];
-  catalogMode?: "replace";
   modelSettingsHref?: string;
   selectedModelValue: string;
   selectedThinkingValue: string;
@@ -382,7 +371,6 @@ function renderChatModelReasoningSelect(params: {
     fastMode,
     modelSelectionLocked,
     modelOptions,
-    catalogMode,
     modelSettingsHref,
     selectedModelValue,
     selectedThinkingValue,
@@ -398,8 +386,8 @@ function renderChatModelReasoningSelect(params: {
     onRequestUpdate,
     onThinkingSelect,
   } = params;
-  const triggerModel = formatCombinedPickerModelLabel(triggerModelLabel);
-  const triggerThinking = formatCombinedPickerThinkingLabel(triggerThinkingLabel);
+  const triggerModel = modelCatalogUi.formatCombinedPickerModelLabel(triggerModelLabel);
+  const triggerThinking = modelCatalogUi.formatCombinedPickerThinkingLabel(triggerThinkingLabel);
   const triggerTitle = `${triggerModel} · ${triggerThinking}`;
   const triggerLabel = triggerTitle;
   const sliderStops = thinkingOptions.filter((option) => option.value !== "");
@@ -420,7 +408,7 @@ function renderChatModelReasoningSelect(params: {
   // no reset affordance, overrides render strong with an icon reset. Screen
   // readers keep the verbose default phrasing via aria-valuetext.
   const reasoningValueText = hasThinkingOverride
-    ? formatCombinedPickerThinkingLabel(
+    ? modelCatalogUi.formatCombinedPickerThinkingLabel(
         selectedThinkingOption?.label ?? formatThinkingOverrideLabel(selectedThinkingValue),
       )
     : defaultLevelLabel;
@@ -461,7 +449,10 @@ function renderChatModelReasoningSelect(params: {
     // text here: setting textContent on a Lit-managed span ejects the
     // ChildPart markers and permanently breaks every later menu render.
     input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
-    input.setAttribute("aria-valuetext", formatCombinedPickerThinkingLabel(stop.label));
+    input.setAttribute(
+      "aria-valuetext",
+      modelCatalogUi.formatCombinedPickerThinkingLabel(stop.label),
+    );
   };
   const onSliderCommit = (event: Event) => {
     if (thinkingDisabled) {
@@ -672,16 +663,7 @@ function renderChatModelReasoningSelect(params: {
                   )}
                 </div>
               </div>
-              ${catalogMode === "replace"
-                ? html`
-                    <div class="chat-controls__catalog-hint" role="note">
-                      <span>${t("chat.selectors.replaceModeHint")}</span>
-                      ${modelSettingsHref
-                        ? html`<a href=${modelSettingsHref}>${t("chat.selectors.manageModels")}</a>`
-                        : nothing}
-                    </div>
-                  `
-                : nothing}
+              ${modelCatalogUi.renderChatModelCatalogHint(modelSettingsHref)}
             `}
         ${showReasoningPanel
           ? html`
