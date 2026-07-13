@@ -16,6 +16,7 @@ import {
 import { XAI_BASE_URL } from "./model-definitions.js";
 
 type XaiRealtimeVoice = "eve" | "ara" | "rex" | "sal" | "leo";
+type XaiRealtimeReasoningEffort = "high" | "none";
 
 export type XaiRealtimeVoiceProviderConfig = {
   apiKey?: string;
@@ -26,7 +27,7 @@ export type XaiRealtimeVoiceProviderConfig = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   interruptResponseOnInputAudio?: boolean;
-  reasoningEffort?: string;
+  reasoningEffort?: XaiRealtimeReasoningEffort;
   sessionResumption?: boolean;
 };
 
@@ -38,7 +39,7 @@ export type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
-  reasoningEffort?: string;
+  reasoningEffort?: XaiRealtimeReasoningEffort;
   sessionResumption?: boolean;
   resolveApiKey?: () => Promise<string>;
 };
@@ -93,7 +94,7 @@ export type XaiRealtimeSessionUpdate = {
       };
       output: { format: XaiRealtimeAudioFormatConfig };
     };
-    reasoning?: { effort: string };
+    reasoning?: { effort: XaiRealtimeReasoningEffort };
     resumption?: { enabled: boolean };
     tools?: RealtimeVoiceBridgeCreateRequest["tools"];
     tool_choice?: string;
@@ -161,6 +162,17 @@ function asXaiDurationMs(value: unknown): number | undefined {
     : undefined;
 }
 
+function asXaiReasoningEffort(value: unknown): XaiRealtimeReasoningEffort | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "high" || normalized === "none") {
+    return normalized;
+  }
+  throw new Error('xAI realtime voice reasoningEffort must be "high" or "none"');
+}
+
 export function normalizeXaiRealtimeProviderConfig(
   config: RealtimeVoiceProviderConfig,
 ): XaiRealtimeVoiceProviderConfig {
@@ -177,7 +189,7 @@ export function normalizeXaiRealtimeProviderConfig(
     silenceDurationMs: asXaiDurationMs(raw.silenceDurationMs),
     prefixPaddingMs: asXaiDurationMs(raw.prefixPaddingMs),
     interruptResponseOnInputAudio: readBoolean(raw.interruptResponseOnInputAudio),
-    reasoningEffort: normalizeOptionalString(raw.reasoningEffort),
+    reasoningEffort: asXaiReasoningEffort(raw.reasoningEffort),
     sessionResumption: readBoolean(raw.sessionResumption),
   };
 }

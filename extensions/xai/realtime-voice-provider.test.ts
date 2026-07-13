@@ -94,6 +94,9 @@ type SentRealtimeEvent = {
     resumption?: {
       enabled?: boolean;
     };
+    reasoning?: {
+      effort?: string;
+    };
     tools?: unknown[];
     tool_choice?: string;
   };
@@ -356,6 +359,39 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         prefix_padding_ms: 0,
       }),
     );
+  });
+
+  it("only forwards reasoning efforts accepted by the xAI Voice Agent API", async () => {
+    const provider = buildXaiRealtimeVoiceProvider();
+    const callbacks = { onAudio: vi.fn(), onClearAudio: vi.fn() };
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "test" });
+
+    expect(() =>
+      provider.createBridge({
+        providerConfig: {
+          reasoningEffort: "low",
+        },
+        ...callbacks,
+      }),
+    ).toThrow('reasoningEffort must be "high" or "none"');
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
+    const bridge = provider.createBridge({
+      providerConfig: {
+        reasoningEffort: "none",
+      },
+      ...callbacks,
+    });
+
+    void bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const socket = requireSocket();
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    bridge.close();
+
+    expect(requireSession(socket).reasoning).toEqual({ effort: "none" });
   });
 
   it("treats xAI input transcription updates as replacements until completed", async () => {

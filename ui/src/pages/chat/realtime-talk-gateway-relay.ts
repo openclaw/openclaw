@@ -38,6 +38,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private readonly submittingToolCalls = new Set<string>();
   private readonly delayedToolResults = new Set<DelayedToolResult>();
   private cancelRequestedForPlayback = false;
+  private pendingOutputCancellations = 0;
   private speechFramesDuringPlayback = 0;
   private lastRelayError: string | undefined;
 
@@ -177,12 +178,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         }
         return;
       case "clear":
-        if (event.reason === "barge-in") {
-          this.discardDelayedToolResults();
-          this.stopOutput({ releaseDelayedToolResults: false });
-        } else {
-          this.stopOutput();
-        }
+        this.stopOutput({ releaseDelayedToolResults: this.pendingOutputCancellations === 0 });
         if (event.talkEvent?.type === "turn.cancelled") {
           this.abortConsults();
         }
@@ -332,7 +328,11 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
     const shouldAllowProviderResponse =
       options?.suppressResponse !== true && options?.willContinue !== true;
-    if (!this.closed && shouldAllowProviderResponse && this.outputPlaybackDelayMs() > 0) {
+    if (
+      !this.closed &&
+      shouldAllowProviderResponse &&
+      (this.pendingOutputCancellations > 0 || this.outputPlaybackDelayMs() > 0)
+    ) {
       this.scheduleDelayedToolResult({ callId, result, ...(options ? { options } : {}) });
       return;
     }
@@ -380,6 +380,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       this.discardDelayedToolResult(pending);
       return;
     }
+    if (this.pendingOutputCancellations > 0) {
+      return;
+    }
     const playbackDelayMs = this.outputPlaybackDelayMs();
     if (playbackDelayMs > 0) {
       pending.timer = window.setTimeout(() => {
@@ -405,6 +408,15 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             this.reportToolResultSubmissionError(error);
           },
         );
+      }
+    }
+  }
+
+  private pauseDelayedToolResults(): void {
+    for (const pending of this.delayedToolResults) {
+      if (pending.timer !== undefined) {
+        window.clearTimeout(pending.timer);
+        pending.timer = undefined;
       }
     }
   }
@@ -463,12 +475,29 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       return;
     }
     this.cancelRequestedForPlayback = true;
-    this.discardDelayedToolResults();
+    // Keep completed consult results until the Gateway records this cancellation.
+    // Releasing earlier can let the provider answer from a turn the user interrupted.
+    this.pendingOutputCancellations += 1;
+    this.pauseDelayedToolResults();
     this.stopOutput({ releaseDelayedToolResults: false });
-    void this.ctx.client.request("talk.session.cancelOutput", {
-      sessionId: this.session.relaySessionId,
-      reason: "barge-in",
-    });
+    void this.ctx.client
+      .request("talk.session.cancelOutput", {
+        sessionId: this.session.relaySessionId,
+        reason: "barge-in",
+      })
+      .then(
+        () => {
+          this.pendingOutputCancellations -= 1;
+          if (this.pendingOutputCancellations === 0) {
+            this.flushDelayedToolResults();
+          }
+        },
+        (error: unknown) => {
+          this.pendingOutputCancellations -= 1;
+          this.reportToolResultSubmissionError(error);
+          this.stop();
+        },
+      );
   }
 
   private abortConsults(): void {

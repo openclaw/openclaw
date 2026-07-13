@@ -479,6 +479,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     or shared realtime selectors reuse the same provider map. Supported keys are
     `apiKey`, `baseUrl`, `model`, `voice`, `vadThreshold`, `silenceDurationMs`,
     `prefixPaddingMs`, `reasoningEffort`, and `sessionResumption`.
+    `reasoningEffort` accepts only `high` or `none`, matching the xAI Voice Agent API.
 
     xAI's server VAD always creates responses and handles audio interruption.
     Use `consultRouting: "provider-direct"`; forced transcript routing and disabling
