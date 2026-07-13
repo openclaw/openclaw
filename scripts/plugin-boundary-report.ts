@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Plugin Boundary Report script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -377,10 +376,6 @@ function collectCompatDebt(
   return listPluginCompatRecords()
     .filter((record) => record.status === "deprecated")
     .map((record) => {
-      const replacement = record.replacement;
-      if (!replacement) {
-        throw new Error(`Deprecated plugin compatibility record ${record.code} has no replacement`);
-      }
       const tokens = extractCompatTokens(record);
       const references =
         options.includeReferenceFiles === false
@@ -394,7 +389,7 @@ function collectCompatDebt(
         owner: record.owner,
         status: record.status,
         removeAfter: record.removeAfter,
-        replacement,
+        replacement: record.replacement as string,
         docsPath: record.docsPath,
         surfaces: record.surfaces,
         tokens,

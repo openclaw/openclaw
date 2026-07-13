@@ -49,6 +49,9 @@ describe("plugin compatibility registry", () => {
     for (const record of listPluginCompatRecords()) {
       expect(record.introduced, record.code).toMatch(datePattern);
       expect(record.docsPath, record.code).toMatch(/^\//u);
+      if (record.status === "deprecated") {
+        expect(record.replacement, record.code).toMatch(/\S/u);
+      }
       expectNonEmptyStringList(record.surfaces, `${record.code}: surfaces`);
       expectNonEmptyStringList(record.diagnostics, `${record.code}: diagnostics`);
       expectNonEmptyStringList(record.tests, `${record.code}: tests`);
