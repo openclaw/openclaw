@@ -311,13 +311,6 @@ export async function waitForSessionTranscriptReconcileActiveForTest(): Promise<
   await Promise.all(activeReconciles.values());
 }
 
-/** Reset process-local reconcile state between focused tests. */
-export function resetSessionTranscriptSearchForTest(): void {
-  runningReconciles.clear();
-  activeReconciles.clear();
-  reconcileQueue = Promise.resolve();
-}
-
 /** Test-only worker lifecycle and packaging seams. */
 export const sessionTranscriptSearchTesting = {
   reconcileWorkerTimeoutMs: RECONCILE_WORKER_TIMEOUT_MS,
