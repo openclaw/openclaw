@@ -4648,7 +4648,8 @@ async function dispatchReplyFromConfigInner(
     }
 
     if (finalPolicySettlements.length > 0) {
-      const settleFinalOperationalPolicies = Promise.all(finalPolicySettlements).catch(
+      const settleFinalOperationalPolicies = Promise.all(finalPolicySettlements).then(
+        () => undefined,
         (error: unknown) => {
           logVerbose(
             `dispatch-from-config: final operational policy settlement failed: ${formatErrorMessage(error)}`,
