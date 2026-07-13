@@ -1227,6 +1227,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/mxc:
+    dependencies:
+      '@microsoft/mxc-sdk':
+        specifier: 0.7.0
+        version: 0.7.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/nextcloud-talk:
     dependencies:
       zod:
@@ -3187,6 +3200,10 @@ packages:
 
   '@mdx-js/mdx@3.1.1':
     resolution: {integrity: sha512-f6ZO2ifpwAQIpzGWaBQT2TXxPv6z3RBzQKpVftEWN78Vl/YweF1uwussDx8ECAXVtr3Rs89fKyG9YlzUs9DyGQ==}
+
+  '@microsoft/mxc-sdk@0.7.0':
+    resolution: {integrity: sha512-EWhz2pKkcPluZHAOI1yneV+JK0NO/3hdh7nABBb0x4PjyUWMeSWPTBAjtIu+BhtMYOqlaijSPZMZ0Hs/J4ZL4A==}
+    engines: {node: '>=18.0.0'}
 
   '@microsoft/teams.api@2.0.13':
     resolution: {integrity: sha512-PUbCxZhBLiRPchWeZNcgsXxBGY7lGJrLwqin9I+n+ND9iCwSTtDf9kzhvIWQSPXgxViK8znmKQshSguf1JRz3Q==}
@@ -6521,6 +6538,9 @@ packages:
     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
     engines: {node: '>= 0.6'}
 
+  node-addon-api@7.1.1:
+    resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
+
   node-addon-api@8.9.0:
     resolution: {integrity: sha512-ekZMeaaIzSQTSpr7X2X3iJM7lTzgnx8ahAG9pJfT/7+14mlEM8ZYQ9cgCDvSSRbReFK0oHli3WrZdCiRsgAT9Q==}
     engines: {node: ^18 || ^20 || >= 21}
@@ -6563,6 +6583,9 @@ packages:
     peerDependenciesMeta:
       typescript:
         optional: true
+
+  node-pty@1.2.0-beta.14:
+    resolution: {integrity: sha512-XORU9BQgpxVgqr7WivjJ17mLenOHUgKKWzuZZNaw3NDYgHc/wPJQMSaoLDrpEgqV6aU1nNwil1o/OqYj6lWmUA==}
 
   node-sarif-builder@3.4.0:
     resolution: {integrity: sha512-tGnJW6OKRii9u/b2WiUViTJS+h7Apxx17qsMUjsUeNDiMMX5ZFf8F8Fcz7PAQ6omvOxHZtvDTmOYKJQwmfpjeg==}
@@ -9373,6 +9396,11 @@ snapshots:
       vfile: 6.0.3
     transitivePeerDependencies:
       - supports-color
+
+  '@microsoft/mxc-sdk@0.7.0':
+    dependencies:
+      node-pty: 1.2.0-beta.14
+      semver: 7.8.5
 
   '@microsoft/teams.api@2.0.13':
     dependencies:
@@ -12905,6 +12933,8 @@ snapshots:
 
   negotiator@1.0.0: {}
 
+  node-addon-api@7.1.1: {}
+
   node-addon-api@8.9.0: {}
 
   node-api-headers@1.9.0:
@@ -12983,6 +13013,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
     optional: true
+
+  node-pty@1.2.0-beta.14:
+    dependencies:
+      node-addon-api: 7.1.1
 
   node-sarif-builder@3.4.0:
     dependencies:
