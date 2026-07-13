@@ -371,7 +371,9 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
         valid: true,
       });
       await page
-        .locator(".model-providers__defaults")
+        .locator(".settings-section", {
+          has: page.getByRole("heading", { name: "Default models" }),
+        })
         .getByRole("button", { name: "Save" })
         .click();
       await expect
@@ -386,8 +388,10 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
         },
       });
 
-      await page.getByRole("button", { name: "Add provider", exact: true }).click();
-      const addSection = page.locator(".model-providers__add");
+      const addSection = page.locator(".settings-section", {
+        has: page.getByRole("heading", { name: "Add provider" }),
+      });
+      await addSection.getByRole("button", { name: "Add provider", exact: true }).click();
       await addSection.getByLabel("Provider").selectOption("google");
       await addSection.getByLabel("API key").fill(googleInputValue);
       const savedConfig = {
