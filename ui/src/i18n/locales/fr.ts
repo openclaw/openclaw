@@ -82,6 +82,7 @@ export const fr: TranslationMap = {
     relink: "Relier à nouveau",
     waitForScan: "Attendre le scan",
     logout: "Se déconnecter",
+    skipToMainContent: "Accéder au contenu principal",
   },
   nativeLinkMenu: {
     label: "Actions de lien",
@@ -393,6 +394,18 @@ export const fr: TranslationMap = {
     title: "Worktrees gérés",
     subtitle: "Checkouts de dépôt isolés appartenant à OpenClaw.",
     cleanNow: "Nettoyer maintenant",
+    cleanupTitle: "Nettoyage",
+    cleanupSubtitle:
+      "OpenClaw supprime périodiquement les anciens worktrees afin de libérer de l’espace disque. Ajustez le niveau d’agressivité du nettoyage.",
+    cleanupMaxCount: "Nombre maximal de worktrees",
+    cleanupMaxCountHelp:
+      "Nombre maximal de worktrees gérés à conserver dans l’ensemble des dépôts. Les worktrees les plus anciens sont d’abord enregistrés sous forme d’instantanés, puis supprimés. Définissez cette valeur sur 0 pour désactiver la limite du nombre.",
+    cleanupMaxSize: "Taille totale maximale (Go)",
+    cleanupMaxSizeHelp:
+      "Taille totale maximale en Go pour l’ensemble des worktrees gérés. Définissez cette valeur sur 0 pour désactiver la limite de taille.",
+    cleanupDecrease: "Diminuer {label}",
+    cleanupIncrease: "Augmenter {label}",
+    cleanupSaveFailed: "Échec de l’enregistrement des limites de nettoyage.",
     name: "Nom",
     repo: "Dépôt",
     branch: "Branche",
@@ -412,6 +425,7 @@ export const fr: TranslationMap = {
     working: "Traitement en cours…",
     ready: "Prêt à discuter",
     whatCanAgentDo: "Que peut faire {name} ?",
+    help: "Aide",
     getHelp: "Obtenir de l’aide",
     discord: "Communauté Discord",
     viewChangelog: "Voir le journal des modifications",
@@ -1119,6 +1133,7 @@ export const fr: TranslationMap = {
     settingsView: "Vue des paramètres",
     simple: "Simple",
     advanced: "Avancé",
+    content: "Contenu des paramètres",
     themeImported: "{name} importé.",
     themeRemoved: "Thème personnalisé supprimé.",
     channels: {
@@ -1477,6 +1492,8 @@ export const fr: TranslationMap = {
     platforms: "Plateformes : {platforms}",
     installNamed: "Installer {name}",
     notFound: "Skill introuvable.",
+    openDetails: "Ouvrir les détails de {name}",
+    enabledNamed: "{name} activé",
     invalidLink: "Lien ClawHub invalide",
     overview: "Aperçu",
     skillCard: "Carte du skill",
@@ -3570,11 +3587,13 @@ export const fr: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "État de l’automatisation",
       all: "Tous",
       active: "Actives",
       paused: "En pause",
     },
     list: {
+      viewLabel: "Vues des automatisations",
       searchPlaceholder: "Rechercher des tâches planifiées",
       newTask: "Nouvelle tâche",
       filters: "Filtres",
@@ -3645,6 +3664,7 @@ export const fr: TranslationMap = {
       nextWake: "Prochain réveil",
     },
     detail: {
+      tabsLabel: "Détails de l’automatisation",
       newTitle: "Nouvelle tâche planifiée",
       newSubtitle: "Décrivez ce qu'OpenClaw doit faire, puis choisissez quand l'exécuter.",
       back: "Toutes les automatisations",

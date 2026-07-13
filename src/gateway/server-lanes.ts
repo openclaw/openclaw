@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 
-export type GatewayLaneConcurrency = {
+type GatewayLaneConcurrency = {
   cron: number;
   main: number;
   subagent: number;

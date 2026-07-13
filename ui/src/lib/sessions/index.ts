@@ -62,6 +62,8 @@ export type SessionState = {
   groups: readonly string[];
 };
 
+type SessionGroupMutationResult = "completed" | "stale";
+
 export type SessionListOptions = {
   agentId?: string;
   activeMinutes?: number;
@@ -240,10 +242,10 @@ export type SessionCapability = {
   groupsLoad: () => Promise<void>;
   /** Replaces the gateway-owned group catalog (order included). */
   groupsPut: (names: readonly string[]) => Promise<void>;
-  /** Renames a group; the gateway repoints member sessions server-side. */
-  groupsRename: (from: string, to: string) => Promise<void>;
-  /** Deletes a group; the gateway clears member categories server-side. */
-  groupsDelete: (name: string) => Promise<void>;
+  /** Renames a group; stale means the initiating connection retired before reconciliation. */
+  groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
+  /** Deletes a group; stale means the initiating connection retired before reconciliation. */
+  groupsDelete: (name: string) => Promise<SessionGroupMutationResult>;
   subscribeCreated: (listener: (key: string) => void) => () => void;
   subscribe: (listener: (state: SessionState) => void) => () => void;
   dispose: () => void;
@@ -994,30 +996,52 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
-  const groupsRename = async (from: string, to: string) => {
+  const groupsRename = async (from: string, to: string): Promise<SessionGroupMutationResult> => {
     const scope = captureConnection();
     if (!scope) {
-      return;
+      return "stale";
     }
-    const result = await scope.client.request("sessions.groups.rename", { name: from, to });
-    if (!isCurrentConnection(scope)) {
-      return;
+    try {
+      const result = await scope.client.request("sessions.groups.rename", { name: from, to });
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publishGroups(readGroupNames(result));
+      // The mutation response is the commit point. Reconcile member rows in
+      // the background so a later disconnect cannot downgrade confirmed work.
+      void refresh({ ...lastListOptions, force: true });
+      return "completed";
+    } catch (error) {
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publish({ ...state, error: String(error) });
+      throw error;
     }
-    publishGroups(readGroupNames(result));
-    await refresh({ ...lastListOptions, force: true });
   };
 
-  const groupsDelete = async (name: string) => {
+  const groupsDelete = async (name: string): Promise<SessionGroupMutationResult> => {
     const scope = captureConnection();
     if (!scope) {
-      return;
+      return "stale";
     }
-    const result = await scope.client.request("sessions.groups.delete", { name });
-    if (!isCurrentConnection(scope)) {
-      return;
+    try {
+      const result = await scope.client.request("sessions.groups.delete", { name });
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publishGroups(readGroupNames(result));
+      // See groupsRename: collapsed-state consumers must observe confirmed
+      // completion before an unrelated refresh can outlive the connection.
+      void refresh({ ...lastListOptions, force: true });
+      return "completed";
+    } catch (error) {
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publish({ ...state, error: String(error) });
+      throw error;
     }
-    publishGroups(readGroupNames(result));
-    await refresh({ ...lastListOptions, force: true });
   };
 
   const patch = async (

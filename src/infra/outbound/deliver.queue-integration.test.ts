@@ -5,7 +5,7 @@ import {
   resetMessageAuditEventsForTest,
   type TrustedMessageAuditEvent,
 } from "../../audit/message-audit-events.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {

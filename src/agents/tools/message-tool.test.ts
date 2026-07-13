@@ -11,7 +11,7 @@ import type { ChannelMessageCapability } from "../../channels/plugins/message-ca
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import {
   mintMessageActionTurnCapability,
-  resetMessageActionTurnCapabilitiesForTest,
+  revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
@@ -346,9 +346,10 @@ beforeAll(async () => {
   ({ createOpenClawTools } = await import("../openclaw-tools.js"));
 });
 
+const mintedTurnCapabilities: string[] = [];
+
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
-  resetMessageActionTurnCapabilitiesForTest();
   resetDiagnosticSessionStateForTest();
   mocks.runMessageAction.mockReset();
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
@@ -358,6 +359,12 @@ beforeEach(() => {
   }));
   mocks.getScopedChannelsCommandSecretTargets.mockClear();
   setActivePluginRegistry(createTestRegistry([]));
+});
+
+afterEach(() => {
+  for (const token of mintedTurnCapabilities.splice(0)) {
+    revokeMessageActionTurnCapability(token);
+  }
 });
 
 function createChannelPlugin(params: {
@@ -2872,15 +2879,15 @@ describe("message tool boot-echo guard", () => {
   ].join("\n");
 
   let setBootEchoContextForSession: typeof import("../../gateway/boot-echo-guard.js").setBootEchoContextForSession;
-  let resetBootEchoContextForTests: typeof import("../../gateway/boot-echo-guard.js").resetBootEchoContextForTests;
+  let clearBootEchoContextForSession: typeof import("../../gateway/boot-echo-guard.js").clearBootEchoContextForSession;
 
   beforeAll(async () => {
-    ({ setBootEchoContextForSession, resetBootEchoContextForTests } =
+    ({ setBootEchoContextForSession, clearBootEchoContextForSession } =
       await import("../../gateway/boot-echo-guard.js"));
   });
 
   afterEach(() => {
-    resetBootEchoContextForTests();
+    clearBootEchoContextForSession("agent:main");
   });
 
   it("suppresses text-only sends that echo a substantial chunk of the registered boot prompt without preserving the wrapper markers (#53732)", async () => {
@@ -3428,6 +3435,7 @@ describe("message tool sandbox passthrough", () => {
         currentChatType: "channel",
       },
     });
+    mintedTurnCapabilities.push(token);
 
     const call = await executeSend({
       toolOptions: {

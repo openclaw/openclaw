@@ -4,6 +4,7 @@ import Foundation
 
 public let GATEWAY_PROTOCOL_VERSION = 4
 public let GATEWAY_MIN_PROTOCOL_VERSION = 4
+public let GATEWAY_MIN_NODE_PROTOCOL_VERSION = 3
 
 private struct GatewayAnyCodingKey: CodingKey, Hashable {
     let stringValue: String
@@ -6476,6 +6477,24 @@ public struct TalkSessionAppendAudioParams: Codable, Sendable {
         case sessionid = "sessionId"
         case audiobase64 = "audioBase64"
         case timestamp
+    }
+}
+
+public struct TalkSessionAcknowledgeMarkParams: Codable, Sendable {
+    public let sessionid: String
+    public let markname: String
+
+    public init(
+        sessionid: String,
+        markname: String)
+    {
+        self.sessionid = sessionid
+        self.markname = markname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case markname = "markName"
     }
 }
 
