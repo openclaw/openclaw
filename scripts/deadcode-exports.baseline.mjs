@@ -1018,7 +1018,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/sms/src/twilio.ts: parseTwilioFormBody",
   "extensions/sms/src/twilio.ts: TwilioSmsApiError",
   "extensions/sms/src/webhook.ts: createSmsWebhookReplayGuard",
-  "extensions/sms/src/webhook.ts: resetSmsWebhookRateLimiterForTest",
   "extensions/sms/src/webhook.ts: resetSmsWebhookReplayGuardsForTest",
   "extensions/synology-chat/src/channel.ts: createSynologyChatPlugin",
   "extensions/synology-chat/src/channel.ts: synologyChatMessageAdapter",
