@@ -3714,6 +3714,7 @@ describe("message tool internal-runtime-context sanitization", () => {
         interactive: JSON.stringify({
           blocks: [{ type: "text", text: `Legacy\n${internalContext}` }],
         }),
+        channelData: JSON.stringify({ slack: { blocks: [{ type: "divider" }] } }),
       },
     });
 
@@ -3724,6 +3725,90 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(call?.params?.interactive).toEqual({
       blocks: [{ type: "text", text: "Legacy" }],
     });
+    expect(call?.params?.channelData).toEqual({
+      slack: { blocks: [{ type: "divider" }] },
+    });
+  });
+
+  it("keeps safe stringified channelData when visible text is stripped before dispatch", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        message: internalContext,
+        channelData: JSON.stringify({ slack: { blocks: [{ type: "divider" }] } }),
+      },
+    });
+
+    expect(call?.params?.message).toBe("");
+    expect(call?.params?.channelData).toEqual({
+      slack: { blocks: [{ type: "divider" }] },
+    });
+  });
+
+  it("drops stringified channelData containing internal-runtime-context text before dispatch", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        message: "Visible",
+        channelData: JSON.stringify({
+          slack: { blocks: [{ type: "section", text: internalContext }] },
+        }),
+      },
+    });
+
+    expect(call?.params?.message).toBe("Visible");
+    expect(call?.params?.channelData).toBeUndefined();
+    expect(JSON.stringify(call?.params)).not.toContain("BOOT.md");
+  });
+
+  it("drops stringified channelData containing internal-runtime-context keys before dispatch", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        message: "Visible",
+        channelData: JSON.stringify({
+          slack: { [internalContext]: { type: "section" } },
+        }),
+      },
+    });
+
+    expect(call?.params?.message).toBe("Visible");
+    expect(call?.params?.channelData).toBeUndefined();
+    expect(JSON.stringify(call?.params)).not.toContain("BOOT.md");
+  });
+
+  it("suppresses sends when visible text and stringified channelData both contain internal context", async () => {
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const { call, result } = await executeSendWithResult({
+      action: {
+        target: "slack:C123",
+        message: internalContext,
+        channelData: JSON.stringify({
+          slack: { blocks: [{ type: "section", text: internalContext }] },
+        }),
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "internal_runtime_context_echo",
+    });
+    expect(JSON.stringify(result)).not.toContain("BOOT.md");
   });
 
   it("suppresses pure internal-runtime-context sends before generic raw-params logging can see original args", async () => {

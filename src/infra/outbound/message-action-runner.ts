@@ -1188,11 +1188,13 @@ async function buildSendPayloadParts(params: {
     Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
+  const hasChannelData = hasReplyPayloadContent({ channelData: actionParams.channelData });
   const location = normalizeOutboundLocation(actionParams.location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {
-      required: !hasMediaHint && !hasPresentation && !hasInteractive && !location,
+      required:
+        !hasMediaHint && !hasPresentation && !hasInteractive && !hasChannelData && !location,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -1268,6 +1270,11 @@ async function buildSendPayloadParts(params: {
   }
 
   const mediaUrl = readStringParam(actionParams, "media", { trim: false });
+  const rawChannelData = actionParams.channelData;
+  const channelData =
+    rawChannelData && typeof rawChannelData === "object" && !Array.isArray(rawChannelData)
+      ? (rawChannelData as Record<string, unknown>)
+      : undefined;
   if (
     !hasReplyPayloadContent({
       text: message,
@@ -1275,6 +1282,7 @@ async function buildSendPayloadParts(params: {
       mediaUrls: mergedMediaUrls,
       presentation: actionParams.presentation,
       interactive: actionParams.interactive,
+      channelData,
       location,
     })
   ) {
@@ -1303,11 +1311,6 @@ async function buildSendPayloadParts(params: {
   const delivery =
     rawDelivery && typeof rawDelivery === "object" && !Array.isArray(rawDelivery)
       ? (rawDelivery as ReplyPayloadDelivery)
-      : undefined;
-  const rawChannelData = actionParams.channelData;
-  const channelData =
-    rawChannelData && typeof rawChannelData === "object" && !Array.isArray(rawChannelData)
-      ? (rawChannelData as Record<string, unknown>)
       : undefined;
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
@@ -1837,6 +1840,7 @@ export async function runMessageAction(
       : undefined);
   parseJsonMessageParam(params, "presentation");
   parseJsonMessageParam(params, "delivery");
+  parseJsonMessageParam(params, "channelData");
   parseInteractiveParam(params);
 
   const action = input.action;

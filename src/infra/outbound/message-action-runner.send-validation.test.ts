@@ -133,6 +133,7 @@ describe("runMessageAction send validation", () => {
       action: "send",
       params: {
         message: "hello from codex",
+        channelData: JSON.stringify({ webchat: { cardId: "card-1" } }),
       },
       toolContext: {
         currentChannelProvider: "webchat",
@@ -153,6 +154,9 @@ describe("runMessageAction send validation", () => {
         sourceReplySink: "internal-ui",
         sourceReply: {
           text: "hello from codex",
+          channelData: {
+            webchat: { cardId: "card-1" },
+          },
         },
       },
     });
@@ -174,6 +178,9 @@ describe("runMessageAction send validation", () => {
       sourceReplySink: "internal-ui",
       sourceReply: {
         text: "hello from codex",
+        channelData: {
+          webchat: { cardId: "card-1" },
+        },
       },
       message: "hello from codex",
       dryRun: false,
@@ -201,6 +208,35 @@ describe("runMessageAction send validation", () => {
       });
     },
   );
+
+  it("uses stringified channelData as internal source reply content", async () => {
+    const result = await runMessageAction({
+      cfg: emptyConfig,
+      action: "send",
+      params: {
+        channelData: JSON.stringify({ webchat: { cardId: "card-only" } }),
+      },
+      toolContext: {
+        currentChannelProvider: "webchat",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "webchat",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload: {
+        sourceReply: {
+          channelData: {
+            webchat: { cardId: "card-only" },
+          },
+        },
+      },
+    });
+  });
 
   it("uses non-webchat current source context as the message-tool-only send sink", async () => {
     const result = await runMessageAction({

@@ -310,6 +310,52 @@ function sanitizeStringArrayParam(
   return suppressionReason;
 }
 
+function detectOpaqueChannelDataSuppressionReason(
+  value: unknown,
+  bootPrompt: string | undefined,
+): VisibleTextSuppressionReason | undefined {
+  if (typeof value === "string") {
+    return sanitizeUserVisibleToolTextResult(value, bootPrompt).suppressionReason;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const reason = detectOpaqueChannelDataSuppressionReason(entry, bootPrompt);
+      if (reason) {
+        return reason;
+      }
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const keyReason = sanitizeUserVisibleToolTextResult(key, bootPrompt).suppressionReason;
+    if (keyReason) {
+      return keyReason;
+    }
+    const reason = detectOpaqueChannelDataSuppressionReason(entry, bootPrompt);
+    if (reason) {
+      return reason;
+    }
+  }
+  return undefined;
+}
+
+function sanitizeOpaqueChannelDataParam(
+  params: Record<string, unknown>,
+  bootPrompt: string | undefined,
+): VisibleTextSuppressionReason | undefined {
+  const suppressionReason = detectOpaqueChannelDataSuppressionReason(
+    params.channelData,
+    bootPrompt,
+  );
+  if (suppressionReason) {
+    delete params.channelData;
+  }
+  return suppressionReason;
+}
+
 function sanitizePresentationTextFieldsResult(
   value: unknown,
   bootPrompt: string | undefined,
@@ -544,6 +590,7 @@ function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolea
       mediaUrls,
       presentation: params.presentation,
       interactive: params.interactive,
+      channelData: params.channelData,
     },
     { trimText: true },
   );
@@ -1452,6 +1499,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
       let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
       parseJsonMessageParam(params, "presentation");
+      parseJsonMessageParam(params, "channelData");
       parseInteractiveParam(params);
       for (const field of [
         "text",
@@ -1485,6 +1533,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       );
       params.interactive = sanitizedInteractive.value;
       suppressedVisiblePayloadReason ??= sanitizedInteractive.suppressionReason;
+      const channelDataSuppressionReason = sanitizeOpaqueChannelDataParam(
+        params,
+        bootPromptForSession,
+      );
+      suppressedVisiblePayloadReason ??= channelDataSuppressionReason;
 
       const action = readStringParam(params, "action", {
         required: true,
