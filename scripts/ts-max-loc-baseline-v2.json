@@ -662,7 +662,7 @@
   "src/agents/tools/sessions-spawn-tool.ts": 513,
   "src/agents/tools/transcripts-tool.ts": 569,
   "src/agents/tools/video-generate-tool.ts": 1318,
-  "src/agents/tools/web-fetch-utils.ts": 701,
+  "src/agents/tools/web-fetch-utils.ts": 678,
   "src/agents/tools/web-fetch.ts": 884,
   "src/agents/transcript-redact.ts": 761,
   "src/agents/workspace.ts": 1328,
