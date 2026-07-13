@@ -1350,7 +1350,7 @@ describe("buildStatusReply subagent summary", () => {
         contextTokens: 272_000,
         resolvedFastMode: false,
         resolvedVerboseLevel: "off",
-        resolvedReasoningLevel: "high",
+        resolvedReasoningLevel: "off",
         resolveDefaultThinkingLevel: async () => undefined,
         isGroup: false,
         defaultGroupActivation: () => "mention",

@@ -2,6 +2,7 @@
  * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
  * checks, shared-client leasing, and isolated-client shutdown handling.
  */
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
   resolveCodexAppServerAuthProfileId,
@@ -124,7 +125,7 @@ export async function requestCodexAppServerRateLimits(params: {
   config?: CodexAppServerJsonRequestParams["config"];
 }): Promise<JsonValue | undefined> {
   const sharedClientAuth = await resolveCodexRateLimitsSharedClientAuth(params);
-  return await requestCodexAppServerJsonInternal<JsonValue | undefined>({
+  return await requestCodexAppServerJsonInternal({
     ...params,
     method: "account/rateLimits/read",
     isolated: false,
@@ -147,9 +148,10 @@ async function resolveCodexRateLimitsSharedClientAuth(params: {
   if (params.authProfileId === null || params.startOptions?.homeScope === "user") {
     return undefined;
   }
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
   const authProfileStore = resolveCodexAppServerAuthProfileStore({
     authProfileId: params.authProfileId,
-    agentDir: params.agentDir,
+    agentDir,
     config: params.config,
   });
   const authProfileId = resolveCodexAppServerAuthProfileId({
@@ -166,7 +168,7 @@ async function resolveCodexRateLimitsSharedClientAuth(params: {
     authRequirement: "subscription",
     authProfileId,
     authProfileStore,
-    agentDir: params.agentDir,
+    agentDir,
     config: params.config,
     subscriptionProfileRequiredError: "Codex usage requires an OpenAI OAuth or token profile.",
     subscriptionProfileUnusableError: `Codex usage auth profile "${authProfileId}" is unusable.`,
@@ -177,7 +179,7 @@ async function resolveCodexRateLimitsSharedClientAuth(params: {
   const authBinding = await prepareCodexAppServerAuthBinding({
     authProfileId,
     authProfileStore,
-    agentDir: params.agentDir,
+    agentDir,
     config: params.config,
   });
   return {
