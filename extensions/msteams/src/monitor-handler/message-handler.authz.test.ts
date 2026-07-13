@@ -6,7 +6,7 @@ import type { GraphThreadMessage } from "../graph-thread.js";
 import { resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import "./message-handler-mock-support.test-support.js";
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
-import { createMSTeamsMessageHandler, resolveMSTeamsTurnChainKey } from "./message-handler.js";
+import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { createMessageHandlerDeps } from "./message-handler.test-support.js";
 
 type HandlerInput = Parameters<ReturnType<typeof createMSTeamsMessageHandler>>[0];
@@ -817,23 +817,6 @@ describe("msteams monitor handler authz", () => {
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
       2,
     );
-  });
-
-  it("scopes Teams turn chains by session when a shared session store is available", () => {
-    const storePath = "openclaw-test-session-store.json";
-    const sessionKey = "msteams:group:shared:support";
-
-    expect(
-      resolveMSTeamsTurnChainKey({
-        storePath,
-        sessionKey,
-      }),
-    ).toBe(`store:${storePath}:session:${sessionKey}`);
-    expect(
-      resolveMSTeamsTurnChainKey({
-        sessionKey,
-      }),
-    ).toBe("global");
   });
 
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {

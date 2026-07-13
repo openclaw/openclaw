@@ -35,7 +35,7 @@ export type MSTeamsSsoStoredToken = {
   updatedAt: string;
 };
 
-export type MSTeamsSsoTokenStore = {
+type MSTeamsSsoTokenStore = {
   get(params: {
     accountId?: string | null;
     connectionName: string;
