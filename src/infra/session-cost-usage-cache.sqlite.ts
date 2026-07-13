@@ -13,7 +13,7 @@ const REFRESH_LOCK_KEY = "refresh-lock";
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
-export type SessionCostUsageRefreshLock = {
+type SessionCostUsageRefreshLock = {
   pid: number;
   startedAt: number;
   ownerNonce: string;

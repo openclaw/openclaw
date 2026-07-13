@@ -3,10 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  detectLegacyUsageCostCacheFiles,
-  maybeRemoveLegacyUsageCostCacheFiles,
-} from "./doctor-usage-cost-cache.js";
+import { maybeRepairLegacyRuntimeFiles } from "./doctor-usage-cost-cache.js";
 
 let root: string | undefined;
 
@@ -49,12 +46,11 @@ describe("legacy usage-cost cache cleanup", () => {
     await Promise.all(staleTempFiles.map((filePath) => fs.utimes(filePath, staleTime, staleTime)));
     const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
 
-    expect(await detectLegacyUsageCostCacheFiles({ env })).toEqual(
-      [...cacheFiles, ...staleTempFiles].toSorted(),
-    );
-    await maybeRemoveLegacyUsageCostCacheFiles({ env, shouldRepair: true });
+    await maybeRepairLegacyRuntimeFiles(true, env);
 
-    expect(await detectLegacyUsageCostCacheFiles({ env })).toEqual([]);
+    for (const filePath of [...cacheFiles, ...staleTempFiles]) {
+      await expect(fs.readFile(filePath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+    }
     for (const filePath of [recentTemp, ...unrelatedFiles]) {
       await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("x");
     }

@@ -18,7 +18,7 @@ function isLegacyUsageCostCacheTempName(name: string): boolean {
   );
 }
 
-export async function detectLegacyUsageCostCacheFiles(params?: {
+async function detectLegacyUsageCostCacheFiles(params?: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): Promise<string[]> {
@@ -54,7 +54,7 @@ export async function detectLegacyUsageCostCacheFiles(params?: {
   return files.toSorted();
 }
 
-export async function maybeRemoveLegacyUsageCostCacheFiles(params: {
+async function maybeRemoveLegacyUsageCostCacheFiles(params: {
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -93,6 +93,6 @@ export async function maybeRepairLegacyRuntimeFiles(
   shouldRepair: boolean,
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
-  await maybeScrubConfigAuditLog({ shouldRepair });
+  await maybeScrubConfigAuditLog({ shouldRepair, env });
   await maybeRemoveLegacyUsageCostCacheFiles({ shouldRepair, env });
 }
