@@ -1500,6 +1500,11 @@ function maybeThrowOnPluginLoadError(
   throw new PluginLoadFailureError(registry);
 }
 
+function shouldSkipHybridMemoryCliPlugin(env: NodeJS.ProcessEnv): boolean {
+  const value = env.OPENCLAW_SKIP_HYBRID_MEMORY_CLI;
+  return value === "1" || value === "true";
+}
+
 function activatePluginRegistry(
   registry: PluginRegistry,
   cacheKey: string,
@@ -1781,6 +1786,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
       const pluginId = manifestRecord.id;
+      if (pluginId === "openclaw-hybrid-memory" && shouldSkipHybridMemoryCliPlugin(env)) {
+        continue;
+      }
       const matchesRequestedScope = matchesScopedPluginOrDreamingSidecar({
         onlyPluginIdSet,
         pluginId,
