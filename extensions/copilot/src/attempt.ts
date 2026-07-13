@@ -32,10 +32,6 @@ import {
 import { createCopilotByokAuth, resolveCopilotAuth } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import {
-  createInfiniteSessionConfig,
-  type CopilotInfiniteSessionOptions,
-} from "./compaction-bridge.js";
-import {
   attachCopilotMirrorIdentity,
   dualWriteCopilotTranscriptBestEffort,
 } from "./dual-write-transcripts.js";
@@ -104,7 +100,7 @@ type AttemptParamsLike = AgentHarnessAttemptParams & {
   cwd?: string;
   enableSessionTelemetry?: boolean;
   hooksConfig?: CopilotHooksConfig;
-  infiniteSessionConfig?: CopilotInfiniteSessionOptions;
+  infiniteSessionConfig?: SessionConfig["infiniteSessions"];
   initialReplayState?: AgentHarnessAttemptParams["initialReplayState"] & { sdkSessionId?: string };
   messages?: AgentMessage[];
   model?: string | { api?: string; id?: string; input?: string[]; provider?: string };
@@ -1331,7 +1327,6 @@ function createSessionConfig(
 ): CopilotSessionConfig {
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
   const hooks = createHooksBridge(params.hooksConfig, options.hooksBridgeOptions);
-  const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
   return {
     model: sdkModelId,
     // Permission decisions for SDK built-in tool kinds (shell, write,
@@ -1371,11 +1366,8 @@ function createSessionConfig(
     ...(typeof params.enableSessionTelemetry === "boolean"
       ? { enableSessionTelemetry: params.enableSessionTelemetry }
       : {}),
-    // Infinite sessions / background compaction: only attach when the
-    // host provided an InfiniteSessionConfig. SDK defaults
-    // (`enabled: true`, background 0.80, buffer 0.95) apply when
-    // omitted. See compaction-bridge.ts.
-    ...(infiniteSessions ? { infiniteSessions } : {}),
+    // The SDK owns defaulting and validation for this native config block.
+    ...(params.infiniteSessionConfig ? { infiniteSessions: params.infiniteSessionConfig } : {}),
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
     // Restrict the SDK's tool catalog to the bridged tool names returned

@@ -39,7 +39,7 @@ import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
-  normalizeOptionalString,
+  readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -362,7 +362,7 @@ function extractJsonStringFieldWindow(
     }
     try {
       const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-      return normalizeOptionalString(decoded);
+      return readNonBlankStringPreservingWhitespace(decoded);
     } catch {
       return undefined;
     }
