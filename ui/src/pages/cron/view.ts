@@ -26,8 +26,9 @@ import type {
 } from "../../lib/cron/index.ts";
 import type { CronFormState } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
-import { formatCronSchedule, formatNextRun } from "../../lib/presenter.ts";
+import { formatCronSchedule } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
+import { renderCronStats } from "./stats.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
 
@@ -42,6 +43,9 @@ type CronProps = {
   jobsLoadingMore: boolean;
   status: CronStatus | null;
   failingCount: number | null;
+  agentScoped: boolean;
+  scopedTotal: number | null;
+  scopedNextWakeAtMs: number | null;
   jobs: CronJob[];
   jobsTotal: number;
   jobsHasMore: boolean;
@@ -361,7 +365,7 @@ const ENABLED_TABS: Array<{ value: CronJobsEnabledFilter; labelKey: string }> = 
 function renderListView(props: CronProps) {
   return html`
     <section class="cron-page" data-panel-mode="overview">
-      ${renderStats(props)}
+      ${renderCronStats(props)}
       ${props.status && !props.status.enabled
         ? html`
             <div class="cron-error-banner" data-test-id="cron-scheduler-banner">
@@ -375,48 +379,6 @@ function renderListView(props: CronProps) {
         ? html`<div class="cron-activity card">${renderRunsSection(props)}</div>`
         : renderTasksPanel(props)}
     </section>
-  `;
-}
-
-function renderStats(props: CronProps) {
-  // failingCount is a dedicated unfiltered cron.list total; props.jobs only
-  // holds the current filtered page and must not feed a global stat.
-  const failing = props.failingCount;
-  const total = props.status?.jobs ?? Math.max(props.jobsTotal, props.jobs.length);
-  return html`
-    <div class="cron-stats">
-      <div class="cron-stat card">
-        <span class="cron-stat__label">${t("cron.stats.tasks")}</span>
-        <span class="cron-stat__value">${total}</span>
-      </div>
-      <button
-        type="button"
-        class="cron-stat cron-stat--action card"
-        data-test-id="cron-stat-failing"
-        title=${t("cron.list.activityTab")}
-        @click=${() => {
-          // Drill into run history pre-filtered to errors.
-          props.onListTabChange("activity");
-          void props.onRunsFiltersChange({ cronRunsStatuses: ["error"] });
-        }}
-      >
-        <span class="cron-stat__label">${t("cron.stats.failing")}</span>
-        <span
-          class="cron-stat__value ${typeof failing === "number" && failing > 0
-            ? "cron-stat__value--danger"
-            : ""}"
-        >
-          ${failing ?? t("common.na")}
-        </span>
-        <span class="cron-stat__go" aria-hidden="true">${icon("chevronRight")}</span>
-      </button>
-      <div class="cron-stat card">
-        <span class="cron-stat__label">${t("cron.stats.nextWake")}</span>
-        <span class="cron-stat__value cron-stat__value--time">
-          ${formatNextRun(props.status?.nextWakeAtMs ?? null)}
-        </span>
-      </div>
-    </div>
   `;
 }
 

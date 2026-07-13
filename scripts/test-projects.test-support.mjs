@@ -2060,6 +2060,27 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
 
+const CROSS_OS_RELEASE_CHECK_SOURCE_PATHS = [
+  "scripts/openclaw-cross-os-release-checks.ts",
+  "scripts/lib/cross-os-release-checks/agent.ts",
+  "scripts/lib/cross-os-release-checks/config.ts",
+  "scripts/lib/cross-os-release-checks/index.ts",
+  "scripts/lib/cross-os-release-checks/install.ts",
+  "scripts/lib/cross-os-release-checks/installed.ts",
+  "scripts/lib/cross-os-release-checks/lanes.ts",
+  "scripts/lib/cross-os-release-checks/logs.ts",
+  "scripts/lib/cross-os-release-checks/network-smokes.ts",
+  "scripts/lib/cross-os-release-checks/process.ts",
+  "scripts/lib/cross-os-release-checks/reporting.ts",
+  "scripts/lib/cross-os-release-checks/runtime.ts",
+  "scripts/lib/cross-os-release-checks/shared.ts",
+];
+for (const sourcePath of CROSS_OS_RELEASE_CHECK_SOURCE_PATHS) {
+  TOOLING_SOURCE_TEST_TARGETS.set(sourcePath, [
+    "test/scripts/openclaw-cross-os-release-checks.test.ts",
+  ]);
+}
+
 const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
@@ -2597,7 +2618,7 @@ function isExistingDirectoryTarget(arg, cwd) {
 }
 
 function isGlobTarget(arg) {
-  return /[*?[\]{}]/u.test(arg);
+  return /[*?[\]{}]|[@+!]\(/u.test(arg);
 }
 
 function isFileLikeTarget(arg) {
@@ -4533,8 +4554,28 @@ export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
   );
 }
 
-export function writeVitestIncludeFile(filePath, includePatterns) {
-  fs.writeFileSync(filePath, `${JSON.stringify(includePatterns, null, 2)}\n`);
+function expandVitestIncludePatterns(includePatterns, cwd) {
+  const candidateFiles = includePatterns.some(isGlobTarget)
+    ? listExplicitTestTargetFilesForCwd(cwd)
+    : [];
+  return uniqueOrdered(
+    includePatterns.flatMap((pattern) => {
+      if (!isGlobTarget(pattern)) {
+        return [pattern];
+      }
+      return candidateFiles.filter((file) => path.matchesGlob(file, pattern));
+    }),
+  );
+}
+
+export function writeVitestIncludeFile(filePath, includePatterns, options = {}) {
+  // Shared Vitest projects intersect this file with their ownership globs.
+  // One-shot runs emit concrete paths; watch runs retain globs for new files.
+  const expandedPatterns =
+    options.expandGlobs === false
+      ? includePatterns
+      : expandVitestIncludePatterns(includePatterns, options.cwd ?? process.cwd());
+  fs.writeFileSync(filePath, `${JSON.stringify(expandedPatterns, null, 2)}\n`);
 }
 
 function shellQuote(value) {

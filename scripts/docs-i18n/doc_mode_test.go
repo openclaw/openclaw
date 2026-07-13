@@ -35,15 +35,15 @@ type docLeafFallbackTranslator struct{}
 
 func (docLeafFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
 	replacer := strings.NewReplacer(
-		"Gateway refuses to start unless `local`.", "Gateway 只有在 `local` 时才会启动。",
+		"Gateway refuses to start unless", "Gateway 只有在",
 		"`gateway.auth.mode: \"trusted-proxy\"`", "`gateway.auth.mode: \"trusted-proxy\"`",
 	)
 	return replacer.Replace(text), nil
 }
 
 func (docLeafFallbackTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
-	if strings.Contains(text, "Gateway refuses to start unless `local`.") {
-		return strings.Replace(text, "Gateway refuses to start unless `local`.", "<Tip>Gateway only starts in local mode.</Tip>", 1), nil
+	if strings.Contains(text, "Gateway refuses to start unless") {
+		return strings.Replace(text, "Gateway refuses to start unless", "<Tip>Gateway only starts in local mode.</Tip>", 1), nil
 	}
 	return text, nil
 }
@@ -177,7 +177,7 @@ func (t *docPromptBudgetTranslator) Translate(_ context.Context, text, _, _ stri
 func (t *docPromptBudgetTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	t.rawInputs = append(t.rawInputs, text)
 	replacer := strings.NewReplacer(
-		"First chunk with `json5` and { braces }", "第一块，含 `json5` 和 { braces }",
+		"First chunk with", "第一块，含",
 		"Second chunk with | table | pipes |", "第二块，含 | table | pipes |",
 	)
 	return replacer.Replace(text), nil
@@ -279,6 +279,21 @@ func (t *fencedLiteralMaskingTranslator) TranslateRaw(_ context.Context, text, _
 }
 
 func (t *fencedLiteralMaskingTranslator) Close() {}
+
+type docSyntaxMaskingTranslator struct {
+	rawInputs []string
+}
+
+func (t *docSyntaxMaskingTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	t.rawInputs = append(t.rawInputs, text)
+	return strings.ReplaceAll(text, "Visible prose", "Видимый текст"), nil
+}
+
+func (t *docSyntaxMaskingTranslator) Close() {}
 
 type duplicateFirstFencedPlaceholderTranslator struct {
 	rawCalls int
@@ -511,7 +526,7 @@ func TestTranslateDocBodyChunkedFallsBackToMaskedTranslateForLeafValidationFailu
 	if strings.Contains(translated, "<Tip>") {
 		t.Fatalf("expected masked fallback to remove hallucinated component tags:\n%s", translated)
 	}
-	if !strings.Contains(translated, "Gateway 只有在 `local` 时才会启动。") {
+	if !strings.Contains(translated, "Gateway 只有在 `local`.") {
 		t.Fatalf("expected fallback translation to be applied:\n%s", translated)
 	}
 }
@@ -1989,7 +2004,7 @@ func TestTranslateDocBodyChunkedPreSplitsOversizedPromptBudget(t *testing.T) {
 		t.Fatalf("translateDocBodyChunked returned error: %v", err)
 	}
 	for _, input := range translator.rawInputs {
-		if strings.Contains(input, "First chunk with `json5` and { braces }") && strings.Contains(input, "Second chunk with | table | pipes |") {
+		if strings.Contains(input, "First chunk with") && strings.Contains(input, "Second chunk with | table | pipes |") {
 			t.Fatalf("expected prompt budget guard to split before raw translation, saw combined input:\n%s", input)
 		}
 	}
@@ -2087,6 +2102,54 @@ func TestTranslateDocBodyChunkedSplitsOversizedFenceBeforeTrailingProse(t *testi
 	}
 	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Trailing paragraph after the fence.") {
 		t.Fatalf("expected fence content and trailing prose to survive split:\n%s", translated)
+	}
+}
+
+func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
+	body := strings.Join([]string{
+		"- Visible prose uses `openclaw config`.",
+		"  1. Visible prose keeps ``nested `ticks` `` exact.",
+		"> - Visible prose inside a quote.",
+		"",
+		"```md",
+		"- Visible prose and `fenced example` stay exposed.",
+		"```",
+		"",
+		"> ```md",
+		"> - Visible prose and `quoted fenced example` stay exposed.",
+		"> ```",
+		"",
+	}, "\n")
+
+	translator := &docSyntaxMaskingTranslator{}
+	translated, err := translateDocBodyChunked(context.Background(), translator, "gateway/configuration.md", body, "en", "ru")
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if len(translator.rawInputs) == 0 {
+		t.Fatal("expected raw translator inputs")
+	}
+	for _, input := range translator.rawInputs {
+		if strings.Contains(input, "`openclaw config`") || strings.Contains(input, "``nested `ticks` ``") {
+			t.Fatalf("expected inline code outside fences to be masked:\n%s", input)
+		}
+		if strings.Contains(input, "- Visible prose uses") || strings.Contains(input, "1. Visible prose keeps") || strings.Contains(input, "> - Visible prose inside a quote.") {
+			t.Fatalf("expected list markers outside fences to be masked:\n%s", input)
+		}
+	}
+	for _, exact := range []string{
+		"- Видимый текст uses `openclaw config`.",
+		"  1. Видимый текст keeps ``nested `ticks` `` exact.",
+		"> - Видимый текст inside a quote.",
+		"```md\n- Видимый текст and `fenced example` stay exposed.\n```",
+		"> ```md\n> - Видимый текст and `quoted fenced example` stay exposed.\n> ```",
+	} {
+		if !strings.Contains(translated, exact) {
+			t.Fatalf("expected restored syntax %q:\n%s", exact, translated)
+		}
+	}
+	if err := validateDocBodyFencedLiterals(body, translated); err != nil {
+		t.Fatalf("expected final structure to validate: %v", err)
 	}
 }
 
@@ -2223,8 +2286,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 21") {
-		t.Fatalf("expected prompt version 21 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 22") {
+		t.Fatalf("expected prompt version 22 in output metadata:\n%s", text)
 	}
 }
 
