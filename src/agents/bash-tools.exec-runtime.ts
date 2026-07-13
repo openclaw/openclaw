@@ -112,10 +112,7 @@ const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
 /** Failure categories used to explain exec process exits. */
-export type ExecProcessFailureKind = Exclude<
-  ExecToolFailureKind,
-  "approval-denied" | "node-run-failed"
->;
+type ExecProcessFailureKind = Exclude<ExecToolFailureKind, "approval-denied" | "node-run-failed">;
 
 type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
 

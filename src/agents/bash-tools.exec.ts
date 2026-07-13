@@ -213,7 +213,6 @@ function getResolvedExecEnvPreparedState(
 function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
   return Boolean(getResolvedExecEnvPreparedState(params));
 }
-
 function markDeferredResolveExecEnvPrepared<T extends ExecToolArgs>(
   params: T,
   state: DeferredResolveExecEnvPreparedState,
@@ -235,7 +234,6 @@ function markResolvedExecWorkdirPrepared<T extends ExecToolArgs>(
   resolvedExecWorkdirPreparedStates.set(params, state);
   return params;
 }
-
 function getResolvedExecWorkdirPreparedState(
   params: ExecToolArgs,
 ): ResolvedExecWorkdirPreparedState | undefined {

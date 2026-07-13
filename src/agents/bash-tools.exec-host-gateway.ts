@@ -382,7 +382,6 @@ function formatDiagnosticsExportFailure(params: {
   }
   return lines.join("\n");
 }
-
 function buildGatewayExecApprovalFollowupSummary(params: {
   approvalId: string;
   sessionId: string;
@@ -426,7 +425,6 @@ function shouldAwaitGatewayApprovalInline(params: {
   // send a follow-up chat message to recover the turn (issue #93918).
   return isNativeApprovalChannel(normalizeMessageChannel(params.turnSourceChannel));
 }
-
 function buildGatewayExecApprovalDeniedToolResult(params: {
   approvalId: string;
   deniedReason: string;
@@ -449,7 +447,6 @@ function buildGatewayExecApprovalDeniedToolResult(params: {
     },
   };
 }
-
 async function resolveGatewayExecApprovalFollowupText(params: {
   approvalFollowup?: ExecApprovalFollowupFactory;
   approvalId: string;

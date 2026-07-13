@@ -14,9 +14,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import { stableStringify } from "./stable-stringify.js";
-
+import { hashStableExecFailure } from "./tool-loop-detection-exec-fingerprint.js";
 const log = createSubsystemLogger("agents/loop-detection");
-
 type LoopDetectorKind =
   | "generic_repeat"
   | "unknown_tool_repeat"
@@ -160,89 +159,20 @@ function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function normalizeExitSignal(value: unknown): string | null {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return String(value);
-  }
-  return null;
-}
-
-// #93917 follow-up: broad catch-all exec failures (node-run-failed,
-// runtime-error, approval-denied) carry a null exitCode and null exitSignal, so
-// fingerprinting them by (status, failureKind) alone would collapse genuinely
-// different failures into one no-progress streak. Derive a summary that keeps
-// the stable failure text — including numeric status/error codes, which are
-// semantic, not noise — and strips only per-instance identifiers (gateway ids,
-// uuids, hex handles). Distinct failures stay distinct while repeats of the same
-// failure still accumulate. Only the first line is kept because trailing detail
-// is the noisiest part.
-function normalizeFailureReason(value: unknown): string {
-  const text = nonEmptyStringField(value);
-  if (!text) {
-    return "";
-  }
-  const summary = text.split("\n", 1)[0] ?? "";
-  return summary
-    .replace(/id=\S+/gi, "id=X") // gateway approval ids
-    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, "U") // uuids
-    .replace(/\b0x[0-9a-f]+\b/gi, "H") // hex addresses
-    .replace(/\b(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b/gi, "H") // hex handles (letters present; bare numeric codes kept)
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 200);
-}
-
-// #93917: Fingerprint an exec failure by stable discriminators only, excluding
-// output text. Error output often carries volatile noise (timestamps, PIDs,
-// connection-refused-at-${time}) that defeats no-progress detection. Keeping
-// (exitCode, exitSignal, failureKind) distinguishes genuinely different failure
-// modes so they do not merge into one no-progress streak, while `status` keeps a
-// nonzero "completed" exit distinct from a "failed" outcome with the same code.
-function hashStableExecFailure(status: string, details: Record<string, unknown>): string {
-  const exitCode = typeof details.exitCode === "number" ? details.exitCode : null;
-  const exitSignal = normalizeExitSignal(details.exitSignal);
-  // A failed outcome with no exit code and no signal (the broad catch-all kinds)
-  // has no structured exit identity, so fall back to the producer's stable
-  // failureReason (the actual error, not the volatile leading stdout), or the
-  // aggregated output when a producer does not set one. Completed nonzero exits
-  // keep the pure exit-fact fingerprint and never reach this branch.
-  const hasStructuredExitIdentity = exitCode !== null || exitSignal !== null;
-  return digestStable({
-    status,
-    exitCode,
-    timedOut: details.timedOut === true,
-    exitSignal,
-    failureKind: stringField(details.failureKind),
-    ...(status === "failed" && !hasStructuredExitIdentity
-      ? { reason: normalizeFailureReason(details.failureReason ?? details.aggregated) }
-      : {}),
-  });
-}
-
 function hashExecToolOutcome(details: Record<string, unknown>, text: string): string | undefined {
   const status = stringField(details.status);
   if (!status) {
     return undefined;
   }
-
   if (status === "running") {
     return digestStable({
       status,
       tail: stringField(details.tail) ?? "",
     });
   }
-
-  if (status === "completed") {
+  if (status === "completed" || status === "failed") {
     const exitCode = typeof details.exitCode === "number" ? details.exitCode : null;
-    // #93917: Foreground exec reports ordinary nonzero exits (grep exit 1,
-    // SSH/Docker retries) as "completed", but they are real failures whose stderr
-    // often varies per call. Fingerprint those by stable failure facts, not the
-    // volatile output, so repeated identical failures accumulate a no-progress
-    // streak. Exit 0 keeps output because changing successful output is progress.
-    if (exitCode !== null && exitCode !== 0) {
+    if (status === "failed" || (exitCode !== null && exitCode !== 0)) {
       return hashStableExecFailure(status, details);
     }
     return digestStable({
@@ -252,11 +182,6 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
       output: nonEmptyStringField(details.aggregated) ?? text,
     });
   }
-
-  if (status === "failed") {
-    return hashStableExecFailure(status, details);
-  }
-
   if (status === "approval-pending" || status === "approval-unavailable") {
     return digestStable({
       status,

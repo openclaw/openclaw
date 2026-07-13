@@ -36,8 +36,8 @@ import {
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
+import { formatNodeRunPayloadToolResult } from "./bash-tools.exec-host-node-result.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -232,60 +232,12 @@ export function formatNodeRunToolResult(params: {
       : undefined;
   const payloadObj =
     payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
-  const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
-  const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
-  const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
-  const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
-  const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
-  const exitSignal: NodeJS.Signals | number | null =
-    typeof payloadObj.exitSignal === "string"
-      ? (payloadObj.exitSignal as NodeJS.Signals)
-      : typeof payloadObj.exitSignal === "number"
-        ? payloadObj.exitSignal
-        : null;
-  const timedOut = payloadObj.timedOut === true;
-  const aggregated = [stdout, stderr, errorText].filter(Boolean).join("\n");
-  const durationMs = Date.now() - params.startedAt;
-  if (!success) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: renderExecUpdateText({ tailText: aggregated, warnings: params.warnings ?? [] }),
-        },
-      ],
-      details: {
-        status: "failed",
-        exitCode,
-        exitSignal,
-        durationMs,
-        aggregated,
-        timedOut,
-        failureKind: timedOut ? "overall-timeout" : "node-run-failed",
-        // Hash the actual node error, not the volatile leading stdout.
-        failureReason: errorText || stderr || undefined,
-        cwd: params.cwd,
-      },
-    };
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text: renderExecUpdateText({
-          tailText: aggregated,
-          warnings: params.warnings ?? [],
-        }),
-      },
-    ],
-    details: {
-      status: "completed",
-      exitCode,
-      durationMs,
-      aggregated,
-      cwd: params.cwd,
-    } satisfies ExecToolDetails,
-  };
+  return formatNodeRunPayloadToolResult({
+    payloadObj,
+    startedAt: params.startedAt,
+    cwd: params.cwd,
+    warnings: params.warnings,
+  });
 }
 
 /** Resolves the node id, platform, argv, env, and timeout for a node-host exec. */
