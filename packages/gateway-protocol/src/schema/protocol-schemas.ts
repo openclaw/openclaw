@@ -459,6 +459,7 @@ import {
   SessionDiscussionStateSchema,
 } from "./session-discussion.js";
 import { SessionPlacementProtocolSchemas } from "./session-placement.js";
+import * as SessionSchemas from "./session-presentation.js";
 import {
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
@@ -717,7 +718,6 @@ export const ProtocolSchemas = {
   FsDirEntry: FsDirEntrySchema,
   FsListDirParams: FsListDirParamsSchema,
   FsListDirResult: FsListDirResultSchema,
-
   // Node pairing, invocation, presence, and pending-queue payloads.
   NodePairListParams: NodePairListParamsSchema,
   NodePairApproveParams: NodePairApproveParamsSchema,
@@ -740,7 +740,6 @@ export const ProtocolSchemas = {
   NodePendingDrainResult: NodePendingDrainResultSchema,
   NodePendingEnqueueParams: NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResult: NodePendingEnqueueResultSchema,
-
   // Push and secret-resolution payloads used by mobile/control integrations.
   PushTestParams: PushTestParamsSchema,
   PushTestResult: PushTestResultSchema,
@@ -757,9 +756,11 @@ export const ProtocolSchemas = {
   SecretsResolveParams: SecretsResolveParamsSchema,
   SecretsResolveAssignment: SecretsResolveAssignmentSchema,
   SecretsResolveResult: SecretsResolveResultSchema,
-
   // Session lifecycle, message routing, compaction, and usage accounting.
   SessionsListParams: SessionsListParamsSchema,
+  SessionPresentationFamily: SessionSchemas.SessionPresentationFamilySchema,
+  SessionPresentationTitleSource: SessionSchemas.SessionPresentationTitleSourceSchema,
+  SessionPresentation: SessionSchemas.SessionPresentationSchema,
   SessionCatalogCapabilities: SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptor: SessionCatalogDescriptorSchema,
   SessionCatalogSession: SessionCatalogSessionSchema,
@@ -840,7 +841,6 @@ export const ProtocolSchemas = {
   SessionsGroupsMutationResult: SessionsGroupsMutationResultSchema,
   SessionsCompactParams: SessionsCompactParamsSchema,
   SessionsUsageParams: SessionsUsageParamsSchema,
-
   // Audit/task ledgers and config/wizard setup payloads.
   AuditActivityAgentRunV1: AuditActivityAgentRunV1Schema,
   AuditActivityToolActionV1: AuditActivityToolActionV1Schema,
