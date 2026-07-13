@@ -37,7 +37,7 @@ export type QueueSettings = {
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
-export type QueueInsertPosition = "tail" | "front";
+type QueueInsertPosition = "tail" | "front";
 
 export type EnqueueFollowupRunOptions = {
   position?: QueueInsertPosition;
@@ -123,6 +123,8 @@ export type FollowupRun = {
     groupId?: string;
     groupChannel?: string;
     groupSpace?: string;
+    /** Parent session provenance used to validate inherited group policy. */
+    spawnedBy?: string;
     senderId?: string;
     channelContext?: PluginHookChannelContext;
     senderName?: string;
@@ -139,6 +141,8 @@ export type FollowupRun = {
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
+    /** Prevents the queued run from selecting configured fallback models. */
+    modelSelectionLocked?: boolean;
     hasSessionModelOverride?: boolean;
     modelOverrideSource?: "auto" | "user";
     hasAutoFallbackProvenance?: boolean;
@@ -153,7 +157,7 @@ export type FollowupRun = {
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;
-    execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+    execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "nodeCwd">;
     bashElevated?: {
       enabled: boolean;
       allowed: boolean;

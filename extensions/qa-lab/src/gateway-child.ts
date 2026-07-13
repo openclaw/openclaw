@@ -63,6 +63,7 @@ import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import type { RuntimeId } from "./runtime-parity.js";
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
@@ -70,6 +71,7 @@ const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
+const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
@@ -91,6 +93,7 @@ type QaGatewayChildDirectCommand = {
   argsPrefix?: string[];
   argsSuffix?: string[];
   cwd?: string;
+  tempParentDir?: string;
   usePackagedPlugins?: boolean;
   processBoundary?: undefined;
 };
@@ -397,6 +400,31 @@ export function buildQaRuntimeEnv(params: {
   return scrubQaGatewayChildSecretEnv(normalizedEnv);
 }
 
+export function buildQaForcedRuntimeEnvPatch(params: {
+  forcedRuntime?: RuntimeId;
+  providerMode: QaProviderMode;
+  providerBaseUrl?: string;
+}): NodeJS.ProcessEnv | undefined {
+  if (!params.forcedRuntime) {
+    return undefined;
+  }
+  const patch: NodeJS.ProcessEnv = {
+    OPENCLAW_BUILD_PRIVATE_QA: "1",
+    OPENCLAW_QA_FORCE_RUNTIME: params.forcedRuntime,
+  };
+  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+    return patch;
+  }
+  const providerBaseUrl = params.providerBaseUrl?.trim().replace(/\/+$/u, "");
+  if (!providerBaseUrl) {
+    throw new Error("forced Codex mock QA requires the managed mock provider URL");
+  }
+  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${providerBaseUrl} --listen stdio://`;
+  patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  return patch;
+}
+
 function isRetryableGatewayCallError(details: string): boolean {
   return (
     details.includes("handshake timeout") ||
@@ -457,6 +485,13 @@ function monitorQaGatewayChildFailure(child: ChildProcess, output: { push(chunk:
     }
   });
   return () => childFailure;
+}
+
+const QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS = 8_192;
+
+function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, logs: string) {
+  const logTail = redactQaGatewayDebugText(logs).slice(-QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS);
+  return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
 }
 
 async function fetchLocalGatewayHealth(params: {
@@ -549,6 +584,7 @@ export const testing = {
   createQaGatewayChildLogCollector,
   monitorQaGatewayChildFailure,
   throwQaGatewayChildFailure,
+  formatQaGatewayProcessBoundaryStartupFailure,
   createQaBundledPluginsDir,
   signalQaGatewayChildProcessTree,
   stopQaGatewayChildProcessTree,
@@ -859,6 +895,7 @@ export async function startQaGatewayChild(params: {
   alternateModel?: string;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
+  forcedRuntime?: RuntimeId;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
@@ -868,9 +905,10 @@ export async function startQaGatewayChild(params: {
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
 }) {
-  const tempRoot = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-suite-"),
-  );
+  // Verified launchers may require every runtime artifact to stay inside their
+  // prepared root; carry that root forward instead of rediscovering host temp policy.
+  const tempParentDir = params.command?.tempParentDir ?? resolvePreferredOpenClawTmpDir();
+  const tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
   const runtimeCwd = tempRoot;
   const distEntryPath = path.join(params.repoRoot, "dist", "index.js");
   const gatewayCommand =
@@ -946,6 +984,7 @@ export async function startQaGatewayChild(params: {
       liveProviderConfigs,
       fastMode: params.fastMode,
       thinkingDefault: params.thinkingDefault,
+      forcedRuntime: params.forcedRuntime,
       controlUiEnabled: params.controlUiEnabled,
     });
   const buildStagedGatewayConfig = async (gatewayPort: number) => {
@@ -1098,13 +1137,21 @@ export async function startQaGatewayChild(params: {
             cleanupErrors.push(cleanupError);
           }
         }
+        const boundaryFailure = preparedBoundary
+          ? formatQaGatewayProcessBoundaryStartupFailure(error, logs())
+          : null;
         if (cleanupErrors.length > 0) {
           const cleanupFailure = new AggregateError(
             [error, ...cleanupErrors],
-            "qa gateway failed before verified process cleanup completed",
+            boundaryFailure
+              ? `qa gateway failed before verified process cleanup completed: ${boundaryFailure}`
+              : "qa gateway failed before verified process cleanup completed",
             { cause: error },
           );
           throw cleanupFailure;
+        }
+        if (boundaryFailure) {
+          throw new Error(boundaryFailure, { cause: error });
         }
         throw error;
       }
@@ -1150,7 +1197,14 @@ export async function startQaGatewayChild(params: {
           stagedBundledPluginsRoot,
           compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
           providerMode,
-          runtimeEnvPatch: params.runtimeEnvPatch,
+          runtimeEnvPatch: {
+            ...params.runtimeEnvPatch,
+            ...buildQaForcedRuntimeEnvPatch({
+              forcedRuntime: params.forcedRuntime,
+              providerMode,
+              providerBaseUrl: params.providerBaseUrl,
+            }),
+          },
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
           claudeCliAuthMode: params.claudeCliAuthMode,
         });
@@ -1549,4 +1603,3 @@ export async function startQaGatewayChild(params: {
     throw new Error(message, { cause: error });
   }
 }
-export { testing as __testing };

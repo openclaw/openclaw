@@ -1,6 +1,6 @@
 // Orchestrates reply agent execution, payload building, and delivery callbacks.
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasSessionAutoModelFallbackProvenance,
@@ -12,6 +12,8 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
 import {
+  hasCompletedSourceReplyDeliveryEvidence,
+  hasCompletedTerminalDeliveryEvidence,
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
@@ -24,7 +26,7 @@ import {
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -33,9 +35,13 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  formatSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+} from "../../config/sessions/sqlite-marker.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
-import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
+import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -105,7 +111,10 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  buildPendingFinalDeliveryText,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import {
@@ -131,6 +140,7 @@ import {
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
+import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
@@ -169,6 +179,18 @@ function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPaylo
   return payloads.map((payload) =>
     setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
   );
+}
+
+function resolvePendingFinalDeliveryRetryText(params: {
+  isHeartbeat: boolean;
+  payload: ReplyPayload;
+}): string {
+  const pendingText = buildPendingFinalDeliveryText([params.payload]);
+  if (!params.isHeartbeat) {
+    return pendingText;
+  }
+  const stripped = stripHeartbeatToken(pendingText, { mode: "message" });
+  return stripped.shouldSkip ? "" : stripped.text || pendingText;
 }
 
 function buildSilentFallbackFailurePayload(params: {
@@ -625,7 +647,10 @@ function derivePromptSegments(prompt: string | undefined): TracePromptSegmentVie
           end += 1;
         }
         if (end < lines.length) {
-          addChars(tagMatch[1], lines.slice(index, end + 1).join("\n").length);
+          addChars(
+            expectDefined(tagMatch[1], "tag match capture group 1"),
+            lines.slice(index, end + 1).join("\n").length,
+          );
           index = end + 1;
           while ((lines[index] ?? "") === "") {
             index += 1;
@@ -744,63 +769,20 @@ async function accumulateSessionUsageFromTranscript(params: {
     return undefined;
   }
   try {
-    const candidates = resolveSessionTranscriptCandidates(
+    const usage = await readLatestSessionUsageFromTranscriptAsync({
       sessionId,
-      params.storePath,
-      params.sessionFile,
-    );
-    let transcriptText: string | undefined;
-    for (const candidate of candidates) {
-      try {
-        transcriptText = await fs.readFile(candidate, "utf-8");
-        break;
-      } catch {
-        continue;
-      }
-    }
-    if (!transcriptText) {
+      storePath: params.storePath,
+      sessionFile: params.sessionFile,
+    });
+    if (!usage) {
       return undefined;
     }
-
-    let input = 0;
-    let output = 0;
-    let cacheRead = 0;
-    let cacheWrite = 0;
-    let sawUsage = false;
-    for (const line of transcriptText.split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
-      }
-      let parsed: { message?: { usage?: unknown } } | undefined;
-      try {
-        parsed = JSON.parse(line) as { message?: { usage?: unknown } };
-      } catch {
-        continue;
-      }
-      const message = parsed?.message;
-      if (!message) {
-        continue;
-      }
-      const usage = normalizeUsage(message?.usage as Parameters<typeof normalizeUsage>[0]);
-      if (!hasNonzeroUsage(usage)) {
-        continue;
-      }
-      sawUsage = true;
-      input += usage.input ?? 0;
-      output += usage.output ?? 0;
-      cacheRead += usage.cacheRead ?? 0;
-      cacheWrite += usage.cacheWrite ?? 0;
-    }
-    if (!sawUsage) {
-      return undefined;
-    }
-    const total = input + output + cacheRead + cacheWrite;
     return {
-      input: input || undefined,
-      output: output || undefined,
-      cacheRead: cacheRead || undefined,
-      cacheWrite: cacheWrite || undefined,
-      total: total || undefined,
+      input: usage.inputTokens,
+      output: usage.outputTokens,
+      cacheRead: usage.cacheRead,
+      cacheWrite: usage.cacheWrite,
+      total: usage.totalTokens,
     };
   } catch {
     return undefined;
@@ -1040,15 +1022,6 @@ function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
     .trim();
 }
 
-function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
-  const text = payloads
-    .filter((payload) => payload.isReasoning !== true)
-    .map((payload) => payload.text)
-    .filter((textLocal): textLocal is string => Boolean(textLocal))
-    .join("\n\n");
-  return sanitizePendingFinalDeliveryText(text);
-}
-
 function normalizeAssistantFinalDeliveryText(text: string): string {
   const parsed = normalizeReplyPayloadDirectives({
     payload: { text },
@@ -1139,6 +1112,28 @@ function refreshSessionEntryFromStore(params: {
   } catch {
     return fallbackEntry;
   }
+}
+
+function resolveAdmittedRunSessionFile(params: {
+  agentId: string;
+  sessionId: string;
+  sessionFile?: string;
+  storePath?: string;
+}): string | undefined {
+  if (
+    params.sessionFile &&
+    sqliteSessionFileMarkerMatchesSession(params.sessionFile, params.sessionId)
+  ) {
+    return params.sessionFile;
+  }
+  if (params.storePath) {
+    return formatSqliteSessionFileMarker({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+    });
+  }
+  return params.sessionFile;
 }
 
 export async function runReplyAgent(params: {
@@ -1274,9 +1269,17 @@ export async function runReplyAgent(params: {
     }
   };
 
+  let shouldQueueAfterSteerRejection = false;
   if (effectiveShouldSteer && isActive) {
+    // Steer against the operation that owns THIS session's run slot. A native
+    // command continuation whose slot adoption was skipped (#104844) still
+    // carries a source-keyed reservation; steering by its stale sessionId
+    // would miss the live target run.
+    const registeredReplyOperation = sessionKey ? replyRunRegistry.get(sessionKey) : undefined;
     const activeReplyOperation =
-      providedReplyOperation ?? (sessionKey ? replyRunRegistry.get(sessionKey) : undefined);
+      providedReplyOperation?.key === sessionKey
+        ? providedReplyOperation
+        : (registeredReplyOperation ?? providedReplyOperation);
     const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
@@ -1314,6 +1317,9 @@ export async function runReplyAgent(params: {
       typing.cleanup();
       return undefined;
     }
+    // The active runtime still owns the turn but cannot prove transcript adoption.
+    // Keep the inbound message queued so ingress can finalize after a later run.
+    shouldQueueAfterSteerRejection = steerOutcome.reason === "transcript_commit_wait_unsupported";
     const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
     logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
   }
@@ -1321,7 +1327,7 @@ export async function runReplyAgent(params: {
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat,
-    shouldFollowup: effectiveShouldFollowup,
+    shouldFollowup: effectiveShouldFollowup || shouldQueueAfterSteerRejection,
     queueMode: activeRunQueueMode,
     resetTriggered: effectiveResetTriggered,
   });
@@ -1504,8 +1510,14 @@ export async function runReplyAgent(params: {
       });
       if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
         activeSessionEntry = admittedSessionEntry;
-        if (admittedSessionEntry.sessionFile) {
-          followupRun.run.sessionFile = admittedSessionEntry.sessionFile;
+        const admittedSessionFile = resolveAdmittedRunSessionFile({
+          agentId: followupRun.run.agentId,
+          sessionId: replyOperation.sessionId,
+          sessionFile: admittedSessionEntry.sessionFile,
+          storePath,
+        });
+        if (admittedSessionFile) {
+          followupRun.run.sessionFile = admittedSessionFile;
         }
       }
     }
@@ -1516,89 +1528,38 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  const restartRecoveryDeliveryRunId = crypto.randomUUID();
-  let trackedRestartRecoveryDeliveryContext = false;
-  const persistRestartRecoveryDeliveryContext = async (): Promise<void> => {
-    if (!sessionKey || !storePath) {
-      return;
-    }
-    const entry = activeSessionStore?.[sessionKey] ?? activeSessionEntry;
-    const deliveryContext = resolveReplyRunDeliveryContext({
-      cfg,
-      sessionCtx,
-      sessionEntry: entry,
-      sessionKey,
-      runtimePolicySessionKey,
-      opts,
-    });
-    if (!deliveryContext) {
-      return;
-    }
-    const updatedAt = Date.now();
-    const patch: Partial<SessionEntry> = {
-      restartRecoveryDeliveryContext: deliveryContext,
-      restartRecoveryDeliveryRunId,
-      updatedAt,
-    };
-    const persisted = await updateSessionEntry(
-      {
-        storePath,
-        sessionKey,
-      },
-      async (current) =>
-        current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true
-          ? patch
-          : null,
-    );
-    if (persisted) {
-      activeSessionEntry = persisted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = persisted;
+  const {
+    clear: clearRestartRecoveryDeliveryClaim,
+    isArmed: isRestartRecoveryArmed,
+    persist: persistRestartRecoveryDeliveryClaim,
+  } = createReplyRestartRecoveryClaimController({
+    admittedRunId: sessionCtx.MessageSid,
+    getEntry: () =>
+      sessionKey ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry) : activeSessionEntry,
+    isRestartAbort: () =>
+      replyOperation.result?.kind === "aborted" &&
+      replyOperation.result.code === "aborted_for_restart",
+    resolveDeliveryContext: (entry) =>
+      sessionKey
+        ? resolveReplyRunDeliveryContext({
+            cfg,
+            sessionCtx,
+            sessionEntry: entry,
+            sessionKey,
+            runtimePolicySessionKey,
+            opts,
+          })
+        : undefined,
+    sessionId: replyOperation.sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+    setEntry: (entry) => {
+      activeSessionEntry = entry;
+      if (activeSessionStore && sessionKey) {
+        activeSessionStore[sessionKey] = entry;
       }
-      trackedRestartRecoveryDeliveryContext =
-        persisted.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId;
-    }
-  };
-  const clearRestartRecoveryDeliveryContext = async (): Promise<void> => {
-    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
-      return;
-    }
-    const patch: Partial<SessionEntry> = {
-      restartRecoveryDeliveryContext: undefined,
-      restartRecoveryDeliveryRunId: undefined,
-      updatedAt: Date.now(),
-    };
-    const persisted = await updateSessionEntry(
-      {
-        storePath,
-        sessionKey,
-      },
-      async (current) =>
-        current.sessionId === replyOperation.sessionId &&
-        current.abortedLastRun !== true &&
-        current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
-          ? patch
-          : null,
-    );
-    if (persisted) {
-      activeSessionEntry = persisted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = persisted;
-      }
-    }
-  };
-  const isRestartRecoveryArmed = (): boolean => {
-    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
-      return false;
-    }
-    const persisted = loadSessionEntry({
-      sessionKey,
-      storePath,
-      clone: false,
-      hydrateSkillPromptRefs: false,
-    });
-    return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
-  };
+    },
+    ...(storePath ? { storePath } : {}),
+  });
   type SessionResetOptions = {
     failureLabel: string;
     buildLogMessage: (nextSessionId: string) => string;
@@ -1739,7 +1700,7 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
-    await persistRestartRecoveryDeliveryContext();
+    await persistRestartRecoveryDeliveryClaim();
     // Adoption marks run start and must never be spool-replayed (would re-run tools).
     // Suppressed delivery has no recovery state to persist; crashed suppressed runs die
     // silently. When a delivery context is resolvable, this still runs after its persist.
@@ -1999,23 +1960,18 @@ export async function runReplyAgent(params: {
     });
     const committedMessagingToolSourceReplyDelivery =
       hasCommittedSourceReplyDeliveryEvidence(runResult);
-    // #85714: the stranded-retry diagnostic gates on committed source-reply
-    // evidence. `committedMessagingToolSourceReplyDelivery` is that exact signal
-    // after the delivery-evidence refactor extracted it into a shared helper.
-    const committedSourceReplyDelivery = committedMessagingToolSourceReplyDelivery;
+    const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
+    const visibleOutboundDelivery = hasVisibleOutboundDeliveryEvidence(runResult);
     const successfulSideEffectDelivery =
       successfulSourceReplyDelivery ||
       committedMessagingToolSourceReplyDelivery ||
-      hasVisibleOutboundDeliveryEvidence(runResult) ||
+      visibleOutboundDelivery ||
       runResult.didSendDeterministicApprovalPrompt === true;
     const successfulTerminalDelivery =
       hasSuccessfulTerminalSourceReplyDelivery({
         blockReplyPipeline,
         directlySentBlockPayloads,
-      }) ||
-      committedMessagingToolSourceReplyDelivery ||
-      hasVisibleOutboundDeliveryEvidence(runResult) ||
-      runResult.didSendDeterministicApprovalPrompt === true;
+      }) || hasCompletedTerminalDeliveryEvidence(runResult);
     // Compaction notices are progress, not a terminal reply. Dispatcher-backed
     // delivery settles after this run returns, so it cannot prove turn completion here.
     const shouldDeliverTerminalFailure = Boolean(
@@ -2048,7 +2004,7 @@ export async function runReplyAgent(params: {
       if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
         return undefined;
       }
-      if (sessionCtx.InboundEventKind === "room_event" || committedSourceReplyDelivery) {
+      if (sessionCtx.InboundEventKind === "room_event" || completedSourceReplyDelivery) {
         return undefined;
       }
       const sourceReplyPolicy = resolveSourceReplyPolicy({
@@ -2067,7 +2023,7 @@ export async function runReplyAgent(params: {
       }
       return buildStrandedReplyDeliveryFailurePayload();
     };
-    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && committedSourceReplyDelivery) {
+    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyDelivery) {
       await opts.onObservedReplyDelivery?.();
     }
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
@@ -2655,7 +2611,7 @@ export async function runReplyAgent(params: {
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery: committedSourceReplyDelivery,
+          successfulSourceReplyDelivery: completedSourceReplyDelivery,
           finalText: assistantFinalText,
         });
       const retryMissingSourceDelivery =
@@ -2664,7 +2620,7 @@ export async function runReplyAgent(params: {
         !isRoomEvent &&
         sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
         !sourceReplyPolicy.sendPolicyDenied &&
-        !committedSourceReplyDelivery;
+        !completedSourceReplyDelivery;
       if (isStrandedReply) {
         warnPrivateMessageToolFinal({
           sessionKey,
@@ -2716,6 +2672,16 @@ export async function runReplyAgent(params: {
           })()
         : pendingText;
       if (resolvedPendingText) {
+        const pendingFinalDeliveryIntentId = crypto.randomUUID();
+        for (const payload of finalPayloads) {
+          setReplyPayloadMetadata(payload, {
+            pendingFinalDeliveryIntentId,
+            pendingFinalDeliveryRetryText: resolvePendingFinalDeliveryRetryText({
+              isHeartbeat,
+              payload,
+            }),
+          });
+        }
         const pendingFinalDeliveryContext = resolveReplyRunDeliveryContext({
           cfg,
           sessionCtx,
@@ -2729,6 +2695,7 @@ export async function runReplyAgent(params: {
           () => ({
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
+            pendingFinalDeliveryIntentId,
             pendingFinalDeliveryContext,
             pendingFinalDeliveryCreatedAt: Date.now(),
             updatedAt: Date.now(),
@@ -2740,11 +2707,9 @@ export async function runReplyAgent(params: {
         );
       }
     }
-
     const result = returnWithQueuedFollowupDrain(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
     );
-
     return result;
   } catch (error) {
     // Drain/restart aborts stay silent and defer to post-restart main-session
@@ -2805,7 +2770,7 @@ export async function runReplyAgent(params: {
     throw error;
   } finally {
     try {
-      await clearRestartRecoveryDeliveryContext();
+      await clearRestartRecoveryDeliveryClaim();
     } catch (error) {
       logVerbose(
         `failed to clear restart recovery delivery context for ${sessionKey ?? "unknown"}: ${String(

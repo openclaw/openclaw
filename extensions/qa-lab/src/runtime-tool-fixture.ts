@@ -1,7 +1,13 @@
 // Qa Lab plugin module implements runtime tool fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  qaMockRequestCursorUrl,
+  qaMockRequestsAfterUrl,
+  readQaMockRequestCursor,
+} from "./providers/shared/debug-request-cursor.js";
 import {
   type QaRuntimeToolCoverageMetadata,
   readRuntimeToolCoverageMetadata,
@@ -415,14 +421,17 @@ async function readSessionTranscriptBytes(
   if (!sessionId) {
     throw new Error(`session transcript entry not found for ${sessionKey}`);
   }
-  const sessionsDir = path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions");
-  const sessionFile = readNonEmptyString(entry?.sessionFile);
-  const transcriptPath = sessionFile
-    ? path.isAbsolute(sessionFile)
-      ? sessionFile
-      : path.join(sessionsDir, sessionFile)
-    : path.join(sessionsDir, `${sessionId}.jsonl`);
-  const transcriptBytes = await fs.readFile(transcriptPath, "utf8");
+  const transcriptBytes = loadTranscriptEventsSync({
+    agentId: "qa",
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+    },
+    sessionId,
+    sessionKey,
+  })
+    .map((event) => JSON.stringify(event))
+    .join("\n");
   if (!transcriptBytes.trim()) {
     throw new Error(`session transcript is empty for ${sessionKey}`);
   }
@@ -460,31 +469,27 @@ function requestLinksPlannedToolOutput(
 
 function findPlannedRequest(params: {
   requests: readonly QaRuntimeToolFixtureRequest[];
-  requestCountBefore: number;
   promptSnippet: string;
   excludedPromptSnippet?: string;
   toolName: string;
 }) {
-  return params.requests
-    .slice(params.requestCountBefore)
-    .find(
-      (request) =>
-        requestMatchesPrompt(request, params.promptSnippet) &&
-        (!params.excludedPromptSnippet ||
-          !requestMatchesPrompt(request, params.excludedPromptSnippet)) &&
-        request.plannedToolName === params.toolName,
-    );
+  return params.requests.find(
+    (request) =>
+      requestMatchesPrompt(request, params.promptSnippet) &&
+      (!params.excludedPromptSnippet ||
+        !requestMatchesPrompt(request, params.excludedPromptSnippet)) &&
+      request.plannedToolName === params.toolName,
+  );
 }
 
 function findExecutedRequest(params: {
   requests: readonly QaRuntimeToolFixtureRequest[];
-  requestCountBefore: number;
   promptSnippet: string;
   excludedPromptSnippet?: string;
   toolName: string;
 }) {
   let plannedRequest: QaRuntimeToolFixtureRequest | undefined;
-  for (const request of params.requests.slice(params.requestCountBefore)) {
+  for (const request of params.requests) {
     if (!requestMatchesPrompt(request, params.promptSnippet)) {
       continue;
     }
@@ -663,9 +668,8 @@ export async function runRuntimeToolFixture(
     `failure target=${toolName}`,
   );
   const happyPathOutputRequired = readBoolean(config.happyPathOutputRequired, true);
-  const requestCountBefore = env.mock
-    ? readQaRuntimeToolFixtureRequests(await deps.fetchJson(`${env.mock.baseUrl}/debug/requests`))
-        .length
+  const requestCursorBefore = env.mock
+    ? readQaMockRequestCursor(await deps.fetchJson(qaMockRequestCursorUrl(env.mock.baseUrl)))
     : 0;
 
   await deps.runAgentPrompt(env, {
@@ -740,31 +744,27 @@ export async function runRuntimeToolFixture(
   }
 
   const requests = readQaRuntimeToolFixtureRequests(
-    await deps.fetchJson(`${env.mock.baseUrl}/debug/requests`),
+    await deps.fetchJson(qaMockRequestsAfterUrl(env.mock.baseUrl, requestCursorBefore)),
   );
   const happyPlannedRequest = findPlannedRequest({
     requests,
-    requestCountBefore,
     promptSnippet,
     excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
   const happyRequest = findExecutedRequest({
     requests,
-    requestCountBefore,
     promptSnippet,
     excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
   const failurePlannedRequest = findPlannedRequest({
     requests,
-    requestCountBefore,
     promptSnippet: failurePromptSnippet,
     toolName,
   });
   const failureRequest = findExecutedRequest({
     requests,
-    requestCountBefore,
     promptSnippet: failurePromptSnippet,
     toolName,
   });

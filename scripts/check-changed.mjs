@@ -12,14 +12,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
+  LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
-  isChangedLaneTestPath,
   listChangedPathsFromGit,
   listStagedChangedPaths,
-  normalizeChangedPath,
 } from "./changed-lanes.mjs";
 import { shrinkwrapPackageDirsForChangedPaths } from "./generate-npm-shrinkwrap.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
@@ -27,17 +27,9 @@ import {
   resolveLocalHeavyCheckEnv,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
+import { isProductionTypeScriptFile } from "./lib/ts-loc-policy.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 
-const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
-  "scripts/lib/live-docker-auth.sh",
-  "scripts/test-live-acp-bind-docker.sh",
-  "scripts/test-live-cli-backend-docker.sh",
-  "scripts/test-live-codex-harness-docker.sh",
-  "scripts/test-live-gateway-models-docker.sh",
-  "scripts/test-live-models-docker.sh",
-  "scripts/test-live-subagent-announce-docker.sh",
-];
 const SHRINKWRAP_POLICY_PATH_RE =
   /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
 const PROMPT_SNAPSHOT_CHECK_PATH_RE =
@@ -46,6 +38,12 @@ const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
   /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
 const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
+const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
+  /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
+const PLUGIN_SDK_API_BASELINE_PATH_RE =
+  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\.sha256$)/u;
+const PLUGIN_SDK_SURFACE_PATH_RE =
+  /^(?:package\.json$|src\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mjs|sync-plugin-sdk-exports\.mjs|lib\/plugin-sdk-(?:declaration-budget\.mjs|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
@@ -208,6 +206,31 @@ export function shouldRunRuntimeSidecarBaselineCheck(paths) {
   return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
 }
 
+/** Returns whether changed files can affect the sessions/transcripts SQLite schema baseline. */
+export function shouldRunSqliteSessionSchemaBaselineCheck(paths) {
+  return paths.some((changedPath) =>
+    SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
+/** Returns whether changed files can alter the published Plugin SDK API contract. */
+export function shouldRunPluginSdkApiBaselineCheck(paths) {
+  return paths.some((changedPath) => {
+    const normalizedPath = normalizeChangedPath(changedPath);
+    return (
+      !getChangedPathFacts(normalizedPath).isTestOnly &&
+      PLUGIN_SDK_API_BASELINE_PATH_RE.test(normalizedPath)
+    );
+  });
+}
+
+/** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
+export function shouldRunPluginSdkSurfaceChecks(paths) {
+  return paths.some((changedPath) =>
+    PLUGIN_SDK_SURFACE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
 export function shouldRunCanvasA2uiNativeResourceCheck(paths) {
   return paths.some((changedPath) =>
     CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
@@ -219,7 +242,9 @@ export function shouldRunAppcastOwnerTest(paths) {
 }
 
 export function shouldRunTestTempCreationReport(paths) {
-  return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
+  return paths.some(
+    (changedPath) => getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest,
+  );
 }
 
 export function createShrinkwrapGuardCommand(paths) {
@@ -290,11 +315,29 @@ export function createChangedCheckPlan(result, options = {}) {
   };
 
   add("conflict markers", ["check:no-conflict-markers"]);
+  if (result.paths.some(isProductionTypeScriptFile)) {
+    // Deliberately omit --head here: local changed checks must inspect worktree and untracked
+    // content. Exact-tree CI calls check:loc directly with both refs.
+    add("TypeScript LOC ratchet", [
+      "check:loc",
+      ...(options.staged ? ["--staged"] : ["--base", options.base ?? "origin/main"]),
+      "--",
+      ...result.paths,
+    ]);
+  }
   add("changelog attributions", ["check:changelog-attributions"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   add("dependency pin guard", ["deps:pins:check"]);
+  if (result.paths.length > 0) {
+    add("format changed files", [
+      "format:check",
+      "--no-error-on-unmatched-pattern",
+      "--",
+      ...result.paths,
+    ]);
+  }
   const shrinkwrapGuardCommand = createShrinkwrapGuardCommand(result.paths);
   if (shrinkwrapGuardCommand) {
     addCommand(
@@ -321,6 +364,16 @@ export function createChangedCheckPlan(result, options = {}) {
       ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
       baseEnv,
     );
+  }
+  if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
+    add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
+  }
+  if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
+    add("Plugin SDK API baseline", ["plugin-sdk:api:check"]);
+  }
+  if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
+    add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
+    add("Plugin SDK surface budget", ["plugin-sdk:surface:check"]);
   }
   if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
     addCommand(
@@ -393,14 +446,23 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.coreTests) {
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
   }
+  if (lanes.ui) {
+    addTypecheck("typecheck UI", ["tsgo:ui"]);
+  }
   if (lanes.extensions) {
     addTypecheck("typecheck extensions", ["tsgo:extensions"]);
   }
   if (lanes.extensionTests) {
     addTypecheck("typecheck extension tests", ["tsgo:extensions:test"]);
   }
+  if (lanes.scripts) {
+    addTypecheck("typecheck scripts", ["tsgo:scripts"]);
+  }
+  if (lanes.testRoot) {
+    addTypecheck("typecheck test root", ["tsgo:test:root"]);
+  }
 
-  if (lanes.core || lanes.coreTests) {
+  if (lanes.core || lanes.coreTests || lanes.ui) {
     const coreLintCommand = createTargetedCoreLintCommand(result.paths, baseEnv);
     if (coreLintCommand) {
       addCommand(
@@ -415,7 +477,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (
     lanes.liveDockerTooling &&
-    result.paths.some((changedPath) => changedPath.startsWith("src/"))
+    result.paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "source")
   ) {
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
     addLint("lint core", ["lint:core"]);

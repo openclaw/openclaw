@@ -41,6 +41,7 @@ import {
   claimNextTelegramSpooledUpdate,
   completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
+  isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
@@ -950,6 +951,11 @@ export class TelegramPollingSession {
         !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
           maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
         }),
+      shouldRecoverCorrupt: (claim) =>
+        !(claim.laneKey && activeLaneKeys.has(claim.laneKey)) &&
+        !isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(claim, {
+          maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
+        }),
     });
     const claimedLaneKeys = new Set(
       (
@@ -1231,6 +1237,8 @@ export class TelegramPollingSession {
         .catch(() => undefined);
       return stopWorkerPromise;
     };
+    // Readiness contract: test/e2e/qa-lab telegram-bot-token-runtime waits for
+    // this marker on the injected runtime log; do not demote it to verbose.
     this.opts.log(`[telegram][diag] isolated polling ingress started spool=${spoolDir}`);
     const pollState: {
       startedAt: number | null;

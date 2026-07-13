@@ -24,7 +24,7 @@ export const MATRIX_RECOVERY_KEY_FILENAME = "recovery-key.json";
 export const MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME = "legacy-crypto-migration.json";
 export const MATRIX_IDB_SNAPSHOT_FILENAME = "crypto-idb-snapshot.json";
 
-export type MatrixLegacyCryptoCounts = {
+type MatrixLegacyCryptoCounts = {
   total: number;
   backedUp: number;
 };
@@ -120,17 +120,6 @@ function readMatrixRecoveryKeyStateWithKey(params: {
   );
 }
 
-export function writeMatrixRecoveryKeyState(params: {
-  storageRootDir: string;
-  payload: MatrixStoredRecoveryKey;
-}): void {
-  writeMatrixRecoveryKeyStateWithKey({
-    storageRootDir: params.storageRootDir,
-    stateKey: STATE_KEY,
-    payload: params.payload,
-  });
-}
-
 export function writeMatrixRecoveryKeyStateForPath(params: {
   recoveryKeyPath: string;
   payload: MatrixStoredRecoveryKey;
@@ -183,7 +172,7 @@ export function readMatrixLegacyCryptoMigrationState(
   );
 }
 
-export function writeMatrixLegacyCryptoMigrationState(params: {
+function writeMatrixLegacyCryptoMigrationState(params: {
   storageRootDir: string;
   state: MatrixLegacyCryptoMigrationState;
 }): void {

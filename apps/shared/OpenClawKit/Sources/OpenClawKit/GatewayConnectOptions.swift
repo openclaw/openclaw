@@ -4,6 +4,7 @@ public struct GatewayConnectOptions: Sendable {
     public var scopesAreExplicit: Bool
     public var caps: [String]
     public var commands: [String]
+    public var pathEnv: String?
     public var permissions: [String: Bool]
     public var clientId: String
     public var clientMode: String
@@ -26,6 +27,7 @@ public struct GatewayConnectOptions: Sendable {
         scopesAreExplicit: Bool = false,
         caps: [String],
         commands: [String],
+        pathEnv: String? = nil,
         permissions: [String: Bool],
         clientId: String,
         clientMode: String,
@@ -40,6 +42,7 @@ public struct GatewayConnectOptions: Sendable {
         self.scopesAreExplicit = scopesAreExplicit
         self.caps = caps
         self.commands = commands
+        self.pathEnv = pathEnv
         self.permissions = permissions
         self.clientId = clientId
         self.clientMode = clientMode
@@ -57,4 +60,11 @@ public enum GatewayAuthSource: String, Sendable {
     case bootstrapToken = "bootstrap-token"
     case password
     case none
+}
+
+/// Opaque binding for the exact credentials selected by one live Gateway socket.
+/// The credential itself never leaves `GatewayChannelActor`.
+public struct GatewayAuthBinding: Equatable, Sendable {
+    public let source: GatewayAuthSource
+    public let credentialFingerprint: String?
 }

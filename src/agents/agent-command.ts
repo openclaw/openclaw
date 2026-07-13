@@ -2,7 +2,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
-import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -15,6 +14,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
@@ -48,13 +48,25 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import {
+  AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
+  isValidAgentHarnessSessionStoreEntry,
+  resolveAgentHarnessSessionContextError,
+} from "../sessions/agent-harness-session-key.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import {
   applyModelOverrideToSessionEntry,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+  ModelSelectionLockedError,
+  isModelSelectionLocked,
   repairProviderWrappedModelOverride,
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  classifySessionStateActor,
+  recordSessionHumanDirectMessage,
+} from "../sessions/session-state-events.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
@@ -64,7 +76,6 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../tasks/task-status-access.js";
-import { removeSessionTrajectoryArtifacts } from "../trajectory/cleanup.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -77,6 +88,12 @@ import {
   resolveMessageChannel,
 } from "../utils/message-channel.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import {
+  buildCurrentRunRestartRecoveryClaim,
+  shouldPersistCurrentRunSessionCleanup,
+  shouldPersistRestartRecoveryCleanup,
+  shouldPersistRestartRecoveryContextClaim,
+} from "./agent-command-restart-recovery.js";
 import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
@@ -89,6 +106,7 @@ import {
   resolveAutoFallbackPrimaryProbe,
   resolveAgentDir,
   resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
   resolveDefaultAgentId,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -121,15 +139,15 @@ import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
 import {
-  isInternalSessionEffectsTranscriptPath,
-  prepareInternalSessionEffectsTranscript,
-  removeInternalSessionEffectsTranscript,
-  resolveInternalSessionEffectsTranscriptPath,
+  prepareInternalSessionEffectsSession,
+  removeInternalSessionEffectsSession,
+  resolveInternalSessionEffectsTarget,
 } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import {
@@ -148,13 +166,16 @@ import {
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
+import { persistPendingFinalDeliveryMarker } from "./pending-final-delivery-marker.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import type { AgentRunSessionTarget } from "./run-session-target.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
+  throwAgentRunRestartAbortReason,
 } from "./run-termination.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
@@ -162,6 +183,7 @@ import { resolveCandidateThinkingLevel, resolveEffectiveAgentRuntime } from "./t
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { hasNonzeroUsage } from "./usage.js";
 import { ensureAgentWorkspace } from "./workspace.js";
+import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "./worktrees/run-lease.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -451,6 +473,7 @@ function clearPendingFinalDeliveryFields(entry: SessionEntry, updatedAt: number)
     pendingFinalDeliveryLastError: undefined,
     pendingFinalDeliveryContext: undefined,
     pendingFinalDeliveryIntentId: undefined,
+    restartRecoveryForceSafeTools: undefined,
     updatedAt,
   };
 }
@@ -526,44 +549,6 @@ async function resolveCurrentRunDeliveryContext(params: {
   });
 }
 
-function shouldPersistCurrentRunSessionCleanup(
-  current: SessionEntry | undefined,
-  sessionId: string,
-): boolean {
-  return (
-    current !== undefined && current.sessionId === sessionId && current.abortedLastRun !== true
-  );
-}
-
-function shouldPersistRestartRecoveryContextClaim(
-  current: SessionEntry | undefined,
-  sessionId: string,
-  runId: string,
-  allowCreate: boolean,
-): boolean {
-  if (!current) {
-    return allowCreate;
-  }
-  if (!shouldPersistCurrentRunSessionCleanup(current, sessionId)) {
-    return false;
-  }
-  return (
-    current.restartRecoveryDeliveryRunId === undefined ||
-    current.restartRecoveryDeliveryRunId === runId
-  );
-}
-
-function shouldPersistRestartRecoveryCleanup(
-  current: SessionEntry | undefined,
-  sessionId: string,
-  runId: string,
-): boolean {
-  return (
-    shouldPersistCurrentRunSessionCleanup(current, sessionId) &&
-    current?.restartRecoveryDeliveryRunId === runId
-  );
-}
-
 function containsControlCharacters(value: string): boolean {
   for (const char of value) {
     const code = char.codePointAt(0);
@@ -614,6 +599,25 @@ function createAgentCommandSessionWorkingCopy(params: {
     result.sessionStore[params.sessionKey] = result.sessionEntry;
   }
   return result;
+}
+
+function resolveInternalSessionEffectsSource(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}):
+  | Required<Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">>
+  | undefined {
+  if (!params.storePath || !params.sessionKey) {
+    return undefined;
+  }
+  return {
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  };
 }
 
 function resolveExplicitAgentCommandSessionKey(params: {
@@ -787,6 +791,20 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
 
   const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
     sessionResolution;
+  const harnessSessionError = sessionKey
+    ? resolveAgentHarnessSessionContextError(sessionKey, sessionResolution.sessionEntry)
+    : undefined;
+  if (harnessSessionError) {
+    throw new Error(harnessSessionError);
+  }
+  const isOneShotModelRun = opts.modelRun === true || opts.promptMode === "none";
+  if (
+    isOneShotModelRun &&
+    sessionKey &&
+    sessionResolution.sessionEntry?.modelSelectionLocked === true
+  ) {
+    throw new Error(AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE);
+  }
   const { sessionEntry: sessionEntryRaw, sessionStore } = createAgentCommandSessionWorkingCopy({
     sessionKey,
     sessionEntry: sessionResolution.sessionEntry,
@@ -856,61 +874,77 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   if (opts.thinkingOnce && !thinkOnce) {
     throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
   }
-  await ensureAgentWorkspace({
-    dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
-    skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-  });
-  const runId = opts.runId?.trim() || sessionId;
-  const { getAcpSessionManager } = await loadAcpManagerRuntime();
-  const acpManager = getAcpSessionManager();
-  const acpResolution = sessionKey
-    ? acpManager.resolveSession({
-        cfg,
-        sessionKey,
-      })
-    : null;
-  const body =
-    !isRawModelRun && acpResolution?.kind === "ready"
-      ? resolveAcpPromptBody(message, opts.internalEvents)
-      : prependInternalEventContext(message, opts.internalEvents);
-  const transcriptBody =
-    opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
-
-  return {
-    opts: commandOpts,
-    body,
-    transcriptBody,
-    cfg,
-    configuredThinkingCatalog,
-    normalizedSpawned,
-    agentCfg,
-    thinkOverride,
-    thinkOnce,
-    verboseOverride,
-    timeoutMs,
-    runTimeoutOverrideMs,
-    sessionId,
-    sessionKey,
+  // Lease the managed worktree before any workspace-dependent preparation so idle
+  // GC or a separate remover cannot delete the checkout while it is being set up;
+  // a session bound to a removed worktree fails closed here. Released on any prepare
+  // failure below and in the run's outer cleanup.
+  const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
+  const worktreeId = await resolveWorktreeIdForPath({
     sessionEntry: sessionEntryRaw,
-    sessionStore,
-    storePath,
-    isNewSession,
-    persistedThinking,
-    persistedVerbose,
-    sessionAgentId,
-    outboundSession,
-    workspaceDir,
-    cwd: cwd ? resolveUserPath(cwd) : undefined,
-    agentDir,
-    pluginsEnabled,
-    manifestMetadataSnapshot,
-    modelManifestContext,
-    runId,
-    isSubagentLane,
-    acpManager,
-    acpResolution,
-  };
+    candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
+  });
+  const runLease = worktreeId ? await acquireWorktreeRunLease(worktreeId) : undefined;
+  try {
+    await ensureAgentWorkspace({
+      dir: workspaceDirRaw,
+      ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+      skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+    });
+    const runId = opts.runId?.trim() || sessionId;
+    const { getAcpSessionManager } = await loadAcpManagerRuntime();
+    const acpManager = getAcpSessionManager();
+    const acpResolution = sessionKey
+      ? acpManager.resolveSession({
+          cfg,
+          sessionKey,
+        })
+      : null;
+    const body =
+      !isRawModelRun && acpResolution?.kind === "ready"
+        ? resolveAcpPromptBody(message, opts.internalEvents)
+        : prependInternalEventContext(message, opts.internalEvents);
+    const transcriptBody =
+      opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
+
+    return {
+      opts: commandOpts,
+      body,
+      transcriptBody,
+      cfg,
+      configuredThinkingCatalog,
+      normalizedSpawned,
+      agentCfg,
+      thinkOverride,
+      thinkOnce,
+      verboseOverride,
+      timeoutMs,
+      runTimeoutOverrideMs,
+      sessionId,
+      sessionKey,
+      sessionEntry: sessionEntryRaw,
+      sessionStore,
+      storePath,
+      isNewSession,
+      persistedThinking,
+      persistedVerbose,
+      sessionAgentId,
+      outboundSession,
+      workspaceDir,
+      cwd: resolvedCwd,
+      agentDir,
+      pluginsEnabled,
+      manifestMetadataSnapshot,
+      modelManifestContext,
+      runId,
+      isSubagentLane,
+      acpManager,
+      acpResolution,
+      runLease,
+    };
+  } catch (error) {
+    await runLease?.release();
+    throw error;
+  }
 }
 
 async function agentCommandInternal(
@@ -962,78 +996,91 @@ async function agentCommandInternal(
     pluginsEnabled,
     manifestMetadataSnapshot,
     modelManifestContext,
+    runLease,
   } = prepared;
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
-  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
-  let sessionEntry = prepared.sessionEntry;
+  let sessionEntry = prepared.sessionEntry,
+    runOwnedSessionId = sessionId;
+  const sessionStateActor = classifySessionStateActor({
+    inputProvenance: opts.inputProvenance,
+    internalEvents: opts.internalEvents,
+    sessionEffects: opts.sessionEffects,
+  });
+  // Subagent-lane turns are the parent's own task dispatch into the child (they
+  // carry no inter_session provenance today); classifying them as human would tell
+  // the parent a human interjected on every spawn, for embedded and ACP children alike.
+  const isSubagentLaneTurn = normalizeOptionalString(opts.lane) === AGENT_LANE_SUBAGENT;
   let sessionReboundDuringRun = false;
-  let trackedRestartRecoveryDeliveryContext = false;
+  let trackedRestartRecoveryDeliveryClaim = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
   const preparedSessionId = sessionEntry?.sessionId;
-  const sessionStoreRuntime = storePath && sessionKey ? await loadSessionStoreRuntime() : undefined;
-  const internalModelRunArtifacts =
+  const internalModelRunTargets =
     initialOpts.modelRun === true && suppressVisibleSessionEffects
-      ? new Map<string, { sessionFile: string; sessionId: string }>()
+      ? new Map<string, AgentRunSessionTarget>()
       : undefined;
-  const trackInternalModelRunArtifact = (
-    sessionFile: string | undefined,
-    artifactSessionId: string,
-  ) => {
-    if (!internalModelRunArtifacts || !isInternalSessionEffectsTranscriptPath(sessionFile)) {
+  const trackInternalModelRunTarget = (target: AgentRunSessionTarget | undefined) => {
+    if (!internalModelRunTargets || !target?.sessionKey || !target.storePath) {
       return;
     }
-    internalModelRunArtifacts.set(`${artifactSessionId}\n${sessionFile}`, {
-      sessionFile,
-      sessionId: artifactSessionId,
-    });
+    internalModelRunTargets.set(`${target.storePath}\n${target.sessionKey}`, target);
   };
-  // Precompute the owned path so even a partially failed prepare can be cleaned.
-  trackInternalModelRunArtifact(resolveInternalSessionEffectsTranscriptPath(runId), sessionId);
+  if (internalModelRunTargets && storePath) {
+    trackInternalModelRunTarget(
+      resolveInternalSessionEffectsTarget({ agentId: sessionAgentId, runId, storePath }),
+    );
+  }
 
-  // Reset marks its mutation before interrupting work. An aborted run must not
-  // queue behind that mutation or reset would wait on the run holding the queue.
-  const sessionWorkAdmission = await beginSessionWorkAdmission({
-    scope: storePath ?? `agent:${sessionAgentId}`,
-    identities: [sessionKey, sessionId],
-    signal: opts.abortSignal,
-    onInterrupt: () => lifecycleAbortController.abort(createAgentRunRestartAbortError()),
-    assertAllowed: () => {
-      const currentEntry =
-        sessionStoreRuntime && storePath && sessionKey
-          ? sessionStoreRuntime.loadSessionEntry({
-              storePath,
-              sessionKey,
-              readConsistency: "latest",
-            })
-          : sessionEntry;
-      if (!currentEntry && preparedSessionId) {
-        throw new Error(`Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`);
-      }
-      const matchesIntentionalRollover =
-        isNewSession && currentEntry?.sessionId === preparedSessionId;
-      if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
-        throw new Error(`Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`);
-      }
-      const archivedSessionError = resolveSessionWorkStartError(
-        sessionKey ?? sessionId,
-        currentEntry,
-      );
-      if (archivedSessionError) {
-        throw new Error(archivedSessionError);
-      }
-      sessionEntry = currentEntry;
-      if (sessionStore && sessionKey) {
-        if (currentEntry) {
-          sessionStore[sessionKey] = currentEntry;
-        } else {
-          delete sessionStore[sessionKey];
-        }
-      }
-    },
-  });
-
+  let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   try {
+    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    const sessionStoreRuntime =
+      storePath && sessionKey ? await loadSessionStoreRuntime() : undefined;
+    // Reset marks its mutation before interrupting work. An aborted run must not
+    // queue behind that mutation or reset would wait on the run holding the queue.
+    sessionWorkAdmission = await beginSessionWorkAdmission({
+      scope: storePath ?? `agent:${sessionAgentId}`,
+      identities: [sessionKey, sessionId],
+      signal: opts.abortSignal,
+      onInterrupt: () => lifecycleAbortController.abort(createAgentRunRestartAbortError()),
+      assertAllowed: () => {
+        const currentEntry =
+          sessionStoreRuntime && storePath && sessionKey
+            ? sessionStoreRuntime.loadSessionEntry({
+                storePath,
+                sessionKey,
+                readConsistency: "latest",
+              })
+            : sessionEntry;
+        if (!currentEntry && preparedSessionId) {
+          throw new Error(
+            `Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`,
+          );
+        }
+        const matchesIntentionalRollover =
+          isNewSession && currentEntry?.sessionId === preparedSessionId;
+        if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
+          throw new Error(
+            `Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`,
+          );
+        }
+        const archivedSessionError = resolveSessionWorkStartError(
+          sessionKey ?? sessionId,
+          currentEntry,
+        );
+        if (archivedSessionError) {
+          throw new Error(archivedSessionError);
+        }
+        sessionEntry = currentEntry;
+        if (sessionStore && sessionKey) {
+          if (currentEntry) {
+            sessionStore[sessionKey] = currentEntry;
+          } else {
+            delete sessionStore[sessionKey];
+          }
+        }
+      },
+    });
     return await sessionWorkAdmission.run(async () => {
       if (opts.deliver === true) {
         const sendPolicy = resolveSendPolicy({
@@ -1078,8 +1125,11 @@ async function agentCommandInternal(
           updatedAt: now,
           sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
           lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
-          restartRecoveryDeliveryContext: currentRunDeliveryContext,
-          restartRecoveryDeliveryRunId: currentRunDeliveryContext ? runId : undefined,
+          ...buildCurrentRunRestartRecoveryClaim({
+            deliveryContext: currentRunDeliveryContext,
+            entry,
+            runId,
+          }),
         };
         const persisted = await persistSessionEntry({
           sessionStore,
@@ -1097,10 +1147,8 @@ async function agentCommandInternal(
                   allowCreateRestartRecoveryEntry,
                 ),
         });
-        sessionEntry = persisted ?? sessionEntry;
-        trackedRestartRecoveryDeliveryContext =
-          Boolean(persisted?.restartRecoveryDeliveryContext) &&
-          persisted?.restartRecoveryDeliveryRunId === runId;
+        sessionEntry = persisted;
+        trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
       }
 
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
@@ -1154,6 +1202,7 @@ async function agentCommandInternal(
           await acpManager.runTurn({
             cfg,
             sessionKey,
+            provenance: isSubagentLaneTurn ? "agent" : sessionStateActor.actorType,
             text: body,
             attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
             mode: "prompt",
@@ -1230,25 +1279,26 @@ async function agentCommandInternal(
         const finalTextRaw = visibleTextAccumulator.finalizeRaw();
         const finalText = visibleTextAccumulator.finalize();
         try {
-          const [{ resolveAcpSessionCwd }, { resolveSessionTranscriptFile }] = await Promise.all([
-            loadAcpSessionIdentifiersRuntime(),
-            loadTranscriptResolveRuntime(),
-          ]);
+          const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
           const internalSource = suppressVisibleSessionEffects
-            ? await resolveSessionTranscriptFile({
+            ? resolveInternalSessionEffectsSource({
+                agentId: sessionAgentId,
                 sessionId,
                 sessionKey,
-                sessionEntry,
+                storePath,
+              })
+            : undefined;
+          const internalTarget = suppressVisibleSessionEffects
+            ? await prepareInternalSessionEffectsSession({
                 agentId: sessionAgentId,
-                threadId: opts.threadId,
-              })
-            : undefined;
-          const internalSessionFile = suppressVisibleSessionEffects
-            ? await prepareInternalSessionEffectsTranscript({
-                sessionFile: internalSource?.sessionFile,
+                cwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
                 runId,
+                source: internalSource,
+                storePath,
               })
             : undefined;
+          trackInternalModelRunTarget(internalTarget);
+          const transcriptSessionEntry = internalTarget?.sessionEntry ?? sessionEntry;
           const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
             body,
             transcriptBody,
@@ -1262,20 +1312,18 @@ async function agentCommandInternal(
                 }
               : {}),
             finalText: finalTextRaw,
-            sessionId,
-            sessionKey,
-            sessionFile: internalSessionFile,
-            sessionEntry,
+            sessionId: internalTarget?.sessionId ?? sessionId,
+            sessionKey: internalTarget?.sessionKey ?? sessionKey,
+            sessionEntry: transcriptSessionEntry,
             sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
-            storePath: suppressVisibleSessionEffects ? undefined : storePath,
-            sessionAgentId,
+            storePath: internalTarget?.storePath ?? storePath,
+            sessionAgentId: internalTarget?.agentId ?? sessionAgentId,
             threadId: opts.threadId,
             sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
             config: cfg,
           });
-          sessionEntry = transcriptResult.sessionEntry;
-          if (internalSessionFile) {
-            sessionEntry = prepared.sessionEntry;
+          if (!internalTarget) {
+            sessionEntry = transcriptResult.sessionEntry;
           }
         } catch (error) {
           log.warn(
@@ -1353,8 +1401,14 @@ async function agentCommandInternal(
       const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
       const [
         { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
-        { canExecRequestNode },
+        { resolveNodeExecEligibility },
       ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
+      const nodeSkillsEligibility = resolveNodeExecEligibility({
+        cfg,
+        sessionEntry,
+        sessionKey,
+        agentId: sessionAgentId,
+      });
       const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
         workspaceDir,
         config: cfg,
@@ -1362,13 +1416,9 @@ async function agentCommandInternal(
         existingSnapshot: isNewSession ? undefined : currentSkillsSnapshot,
         skillFilter,
         eligibility: {
+          nodeSkills: nodeSkillsEligibility,
           remote: getRemoteSkillEligibility({
-            advertiseExecNode: canExecRequestNode({
-              cfg,
-              sessionEntry,
-              sessionKey,
-              agentId: sessionAgentId,
-            }),
+            advertiseExecNode: nodeSkillsEligibility.canExec,
           }),
         },
         watch: false,
@@ -1404,7 +1454,7 @@ async function agentCommandInternal(
           initialEntry: current,
           entry: next,
         });
-        sessionEntry = persisted ?? sessionEntry;
+        sessionEntry = persisted;
       }
 
       // Persist non-model-dependent command state before provider/model resolution.
@@ -1436,7 +1486,17 @@ async function agentCommandInternal(
           initialEntry: entry,
           entry: next,
         });
-        sessionEntry = persisted ?? sessionEntry;
+        sessionEntry = persisted;
+      }
+      if (sessionKey && !isSubagentLaneTurn) {
+        recordSessionHumanDirectMessage({
+          sessionKey,
+          entry: sessionEntry,
+          agentId: sessionAgentId,
+          actor: sessionStateActor,
+          channel: opts.channel,
+          runId,
+        });
       }
 
       const configuredDefaultRef = resolveDefaultModelForAgent({
@@ -1445,6 +1505,9 @@ async function agentCommandInternal(
         allowPluginNormalization: pluginsEnabled,
         ...modelManifestContext,
       });
+      const configuredDefaultAuthProfileId = splitTrailingAuthProfile(
+        resolveAgentEffectiveModelPrimary(cfg, sessionAgentId) ?? "",
+      ).profile;
       const runContext = resolveAgentRunContext(opts);
       const { provider: defaultProvider, model: defaultModel } =
         normalizeAgentCommandDefaultModelRef(
@@ -1475,6 +1538,9 @@ async function agentCommandInternal(
           ? normalizeExplicitOverrideInput(opts.model, "model")
           : undefined;
       const hasExplicitRunOverride = Boolean(explicitProviderOverride || explicitModelOverride);
+      if (hasExplicitRunOverride && isModelSelectionLocked(sessionEntry)) {
+        throw new ModelSelectionLockedError();
+      }
       if (hasExplicitRunOverride && opts.allowModelOverride !== true) {
         throw new Error("Model override is not authorized for this caller.");
       }
@@ -1513,8 +1579,11 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         hasStoredOverride &&
+        !isValidAgentHarnessSessionStoreEntry(sessionKey, sessionEntry) &&
         !suppressVisibleSessionEffects
       ) {
+        // Validate legacy model-only locks on a clone so repair rejects before mutation.
+        // Durable harness locks own their model metadata and bypass generic repair entirely.
         const initialEntry = sessionEntry;
         const entry = { ...sessionEntry };
         let entryUpdated = false;
@@ -1564,12 +1633,12 @@ async function agentCommandInternal(
             initialEntry,
             entry,
           });
-          sessionEntry = persisted ?? sessionEntry;
+          sessionEntry = persisted;
           const adoptedHasStoredOverride = Boolean(
-            sessionEntry.modelOverride || sessionEntry.providerOverride,
+            sessionEntry?.modelOverride || sessionEntry?.providerOverride,
           );
           storedModelOverrideSource = adoptedHasStoredOverride
-            ? sessionEntry.modelOverrideSource
+            ? sessionEntry?.modelOverrideSource
             : undefined;
           hasStoredAutoFallbackProvenance =
             adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
@@ -1644,14 +1713,15 @@ async function agentCommandInternal(
           model = normalizedStored.model;
         }
       }
-      const autoFallbackPrimaryProbe = !hasExplicitRunOverride
-        ? resolveAutoFallbackPrimaryProbe({
-            entry: sessionEntry,
-            sessionKey,
-            primaryProvider,
-            primaryModel,
-          })
-        : undefined;
+      const autoFallbackPrimaryProbe =
+        !hasExplicitRunOverride && !isModelSelectionLocked(sessionEntry)
+          ? resolveAutoFallbackPrimaryProbe({
+              entry: sessionEntry,
+              sessionKey,
+              primaryProvider,
+              primaryModel,
+            })
+          : undefined;
       let autoFallbackPrimaryProbeSessionEntry: SessionEntry | undefined;
       if (autoFallbackPrimaryProbe && sessionEntry) {
         provider = autoFallbackPrimaryProbe.provider;
@@ -1702,6 +1772,12 @@ async function agentCommandInternal(
       provider = allowedInitialSelection.provider;
       model = allowedInitialSelection.model;
       providerForAuthProfileValidation = provider;
+      let sessionEntryForAttempt = autoFallbackPrimaryProbeSessionEntry ?? sessionEntry;
+      const initialAgentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+        provider,
+        entry: sessionEntryForAttempt,
+        cfg,
+      });
 
       await ensureSelectedAgentHarnessPlugin({
         config: cfg,
@@ -1709,15 +1785,10 @@ async function agentCommandInternal(
         modelId: model,
         agentId: sessionAgentId,
         sessionKey,
-        agentHarnessRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
-          provider,
-          entry: sessionEntry,
-          cfg,
-        }),
+        agentHarnessRuntimeOverride: initialAgentHarnessRuntimeOverride,
         workspaceDir,
       });
 
-      let sessionEntryForAttempt = autoFallbackPrimaryProbeSessionEntry ?? sessionEntry;
       if (sessionEntryForAttempt) {
         const authProfileId = sessionEntryForAttempt.authProfileOverride;
         if (authProfileId) {
@@ -1892,10 +1963,23 @@ async function agentCommandInternal(
         sessionFile = resolvedSessionFile.sessionFile;
         sessionEntry = resolvedSessionFile.sessionEntry;
       }
-      const attemptSessionFile = suppressVisibleSessionEffects
-        ? await prepareInternalSessionEffectsTranscript({ sessionFile, runId })
-        : sessionFile;
-      trackInternalModelRunArtifact(attemptSessionFile, sessionId);
+      const sessionEffectsSource = resolveInternalSessionEffectsSource({
+        agentId: sessionAgentId,
+        sessionId,
+        sessionKey,
+        storePath,
+      });
+      const internalSessionTarget = suppressVisibleSessionEffects
+        ? await prepareInternalSessionEffectsSession({
+            agentId: sessionAgentId,
+            cwd: cwd ?? workspaceDir,
+            runId,
+            source: sessionEffectsSource,
+            storePath,
+          })
+        : undefined;
+      trackInternalModelRunTarget(internalSessionTarget);
+      const attemptSessionFile = internalSessionTarget?.sessionFile ?? sessionFile;
 
       const startedAt = Date.now();
       const attemptLifecycleState: AgentAttemptLifecycleState = {
@@ -1925,10 +2009,12 @@ async function agentCommandInternal(
             }
           : {}),
         target: {
-          transcriptPath: attemptSessionFile,
-          sessionId,
-          agentId: sessionAgentId,
-          ...(sessionKey ? { sessionKey } : {}),
+          sessionId: internalSessionTarget?.sessionId ?? sessionId,
+          agentId: internalSessionTarget?.agentId ?? sessionAgentId,
+          sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? sessionId,
+          sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
+          sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+          storePath: internalSessionTarget?.storePath ?? storePath,
           cwd: cwd ?? workspaceDir,
           config: cfg,
         },
@@ -2084,17 +2170,19 @@ async function agentCommandInternal(
             ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
             : new Set<string>();
           const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
-          const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
-            cfg,
-            agentId: sessionAgentId,
-            sessionKey,
-            hasSessionModelOverride:
-              hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
-            modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
-            hasAutoFallbackProvenance: hasExplicitRunOverride
-              ? false
-              : hasStoredAutoFallbackProvenance,
-          });
+          const effectiveFallbacksOverride = isModelSelectionLocked(sessionEntry)
+            ? []
+            : resolveEffectiveModelFallbacks({
+                cfg,
+                agentId: sessionAgentId,
+                sessionKey,
+                hasSessionModelOverride:
+                  hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
+                modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
+                hasAutoFallbackProvenance: hasExplicitRunOverride
+                  ? false
+                  : hasStoredAutoFallbackProvenance,
+              });
 
           let fallbackAttemptIndex = 0;
           const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
@@ -2193,6 +2281,10 @@ async function agentCommandInternal(
                 sessionEntry,
               });
               const fastMode = opts.fastMode ?? fastModeState.mode;
+              const configuredAuthProfileId =
+                providerOverride === defaultProvider && modelOverride === defaultModel
+                  ? configuredDefaultAuthProfileId
+                  : undefined;
               const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                 provider: providerOverride,
                 entry: attemptSessionEntry,
@@ -2231,6 +2323,7 @@ async function agentCommandInternal(
               return attemptExecutionRuntime.runAgentAttempt({
                 providerOverride,
                 modelOverride,
+                configuredAuthProfileId,
                 modelFallbacksOverride: effectiveFallbacksOverride,
                 originalProvider: provider,
                 cfg,
@@ -2238,6 +2331,7 @@ async function agentCommandInternal(
                 agentHarnessRuntimeOverride,
                 sessionId,
                 sessionKey,
+                ...(internalSessionTarget ? { sessionTarget: internalSessionTarget } : {}),
                 sessionAgentId,
                 sessionFile: attemptSessionFile,
                 workspaceDir,
@@ -2305,6 +2399,7 @@ async function agentCommandInternal(
             sessionEntry &&
             sessionStore &&
             sessionKey &&
+            !isModelSelectionLocked(sessionEntry) &&
             !suppressVisibleSessionEffects &&
             !preserveUserFacingSessionModelState &&
             entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe) &&
@@ -2325,7 +2420,7 @@ async function agentCommandInternal(
                   entryMatchesAutoFallbackPrimaryProbe(current, autoFallbackPrimaryProbe),
                 ),
             });
-            sessionEntry = persistedEntry ?? sessionEntry;
+            sessionEntry = persistedEntry;
           }
           if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
             result = {
@@ -2345,6 +2440,23 @@ async function agentCommandInternal(
           break;
         } catch (err) {
           if (err instanceof LiveSessionModelSwitchError) {
+            if (isModelSelectionLocked(sessionEntry)) {
+              if (!attemptLifecycleState.lifecycleEnded) {
+                emitAgentEvent({
+                  runId,
+                  lifecycleGeneration,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "error",
+                    startedAt,
+                    endedAt: Date.now(),
+                    error: MODEL_SELECTION_LOCKED_MESSAGE,
+                  },
+                });
+              }
+              await fallbackTrajectoryRecorder?.flush();
+              throw new ModelSelectionLockedError();
+            }
             if (
               sessionKey &&
               hasNewGeneratedMediaTaskForSessionKey(sessionKey, liveSwitchMediaTaskIds)
@@ -2472,11 +2584,11 @@ async function agentCommandInternal(
 
         const rotatedSessionFile = result.meta.agentMeta?.sessionFile;
         const effectiveSessionId = rotatedSessionFile
-          ? (result.meta.agentMeta?.sessionId ?? sessionId)
-          : sessionId;
-        const effectiveSessionFile = rotatedSessionFile ?? attemptSessionFile;
-        trackInternalModelRunArtifact(effectiveSessionFile, effectiveSessionId);
-
+          ? (result.meta.agentMeta?.sessionId ?? internalSessionTarget?.sessionId ?? sessionId)
+          : (internalSessionTarget?.sessionId ?? sessionId);
+        if (internalSessionTarget && effectiveSessionId !== internalSessionTarget.sessionId) {
+          trackInternalModelRunTarget({ ...internalSessionTarget, sessionId: effectiveSessionId });
+        }
         // Update token+model fields in the session store.
         if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
           const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(opts.bootstrapContextRunKind);
@@ -2503,32 +2615,36 @@ async function agentCommandInternal(
             preserveRuntimeModel:
               fallbackExhausted || isHeartbeatLifecycleRun || preserveUserFacingSessionModelState,
             preserveUserFacingSessionModelState,
+            // Delivered recovery runs clear the guard with pending-delivery state below.
+            clearRestartRecoveryForceSafeTools:
+              opts.forceRestartSafeTools === true && opts.deliver !== true,
           });
           sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
         }
+        runOwnedSessionId = effectiveSessionId;
 
         const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
         const embeddedAssistantGapFill =
           transcriptPersistenceRunner === "embedded" ||
           (transcriptPersistenceRunner === undefined &&
             Boolean(result.meta.finalAssistantVisibleText?.trim()));
+        let persistedCliTurnTranscript = false;
         if (
           !sessionReboundDuringRun &&
           (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill)
         ) {
-          let persistedCliTurnTranscript = false;
           try {
+            const transcriptSessionEntry = internalSessionTarget?.sessionEntry ?? sessionEntry;
             const transcriptResult = await attemptExecutionRuntime.persistCliTurnTranscript({
               body,
               transcriptBody,
               result,
               sessionId: effectiveSessionId,
-              sessionKey: sessionKey ?? effectiveSessionId,
-              sessionFile: suppressVisibleSessionEffects ? effectiveSessionFile : undefined,
-              sessionEntry,
+              sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? effectiveSessionId,
+              sessionEntry: transcriptSessionEntry,
               sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
-              storePath: suppressVisibleSessionEffects ? undefined : storePath,
-              sessionAgentId,
+              storePath: internalSessionTarget?.storePath ?? storePath,
+              sessionAgentId: internalSessionTarget?.agentId ?? sessionAgentId,
               threadId: opts.threadId,
               sessionCwd: effectiveCwd,
               config: cfg,
@@ -2538,10 +2654,9 @@ async function agentCommandInternal(
                 userTurnTranscriptRecorder.hasPersisted() ||
                 userTurnTranscriptRecorder.isBlocked(),
             });
-            sessionEntry = transcriptResult.sessionEntry;
             sessionReboundDuringRun = transcriptResult.kind === "session-rebound";
-            if (suppressVisibleSessionEffects) {
-              sessionEntry = prepared.sessionEntry;
+            if (!internalSessionTarget) {
+              sessionEntry = transcriptResult.sessionEntry;
             }
             persistedCliTurnTranscript = transcriptResult.kind === "persisted";
           } catch (error) {
@@ -2549,8 +2664,35 @@ async function agentCommandInternal(
               `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
             );
           }
-          if (persistedCliTurnTranscript && !suppressVisibleSessionEffects) {
-            sessionEntry = await (
+        }
+
+        const payloads = result.payloads ?? [];
+        const pendingFinalDeliveryMarker = await persistPendingFinalDeliveryMarker({
+          deliver: opts.deliver === true,
+          sessionStore,
+          sessionKey,
+          sessionEntry,
+          storePath,
+          suppressVisibleSessionEffects,
+          sessionReboundDuringRun,
+          payloads,
+          deliveryContext: currentRunDeliveryContext,
+          runOwnedSessionId,
+        });
+        sessionEntry = pendingFinalDeliveryMarker.sessionEntry;
+
+        const canSafelyRunPostTurnCompaction =
+          opts.deliver !== true ||
+          !pendingFinalDeliveryMarker.hasSendableFinalPayload ||
+          pendingFinalDeliveryMarker.pendingFinalDeliveryMarkerPersisted;
+
+        if (
+          persistedCliTurnTranscript &&
+          !suppressVisibleSessionEffects &&
+          canSafelyRunPostTurnCompaction
+        ) {
+          try {
+            const compactedSessionEntry = await (
               await loadCliCompactionRuntime()
             ).runCliTurnCompactionLifecycle({
               cfg,
@@ -2572,51 +2714,24 @@ async function agentCommandInternal(
               thinkLevel: effectiveTurnThinkLevel,
               extraSystemPrompt: opts.extraSystemPrompt,
             });
-          }
-        }
-
-        const payloads = result.payloads ?? [];
-        let pendingFinalDeliveryTextForThisRun: string | undefined;
-
-        // Phase 2: Persist pending final delivery for main sessions before attempting delivery.
-        // This ensures that if the process restarts during delivery, the payload is durable.
-        if (
-          opts.deliver === true &&
-          sessionStore &&
-          sessionKey &&
-          !suppressVisibleSessionEffects &&
-          !sessionReboundDuringRun &&
-          payloads.length > 0 &&
-          !isSubagentSessionKey(sessionKey)
-        ) {
-          const now = Date.now();
-          const combinedPayload = sanitizePendingFinalDeliveryText(
-            payloads
-              .map((p) => (typeof p.text === "string" ? p.text : ""))
-              .filter(Boolean)
-              .join("\n\n"),
-          );
-          pendingFinalDeliveryTextForThisRun = combinedPayload || undefined;
-
-          if (combinedPayload) {
-            const entry = sessionStore[sessionKey] ?? sessionEntry;
-            const next: SessionEntry = {
-              ...entry,
-              pendingFinalDelivery: true,
-              pendingFinalDeliveryText: combinedPayload,
-              pendingFinalDeliveryContext: currentRunDeliveryContext,
-              pendingFinalDeliveryCreatedAt: now,
-              updatedAt: now,
-            };
-            const persisted = await persistSessionEntry({
-              sessionStore,
-              sessionKey,
-              storePath,
-              initialEntry: entry,
-              entry: next,
-              shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
-            });
-            sessionEntry = persisted ?? sessionEntry;
+            throwAgentRunRestartAbortReason(opts.abortSignal?.reason);
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            sessionEntry = compactedSessionEntry;
+            runOwnedSessionId = compactedSessionEntry?.sessionId ?? runOwnedSessionId;
+          } catch (error) {
+            throwAgentRunRestartAbortReason(opts.abortSignal?.reason);
+            throwAgentRunRestartAbortReason(error);
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            if (
+              opts.deliver !== true ||
+              !pendingFinalDeliveryMarker.pendingFinalDeliveryMarkerPersisted ||
+              !pendingFinalDeliveryMarker.hasSendableFinalPayload
+            ) {
+              throw error;
+            }
+            log.warn(
+              `Post-turn transcript compaction failed for ${sessionKey ?? sessionId}; continuing final delivery: ${formatErrorMessage(error)}`,
+            );
           }
         }
 
@@ -2624,13 +2739,14 @@ async function agentCommandInternal(
         const resolveFreshSessionEntryForDelivery =
           sessionStore && sessionKey && !suppressVisibleSessionEffects
             ? async (): Promise<SessionEntry | undefined> => {
-                const { loadSessionStore } = await loadSessionStoreRuntime();
-                const freshStore = loadSessionStore(storePath, {
-                  skipCache: true,
+                const { loadSessionEntry } = await loadSessionStoreRuntime();
+                const freshEntry = loadSessionEntry({
+                  storePath,
+                  sessionKey,
+                  readConsistency: "latest",
                   clone: false,
                 });
-                const freshEntry = freshStore[sessionKey];
-                if (!freshEntry || freshEntry.sessionId !== effectiveSessionId) {
+                if (!freshEntry || freshEntry.sessionId !== runOwnedSessionId) {
                   return undefined;
                 }
                 sessionStore[sessionKey] = freshEntry;
@@ -2653,13 +2769,12 @@ async function agentCommandInternal(
           resolveFreshSessionEntryForDelivery
             ? {
                 ...deliveryParams,
-                expectedSessionIdForFreshDelivery: effectiveSessionId,
+                expectedSessionIdForFreshDelivery: runOwnedSessionId,
                 resolveFreshSessionEntryForDelivery,
               }
             : deliveryParams,
         );
 
-        // Phase 2: Clear pending delivery payload after successful delivery.
         if (
           sessionStore &&
           sessionKey &&
@@ -2668,12 +2783,15 @@ async function agentCommandInternal(
           !sessionReboundDuringRun
         ) {
           const entry = sessionStore[sessionKey] ?? sessionEntry;
+          if (!entry) {
+            throw new Error("Cannot clear pending delivery without a session entry");
+          }
           const noPendingTextForThisRun =
             opts.deliver === true &&
-            pendingFinalDeliveryTextForThisRun === undefined &&
-            entry.pendingFinalDelivery === true &&
+            pendingFinalDeliveryMarker.pendingFinalDeliveryTextForThisRun === undefined &&
+            entry?.pendingFinalDelivery === true &&
             !entry.pendingFinalDeliveryText;
-          if (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun) {
+          if (entry && (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun)) {
             const next = clearPendingFinalDeliveryFields(entry, Date.now());
             const persisted = await persistSessionEntry({
               sessionStore,
@@ -2681,9 +2799,10 @@ async function agentCommandInternal(
               storePath,
               initialEntry: entry,
               entry: next,
-              shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
+              shouldPersist: (current) =>
+                shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId),
             });
-            sessionEntry = persisted ?? sessionEntry;
+            sessionEntry = persisted;
           }
         }
 
@@ -2699,44 +2818,42 @@ async function agentCommandInternal(
       }
     });
   } finally {
-    sessionWorkAdmission.release();
-    if (internalModelRunArtifacts) {
-      // Compaction may rotate a private transcript. Clean every owned identity
-      // only after delivery, then remove each transcript after its sidecars.
-      for (const artifact of internalModelRunArtifacts.values()) {
+    if (runLease) {
+      await runLease.release();
+    }
+    sessionWorkAdmission?.release();
+    if (internalModelRunTargets) {
+      // Compaction may rotate a private session identity. Remove every owned
+      // SQLite row only after delivery; transcript and trajectory rows cascade.
+      for (const target of internalModelRunTargets.values()) {
         try {
-          await removeSessionTrajectoryArtifacts({
-            sessionId: artifact.sessionId,
-            sessionFile: artifact.sessionFile,
-            storePath: artifact.sessionFile,
-          });
+          await removeInternalSessionEffectsSession(target);
         } catch (error) {
+          // Cleanup remains best-effort so a terminal SQLite write failure does
+          // not replace the completed model-run result; the DB layer warns too.
           log.warn(
-            `failed to remove model-run trajectory artifacts: ${
+            `failed to remove model-run SQLite session: ${
               error instanceof Error ? error.message : String(error)
             }`,
           );
         }
       }
-      for (const sessionFile of new Set(
-        Array.from(internalModelRunArtifacts.values(), (artifact) => artifact.sessionFile),
-      )) {
-        await removeInternalSessionEffectsTranscript(sessionFile);
-      }
     }
     if (
       !sessionReboundDuringRun &&
-      trackedRestartRecoveryDeliveryContext &&
+      trackedRestartRecoveryDeliveryClaim &&
       sessionStore &&
       sessionKey
     ) {
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
-        if (entry?.restartRecoveryDeliveryContext && entry.restartRecoveryDeliveryRunId === runId) {
+        if (entry?.restartRecoveryDeliveryRunId === runId) {
           const next: SessionEntry = {
             ...entry,
-            restartRecoveryDeliveryContext: undefined,
-            restartRecoveryDeliveryRunId: undefined,
+            ...buildRestartRecoveryClaimCleanupPatch({
+              entry,
+              recordTerminalSource: true,
+            }),
             updatedAt: Date.now(),
           };
           const persisted = await persistSessionEntry({
@@ -2746,9 +2863,9 @@ async function agentCommandInternal(
             initialEntry: entry,
             entry: next,
             shouldPersist: (current) =>
-              shouldPersistRestartRecoveryCleanup(current, sessionId, runId),
+              shouldPersistRestartRecoveryCleanup(current, runOwnedSessionId, runId),
           });
-          sessionEntry = persisted ?? sessionEntry;
+          sessionEntry = persisted;
         }
       } catch (error) {
         log.warn(

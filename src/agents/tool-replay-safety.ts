@@ -16,6 +16,7 @@ const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
   "memory_get",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "agents_list",
   "get_goal",
   "update_plan",
@@ -34,6 +35,22 @@ export function isAgentToolReplaySafe(
 ): boolean {
   if (options?.declaredReplaySafe?.(tool) === false) {
     return false;
+  }
+  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolName(tool.name ?? ""));
+}
+
+/**
+ * Classify one concrete tool instance for an explicitly restart-safe turn.
+ * Unlike blind name-only replay, an owner declaration is sufficient because
+ * the host filters the concrete registered instance before execution.
+ */
+export function isAgentToolRestartSafe(
+  tool: { name?: string },
+  options?: { declaredReplaySafe?: (tool: { name?: string }) => boolean | undefined },
+): boolean {
+  const declaredReplaySafe = options?.declaredReplaySafe?.(tool);
+  if (declaredReplaySafe !== undefined) {
+    return declaredReplaySafe;
   }
   return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolName(tool.name ?? ""));
 }

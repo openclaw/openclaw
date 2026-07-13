@@ -17,7 +17,7 @@ export type QQBotGroupCommandLevel = "all" | "safety" | "strict";
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 // Omitted commandLevel preserves shipped QQBot group behavior. Operators opt in to
 // the fail-closed safety/strict modes per group or wildcard group config.
-export const DEFAULT_GROUP_COMMAND_LEVEL: QQBotGroupCommandLevel = "all";
+const DEFAULT_GROUP_COMMAND_LEVEL: QQBotGroupCommandLevel = "all";
 
 export const DEFAULT_GROUP_PROMPT =
   "If the sender is a bot, respond only when they explicitly @mention you to ask a question or request assistance with a specific task; keep your replies concise and clear, avoiding the urge to race other bots to answer or engage in lengthy, unproductive exchanges. In group chats, prioritize responding to messages from human users; bots should maintain a collaborative rather than competitive dynamic to ensure the conversation remains orderly and does not result in message flooding.";

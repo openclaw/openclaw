@@ -28,6 +28,7 @@ const WRITABLE_IDENTITY_FIELDS = [
 const RICH_IDENTITY_LABELS = new Set(["name", "creature", "vibe", "theme", "emoji", "avatar"]);
 
 const IDENTITY_PLACEHOLDER_VALUES = new Set([
+  "not set yet",
   "pick something you like",
   "ai? robot? familiar? ghost in the machine? something weirder?",
   "how do you come across? sharp? warm? chaotic? calm?",
@@ -191,6 +192,9 @@ export function mergeIdentityMarkdownContent(
 
     if (matchingIndexes.length > 0) {
       const [firstIndex, ...duplicateIndexes] = matchingIndexes;
+      if (firstIndex === undefined) {
+        continue;
+      }
       nextLines[firstIndex] = buildIdentityLine(label, value);
       for (const duplicateIndex of duplicateIndexes.toReversed()) {
         nextLines.splice(duplicateIndex, 1);

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  __testing as cliBackendsTesting,
+  testing as cliBackendsTesting,
   resolveCliBackendConfig,
   resolveCliBackendLiveTest,
 } from "../agents/cli-backends.js";
@@ -20,7 +20,6 @@ import {
   resetGlobalHookRunner,
 } from "../plugin-sdk/testing.js";
 import { setTestEnvValue } from "../test-utils/env.js";
-import { resolveClaudeCliSessionFilePath } from "./cli-session-history.js";
 import {
   applyCliBackendLiveEnv,
   buildClaudeCliResumeContinuityProbe,
@@ -93,6 +92,35 @@ const CLI_BACKEND_LIVE_TIMEOUT_MS = Math.max(
     2 * 60_000,
 );
 
+async function findClaudeCliSessionFile(cliSessionId: string): Promise<string | undefined> {
+  const sessionId = cliSessionId.trim();
+  if (!sessionId || sessionId.includes("/") || sessionId.includes("\\")) {
+    return undefined;
+  }
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), ".claude");
+  const projectsDir = path.join(configDir, "projects");
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(projectsDir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const filePath = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
+    try {
+      if ((await fs.stat(filePath)).isFile()) {
+        return filePath;
+      }
+    } catch {
+      // Try the next Claude project directory.
+    }
+  }
+  return undefined;
+}
+
 function parsePositiveIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) {
@@ -136,7 +164,7 @@ function openAiProviderConfigForCodexCli(
   modelKey: string,
 ): NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>["openai"] {
   const parsed = parseModelRef(modelKey, DEFAULT_PROVIDER);
-  const modelId = parsed?.model?.trim() || "gpt-5.5";
+  const modelId = parsed?.model?.trim() || "gpt-5.6-luna";
   return {
     api: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
@@ -687,7 +715,7 @@ describeLive("gateway live (cli backend)", () => {
             expect(JSON.stringify(nativeHistory.messages ?? [])).toContain(memoryToken);
             expect(cliSessionId).toBeTruthy();
             const cliSessionFile = cliSessionId
-              ? resolveClaudeCliSessionFilePath({ cliSessionId })
+              ? await findClaudeCliSessionFile(cliSessionId)
               : undefined;
             expect(cliSessionFile).toBeTruthy();
             if (!cliSessionFile) {

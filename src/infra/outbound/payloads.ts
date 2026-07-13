@@ -20,6 +20,7 @@ import {
   normalizeInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
+  renderMessagePresentationTableFallbackText,
   type InteractiveReply,
   type MessagePresentation,
   type ReplyPayloadDelivery,
@@ -36,6 +37,7 @@ export type NormalizedOutboundPayload = {
   delivery?: ReplyPayloadDelivery;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
+  location?: ReplyPayload["location"];
   /** Hook-only content for audio-only TTS payloads. Never used as channel text/caption. */
   hookContent?: string;
 };
@@ -50,6 +52,7 @@ export type OutboundPayloadJson = {
   delivery?: ReplyPayloadDelivery;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
+  location?: ReplyPayload["location"];
 };
 
 /** Prepared payload entry that keeps source indexing plus reusable projections. */
@@ -71,7 +74,7 @@ type OutboundPayloadPlanContext = {
 };
 
 /** Text/media projection used to mirror outbound replies into session state. */
-export type OutboundPayloadMirror = {
+type OutboundPayloadMirror = {
   text: string;
   mediaUrls: string[];
 };
@@ -101,6 +104,10 @@ function collectBlockMirrorText(
     }
     if (block.type === "chart") {
       lines.push(renderMessagePresentationChartFallbackText(block));
+      continue;
+    }
+    if (block.type === "table") {
+      lines.push(renderMessagePresentationTableFallbackText(block));
       continue;
     }
     if (block.type === "select") {
@@ -140,10 +147,12 @@ function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
   const text = entry.parts.text.trim() ? entry.parts.text : entry.payload.text;
   const presentation = normalizeMessagePresentation(entry.payload.presentation);
   if (text?.trim()) {
-    const chartText = presentation
-      ? collectBlockMirrorText(presentation.blocks.filter((block) => block.type === "chart"))
+    const structuredDataText = presentation
+      ? collectBlockMirrorText(
+          presentation.blocks.filter((block) => block.type === "chart" || block.type === "table"),
+        )
       : [];
-    return [text, ...chartText].join("\n");
+    return [text, ...structuredDataText].join("\n");
   }
   const interactive = normalizeInteractiveReply(entry.payload.interactive);
   return [
@@ -222,7 +231,7 @@ function createOutboundPayloadPlanEntry(
     extractMarkdownImages: context.extractMarkdownImages,
   });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
-  const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
+  const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrls?.[0];
   const mergedMedia = mergeMediaUrls(
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,
@@ -319,7 +328,10 @@ export function projectOutboundPayloadPlanForOutbound(
     if (
       !hasReplyPayloadContent(
         { ...payload, text, mediaUrls: entry.parts.mediaUrls },
-        { hasChannelData: entry.hasChannelData },
+        {
+          hasChannelData: entry.hasChannelData,
+          extraContent: payload.location != null,
+        },
       )
     ) {
       continue;
@@ -332,6 +344,7 @@ export function projectOutboundPayloadPlanForOutbound(
       ...(payload.delivery ? { delivery: payload.delivery } : {}),
       ...(entry.hasInteractive ? { interactive: payload.interactive } : {}),
       ...(entry.hasChannelData ? { channelData: payload.channelData } : {}),
+      ...(payload.location ? { location: payload.location } : {}),
     });
   }
   return normalizedPayloads;
@@ -353,6 +366,7 @@ export function projectOutboundPayloadPlanForJson(
       delivery: payload.delivery,
       interactive: payload.interactive,
       channelData: payload.channelData,
+      ...(payload.location ? { location: payload.location } : {}),
     });
   }
   return normalized;
@@ -390,6 +404,7 @@ export function summarizeOutboundPayloadForTransport(
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
+    ...(payload.location ? { location: payload.location } : {}),
     ...(text || !spokenText ? {} : { hookContent: spokenText }),
   };
 }

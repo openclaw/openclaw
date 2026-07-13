@@ -1,13 +1,15 @@
 // Sms plugin module implements twilio behavior.
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
 import {
   readResponseTextPrefix,
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
+import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
 
 const TWILIO_ACCOUNTS_URL = "https://api.twilio.com/2010-04-01/Accounts";
@@ -38,6 +40,8 @@ type TwilioMessagePayload = {
   from?: string;
   status?: string;
 };
+
+const TWILIO_CHANNEL_ADDRESS_RE = /^([a-z][a-z0-9-]*):(.*)$/i;
 
 export type TwilioIncomingPhoneNumber = {
   sid: string;
@@ -194,12 +198,6 @@ export function computeTwilioSignature(params: {
   return createHmac("sha1", params.authToken).update(data).digest("base64");
 }
 
-function safeEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
 export function verifyTwilioSignature(params: {
   signature: string | undefined;
   url: string;
@@ -209,7 +207,7 @@ export function verifyTwilioSignature(params: {
   if (!params.signature || !params.url || !params.authToken) {
     return false;
   }
-  return safeEqual(
+  return safeEqualSecret(
     params.signature,
     computeTwilioSignature({
       url: params.url,
@@ -219,8 +217,27 @@ export function verifyTwilioSignature(params: {
   );
 }
 
+function parseTwilioInboundFrom(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const channelAddress = trimmed.match(TWILIO_CHANNEL_ADDRESS_RE);
+  const kind = channelAddress?.[1]?.toLowerCase();
+  if (kind && kind !== "rcs") {
+    return null;
+  }
+  const phoneNumber = normalizeSmsPhoneNumber(channelAddress?.[2] ?? trimmed);
+  if (!looksLikeSmsPhoneNumber(phoneNumber)) {
+    return null;
+  }
+  return phoneNumber;
+}
+
 export function buildTwilioInboundMessage(form: Record<string, string>): SmsInboundMessage | null {
-  const from = firstTrimmedString(form.From);
+  // Signature verification owns the untouched form. Canonicalize only after
+  // that boundary so Twilio channel prefixes never change its signed input.
+  const from = parseTwilioInboundFrom(firstTrimmedString(form.From));
   const to = firstTrimmedString(form.To);
   const body = firstString(form.Body);
   const accountSid = firstTrimmedString(form.AccountSid);

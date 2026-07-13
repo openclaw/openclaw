@@ -4,7 +4,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayCronServiceContract, GatewayCronState } from "./server-cron.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import type { GatewayCronState } from "./server-cron.js";
 
 const hoisted = vi.hoisted(() => {
   let state: unknown;
@@ -34,6 +35,17 @@ describe("createLazyGatewayCronState", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     hoisted.buildGatewayCronService.mockClear();
+  });
+
+  it("resolves its default store path from the prepared env", () => {
+    const stateRoot = "/tmp/openclaw-candidate-state";
+    const lazy = createLazyGatewayCronState({
+      ...createParams(),
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateRoot },
+    });
+
+    expect(lazy.storePath).toBe(`${stateRoot}/cron/jobs.json`);
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
   });
 
   it("does not build the heavy cron service until an async cron operation needs it", async () => {

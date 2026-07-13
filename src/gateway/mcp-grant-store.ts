@@ -1,13 +1,21 @@
 import crypto from "node:crypto";
+import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
+import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
+  runtimePolicySessionKey?: string;
+  agentId?: string;
   sessionId?: string;
+  runId?: string;
+  modelProvider?: string;
+  modelId?: string;
   messageProvider?: string;
   clientCaps?: string[];
   currentChannelId?: string;
@@ -20,9 +28,24 @@ export type McpLoopbackRequestContext = {
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean;
+  /** Capability minted only for Gateway-launched CLI backends. */
+  nodeExecAllowed?: boolean;
+  execSession?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
+  bashElevated?: ExecElevatedDefaults;
+  trigger?: string;
+  approvalReviewerDeviceId?: string;
+  channelContext?: PluginHookChannelContext;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+  spawnedBy?: string;
 };
 
-export interface McpAttachGrant {
+interface McpAttachGrant {
   /** Opaque bearer presented as `Authorization: Bearer <token>`. */
   readonly token: string;
   /** The openclaw session this grant is bound to; tool scope is resolved for this key. */
@@ -33,7 +56,7 @@ export interface McpAttachGrant {
   readonly issuedAtMs: number;
 }
 
-export interface McpLoopbackClientGrant {
+interface McpLoopbackClientGrant {
   /** Opaque bearer presented as `Authorization: Bearer <token>`. */
   readonly token: string;
   /** Gateway-selected request context; child-process headers cannot widen it. */
@@ -99,6 +122,7 @@ export function revokeAttachGrant(token: string): boolean {
   return grantsByToken.delete(token);
 }
 
+/** Revokes every attach grant minted for one session. Returns the count removed. */
 export function revokeAttachGrantsForSession(sessionKey: string): number {
   const key = sessionKey.trim();
   let removed = 0;
@@ -111,7 +135,7 @@ export function revokeAttachGrantsForSession(sessionKey: string): number {
   return removed;
 }
 
-export function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
+function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
   let removed = 0;
   for (const [token, grant] of grantsByToken) {
     if (nowMs >= grant.expiresAtMs) {
@@ -120,14 +144,6 @@ export function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
     }
   }
   return removed;
-}
-
-export function attachGrantStoreSize(): number {
-  return grantsByToken.size;
-}
-
-export function resetAttachGrantsForTest(): void {
-  grantsByToken.clear();
 }
 
 export function mintMcpLoopbackClientGrant(params: {
@@ -221,12 +237,4 @@ export function revokeMcpLoopbackClientGrantsForRuntime(runtimeOwnerToken: strin
     }
   }
   return removed;
-}
-
-export function mcpLoopbackClientGrantStoreSize(): number {
-  return clientGrantsByToken.size;
-}
-
-export function resetMcpLoopbackClientGrantsForTest(): void {
-  clientGrantsByToken.clear();
 }

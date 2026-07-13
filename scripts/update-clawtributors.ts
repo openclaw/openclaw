@@ -2,6 +2,8 @@
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import pMap from "p-map";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
 const REPO = "openclaw/openclaw";
@@ -99,13 +101,13 @@ for (const line of log.split("\n")) {
   }
 
   // Skip docs paths so bulk-generated i18n scaffolds don't inflate rankings
-  const filePath = parts[2];
+  const filePath = expectDefined(parts[2], "git numstat file path");
   if (filePath.startsWith("docs/")) {
     continue;
   }
 
-  const adds = parseCount(parts[0]);
-  const dels = parseCount(parts[1]);
+  const adds = parseCount(expectDefined(parts[0], "git numstat additions"));
+  const dels = parseCount(expectDefined(parts[1], "git numstat deletions"));
   const total = adds + dels;
   if (!total) {
     continue;
@@ -624,36 +626,22 @@ async function filterVisibleEntries(
   entriesResult: Entry[],
   hiddenLogins: ReadonlySet<string>,
 ): Promise<Entry[]> {
-  const results = await mapConcurrent(entriesResult, 8, async (entry) => {
-    const login = entry.login ?? entry.key;
-    if (!login) {
-      return entry;
-    }
-    const normalized = normalizeLogin(login)?.toLowerCase();
-    if (normalized && hiddenLogins.has(normalized)) {
-      return null;
-    }
-    return (await isDefaultGitHubAvatar(login)) ? null : entry;
-  });
+  const results = await pMap(
+    entriesResult,
+    async (entry) => {
+      const login = entry.login ?? entry.key;
+      if (!login) {
+        return entry;
+      }
+      const normalized = normalizeLogin(login)?.toLowerCase();
+      if (normalized && hiddenLogins.has(normalized)) {
+        return null;
+      }
+      return (await isDefaultGitHubAvatar(login)) ? null : entry;
+    },
+    { concurrency: 8, stopOnError: true },
+  );
   return results.filter((entry): entry is Entry => entry !== null);
-}
-
-async function mapConcurrent<T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = items.length;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex++;
-      results[index] = await mapper(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function readImageDimensions(buffer: Buffer): { width: number; height: number } | null {
@@ -702,7 +690,7 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } |
       continue;
     }
 
-    const marker = buffer[offset + 1];
+    const marker = expectDefined(buffer[offset + 1], `JPEG marker at byte ${offset + 1}`);
     offset += 2;
 
     if (marker === 0xd8 || marker === 0xd9) {
@@ -759,13 +747,15 @@ function resolveLogin(
   }
 
   if (email && email.endsWith("@users.noreply.github.com")) {
-    const local = email.split("@", 1)[0];
-    const login = local.includes("+") ? local.split("+")[1] : local;
+    const local = expectDefined(email.split("@", 1)[0], "GitHub noreply email local part");
+    const login = local.includes("+")
+      ? expectDefined(local.split("+")[1], "GitHub noreply email login suffix")
+      : local;
     return normalizeLogin(login);
   }
 
   if (email && email.endsWith("@github.com")) {
-    const login = email.split("@", 1)[0];
+    const login = expectDefined(email.split("@", 1)[0], "GitHub email local part");
     if (apiByLoginValue.has(login.toLowerCase())) {
       return normalizeLogin(login);
     }

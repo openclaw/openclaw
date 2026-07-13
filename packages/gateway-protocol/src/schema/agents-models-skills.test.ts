@@ -3,10 +3,13 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentsListResultSchema,
+  ModelsListParamsSchema,
+  ModelsListResultSchema,
   SkillsDetailResultSchema,
   SkillsProposalInspectResultSchema,
   SkillsProposalRequestRevisionResultSchema,
   ToolsEffectiveResultSchema,
+  ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
 
 /**
@@ -65,6 +68,31 @@ describe("AgentsListResultSchema", () => {
   });
 });
 
+describe("ModelsListParamsSchema", () => {
+  it("accepts the provider-config inventory view", () => {
+    expect(Value.Check(ModelsListParamsSchema, { view: "provider-config" })).toBe(true);
+    expect(Value.Check(ModelsListParamsSchema, { view: "provider-route" })).toBe(false);
+  });
+});
+
+describe("ModelsListResultSchema", () => {
+  it("accepts stable public input capabilities", () => {
+    const model = {
+      id: "gpt-image",
+      name: "GPT Image",
+      provider: "openai",
+      input: ["text", "image", "audio", "video", "document"],
+    };
+
+    expect(Value.Check(ModelsListResultSchema, { models: [model] })).toBe(true);
+    expect(
+      Value.Check(ModelsListResultSchema, {
+        models: [{ ...model, input: ["text", "binary"] }],
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("ToolsEffectiveResultSchema", () => {
   it("accepts runtime tool quarantine notices", () => {
     const result = {
@@ -96,6 +124,23 @@ describe("ToolsEffectiveResultSchema", () => {
     };
 
     expect(Value.Check(ToolsEffectiveResultSchema, result)).toBe(false);
+  });
+});
+
+describe("ToolsInvokeParamsSchema", () => {
+  it("accepts only the operation-local direct-operator marker", () => {
+    expect(
+      Value.Check(ToolsInvokeParamsSchema, {
+        name: "message",
+        conversationReadOrigin: "direct-operator",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ToolsInvokeParamsSchema, {
+        name: "message",
+        conversationReadOrigin: "delegated",
+      }),
+    ).toBe(false);
   });
 });
 

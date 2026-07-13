@@ -14,6 +14,18 @@ import {
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 
+type WorkflowStep = {
+  env?: Record<string, string>;
+  name?: string;
+  run?: string;
+  uses?: string;
+  with?: Record<string, unknown>;
+};
+
+type WorkflowMatrixEntry = {
+  check_name?: string;
+};
+
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
@@ -245,22 +257,30 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const dockerSuite = pluginWorkflow.jobs["plugin-prerelease-docker-suite"];
     const suite = pluginWorkflow.jobs["plugin-prerelease-suite"];
     const releaseWorkflow = readFullReleaseValidationWorkflow();
-    const manifestScript = preflight.steps.find((step) => step.name === "Build CI manifest").run;
-    const manifestEnv = preflight.steps.find((step) => step.name === "Build CI manifest").env;
+    const releaseWorkflowSource = readFileSync(
+      ".github/workflows/full-release-validation.yml",
+      "utf8",
+    );
+    const manifestScript = preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build CI manifest",
+    ).run;
+    const manifestEnv = preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build CI manifest",
+    ).env;
     const pluginManifestScript = pluginPreflight.steps.find(
-      (step) => step.name === "Build plugin prerelease manifest",
+      (step: WorkflowStep) => step.name === "Build plugin prerelease manifest",
     ).run;
     const pluginManifestEnv = pluginPreflight.steps.find(
-      (step) => step.name === "Build plugin prerelease manifest",
+      (step: WorkflowStep) => step.name === "Build plugin prerelease manifest",
     ).env;
     const normalCiScript = releaseWorkflow.jobs.normal_ci.steps.find(
-      (step) => step.name === "Dispatch and monitor CI",
+      (step: WorkflowStep) => step.name === "Dispatch and monitor CI",
     ).run;
     const pluginPrereleaseScript = releaseWorkflow.jobs.plugin_prerelease.steps.find(
-      (step) => step.name === "Dispatch and monitor plugin prerelease",
+      (step: WorkflowStep) => step.name === "Dispatch and monitor plugin prerelease",
     ).run;
     const buildDistStep = workflow.jobs["build-artifacts"].steps.find(
-      (step) => step.name === "Build dist",
+      (step: WorkflowStep) => step.name === "Build dist",
     );
 
     expect(workflow.jobs["plugin-prerelease-static-shard"]).toBeUndefined();
@@ -327,6 +347,19 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       required: false,
       type: "boolean",
     });
+    expect(workflow.on.workflow_dispatch.inputs.historical_target_tag).toEqual({
+      default: "",
+      description: "Semver release tag authorizing compatibility fallbacks for its exact commit",
+      required: false,
+      type: "string",
+    });
+    expect(workflow.on.workflow_dispatch.inputs.release_candidate_ref).toEqual({
+      default: "",
+      description:
+        "Canonical release branch authorizing compatibility fallbacks for its exact head",
+      required: false,
+      type: "string",
+    });
     expect(manifestEnv).toEqual({
       OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
       OPENCLAW_CI_DOCS_CHANGED:
@@ -334,6 +367,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       OPENCLAW_CI_DOCS_ONLY:
         "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}",
       OPENCLAW_CI_EVENT_NAME: "${{ github.event_name }}",
+      OPENCLAW_CI_HISTORICAL_TARGET: "${{ steps.historical_target.outputs.eligible || 'false' }}",
+      OPENCLAW_CI_RELEASE_CANDIDATE_TARGET:
+        "${{ steps.release_candidate_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
       OPENCLAW_CI_RUN_ANDROID:
         "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
@@ -355,15 +391,20 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
       OPENCLAW_CI_RUN_SKILLS_PYTHON:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
+      OPENCLAW_CI_RUN_TS_LOC:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ts_loc || 'false' }}",
+      OPENCLAW_CI_RUN_UI_TESTS:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
       OPENCLAW_CI_RUN_WINDOWS:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
+      OPENCLAW_CI_WORKFLOW_REVISION: "${{ github.sha }}",
     });
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
     expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mjs");
     expect(
       workflow.jobs["check-shard"].strategy.matrix.include.find(
-        (entry) => entry.check_name === "check-dependencies",
+        (entry: WorkflowMatrixEntry) => entry.check_name === "check-dependencies",
       ),
     ).toEqual({
       check_name: "check-dependencies",
@@ -371,11 +412,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(
-      workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,
+      workflow.jobs["check-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run check shard",
+      ).run,
     ).toContain("pnpm deadcode:ci");
-    expect(normalCiScript).toContain(
-      'dispatch_and_wait ci.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id"',
-    );
+    expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_REF")');
+    expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_CONTEXT_REF")');
+    expect(normalCiScript).toContain('args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")');
+    expect(releaseWorkflowSource).toContain('--arg targetContextRef "$TARGET_CONTEXT_REF"');
+    expect(releaseWorkflowSource).toContain("targetContextRef: $targetContextRef");
+    expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');
     expect(normalCiScript).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
       'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id"',
@@ -444,17 +490,22 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(extensionShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );
+    expect(
+      extensionShard.steps.find((step: WorkflowStep) => step.name === "Run extension shard").run,
+    ).toContain("--retry=1");
     expect(inspector.name).toBe("plugin-prerelease-inspector");
     expect(inspector.needs).toEqual(["preflight"]);
     expect(inspector.if).toBe("needs.preflight.outputs.run_plugin_prerelease_suite == 'true'");
     expect(inspector["continue-on-error"]).toBe(true);
     expect(inspector["runs-on"]).toBe("ubuntu-24.04");
     expect(inspector["timeout-minutes"]).toBe(30);
-    expect(inspector.steps.find((step) => step.name === "Setup Node environment").with).toEqual({
+    expect(
+      inspector.steps.find((step: WorkflowStep) => step.name === "Setup Node environment").with,
+    ).toEqual({
       "install-bun": "false",
     });
     const inspectorRun = inspector.steps.find(
-      (step) => step.name === "Run plugin inspector advisory sweep",
+      (step: WorkflowStep) => step.name === "Run plugin inspector advisory sweep",
     );
     expect(inspectorRun.env).toEqual({
       OPENCLAW_PLUGIN_INSPECTOR_ROOT: ".artifacts/plugin-inspector",
@@ -466,7 +517,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     );
     expect(inspectorRun.run).toContain("This job is informational");
     expect(
-      inspector.steps.find((step) => step.name === "Upload plugin inspector advisory artifacts"),
+      inspector.steps.find(
+        (step: WorkflowStep) => step.name === "Upload plugin inspector advisory artifacts",
+      ),
     ).toEqual({
       if: "always()",
       name: "Upload plugin inspector advisory artifacts",
@@ -478,7 +531,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       },
     });
     expect(
-      staticShard.steps.find((step) => step.name === "Run plugin prerelease static shard").run,
+      staticShard.steps.find(
+        (step: WorkflowStep) => step.name === "Run plugin prerelease static shard",
+      ).run,
     ).toContain('bash -c "$PLUGIN_PRERELEASE_COMMAND"');
     expect(dockerSuite).toEqual({
       if: "${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}",
@@ -498,6 +553,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         include_release_path_suites: false,
         include_repo_e2e: false,
         live_models_only: false,
+        allow_unreleased_changelog: true,
         ref: "${{ needs.preflight.outputs.checkout_revision }}",
         shared_image_artifact_namespace: "plugin-prerelease",
         shared_image_policy: "no-push-artifact",
@@ -514,7 +570,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "plugin-prerelease-docker-suite",
     ]);
     expect(
-      suite.steps.find((step) => step.name === "Verify plugin prerelease suite").run,
+      suite.steps.find((step: WorkflowStep) => step.name === "Verify plugin prerelease suite").run,
     ).toContain("plugin-prerelease-inspector advisory result");
   });
 
@@ -549,7 +605,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
     }
     expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(
-      "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
+      "${{ inputs.release_profile != 'beta' && 240 || 60 }}",
     );
     expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual(["resolve_target", "evidence_reuse"]);
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
@@ -563,7 +619,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
     const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
-      (step) => step.name === "Verify Docker runtime-assets prune path",
+      (step: WorkflowStep) => step.name === "Verify Docker runtime-assets prune path",
     );
     expect(dockerPreflightStep).toBeDefined();
     expect(dockerPreflightStep?.run).toContain("docker build");
@@ -574,14 +630,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     );
     expect(
       fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.some(
-        (step) => step.name === "Build and smoke test final Docker runtime image",
+        (step: WorkflowStep) => step.name === "Build and smoke test final Docker runtime image",
       ),
     ).toBe(false);
     expect(fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}",
     );
     expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(
-      "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
+      "${{ inputs.release_profile != 'beta' && 240 || 60 }}",
     );
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
     expect(

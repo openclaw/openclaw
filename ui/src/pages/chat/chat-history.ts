@@ -20,7 +20,11 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import type { ChatSideResult } from "../../lib/chat/side-result.ts";
+import {
+  retirePendingChatSideQuestion,
+  type ChatSideResult,
+  type ChatSideResultPending,
+} from "../../lib/chat/side-result.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -433,6 +437,7 @@ export type ChatState = {
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;
   chatLoading: boolean;
+  chatHistoryPagination?: ChatHistoryPagination;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
   chatThinkingLevel: string | null;
@@ -446,8 +451,12 @@ export type ChatState = {
   chatStreamStartedAt: number | null;
   lastError: string | null;
   chatError?: string | null;
-  chatSideResult?: ChatSideResult | null;
+  /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
+  chatSideChatTurns?: ChatSideResult[];
+  chatSideResultPending?: ChatSideResultPending | null;
   chatSideResultTerminalRuns?: Set<string>;
+  /** Panel closed via X/Escape; conversation kept until cleared or reset. */
+  chatSideChatHidden?: boolean;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
   onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
@@ -474,6 +483,11 @@ type ChatSessionMessageSubscriptionState = ChatState & {
 
 export type ChatHistoryResult = {
   messages?: Array<unknown>;
+  offset?: number;
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
+  completeSnapshot?: boolean;
   sessionId?: string;
   thinkingLevel?: string;
   verboseLevel?: string;
@@ -482,6 +496,38 @@ export type ChatHistoryResult = {
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
 };
+
+export type ChatHistoryPagination =
+  | { hasMore: false; totalMessages?: number; completeSnapshot?: true }
+  | { hasMore: true; nextOffset: number; totalMessages?: number };
+
+export function resolveChatHistoryPagination(
+  result: ChatHistoryResult | undefined,
+): ChatHistoryPagination {
+  const totalMessages = result?.totalMessages;
+  const validTotal =
+    typeof totalMessages === "number" && Number.isSafeInteger(totalMessages) && totalMessages >= 0
+      ? totalMessages
+      : undefined;
+  const nextOffset = result?.nextOffset;
+  if (
+    result?.hasMore === true &&
+    typeof nextOffset === "number" &&
+    Number.isSafeInteger(nextOffset) &&
+    nextOffset > 0
+  ) {
+    return {
+      hasMore: true,
+      nextOffset,
+      ...(validTotal !== undefined ? { totalMessages: validTotal } : {}),
+    };
+  }
+  return {
+    hasMore: false,
+    ...(validTotal !== undefined ? { totalMessages: validTotal } : {}),
+    ...(result?.completeSnapshot === true ? { completeSnapshot: true as const } : {}),
+  };
+}
 
 export type ChatMetadataResult = CommandsListResult & {
   models?: ModelCatalogEntry[];
@@ -836,7 +882,8 @@ export async function clearChatHistory(
     return "completed";
   }
   state.chatMessages = [];
-  state.chatSideResult = null;
+  state.chatSideChatTurns = [];
+  state.chatSideChatHidden = false;
   state.chatReplyTarget = null;
   reconcileChatRunLifecycle(state, {
     outcome: hadActiveRun ? "interrupted" : undefined,
@@ -849,6 +896,10 @@ export async function clearChatHistory(
     clearSideResultTerminalRuns: true,
     clearRunStatus: !hadActiveRun,
   });
+  // After the suppression-set wipe above: retire (not just drop) a pending
+  // BTW run so its late resultless terminal event cannot re-enter the freshly
+  // cleared transcript.
+  retirePendingChatSideQuestion(state);
   await loadChatHistory(state);
   scheduleChatScroll(state);
   return "completed";
@@ -900,6 +951,42 @@ export async function loadChatHistory(
     promise,
   });
   return promise;
+}
+
+export async function loadOlderChatHistoryPage(
+  state: ChatState,
+  offset: number,
+): Promise<ChatHistoryResult | undefined> {
+  if (!state.client || !state.connected) {
+    return undefined;
+  }
+  const client = state.client;
+  const sessionKey = state.sessionKey;
+  const requestAgentId = isUiSelectedGlobalSessionKey(sessionKey)
+    ? resolveUiSelectedSessionAgentId(state)
+    : undefined;
+  const ownership = beginChatHistoryRequest(
+    state,
+    client,
+    state.connectionEpoch,
+    sessionKey,
+    requestAgentId,
+  );
+  const result = await client.request<ChatHistoryResult>("chat.history", {
+    sessionKey,
+    ...(requestAgentId ? { agentId: requestAgentId } : {}),
+    limit: CHAT_HISTORY_REQUEST_LIMIT,
+    offset,
+  });
+  if (!shouldApplyChatHistoryResult(state, ownership)) {
+    return undefined;
+  }
+  return {
+    ...result,
+    messages: (Array.isArray(result.messages) ? result.messages : []).filter(
+      (message) => !shouldHideHistoryMessage(message),
+    ),
+  };
 }
 
 export function applyChatAgentsList(
@@ -1005,6 +1092,7 @@ async function loadChatHistoryUncached(
       return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
+    state.chatHistoryPagination = resolveChatHistoryPagination(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     const lateOptimisticTail = collectLateOptimisticTailMessages(

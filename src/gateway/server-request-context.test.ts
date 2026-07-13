@@ -3,10 +3,9 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServerLiveState } from "./server-live-state.js";
-import {
-  createGatewayRequestContext,
-  type GatewayRequestContextParams,
-} from "./server-request-context.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+
+type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
 
 function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
@@ -30,7 +29,9 @@ function makeContextParams(
     isTerminalEnabled: vi.fn(() => false),
     execApprovalManager: undefined,
     pluginApprovalManager: undefined,
+    listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
+    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
     getHealthCache: vi.fn(() => null),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     logHealth: { error: vi.fn() },

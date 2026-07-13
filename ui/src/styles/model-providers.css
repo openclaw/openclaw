@@ -1,0 +1,41 @@
+/* Model Providers settings page leftovers; provider usage details reuse
+   provider-usage-* styles from usage.css and .provider-brand-icon from
+   components.css. Structural surfaces come from settings.css. */
+
+.model-providers__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.model-providers__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.model-providers__icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+}
+
+.model-providers__icon.provider-brand-icon--fallback {
+  font-size: 12px;
+}
+
+.model-providers__no-stats,
+.model-providers__local-cost-detail {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.model-providers__local-cost {
+  display: grid;
+  gap: var(--space-1);
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding-top: var(--space-3);
+}

@@ -5,13 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readQaJsonBody } from "./bus-server.js";
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
-import {
-  startQaLabServer,
-  writeQaLabServerError,
-  type QaLabServerStartParams,
-} from "./lab-server.js";
+import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -494,7 +489,7 @@ describe("qa-lab server", () => {
                 provider: {
                   id: "mock-openai",
                   live: false,
-                  model: { name: "mock-openai/gpt-5.5", ref: "mock-openai/gpt-5.5" },
+                  model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
                 },
                 packageSource: { kind: "source-checkout" },
                 artifacts: [{ kind: "log", path: "artifact.log", source: "vitest" }],
@@ -605,38 +600,6 @@ describe("qa-lab server", () => {
     outsideUrl.searchParams.set("artifactPath", outsideArtifact);
     const outsideResponse = await fetchWithRetry(outsideUrl.toString());
     expect(outsideResponse.status).toBe(404);
-  });
-
-  it("returns controlled errors for oversized JSON body reads", async () => {
-    const req = {
-      headers: { "content-length": String(1024 * 1024 + 1) },
-      destroyed: false,
-      destroy() {
-        this.destroyed = true;
-      },
-    };
-    const res = {
-      statusCode: 0,
-      body: "",
-      writeHead(statusCode: number) {
-        this.statusCode = statusCode;
-      },
-      end(payload: string) {
-        this.body = payload;
-      },
-    };
-
-    let error: unknown;
-    try {
-      await readQaJsonBody(req as never);
-    } catch (caught) {
-      error = caught;
-    }
-
-    writeQaLabServerError(res as never, error);
-
-    expect(res.statusCode).toBe(413);
-    expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
   });
 
   it("returns controlled errors for malformed JSON body reads", async () => {
@@ -869,9 +832,9 @@ describe("qa-lab server", () => {
         `fs.writeFileSync(${JSON.stringify(markerPath)}, process.argv.slice(2).join(" "), "utf8");`,
         "process.stdout.write(JSON.stringify({",
         "  models: [{",
-        '    key: "openai/gpt-5.5",',
-        '    name: "GPT-5.5",',
-        '    input: "openai/gpt-5.5",',
+        '    key: "openai/gpt-5.6-luna",',
+        '    name: "GPT-5.6 Luna",',
+        '    input: "openai/gpt-5.6-luna",',
         "    available: true,",
         "    missing: false,",
         "  }],",
@@ -1083,7 +1046,7 @@ describe("qa-lab server", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.5",
+        model: "gpt-5.6-luna",
         captureOrigin: "shared-fetch",
       }),
     });
@@ -1104,7 +1067,7 @@ describe("qa-lab server", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.5",
+        model: "gpt-5.6-luna",
         captureOrigin: "shared-fetch",
       }),
     });
@@ -1148,7 +1111,7 @@ describe("qa-lab server", () => {
     expect(events.events.map((event) => event.flowId)).toContain("flow-1");
     const flow1 = events.events.find((event) => event.flowId === "flow-1");
     expect(flow1?.provider).toBe("openai");
-    expect(flow1?.model).toBe("gpt-5.5");
+    expect(flow1?.model).toBe("gpt-5.6-luna");
     expect(flow1?.captureOrigin).toBe("shared-fetch");
 
     const flow3 = events.events.find((event) => event.flowId === "flow-3");
@@ -1174,7 +1137,7 @@ describe("qa-lab server", () => {
     expect(coverage.coverage.providers.find((provider) => provider.value === "ollama")?.count).toBe(
       1,
     );
-    expect(coverage.coverage.models.find((model) => model.value === "gpt-5.5")?.count).toBe(2);
+    expect(coverage.coverage.models.find((model) => model.value === "gpt-5.6-luna")?.count).toBe(2);
     expect(coverage.coverage.models.find((model) => model.value === "kimi-k2.5:cloud")?.count).toBe(
       1,
     );
