@@ -3,19 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync, resolveRootPathSync } from "../infra/boundary-path.js";
-import {
-  acquireGatewayLock,
-  GatewayLockError,
-  type GatewayLockOptions,
-} from "../infra/gateway-lock.js";
+import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { DoctorSessionSqliteMode } from "./doctor-session-sqlite-types.js";
 
 const MAINTENANCE_LOCK_TIMEOUT_MS = 250;
 const MAINTENANCE_LOCK_POLL_INTERVAL_MS = 25;
 
+type AcquireGatewayLockOptions = NonNullable<Parameters<typeof acquireGatewayLock>[0]>;
+
 type MaintenanceLockOptions = Pick<
-  GatewayLockOptions,
+  AcquireGatewayLockOptions,
   | "lockDir"
   | "now"
   | "platform"
