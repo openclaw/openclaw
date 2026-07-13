@@ -69,20 +69,28 @@ type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
 
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 
-function withSessionResumeCapability(handle: AcpxRuntimeHandle): AcpRuntimeHandle {
-  const agentCapabilities = (handle as AcpxRuntimeHandle & { agentCapabilities?: unknown })
-    .agentCapabilities;
+function withSessionResumeCapability(
+  handle: AcpxRuntimeHandle,
+  record: AcpLoadedSessionRecord,
+): AcpRuntimeHandle {
+  const agentCapabilities =
+    typeof record === "object" && record !== null
+      ? (record as { agentCapabilities?: unknown }).agentCapabilities
+      : undefined;
   if (typeof agentCapabilities !== "object" || agentCapabilities === null) {
     return handle;
   }
   const capabilities = agentCapabilities as {
     loadSession?: unknown;
-    sessionCapabilities?: { resume?: unknown };
+    sessionCapabilities?: { resume?: unknown } | null;
   };
+  const resumeCapability = capabilities.sessionCapabilities?.resume;
   return {
     ...handle,
     sessionResumeSupported:
-      capabilities.loadSession === true || capabilities.sessionCapabilities?.resume === true,
+      capabilities.loadSession === true ||
+      resumeCapability === true ||
+      (typeof resumeCapability === "object" && resumeCapability !== null),
   };
 }
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
@@ -1135,7 +1143,8 @@ export class AcpxRuntime implements AcpRuntime {
             run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
           }),
       });
-      return withSessionResumeCapability(handle);
+      const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+      return withSessionResumeCapability(handle, record);
     }
 
     const normalizedInput = {
@@ -1157,7 +1166,8 @@ export class AcpxRuntime implements AcpRuntime {
           }),
         ),
     });
-    return withSessionResumeCapability(handle);
+    const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+    return withSessionResumeCapability(handle, record);
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {

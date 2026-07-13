@@ -2003,12 +2003,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it.each([
-    [{ sessionCapabilities: { resume: true } }, true],
+    [{ sessionCapabilities: { resume: {} } }, true],
     [{ loadSession: true }, true],
-    [{ sessionCapabilities: {} }, false],
+    [{ sessionCapabilities: { resume: null } }, false],
   ] as const)("reports ACP session resume capability %#", async (agentCapabilities, expected) => {
     const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
+      load: vi.fn(async () => ({ agentCapabilities })),
       save: vi.fn(async () => {}),
     };
     const { runtime, delegate } = makeRuntime(baseStore);
@@ -2016,8 +2016,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       sessionKey: "agent:claude:acp:test",
       backend: "acpx",
       runtimeSessionName: "claude",
-      agentCapabilities,
-    } as never);
+    });
 
     const result = await runtime.ensureSession({
       sessionKey: "agent:claude:acp:test",
