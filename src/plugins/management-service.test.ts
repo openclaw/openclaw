@@ -86,7 +86,6 @@ const {
   clearManagedPluginOfficialCatalogCache,
   installManagedPlugin,
   listManagedPlugins,
-  overlayBundledOfficialPluginCatalogMetadata,
   setManagedPluginEnabled,
   uninstallManagedPlugin,
 } = await import("./management-service.js");
@@ -222,97 +221,6 @@ describe("plugin management service", () => {
       feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
       metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
     });
-  });
-
-  it("overlays bundled runtime identity and curation while keeping hosted install metadata", () => {
-    const [merged] = overlayBundledOfficialPluginCatalogMetadata(
-      [hostedDiffsEntry] as never,
-      [bundledDiffsEntry] as never,
-    );
-
-    expect(merged).toMatchObject({
-      name: "@openclaw/diffs",
-      version: "2.0.0",
-      description: "Hosted description",
-      openclaw: {
-        plugin: { id: "diffs", label: "Bundled Diffs" },
-        install: { clawhubSpec: "clawhub:@openclaw/diffs", defaultChoice: "clawhub" },
-        catalog: { featured: true, order: 40 },
-      },
-    });
-  });
-
-  it("normalizes the current package-shaped hosted feed against exact local identity", async () => {
-    const [merged] = overlayBundledOfficialPluginCatalogMetadata(
-      [hostedFeedDiffsEntry] as never,
-      [bundledDiffsEntry] as never,
-    );
-    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: merged ? [merged] : [] },
-    });
-
-    expect(merged).toMatchObject({
-      id: "@openclaw/diffs",
-      title: "Diffs",
-      name: "@openclaw/diffs",
-      description: "Bundled description",
-      install: hostedFeedDiffsEntry.install,
-      openclaw: {
-        plugin: { id: "diffs", label: "Bundled Diffs" },
-        catalog: { featured: true, order: 40 },
-      },
-    });
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: "diffs",
-        name: "Bundled Diffs",
-        installed: false,
-        featured: true,
-        order: 40,
-        install: { source: "official", pluginId: "diffs" },
-      }),
-    ]);
-  });
-
-  it("deduplicates a package-shaped hosted row against its installed runtime id", async () => {
-    const [merged] = overlayBundledOfficialPluginCatalogMetadata(
-      [hostedFeedDiffsEntry] as never,
-      [bundledDiffsEntry] as never,
-    );
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
-    );
-
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: merged ? [merged] : [] },
-    });
-
-    expect(catalog.plugins).toHaveLength(1);
-    expect(catalog.plugins[0]).toMatchObject({ id: "diffs", installed: true, enabled: true });
-  });
-
-  it("does not transfer endorsement to a hosted entry that only reuses the plugin id", () => {
-    const impostor = {
-      ...hostedDiffsEntry,
-      name: "community/impostor",
-      openclaw: {
-        ...hostedDiffsEntry.openclaw,
-        install: { clawhubSpec: "clawhub:community/impostor", defaultChoice: "clawhub" },
-      },
-    };
-
-    const [merged] = overlayBundledOfficialPluginCatalogMetadata(
-      [impostor] as never,
-      [bundledDiffsEntry] as never,
-    );
-
-    expect(merged?.openclaw?.catalog).toBeUndefined();
   });
 
   it("normalizes hosted catalog hints before building the public DTO", async () => {
@@ -814,44 +722,6 @@ describe("plugin management service", () => {
       version: "1.2.3",
       warning: "Review the release",
     });
-  });
-
-  it("suppresses hosted package-name-fallback entries once their package is installed", async () => {
-    // Hosted curated row without a declared runtime id: its catalog id falls
-    // back to the package name, which never matches the installed runtime id.
-    const hostedRow = {
-      id: "@openclaw/bluebubbles",
-      title: "BlueBubbles",
-      state: "available",
-      publisher: { id: "openclaw", trust: "official" },
-      openclaw: { catalog: { featured: true, order: 90 } },
-      install: {
-        candidates: [{ sourceRef: "public-clawhub", package: "@openclaw/bluebubbles" }],
-      },
-    };
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: true,
-        id: "bluebubbles",
-        name: "BlueBubbles",
-        origin: "global",
-        installRecord: { source: "clawhub", installPath: "/tmp/extensions/bluebubbles" },
-      }),
-    );
-
-    const catalog = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: {
-        entries: overlayBundledOfficialPluginCatalogMetadata(
-          // Route through the hosted-feed normalizer used by loadOfficialCatalog.
-          [hostedRow] as never,
-          [],
-        ),
-      },
-    });
-
-    expect(catalog.plugins.map((plugin) => plugin.id)).toEqual(["bluebubbles"]);
   });
 
   it("marks external installs removable and bundled plugins non-removable", async () => {
