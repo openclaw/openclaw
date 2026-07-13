@@ -1,5 +1,4 @@
 // Verifies pruning-related config defaults and migrations.
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
