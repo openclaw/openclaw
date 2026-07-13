@@ -14,7 +14,6 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
 
@@ -291,41 +290,5 @@ export function sidebarMoreMenuHoldsActiveRoute(params: {
       (routeId) =>
         params.isRouteEnabled(routeId) && isSidebarRouteActive(params.activeRouteId, routeId),
     )
-  );
-}
-
-// External rows of the footer agent menu. Docs-first: public docs pages over
-// raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
-const AGENT_MENU_LINKS: ReadonlyArray<{ href: string; icon: IconName; label: () => string }> = [
-  { href: "https://docs.openclaw.ai", icon: "book", label: () => t("common.docs") },
-  {
-    href: "https://docs.openclaw.ai/help",
-    icon: "messageSquare",
-    label: () => t("agentChip.getHelp"),
-  },
-  { href: "https://discord.gg/clawd", icon: "users", label: () => t("agentChip.discord") },
-  {
-    href: "https://docs.openclaw.ai/releases",
-    icon: "scrollText",
-    label: () => t("agentChip.viewChangelog"),
-  },
-];
-
-export function renderSidebarAgentMenuLinks(params: { onLinkClick: () => void }) {
-  return AGENT_MENU_LINKS.map(
-    (link) => html`
-      <a
-        class="sidebar-customize-menu__item"
-        role="menuitem"
-        tabindex="-1"
-        href=${link.href}
-        target=${EXTERNAL_LINK_TARGET}
-        rel=${buildExternalLinkRel()}
-        @click=${() => params.onLinkClick()}
-      >
-        <span class="nav-item__icon" aria-hidden="true">${icons[link.icon]}</span>
-        <span class="sidebar-customize-menu__text">${link.label()}</span>
-      </a>
-    `,
   );
 }
