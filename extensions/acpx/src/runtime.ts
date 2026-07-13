@@ -630,6 +630,17 @@ function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegate
   } as AcpxDelegateEnsureInput;
 }
 
+function withResumeSafeAcpxSessionMode(
+  input: OpenClawRuntimeEnsureInput,
+): OpenClawRuntimeEnsureInput {
+  if (input.mode !== "oneshot" || !input.resumeSessionId?.trim()) {
+    return input;
+  }
+  // ACPX permits a one-shot reconnect to create a fresh backend session. Keep an explicitly
+  // resumed follow-up connected until OpenClaw closes it after the turn instead.
+  return { ...input, mode: "persistent" };
+}
+
 function isAcpModelCapabilityMissingError(error: unknown): boolean {
   return isRequestedModelUnsupportedError(error) && error.reason === "missing-capability";
 }
@@ -1106,6 +1117,7 @@ export class AcpxRuntime implements AcpRuntime {
     input: Parameters<AcpRuntime["ensureSession"]>[0],
   ): Promise<AcpRuntimeHandle> {
     assertSupportedRuntimeSessionMode(input.mode);
+    const resumeSafeInput = withResumeSafeAcpxSessionMode(input);
     const command = resolveAgentCommand({
       agentName: input.agent,
       agentRegistry: this.agentRegistry,
@@ -1118,14 +1130,16 @@ export class AcpxRuntime implements AcpRuntime {
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command)
         ? normalizeCodexAcpModelOverride(input.model, input.thinking)
         : undefined;
-    const ensureInput = claudeModelOverride ? { ...input, model: claudeModelOverride } : input;
+    const ensureInput = claudeModelOverride
+      ? { ...resumeSafeInput, model: claudeModelOverride }
+      : resumeSafeInput;
     const stableLaunchCommand =
       codexModelOverride && command
         ? appendCodexAcpConfigOverrides(command, codexModelOverride)
         : command;
     const shouldStartWithLease = !(await this.canReuseStablePersistentSession({
       sessionKey: input.sessionKey,
-      mode: input.mode,
+      mode: ensureInput.mode,
       cwd: input.cwd,
       command: stableLaunchCommand,
       resumeSessionId: input.resumeSessionId,
