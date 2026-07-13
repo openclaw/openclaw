@@ -1214,7 +1214,7 @@ export async function startGatewayServer(
       (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
         DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
   });
-  applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(cfgAtStart));
+  applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(cfgAtStart), { gatewayStart: true });
 
   runtimeState = createGatewayServerLiveState({
     hooksConfig: initialHooksConfig,

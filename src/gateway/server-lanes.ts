@@ -21,15 +21,23 @@ export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneC
   };
 }
 
-export function applyGatewayLaneConcurrency(concurrency: GatewayLaneConcurrency): void {
-  enableSessionSuspensionTimersForGatewayStart();
+export function applyGatewayLaneConcurrency(
+  concurrency: GatewayLaneConcurrency,
+  opts: { gatewayStart?: boolean } = {},
+): void {
+  if (opts.gatewayStart) {
+    enableSessionSuspensionTimersForGatewayStart();
+  }
   // Resolution is deliberately separate: this commit-edge applier only updates
   // live queue state and cannot reject a config midway through publication.
   setCommandLaneConcurrency(CommandLane.Cron, concurrency.cron);
   // Cron isolated agent turns remap inner LLM work to this lane.
   setCommandLaneConcurrency(CommandLane.CronNested, concurrency.cron);
   setCommandLaneConcurrency(CommandLane.Main, concurrency.main);
-  // sessions.send work uses a shared nested lane with no config knob.
-  setCommandLaneConcurrency(CommandLane.Nested, 1);
+  if (opts.gatewayStart) {
+    // sessions.send work uses a shared nested lane with no config knob; live
+    // reload must not resume a currently suspended nested lane before its TTL.
+    setCommandLaneConcurrency(CommandLane.Nested, 1);
+  }
   setCommandLaneConcurrency(CommandLane.Subagent, concurrency.subagent);
 }

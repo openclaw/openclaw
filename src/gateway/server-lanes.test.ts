@@ -13,8 +13,11 @@ import { CommandLane } from "../process/lanes.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 
-function applyConfigLaneConcurrency(config: OpenClawConfig): void {
-  applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config));
+function applyConfigLaneConcurrency(
+  config: OpenClawConfig,
+  opts: { gatewayStart?: boolean } = {},
+): void {
+  applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config), opts);
 }
 
 describe("applyGatewayLaneConcurrency", () => {
@@ -104,7 +107,9 @@ describe("applyGatewayLaneConcurrency", () => {
   });
 
   it("keeps the shared nested lane at its default concurrency", async () => {
-    applyConfigLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig);
+    applyConfigLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig, {
+      gatewayStart: true,
+    });
 
     let startedRuns = 0;
     const releaseRuns = createDeferred();
@@ -125,7 +130,7 @@ describe("applyGatewayLaneConcurrency", () => {
 
   it("restores a suspended shared nested lane on gateway startup", async () => {
     setCommandLaneConcurrency(CommandLane.Nested, 0);
-    applyConfigLaneConcurrency({} as OpenClawConfig);
+    applyConfigLaneConcurrency({} as OpenClawConfig, { gatewayStart: true });
 
     let started = false;
     await enqueueCommandInLane(
@@ -136,6 +141,27 @@ describe("applyGatewayLaneConcurrency", () => {
       { warnAfterMs: 10_000 },
     );
 
+    expect(started).toBe(true);
+  });
+
+  it("does not resume a suspended shared nested lane during live config publication", async () => {
+    setCommandLaneConcurrency(CommandLane.Nested, 0);
+    applyConfigLaneConcurrency({} as OpenClawConfig);
+
+    let started = false;
+    const nestedRun = enqueueCommandInLane(
+      CommandLane.Nested,
+      async () => {
+        started = true;
+      },
+      { warnAfterMs: 10_000 },
+    );
+    await Promise.resolve();
+
+    expect(started).toBe(false);
+
+    setCommandLaneConcurrency(CommandLane.Nested, 1);
+    await nestedRun;
     expect(started).toBe(true);
   });
 });
