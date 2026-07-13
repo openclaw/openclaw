@@ -19,7 +19,7 @@ type TextFragmentEntry = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-export type TelegramTextFragmentInput = {
+type TelegramTextFragmentInput = {
   ctx: TelegramContext;
   msg: Message;
   chatId: number;
