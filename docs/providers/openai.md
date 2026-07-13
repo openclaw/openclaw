@@ -206,9 +206,8 @@ for the full example.
 
 For instruction-aware OpenAI or OpenAI-compatible embedding models, set
 `queryInstructionTemplate: true` under `memorySearch` to apply a known retrieval
-query template for matching Qwen3 embedding, Nomic `nomic-embed-text`, and
-Mixedbread `mxbai-embed-large` model ids. Indexed memory document batches stay
-raw.
+query template for matching Qwen3 embedding and Mixedbread `mxbai-embed-large`
+model ids. Indexed memory document batches stay raw.
 
 ## Getting started
 

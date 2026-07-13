@@ -238,7 +238,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     | `inputType`                | `string`  | unset   | Shared `input_type` for query and document embeddings                       |
     | `queryInputType`           | `string`  | unset   | Query-time `input_type`; overrides `inputType`                              |
     | `documentInputType`        | `string`  | unset   | Index/document `input_type`; overrides `inputType`                          |
-    | `queryInstructionTemplate` | `boolean` | `false` | Apply a known retrieval query template for Qwen3, Nomic, or Mixedbread IDs  |
+    | `queryInstructionTemplate` | `boolean` | `false` | Apply a known retrieval query template for Qwen3 or Mixedbread IDs         |
 
     ```json5
     {
