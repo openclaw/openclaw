@@ -563,7 +563,16 @@ export async function buildProbeTargets(params: {
         }
       }
       if (environmentValue) {
-        const mode = environmentValue.source.includes("OAUTH_TOKEN") ? "oauth" : "api_key";
+        // Honor an explicit provider auth override (token/oauth) the way normal
+        // dispatch does; only fall back to the env-name heuristic when the
+        // provider does not pin a mode, so a token-auth provider fed by a
+        // *_API_KEY var is not misprobed as api-key and falsely failed.
+        const mode =
+          configuredProvider?.auth === "oauth" || configuredProvider?.auth === "token"
+            ? configuredProvider.auth
+            : environmentValue.source.includes("OAUTH_TOKEN")
+              ? "oauth"
+              : "api_key";
         if (model) {
           targets.push({
             provider: providerKey,
@@ -613,7 +622,15 @@ export async function buildProbeTargets(params: {
         const profile = store.profiles[profileId];
         const mode = profile?.type;
         const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
-        if (explicitOrder && !explicitOrder.includes(profileId)) {
+        // A profile referenced by models.providers.<id>.apiKey is resolved by
+        // runtime binding ahead of auth.order fallback, so it stays effective
+        // even when excluded from auth.order. Probe it instead of reporting it
+        // as excluded, matching runtime credential precedence.
+        const isConfigBoundProfile =
+          includeConfigKey &&
+          configuredReference.kind === "profile" &&
+          profileId === configuredReference.profileId;
+        if (!isConfigBoundProfile && explicitOrder && !explicitOrder.includes(profileId)) {
           results.push({
             provider: providerKey,
             profileId,
@@ -627,7 +644,7 @@ export async function buildProbeTargets(params: {
           });
           continue;
         }
-        if (allowedProfiles && !allowedProfiles.has(profileId)) {
+        if (!isConfigBoundProfile && allowedProfiles && !allowedProfiles.has(profileId)) {
           const eligibility = resolveAuthProfileEligibility({
             cfg,
             store,

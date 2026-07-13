@@ -599,6 +599,89 @@ describe("buildProbeTargets reason codes", () => {
     ]);
   });
 
+  it("probes a config-bound profile even when auth.order excludes it", async () => {
+    const ref = "anthropic:saved";
+    mockStore = {
+      version: 1,
+      profiles: {
+        [ref]: { type: "api_key", provider: "anthropic", key: "placeholder" },
+        "anthropic:other": { type: "api_key", provider: "anthropic", key: "placeholder" },
+      },
+      // Explicit order excludes the config-referenced profile; runtime still
+      // binds it from the provider apiKey, so the probe must not report it
+      // excluded_by_auth_order.
+      order: { anthropic: ["anthropic:other"] },
+    };
+    mockAllowedProfiles = ["anthropic:other"];
+    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+
+    const plan = await buildProbeTargets({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com/v1",
+              api: "anthropic-messages",
+              ...Object.fromEntries([["apiKey", ref]]),
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: ["anthropic/claude-sonnet-4-6"],
+      options: {
+        includeDirectKeys: true,
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.results).not.toContainEqual(
+      expect.objectContaining({ profileId: ref, reasonCode: "excluded_by_auth_order" }),
+    );
+    expect(plan.targets).toContainEqual(
+      expect.objectContaining({ profileId: ref, source: "profile" }),
+    );
+  });
+
+  it("probes an environment credential with the configured token auth mode", async () => {
+    await withEnvAsync(
+      Object.fromEntries([["ZAI_API_KEY", ["env", "zai"].join("-")]]),
+      async () => {
+        mockStore = { version: 1, profiles: {}, order: {} };
+        mockAllowedProfiles = [];
+        const plan = await buildProbeTargets({
+          cfg: {
+            models: {
+              providers: {
+                zai: {
+                  baseUrl: "https://api.z.ai/v1",
+                  api: "openai-responses",
+                  auth: "token",
+                  models: [],
+                },
+              },
+            },
+          } as OpenClawConfig,
+          providers: ["zai"],
+          modelCandidates: ["zai/glm-4.7"],
+          options: {
+            includeDirectKeys: true,
+            timeoutMs: 5_000,
+            concurrency: 1,
+            maxTokens: 16,
+          },
+        });
+
+        expect(plan.targets).toContainEqual(
+          expect.objectContaining({ source: "env", label: "env: ZAI_API_KEY", mode: "token" }),
+        );
+      },
+    );
+  });
+
   it("matches canonical providers against alias-valued catalog probe models", async () => {
     await withClearedZaiEnv(async () => {
       mockStore = {
