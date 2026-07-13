@@ -3,7 +3,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import pMap from "p-map";
 import {
@@ -33,11 +32,8 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-  parseModelRef,
-} from "../../agents/model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import {
   resolveSessionTranscriptPath,
@@ -53,7 +49,8 @@ import { type SecretRefResolveCache, resolveSecretRefString } from "../../secret
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { redactSecrets } from "../status-all/format.js";
-import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
+import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
+import { formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
@@ -168,73 +165,6 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
     return "format";
   }
   return "unknown";
-}
-
-function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  for (const raw of modelCandidates) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
-    if (!parsed) {
-      continue;
-    }
-    const list = map.get(parsed.provider) ?? [];
-    if (!list.includes(parsed.model)) {
-      list.push(parsed.model);
-    }
-    map.set(parsed.provider, list);
-  }
-  return map;
-}
-
-function catalogProbePriority(provider: string, modelId: string): number {
-  const id = modelId.trim().toLowerCase();
-  if (provider !== "anthropic") {
-    return 50;
-  }
-  if (/^claude-haiku-4-5-\d{8}$/.test(id)) {
-    return 0;
-  }
-  if (id === "claude-haiku-4-5") {
-    return 1;
-  }
-  if (id === "claude-sonnet-5" || id.startsWith("claude-sonnet-5-")) {
-    return 2;
-  }
-  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
-    return 3;
-  }
-  if (id.startsWith("claude-sonnet-4-")) {
-    return 4;
-  }
-  if (id.startsWith("claude-3-")) {
-    return 100;
-  }
-  return 50;
-}
-
-function selectProbeModel(params: {
-  provider: string;
-  candidates: Map<string, string[]>;
-  catalog: Array<{ provider: string; id: string }>;
-}): { provider: string; model: string } | null {
-  const { provider, candidates, catalog } = params;
-  const direct = candidates.get(provider);
-  if (direct && direct.length > 0) {
-    return { provider, model: expectDefined(direct[0], "direct entry at 0") };
-  }
-  const fromCatalog = catalog
-    .map((entry, index) => ({ entry, index }))
-    .filter(({ entry }) => normalizeProviderId(entry.provider) === provider)
-    .toSorted((left, right) => {
-      const priority =
-        catalogProbePriority(provider, left.entry.id) -
-        catalogProbePriority(provider, right.entry.id);
-      return priority || left.index - right.index;
-    })[0]?.entry;
-  if (fromCatalog) {
-    return { provider, model: fromCatalog.id };
-  }
-  return null;
 }
 
 function mapEligibilityReasonToProbeReasonCode(
@@ -405,11 +335,14 @@ export async function buildProbeTargets(params: {
   options: AuthProbeOptions;
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
   const { cfg, agentDir, providers, modelCandidates, options, workspaceDir } = params;
+  const authAliasLookupParams = { config: cfg, workspaceDir };
   const store = ensureAuthProfileStore(agentDir, {
     externalCli: externalCliDiscoveryScoped({
       config: cfg,
       allowKeychainPrompt: false,
-      providerIds: providers,
+      providerIds: providers.map((provider) =>
+        resolveProviderIdForAuth(provider, authAliasLookupParams),
+      ),
       profileIds: options.profileIds,
     }),
   });
@@ -418,12 +351,13 @@ export async function buildProbeTargets(params: {
   const profileFilter = new Set(normalizeUniqueStringEntries(options.profileIds));
   const refResolveCache: SecretRefResolveCache = {};
   const catalog = await loadModelCatalog({ config: cfg });
-  const candidates = buildCandidateMap(modelCandidates);
+  const candidates = buildProbeCandidateMap(modelCandidates);
   const targets: AuthProbeTarget[] = [];
   const results: AuthProbeResult[] = [];
 
   for (const provider of providers) {
     const providerKey = normalizeProviderId(provider);
+    const authProviderKey = resolveProviderIdForAuth(providerKey, authAliasLookupParams);
     if (providerFilterKey && providerKey !== providerFilterKey) {
       continue;
     }
@@ -439,9 +373,13 @@ export async function buildProbeTargets(params: {
       includeDirectKeys &&
       profileFilter.size === 0 &&
       hasConfiguredSecretInput(configuredProvider?.apiKey, cfg.secrets?.defaults);
-    const profileIds = listProfilesForProvider(store, providerKey);
+    const profileIds = listProfilesForProvider(store, authProviderKey);
     const configuredReference = includeConfigKey
-      ? resolveProviderEntryApiKeyProfileReference({ cfg, provider: providerKey, store })
+      ? resolveProviderEntryApiKeyProfileReference({
+          cfg,
+          provider: providerKey,
+          store,
+        })
       : ({ kind: "none" } as const);
     const configuredBinding =
       configuredReference.kind === "profile" && !profileIds.includes(configuredReference.profileId)
@@ -473,7 +411,7 @@ export async function buildProbeTargets(params: {
         ? configuredProvider.auth
         : "api_key";
     const resolvedEnvironmentValue = includeDirectKeys
-      ? resolveEnvApiKey(providerKey, process.env, {
+      ? resolveEnvApiKey(authProviderKey, process.env, {
           config: cfg,
           workspaceDir,
         })
@@ -596,12 +534,11 @@ export async function buildProbeTargets(params: {
         }
       }
     };
-    const explicitOrder = (() => {
-      return (
-        findNormalizedProviderValue(store.order, providerKey) ??
-        findNormalizedProviderValue(cfg?.auth?.order, providerKey)
-      );
-    })();
+    const explicitOrder =
+      findNormalizedProviderValue(store.order, authProviderKey) ??
+      findNormalizedProviderValue(store.order, providerKey) ??
+      findNormalizedProviderValue(cfg?.auth?.order, authProviderKey) ??
+      findNormalizedProviderValue(cfg?.auth?.order, providerKey);
     const orderResolution = resolveAuthProfileOrderWithMetadata({
       cfg,
       store,
@@ -725,7 +662,7 @@ export async function buildProbeTargets(params: {
 
     const envKey = orderResolution.hasExplicitOrder
       ? null
-      : resolveEnvApiKey(providerKey, process.env, {
+      : resolveEnvApiKey(authProviderKey, process.env, {
           config: cfg,
           workspaceDir,
         });
