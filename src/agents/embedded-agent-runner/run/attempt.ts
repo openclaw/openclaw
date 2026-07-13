@@ -345,6 +345,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
+import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
@@ -411,8 +412,10 @@ import {
   installPromptSubmissionLockRelease,
 } from "./attempt.session-lock.js";
 import {
+  isSessionsYieldAbortError,
   persistSessionsYieldContextMessage,
   queueSessionsYieldInterruptMessage,
+  SESSIONS_YIELD_ABORT_REASON,
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
@@ -1296,6 +1299,7 @@ export async function runEmbeddedAttempt(
       !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
+      params.skillWorkshopProposalOnly !== true &&
       params.toolsAllow?.length !== 0 &&
       codeModeConfig.enabled;
     const toolSearchControlsEnabledForRun =
@@ -1303,6 +1307,7 @@ export async function runEmbeddedAttempt(
       !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
+      params.skillWorkshopProposalOnly !== true &&
       params.toolsAllow?.length !== 0 &&
       !codeModeControlsEnabledForRun &&
       toolSearchConfig.enabled;
@@ -1465,6 +1470,11 @@ export async function runEmbeddedAttempt(
             abortSignal: runAbortController.signal,
             modelProvider: params.provider,
             modelId: params.modelId,
+            skillWorkshop: {
+              proposalOnly: params.skillWorkshopProposalOnly,
+              origin: params.skillWorkshopOrigin,
+              proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+            },
             modelCompat: extractModelCompat(params.model),
             modelApi: params.model.api,
             modelContextWindowTokens: params.model.contextWindow,
@@ -1518,7 +1528,7 @@ export async function runEmbeddedAttempt(
               yieldDetected = true;
               yieldMessage = message;
               queueYieldInterruptForSession?.();
-              runAbortController.abort("sessions_yield");
+              runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
               abortSessionForYield?.();
             },
           });
@@ -2875,8 +2885,8 @@ export async function runEmbeddedAttempt(
         trackSettlePromise(inFlightPromptSettlePromises, promise);
       const trackAbortSettlePromise = (promise: Promise<void>): Promise<void> =>
         trackSettlePromise(inFlightAbortSettlePromises, promise);
-      const abortActiveSession = (): Promise<void> =>
-        trackAbortSettlePromise(Promise.resolve(activeSession.abort()));
+      const abortActiveSession = (reason?: unknown): Promise<void> =>
+        trackAbortSettlePromise(Promise.resolve(activeSession.abort(reason)));
       abortActiveSessionForExternalSignal = abortActiveSession;
       buildAbortSettlePromise = (): Promise<void> | null => {
         const promises = [...inFlightPromptSettlePromises, ...inFlightAbortSettlePromises];
@@ -2886,7 +2896,7 @@ export async function runEmbeddedAttempt(
         return Promise.allSettled(promises).then(() => undefined);
       };
       abortSessionForYield = () => {
-        yieldAbortSettled = abortActiveSession();
+        yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
       };
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
@@ -4939,11 +4949,7 @@ export async function runEmbeddedAttempt(
           }
         } catch (err) {
           releaseLeasedSteering(err);
-          yieldAborted =
-            yieldDetected &&
-            isRunnerAbortError(err) &&
-            err instanceof Error &&
-            err.cause === "sessions_yield";
+          yieldAborted = yieldDetected && isSessionsYieldAbortError(err);
           cleanupYieldAborted = yieldAborted;
           if (yieldAborted) {
             aborted = false;
@@ -5387,23 +5393,15 @@ export async function runEmbeddedAttempt(
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
             },
-            ctx: {
-              runId: params.runId,
-              trace: freezeDiagnosticTraceContext(diagnosticTrace),
+            ctx: buildEmbeddedAgentEndContext({
+              run: params,
               agentId: hookAgentId,
-              sessionKey: params.sessionKey,
-              sessionId: params.sessionId,
-              workspaceDir: params.workspaceDir,
-              trigger: params.trigger,
-              ...(params.config ? { config: params.config } : {}),
-              ...buildAgentHookContextChannelFields(params),
-              ...buildAgentHookContextIdentityFields({
-                trigger: params.trigger,
-                senderId: params.senderId,
-                chatId: params.chatId,
-                channelContext: params.channelContext,
-              }),
-            },
+              trace: freezeDiagnosticTraceContext(diagnosticTrace),
+              skillWorkshopAvailable: uncompactedEffectiveTools.some(
+                (tool) => tool.name === "skill_workshop",
+              ),
+              compacted: compactionOccurredThisAttempt,
+            }),
             hookRunner,
           });
         }

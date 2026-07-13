@@ -22,7 +22,10 @@ import type {
   McpLoopbackRequestContext,
 } from "../../gateway/mcp-grant-store.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryPromptSection,
+} from "../../plugins/memory-state.test-fixtures.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,

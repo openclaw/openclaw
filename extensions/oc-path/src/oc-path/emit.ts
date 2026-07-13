@@ -22,7 +22,7 @@
  * @module @openclaw/oc-path/emit
  */
 
-import type { FrontmatterEntry, MdAst } from "./ast.js";
+import type { MdAst } from "./ast.js";
 import { guardSentinel } from "./sentinel.js";
 
 /**
@@ -127,4 +127,3 @@ function formatFrontmatterValue(value: string): string {
 
 // Re-export the frontmatter type for convenience so tests don't need
 // to import from ast.ts.
-export type { FrontmatterEntry };

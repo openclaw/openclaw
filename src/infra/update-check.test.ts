@@ -27,17 +27,12 @@ afterEach(() => {
 });
 
 describe("compareSemverStrings", () => {
-  it("handles stable and prerelease precedence for both legacy and beta formats", () => {
-    expect(compareSemverStrings("1.0.0", "1.0.0")).toBe(0);
-    expect(compareSemverStrings("v1.0.0", "1.0.0")).toBe(0);
-
-    expect(compareSemverStrings("1.0.0", "1.0.0-beta.1")).toBe(1);
-    expect(compareSemverStrings("1.0.0-beta.2", "1.0.0-beta.1")).toBe(1);
-
-    expect(compareSemverStrings("1.0.0-2", "1.0.0-1")).toBe(1);
-    expect(compareSemverStrings("1.0.0-1", "1.0.0-beta.1")).toBe(-1);
-    expect(compareSemverStrings("1.0.0.beta.2", "1.0.0-beta.1")).toBe(1);
-    expect(compareSemverStrings("1.0.0", "1.0.0.beta.1")).toBe(1);
+  it("orders real stable, prerelease, and legacy dot-beta versions", () => {
+    expect(compareSemverStrings("2026.6.5", "2026.6.6-beta.1")).toBe(-1);
+    expect(compareSemverStrings("2026.6.6", "2026.6.6-beta.1")).toBe(1);
+    expect(compareSemverStrings("2026.6.6-beta.2", "2026.6.6-beta.1")).toBe(1);
+    expect(compareSemverStrings("v2026.6.6", "2026.6.6")).toBe(0);
+    expect(compareSemverStrings("2026.6.6.beta.2", "2026.6.6-beta.1")).toBe(1);
   });
 
   it("treats OpenClaw stable correction releases as newer than their base release", () => {

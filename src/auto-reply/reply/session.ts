@@ -198,7 +198,7 @@ export type SessionInitResult = {
   triggerBodyNormalized: string;
 };
 
-export type InitSessionStateParams = {
+type InitSessionStateParams = {
   abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
@@ -322,7 +322,7 @@ function resolveInitSessionStateAttemptContext(
   };
 }
 
-export type ReplySessionPreprocessingState = {
+type ReplySessionPreprocessingState = {
   sessionEntry?: SessionEntry;
   sessionKey: string;
   storePath: string;

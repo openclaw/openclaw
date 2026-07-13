@@ -500,7 +500,7 @@ SDK.
   | `plugin-sdk/media-generation-runtime` | Shared media-generation helpers | Shared failover helpers, candidate selection, and missing-model messaging for image/video/music generation |
   | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
   | `plugin-sdk/text-runtime` | Deprecated broad text compatibility export | Use `string-coerce-runtime`, `text-chunking`, `text-utility-runtime`, and `logging-core` |
-  | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
+  | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text and offset-preserving range chunking helpers |
   | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
@@ -788,6 +788,18 @@ major release. Every entry maps the old API to its canonical replacement.
     remains wired as deprecated compatibility while existing providers
     migrate. Plugin inspection reports non-bundled usage as compatibility
     debt.
+
+  </Accordion>
+
+  <Accordion title="Raw channel send results -> OutboundDeliveryResult">
+    **Old**: return `{ ok, messageId, error }` through
+    `ChannelSendRawResult` and normalize it with
+    `createRawChannelSendResultAdapter(...)`.
+
+    **New**: return `OutboundDeliveryResult` fields and attach the channel with
+    `createAttachedChannelResultAdapter(...)`. Failed sends should throw instead
+    of returning an error string. The raw result type remains available until
+    the next plugin-SDK major release.
 
   </Accordion>
 

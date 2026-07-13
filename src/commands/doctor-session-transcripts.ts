@@ -39,7 +39,7 @@ type TranscriptRepairResult = {
   reason?: string;
 };
 
-export type SessionTranscriptHealthIssue = TranscriptRepairResult & {
+type SessionTranscriptHealthIssue = TranscriptRepairResult & {
   broken: true;
 };
 
