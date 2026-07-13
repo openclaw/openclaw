@@ -497,6 +497,21 @@ describe("searchSessionTranscripts", () => {
     expect(pending()).toEqual(["session-1"]);
   });
 
+  it("hides stale index rows while a missing watermark is being rebuilt", async () => {
+    await appendUserMessage("session-1", "agent:main:main", "stale watermark text");
+    const { db, kysely } = agentKysely();
+    executeSqliteQuerySync(
+      db,
+      kysely.deleteFrom("session_transcript_index_state").where("session_id", "=", "session-1"),
+    );
+
+    const result = search("stale watermark");
+    expect(result.indexing).toBe(true);
+    expect(result.hits).toHaveLength(0);
+    await waitForSessionTranscriptReconcileForTest();
+    expect(search("stale watermark").hits).toHaveLength(1);
+  });
+
   it("sweeps orphaned index rows during reconcile", async () => {
     await appendUserMessage("session-1", "agent:main:main", "anchor row");
     const { db, kysely } = agentKysely();

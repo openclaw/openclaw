@@ -246,7 +246,9 @@ export function searchSessionTranscripts(params: {
   // never leave stale keys inside the index. Sessions flagged needs_rebuild
   // are excluded: their rows may still hold rewound-away branch text that
   // sessions_history no longer exposes, so they stay hidden until reconcile
-  // rebuilds them (indexing=true tells the caller to retry).
+  // rebuilds them (indexing=true tells the caller to retry). Requiring a
+  // current clean watermark also hides stale FTS rows before a worker has
+  // claimed a missing or lagging index-state row.
   const statement = database.db.prepare(/* sqlite-allow-raw: FTS5 MATCH/snippet/bm25 */ `
     SELECT sessions.session_key AS session_key, session_transcript_fts.session_id AS session_id,
       message_id, role, timestamp,
@@ -254,10 +256,15 @@ export function searchSessionTranscripts(params: {
       bm25(session_transcript_fts) AS rank
     FROM session_transcript_fts
     JOIN sessions ON sessions.session_id = session_transcript_fts.session_id
+    JOIN session_transcript_index_state AS index_state
+      ON index_state.session_id = session_transcript_fts.session_id
+      AND index_state.needs_rebuild = 0
+      AND index_state.indexed_seq >= COALESCE((
+        SELECT MAX(transcript_events.seq)
+        FROM transcript_events
+        WHERE transcript_events.session_id = session_transcript_fts.session_id
+      ), -1)
     WHERE session_transcript_fts MATCH ?${whereSession}
-      AND session_transcript_fts.session_id NOT IN (
-        SELECT session_id FROM session_transcript_index_state WHERE needs_rebuild != 0
-      )
     ORDER BY rank ASC, timestamp DESC, message_id ASC
     LIMIT ?
   `);
