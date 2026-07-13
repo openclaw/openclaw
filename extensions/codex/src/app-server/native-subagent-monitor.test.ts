@@ -6,10 +6,17 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
-import type { CodexServerNotification, CodexThreadReadResponse, JsonValue } from "./protocol.js";
+import type {
+  CodexAppServerRequestResult,
+  CodexServerNotification,
+  JsonValue,
+} from "./protocol.js";
+
+type CodexThreadReadResponse = CodexAppServerRequestResult<"thread/read">;
 
 const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Monitor;
 const registerCodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register;
+type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagentMonitor>;
 
 function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };
@@ -140,7 +147,7 @@ function createTaskScope(requesterSessionKey = "agent:main:discord:channel:C123"
 }
 
 function registerParent(
-  monitor: CodexNativeSubagentMonitor,
+  monitor: CodexNativeSubagentMonitorInstance,
   parentThreadId = "parent-thread",
   requesterSessionKey = "agent:main:discord:channel:C123",
 ) {

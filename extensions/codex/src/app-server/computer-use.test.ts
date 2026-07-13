@@ -27,9 +27,12 @@ import {
   installCodexComputerUse,
   readCodexComputerUseStatus,
   type CodexComputerUseStatus,
-  type CodexComputerUseRequest,
 } from "./computer-use.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
+
+type CodexComputerUseRequest = NonNullable<
+  NonNullable<Parameters<typeof ensureCodexComputerUse>[0]>["request"]
+>;
 
 function expectStatusFields(
   status: CodexComputerUseStatus,

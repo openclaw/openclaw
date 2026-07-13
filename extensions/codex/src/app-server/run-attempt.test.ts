@@ -48,10 +48,7 @@ import {
 import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
-import {
-  CodexAppServerEventProjector,
-  type CodexAppServerToolTelemetry,
-} from "./event-projector.js";
+import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   buildCodexAppServerConnectionFingerprint,
   buildCodexPluginAppCacheKey,
@@ -63,6 +60,8 @@ import {
   type CodexDynamicToolSpec,
   type CodexServerNotification,
 } from "./protocol.js";
+
+type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 import {
   assistantMessage,
   createAppServerHarness,

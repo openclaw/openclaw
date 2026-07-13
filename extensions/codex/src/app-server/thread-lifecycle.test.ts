@@ -30,8 +30,11 @@ import {
   resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
   startOrResumeThread as startOrResumeThreadImpl,
-  type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.js";
+
+type CodexThreadLifecycleTimingLogger = NonNullable<
+  NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
+>;
 
 describe("Codex ring-zero thread config", () => {
   it("applies the restriction to both thread start and resume", () => {

@@ -28,9 +28,10 @@ import { handleCodexCommand } from "./command-dispatch.js";
 import type { CodexCommandDepsOverride } from "./command-handlers.js";
 import type {
   CodexPluginsConfigBlock,
-  CodexPluginConfigEntry,
   CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
+
+type CodexPluginConfigEntry = NonNullable<CodexPluginsConfigBlock["plugins"]>[string];
 
 let tempDir: string;
 
