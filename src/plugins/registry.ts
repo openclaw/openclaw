@@ -2,6 +2,7 @@
 import { clearCodeModeNamespacesForPlugin } from "../agents/code-mode-namespaces.js";
 import { clearContextEnginesForOwner } from "../context-engine/registry.js";
 import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
+import { cleanupPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
 import { clearPluginInteractiveHandlersForPlugin } from "./interactive-registry.js";
 import { createPluginApiFactory } from "./registry-api.js";
 import { createPluginRegistrars } from "./registry-registrars.js";
@@ -44,6 +45,30 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     clearCodeModeNamespacesForPlugin(pluginId);
     clearContextEnginesForOwner(`plugin:${pluginId}`);
     registrars.rollbackHooks(pluginId);
+    void cleanupPluginSessionSchedulerJobs({
+      pluginId,
+      reason: "disable",
+    })
+      .then((failures) => {
+        for (const failure of failures) {
+          state.pushDiagnostic({
+            level: "error",
+            pluginId: failure.pluginId,
+            source: pluginId,
+            message: `failed to clean session scheduler job during registration rollback: ${failure.hookId}`,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        state.pushDiagnostic({
+          level: "error",
+          pluginId,
+          source: pluginId,
+          message: `failed to clean session scheduler jobs during registration rollback: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+      });
   };
 
   return {

@@ -3,12 +3,15 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createPluginRegistryFixture } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import type { PluginCandidate } from "./discovery.js";
+import { clearPluginHostRuntimeState } from "./host-hook-runtime.js";
+import { listPluginSessionSchedulerJobs } from "./host-hook-runtime.test-fixtures.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
@@ -35,6 +38,7 @@ import {
   resolvePluginContributionOwners,
   resolveProviderOwners,
 } from "./plugin-registry.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -47,6 +51,7 @@ function listPluginRecords(params: { index: InstalledPluginIndex }) {
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   clearPluginMetadataLifecycleCaches();
+  clearPluginHostRuntimeState();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -212,6 +217,52 @@ function expectSnapshotPluginIds(snapshot: InstalledPluginIndex, expectedPluginI
 }
 
 describe("plugin registry facade", () => {
+  it("cleans session scheduler jobs when plugin registration rolls back", async () => {
+    const cleanup = vi.fn();
+    const { config, registry } = createPluginRegistryFixture();
+    const api = registry.createApi(
+      createPluginRecord({
+        id: "rollback-scheduler",
+        name: "Rollback Scheduler",
+        description: "test plugin",
+        origin: "global",
+        source: "test-plugin",
+        rootDir: "/tmp/test-plugin",
+      }),
+      {
+        config,
+        pluginConfig: {},
+        registrationMode: "full",
+      },
+    );
+
+    api.registerSessionSchedulerJob({
+      id: "leaked-job",
+      sessionKey: "agent:main:main",
+      kind: "monitor",
+      cleanup,
+    });
+    expect(listPluginSessionSchedulerJobs("rollback-scheduler")).toEqual([
+      {
+        id: "leaked-job",
+        pluginId: "rollback-scheduler",
+        sessionKey: "agent:main:main",
+        kind: "monitor",
+      },
+    ]);
+
+    registry.rollbackPluginGlobalSideEffects("rollback-scheduler");
+
+    await vi.waitFor(() => {
+      expect(cleanup).toHaveBeenCalledWith({
+        reason: "disable",
+        sessionKey: "agent:main:main",
+        jobId: "leaked-job",
+      });
+      expect(listPluginSessionSchedulerJobs("rollback-scheduler")).toEqual([]);
+    });
+  });
+
   it("resolves cold plugin records and contribution owners without loading runtime", () => {
     const rootDir = makeTempDir();
     const candidate = createCandidate(rootDir);

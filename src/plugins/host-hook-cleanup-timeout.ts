@@ -16,15 +16,14 @@ export async function withPluginHostCleanupTimeout<T>(
 ): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   try {
-    return await Promise.race([
-      Promise.resolve().then(cleanup),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(new PluginHostCleanupTimeoutError(hookId));
-        }, PLUGIN_HOST_CLEANUP_TIMEOUT_MS);
-        timeout.unref?.();
-      }),
-    ]);
+    const timedOut = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(new PluginHostCleanupTimeoutError(hookId));
+      }, PLUGIN_HOST_CLEANUP_TIMEOUT_MS);
+      timeout.unref?.();
+    });
+    const cleanupResult = cleanup();
+    return await Promise.race([Promise.resolve(cleanupResult), timedOut]);
   } finally {
     if (timeout) {
       clearTimeout(timeout);
