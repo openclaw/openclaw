@@ -613,13 +613,17 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
         },
       );
-      const { runIds: abortedRunIds } = abortChatRunsForProvider(
-        createAuthLogoutAbortOps(context),
-        {
-          providerId: authProvider,
-          stopReason: "auth-revoked",
-        },
-      );
+      // A provider-wide abort would terminate runs using credentials this
+      // logout preserved (other profiles, tokens, or the config API key). Abort
+      // entries do not carry the profile id, so a targeted logout cannot scope
+      // the abort and instead leaves in-flight runs to fail on their next
+      // request; only a full-provider logout revokes everything and aborts.
+      const { runIds: abortedRunIds } = selection.profileIds
+        ? { runIds: [] as string[] }
+        : abortChatRunsForProvider(createAuthLogoutAbortOps(context), {
+            providerId: authProvider,
+            stopReason: "auth-revoked",
+          });
       const result: ModelAuthLogoutResult = {
         provider,
         removedProfiles,

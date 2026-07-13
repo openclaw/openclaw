@@ -1304,6 +1304,35 @@ describe("models.authLogout", () => {
     expect(ok).toBe(true);
   });
 
+  it("preserves active provider runs on a targeted logout", async () => {
+    const profileId = "openrouter:saved";
+    mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openrouter",
+          access: "access",
+          refresh: "refresh",
+          expires: 1_000_000,
+        },
+      },
+    });
+    mocks.listProfilesForProvider.mockReturnValue([profileId]);
+    const opts = createLogoutOptions({ provider: "openrouter", profileIds: [profileId] });
+    const activeRun = createActiveRun("openrouter");
+    opts.context.chatAbortControllers.set("run-openrouter", activeRun);
+
+    await logoutHandler(opts);
+
+    // Targeted logout removes one credential but must not terminate runs that
+    // may be using other preserved credentials for the same provider.
+    expect(activeRun.controller.signal.aborted).toBe(false);
+    const [ok, payload] = firstRespondCall(opts) ?? [];
+    expect(ok).toBe(true);
+    expect((payload as ModelAuthLogoutResult).abortedRunIds).toEqual([]);
+  });
+
   it("aborts active runs that share a provider auth alias", async () => {
     const opts = createLogoutOptions({ provider: "byteplus" });
     const aliasedRun = createActiveRun("byteplus-plan", "byteplus");
