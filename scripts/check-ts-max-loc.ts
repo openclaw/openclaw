@@ -225,14 +225,14 @@ function resolveComparisonBaseRef(
   if (explicitBaseRef) {
     return explicitBaseRef;
   }
-  const changedBaselinePath = tryGitOutput(["diff", "--name-only", "HEAD", "--", baselinePath]);
-  if (changedBaselinePath?.split("\n").includes(baselinePath)) {
-    return "HEAD";
-  }
   const head = tryGitOutput(["rev-parse", "HEAD"]);
   const mergeBase = tryGitOutput(["merge-base", "HEAD", "origin/main"]);
   if (mergeBase && mergeBase !== head) {
     return mergeBase;
+  }
+  const changedBaselinePath = tryGitOutput(["diff", "--name-only", "HEAD", "--", baselinePath]);
+  if (changedBaselinePath?.split("\n").includes(baselinePath)) {
+    return "HEAD";
   }
   return tryGitOutput(["rev-parse", "--verify", "HEAD^"]) ? "HEAD^" : undefined;
 }
@@ -243,6 +243,9 @@ function readBaselineAtRef(
 ): LocBaseline | undefined {
   if (!baseRef) {
     return undefined;
+  }
+  if (!tryGitOutput(["rev-parse", "--verify", `${baseRef}^{commit}`])) {
+    throw new Error(`Invalid TypeScript LOC comparison ref: ${baseRef}`);
   }
   const content = tryGitOutput(["show", `${baseRef}:${baselinePath}`]);
   return content === undefined ? undefined : parseBaseline(content, `${baseRef}:${baselinePath}`);
@@ -283,10 +286,12 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
   if (writeBaseline) {
     const baseline = await readBaseline(baselinePath);
-    const baseBaseline = readBaselineAtRef(
-      resolveComparisonBaseRef(baselinePath, baseRef),
-      baselinePath,
-    );
+    const comparisonBaseRef = resolveComparisonBaseRef(baselinePath, baseRef);
+    if (!comparisonBaseRef) {
+      throw new Error("Unable to resolve a comparison ref for the TypeScript LOC baseline update");
+    }
+    const baseBaseline = readBaselineAtRef(comparisonBaseRef, baselinePath);
+    // A missing baseline at a valid base ref is the one-time initialization path.
     const violations = [
       ...(baseBaseline ? findVersionedBaselineViolations({ baseline, baseBaseline }) : []),
       ...findLocBaselineUpdateViolations({ baseline, maxLines, results }),

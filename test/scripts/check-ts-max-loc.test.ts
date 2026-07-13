@@ -43,6 +43,16 @@ describe("scripts/check-ts-max-loc", () => {
     expect(() => parseArgs(["--base-ref", "main^{tree}"])).toThrow("--base-ref requires a git ref");
   });
 
+  it("fails closed when a comparison ref does not exist", () => {
+    const result = runCheckTsMaxLoc(["--base-ref", "refs/heads/__loc-ratchet-missing__"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Invalid TypeScript LOC comparison ref: refs/heads/__loc-ratchet-missing__\n",
+    );
+  });
+
   it("grandfathers exact legacy sizes and rejects growth or stale baselines", () => {
     const violations = findLocRatchetViolations({
       maxLines: 500,
