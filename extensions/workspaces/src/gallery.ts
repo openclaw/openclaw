@@ -9,7 +9,6 @@ import {
   resolveWidgetDir,
   validateWidgetManifest,
   WIDGET_CONTENT_TYPES,
-  type WidgetManifest,
 } from "./manifest.js";
 import type { WorkspaceActor, WorkspaceWidgetRegistryEntry } from "./schema.js";
 import type { WorkspaceStore } from "./store.js";
@@ -283,7 +282,11 @@ export async function fetchWorkspaceGallery(
   );
 }
 
-type NormalizedBundle = { name: string; manifest: WidgetManifest; files: Map<string, string> };
+type NormalizedBundle = {
+  name: string;
+  manifest: ReturnType<typeof validateWidgetManifest>;
+  files: Map<string, string>;
+};
 
 function validateBundle(value: unknown): NormalizedBundle {
   if (!isRecord(value)) {
@@ -352,88 +355,57 @@ async function installBundle(
   const root = await fsRoot(stateDir, { mkdir: true, mode: 0o600, symlinks: "reject" });
   const widgetsRoot = path.posix.join("workspaces", "widgets");
   const targetDir = path.posix.join(widgetsRoot, bundle.name);
-  const stagedDir = path.posix.join(widgetsRoot, `.gallery-install-${randomUUID()}`);
+  const reservationPath = path.posix.join(
+    targetDir,
+    `.openclaw-gallery-reservation-${randomUUID()}`,
+  );
   await root.mkdir(widgetsRoot);
   const files = new Map(bundle.files);
   files.set("widget.json", `${JSON.stringify(bundle.manifest, null, 2)}\n`);
-  const installedPaths = [...files.keys()].map((logicalPath) =>
-    path.posix.join(stagedDir, logicalPath),
-  );
   const result = await withWidgetInstallLock(bundle.name, stateDir, async () => {
-    let cleanupDir: string | null = null;
-    let reservationOwned = false;
-    try {
-      try {
-        await root.mkdirExclusive(targetDir, { mode: 0o700 });
-        reservationOwned = true;
-      } catch (error) {
-        if (["already-exists", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) {
-          throw new Error(`workspace widget already exists: ${bundle.name}`, { cause: error });
-        }
-        throw error;
-      }
+    await assertWidgetTargetMissing(root, targetDir, bundle.name);
 
-      // Reserve the final name before staging. Peers see EEXIST while the
-      // completed tree remains hidden under its random staging name.
-      await root.mkdir(stagedDir);
-      cleanupDir = stagedDir;
-      for (const [logicalPath, content] of files) {
-        const relativePath = path.posix.join(stagedDir, logicalPath);
-        await root.create(relativePath, content, { mkdir: true, mode: 0o600 });
-      }
-      await root.move(stagedDir, targetDir, { overwrite: true });
-      reservationOwned = false;
-      cleanupDir = targetDir;
-
-      const mutation = options.store.mutate(
-        (draft) => {
-          if (draft.widgetsRegistry[bundle.name]) {
-            throw new Error(`workspace widget already exists: ${bundle.name}`);
-          }
-          draft.widgetsRegistry[bundle.name] = { status: "pending", createdBy: options.actor };
-        },
-        { actor: options.actor },
-      );
-      return mutation.doc.widgetsRegistry[bundle.name]!;
-    } catch (error) {
-      if (cleanupDir) {
-        await removeInstalledTree(root, cleanupDir, installedPaths, stagedDir).catch(() => {});
-      }
-      if (reservationOwned) {
-        await root.remove(targetDir).catch(() => {});
-      }
-      throw error;
+    // Gallery installs and scaffolds share a cross-process per-widget lock.
+    // The create-new marker owns the target without replacing a directory that
+    // appears after the absence check. The registry remains unchanged until
+    // every create-new bundle file is present, so partial trees cannot render.
+    // Keep the marker permanently as a non-servable install receipt. Deleting
+    // its pathname after creation would be unsafe: a direct-filesystem writer
+    // could replace it first, causing Gallery to delete content it does not own.
+    // Failed installs likewise remain unregistered with their marker in place.
+    await root.create(reservationPath, bundle.name, { mkdir: true, mode: 0o600 });
+    for (const [logicalPath, content] of files) {
+      const relativePath = path.posix.join(targetDir, logicalPath);
+      await root.create(relativePath, content, { mkdir: true, mode: 0o600 });
     }
+    const mutation = options.store.mutate(
+      (draft) => {
+        if (draft.widgetsRegistry[bundle.name]) {
+          throw new Error(`workspace widget already exists: ${bundle.name}`);
+        }
+        draft.widgetsRegistry[bundle.name] = { status: "pending", createdBy: options.actor };
+      },
+      { actor: options.actor },
+    );
+    return mutation.doc.widgetsRegistry[bundle.name]!;
   });
   return result;
 }
 
-async function removeInstalledTree(
+async function assertWidgetTargetMissing(
   root: GalleryRoot,
-  cleanupDir: string,
-  writtenPaths: readonly string[],
-  stagedDir: string,
+  targetDir: string,
+  name: string,
 ): Promise<void> {
-  const paths = writtenPaths.map((entry) =>
-    cleanupDir === stagedDir
-      ? entry
-      : path.posix.join(cleanupDir, path.posix.relative(stagedDir, entry)),
-  );
-  const directories = new Set<string>();
-  for (const filePath of paths) {
-    await root.remove(filePath).catch(() => {});
-    for (
-      let parent = path.posix.dirname(filePath);
-      parent !== cleanupDir;
-      parent = path.posix.dirname(parent)
-    ) {
-      directories.add(parent);
+  try {
+    await root.stat(targetDir);
+  } catch (error) {
+    if (["not-found", "ENOENT"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      return;
     }
+    throw error;
   }
-  for (const directory of [...directories].toSorted((left, right) => right.length - left.length)) {
-    await root.remove(directory).catch(() => {});
-  }
-  await root.remove(cleanupDir);
+  throw new Error(`workspace widget already exists: ${name}`);
 }
 
 export async function installWorkspaceGalleryWidget(

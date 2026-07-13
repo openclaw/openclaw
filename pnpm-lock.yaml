@@ -37,7 +37,7 @@ overrides:
 packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
 patchedDependencies:
-  '@openclaw/fs-safe@0.4.1': 771c67e4b86049f4fcd979507724329f4dcf9aa6706c51357ee87b458e4c2c06
+  '@openclaw/fs-safe@0.4.1': e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c
 
 importers:
 
@@ -87,7 +87,7 @@ importers:
         version: link:packages/ai
       '@openclaw/fs-safe':
         specifier: 0.4.1
-        version: 0.4.1(patch_hash=771c67e4b86049f4fcd979507724329f4dcf9aa6706c51357ee87b458e4c2c06)
+        version: 0.4.1(patch_hash=e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c)
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.5.0)
@@ -9744,7 +9744,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.4.1(patch_hash=771c67e4b86049f4fcd979507724329f4dcf9aa6706c51357ee87b458e4c2c06)':
+  '@openclaw/fs-safe@0.4.1(patch_hash=e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c)':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.19

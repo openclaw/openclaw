@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import {
   resolvePinnedHostnameWithPolicy,
   resolveSsrFPolicyForUrl,
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchWorkspaceGallery,
   installWorkspaceGalleryWidget,
@@ -72,6 +73,10 @@ async function withTempStateDir<T>(run: (stateDir: string) => Promise<T>): Promi
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
+
+afterEach(() => {
+  __setFsSafeTestHooksForTest(undefined);
+});
 
 describe("parseWorkspaceGalleryConfig", () => {
   it("accepts only explicit HTTPS origins", () => {
@@ -281,7 +286,7 @@ describe("installWorkspaceGalleryWidget", () => {
     }
   });
 
-  it("reserves the final directory exclusively before exposing the complete tree", async () => {
+  it("keeps partial files out of the registry until the complete tree is present", async () => {
     await withTempStateDir(async (stateDir) => {
       const store = new WorkspaceStore({ stateDir });
       const files = Object.fromEntries(
@@ -296,8 +301,7 @@ describe("installWorkspaceGalleryWidget", () => {
       );
       const widgetDir = resolveWidgetDir("weather", stateDir);
       let settled = false;
-      let observedReservation = false;
-      let observedPartial = false;
+      let observedUnregistered = false;
 
       const install = installWorkspaceGalleryWidget(
         "https://gallery.example/widgets/weather.json",
@@ -315,19 +319,12 @@ describe("installWorkspaceGalleryWidget", () => {
         if (settled) {
           break;
         }
-        try {
+        const registryEntry = store.read().widgetsRegistry.weather;
+        if (registryEntry === undefined) {
+          observedUnregistered = true;
+        } else {
           const observed = await fs.readdir(widgetDir, { recursive: true });
-          if (observed.length === 0) {
-            observedReservation = true;
-            await expect(fs.mkdir(widgetDir)).rejects.toMatchObject({ code: "EEXIST" });
-          } else if (!expectedFiles.every((file) => observed.includes(file))) {
-            observedPartial = true;
-            break;
-          }
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            throw error;
-          }
+          expect(expectedFiles.every((file) => observed.includes(file))).toBe(true);
         }
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
@@ -335,9 +332,78 @@ describe("installWorkspaceGalleryWidget", () => {
       }
       await install;
 
-      expect(observedReservation).toBe(true);
-      expect(observedPartial).toBe(false);
+      expect(observedUnregistered).toBe(true);
       await expect(fs.readdir(widgetDir)).resolves.toEqual(expect.arrayContaining(expectedFiles));
+    });
+  });
+
+  it("does not replace a target directory created during reservation", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new WorkspaceStore({ stateDir });
+      const widgetDir = resolveWidgetDir("weather", stateDir);
+      let competitorInode: number | bigint | undefined;
+      __setFsSafeTestHooksForTest({
+        beforeOpen: async (targetPath) => {
+          if (
+            competitorInode !== undefined ||
+            !path.basename(targetPath).startsWith(".openclaw-gallery-reservation-")
+          ) {
+            return;
+          }
+          await fs.mkdir(widgetDir);
+          competitorInode = (await fs.stat(widgetDir, { bigint: true })).ino;
+        },
+      });
+      const fetchGuard = vi.fn<WorkspaceGalleryFetch>(async (options) =>
+        guardedResponse(jsonResponse(bundle()), options.url),
+      );
+
+      await installWorkspaceGalleryWidget("https://gallery.example/widgets/weather.json", {
+        allowedOrigins: ["https://gallery.example"],
+        fetchGuard,
+        stateDir,
+        store,
+        actor: "user",
+      });
+
+      expect(competitorInode).toBeDefined();
+      expect((await fs.stat(widgetDir, { bigint: true })).ino).toBe(competitorInode);
+      expect(store.read().widgetsRegistry.weather?.status).toBe("pending");
+    });
+  });
+
+  it("never cleans up a competitor file that wins create-new", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new WorkspaceStore({ stateDir });
+      const widgetDir = resolveWidgetDir("weather", stateDir);
+      const competitorPath = path.join(widgetDir, "index.html");
+      let competitorCreated = false;
+      __setFsSafeTestHooksForTest({
+        beforeOpen: async (targetPath) => {
+          if (competitorCreated || path.basename(targetPath) !== "index.html") {
+            return;
+          }
+          competitorCreated = true;
+          await fs.writeFile(competitorPath, "competitor", { flag: "wx" });
+        },
+      });
+      const fetchGuard = vi.fn<WorkspaceGalleryFetch>(async (options) =>
+        guardedResponse(jsonResponse(bundle()), options.url),
+      );
+
+      await expect(
+        installWorkspaceGalleryWidget("https://gallery.example/widgets/weather.json", {
+          allowedOrigins: ["https://gallery.example"],
+          fetchGuard,
+          stateDir,
+          store,
+          actor: "user",
+        }),
+      ).rejects.toThrow(/exist/i);
+
+      expect(competitorCreated).toBe(true);
+      await expect(fs.readFile(competitorPath, "utf8")).resolves.toBe("competitor");
+      expect(store.read().widgetsRegistry.weather).toBeUndefined();
     });
   });
 
@@ -398,14 +464,42 @@ describe("installWorkspaceGalleryWidget", () => {
       expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
       expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
       const files = (await fs.readdir(resolveWidgetDir("weather", stateDir))).toSorted();
+      const reservationFiles = files.filter((file) =>
+        file.startsWith(".openclaw-gallery-reservation-"),
+      );
       expect([
         ["index.html", "widget.json"],
         ["README.md", "index.html", "widget.json"],
-      ]).toContainEqual(files);
+      ]).toContainEqual(files.filter((file) => !file.startsWith(".openclaw-gallery-reservation-")));
+      expect(reservationFiles).toHaveLength(results[0]?.status === "fulfilled" ? 1 : 0);
     });
   });
 
-  it("removes staging directories after a nested file write fails", async () => {
+  it("retains a successful reservation marker instead of deleting an ambiguous pathname", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new WorkspaceStore({ stateDir });
+      const fetchGuard = vi.fn<WorkspaceGalleryFetch>(async (options) =>
+        guardedResponse(jsonResponse(bundle()), options.url),
+      );
+
+      await expect(
+        installWorkspaceGalleryWidget("https://gallery.example/widgets/weather.json", {
+          allowedOrigins: ["https://gallery.example"],
+          fetchGuard,
+          stateDir,
+          store,
+          actor: "user",
+        }),
+      ).resolves.toMatchObject({ registry: { status: "pending" } });
+
+      const widgetEntries = await fs.readdir(resolveWidgetDir("weather", stateDir));
+      expect(
+        widgetEntries.filter((entry) => entry.startsWith(".openclaw-gallery-reservation-")),
+      ).toHaveLength(1);
+    });
+  });
+
+  it("leaves an unregistered reservation after an ambiguous partial write failure", async () => {
     await withTempStateDir(async (stateDir) => {
       const store = new WorkspaceStore({ stateDir });
       const tooLongName = `${"x".repeat(256)}.js`;
@@ -432,7 +526,12 @@ describe("installWorkspaceGalleryWidget", () => {
         }),
       ).rejects.toThrow();
 
-      await expect(fs.readdir(path.join(stateDir, "workspaces", "widgets"))).resolves.toEqual([]);
+      const widgetEntries = await fs.readdir(resolveWidgetDir("weather", stateDir));
+      expect(
+        widgetEntries.some((entry) => entry.startsWith(".openclaw-gallery-reservation-")),
+      ).toBe(true);
+      expect(widgetEntries).toContain("index.html");
+      expect(widgetEntries).not.toContain("widget.json");
       expect(store.read().widgetsRegistry.weather).toBeUndefined();
     });
   });
