@@ -593,6 +593,82 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
   });
 
+  it("pins official onboarding installs to the extended-stable core version", async () => {
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo-plugin",
+      targetDir: "/tmp/demo-plugin",
+      version: VERSION,
+      npmResolution: {
+        name: "@openclaw/demo-plugin",
+        version: VERSION,
+        resolvedSpec: `@openclaw/demo-plugin@${VERSION}`,
+      },
+    });
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "extended-stable" } },
+      entry: {
+        pluginId: "demo-plugin",
+        label: "Demo Plugin",
+        install: {
+          clawhubSpec: "clawhub:@openclaw/demo-plugin",
+          npmSpec: "@openclaw/demo-plugin",
+          defaultChoice: "clawhub",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter: {
+        select: vi.fn(async () => "clawhub"),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: {} as never,
+      promptInstall: false,
+    });
+
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    const [npmCall] = readFirstMockCall(installPluginFromNpmSpec, "installPluginFromNpmSpec") as [
+      NpmSpecInstallCall,
+    ];
+    expect(npmCall.spec).toBe(`@openclaw/demo-plugin@${VERSION}`);
+    expect(npmCall.trustedSourceLinkedOfficialInstall).toBe(true);
+  });
+
+  it("preserves third-party onboarding specs on extended-stable", async () => {
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "vendor-plugin",
+      targetDir: "/tmp/vendor-plugin",
+      version: "9.1.0",
+      npmResolution: {
+        name: "@vendor/plugin",
+        version: "9.1.0",
+        resolvedSpec: "@vendor/plugin@9.1.0",
+      },
+    });
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "extended-stable" } },
+      entry: {
+        pluginId: "vendor-plugin",
+        label: "Vendor Plugin",
+        install: { npmSpec: "@vendor/plugin@latest" },
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: {} as never,
+      promptInstall: false,
+    });
+
+    const [npmCall] = readFirstMockCall(installPluginFromNpmSpec, "installPluginFromNpmSpec") as [
+      NpmSpecInstallCall,
+    ];
+    expect(npmCall.spec).toBe("@vendor/plugin@latest");
+    expect(npmCall.trustedSourceLinkedOfficialInstall).toBeUndefined();
+  });
+
   it("logs npm install warnings once while shortening the progress label", async () => {
     const warning =
       "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.";

@@ -591,6 +591,9 @@ function installedRuntimePackageVersionIsStale(params: {
   ) {
     return false;
   }
+  if (params.updateChannel === "extended-stable") {
+    return params.installedVersion !== params.currentVersion;
+  }
   const comparison = compareOpenClawReleaseVersions(params.installedVersion, params.currentVersion);
   return comparison === null ? params.installedVersion !== params.currentVersion : comparison < 0;
 }
@@ -918,19 +921,29 @@ async function installCandidate(params: {
   const { candidate } = params;
   const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
   const changes: string[] = [];
-  const clawhubSpecs = candidate.clawhubSpec
-    ? resolveClawHubInstallSpecsForUpdateChannel({
-        spec: candidate.clawhubSpec,
-        updateChannel: params.updateChannel,
-      })
-    : null;
+  const exactOfficialPluginVersion =
+    params.updateChannel === "extended-stable" &&
+    candidate.trustedSourceLinkedOfficialInstall &&
+    candidate.npmSpec
+      ? VERSION
+      : undefined;
+  const clawhubSpecs =
+    candidate.clawhubSpec && !exactOfficialPluginVersion
+      ? resolveClawHubInstallSpecsForUpdateChannel({
+          spec: candidate.clawhubSpec,
+          updateChannel: params.updateChannel,
+        })
+      : null;
   const npmSpecs = candidate.npmSpec
     ? resolveNpmInstallSpecsForUpdateChannel({
         spec: candidate.npmSpec,
         updateChannel: params.updateChannel,
+        exactVersion: exactOfficialPluginVersion,
       })
     : null;
-  const clawhubInstallSpec = clawhubSpecs?.installSpec ?? candidate.clawhubSpec;
+  const clawhubInstallSpec = exactOfficialPluginVersion
+    ? undefined
+    : (clawhubSpecs?.installSpec ?? candidate.clawhubSpec);
   const npmInstallSpec = npmSpecs?.installSpec ?? candidate.npmSpec;
   const npmDir = resolveDefaultPluginNpmDir(params.env);
   const existingClawHubPackagePath = clawhubInstallSpec

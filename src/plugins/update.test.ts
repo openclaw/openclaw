@@ -4175,6 +4175,98 @@ describe("syncPluginsForUpdateChannel", () => {
     });
   });
 
+  it("pins externalized official plugins to the extended-stable core version", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "legacy-chat",
+        targetDir: "/tmp/openclaw-plugins/legacy-chat",
+        version: "2026.6.33",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "extended-stable",
+      exactOfficialPluginVersion: "2026.6.33",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          preferredSource: "clawhub",
+          clawhubSpec: "clawhub:legacy-chat",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: { "legacy-chat": { enabled: true } },
+        plugins: {
+          load: { paths: [appBundledPluginRoot("legacy-chat")] },
+          installs: {
+            "legacy-chat": {
+              source: "path",
+              sourcePath: appBundledPluginRoot("legacy-chat"),
+              installPath: appBundledPluginRoot("legacy-chat"),
+            },
+          },
+        },
+      },
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/legacy-chat@2026.6.33");
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
+  });
+
+  it("moves trusted official ClawHub installs to the exact extended-stable npm version", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "discord",
+        targetDir: "/tmp/openclaw-plugins/discord",
+        version: "2026.6.33",
+        npmResolution: {
+          name: "@openclaw/discord",
+          version: "2026.6.33",
+          resolvedSpec: "@openclaw/discord@2026.6.33",
+        },
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "extended-stable",
+      exactOfficialPluginVersion: "2026.6.33",
+      config: {
+        plugins: {
+          installs: {
+            discord: {
+              source: "clawhub",
+              spec: "clawhub:@openclaw/discord",
+              installPath: "/tmp/openclaw-plugins/discord",
+              version: "2026.6.8",
+              clawhubUrl: "https://clawhub.ai",
+              clawhubPackage: "@openclaw/discord",
+              clawhubChannel: "official",
+            },
+          },
+        },
+      },
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/discord@2026.6.33");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    expect(result.summary.switchedToNpm).toEqual(["discord"]);
+    expectRecordFields(result.config.plugins?.installs?.discord, {
+      source: "npm",
+      spec: "@openclaw/discord@2026.6.33",
+      installPath: "/tmp/openclaw-plugins/discord",
+      version: "2026.6.33",
+      resolvedName: "@openclaw/discord",
+      resolvedVersion: "2026.6.33",
+      resolvedSpec: "@openclaw/discord@2026.6.33",
+    });
+  });
+
   it("falls back from ClawHub to npm only when the ClawHub package is absent", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     installPluginFromClawHubMock.mockResolvedValue({

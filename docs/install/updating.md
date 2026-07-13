@@ -20,6 +20,7 @@ To switch channels or target a specific version:
 
 ```bash
 openclaw update --channel beta
+openclaw update --channel extended-stable
 openclaw update --channel dev
 openclaw update --dry-run   # preview without applying
 ```
@@ -33,6 +34,21 @@ installer has its own `--verbose` flag, but that flag is not part of
 `--channel beta` prefers beta, but the runtime falls back to stable/latest when
 the beta tag is missing or older than the latest stable release. Use `--tag beta`
 if you want the raw npm beta dist-tag for a one-off package update.
+
+`--channel extended-stable` is package-only, and installation remains
+foreground-only. OpenClaw reads the public npm `extended-stable` selector,
+verifies the selected exact package, and installs that exact version. Missing
+or inconsistent registry data fails closed; it never falls back to `latest`.
+If the selected version is older than the installed version, the normal
+downgrade confirmation still applies. The CLI persists the channel after a
+successful core update; a direct `npm install -g openclaw@extended-stable`
+does not update `update.channel`.
+After the core swap, normal plugin integrity and convergence checks still run.
+Npm-publishable official plugins use the exact installed core version; OpenClaw
+does not query plugin `@extended-stable` selectors. This compatibility rule
+overrides an official plugin's explicit npm pin/tag and converts a trusted
+official ClawHub install to the exact npm package version. Third-party plugin
+pins/tags and other non-npm sources remain unchanged.
 
 Use `--channel dev` for a persistent moving GitHub `main` checkout. For package
 updates, `--tag main` maps to `github:openclaw/openclaw#main` for one run, and
@@ -67,7 +83,9 @@ openclaw update --channel stable --dry-run
 ```
 
 The `dev` channel ensures a git checkout, builds it, and installs the global CLI
-from that checkout. The `stable` and `beta` channels use package installs. If the
+from that checkout. The `stable`, `extended-stable`, and `beta` channels use
+package installs. Extended-stable is rejected on a Git checkout without
+mutating or converting it. If the
 gateway is already installed, `openclaw update` refreshes the service metadata
 and restarts it unless you pass `--no-restart`.
 
@@ -201,13 +219,17 @@ The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
 }
 ```
 
-| Channel  | Behavior                                                                                                      |
-| -------- | ------------------------------------------------------------------------------------------------------------- |
-| `stable` | Waits `stableDelayHours`, then applies with deterministic jitter across `stableJitterHours` (spread rollout). |
-| `beta`   | Checks every `betaCheckIntervalHours` (default: hourly) and applies immediately.                              |
-| `dev`    | No automatic apply. Use `openclaw update` manually.                                                           |
+| Channel           | Behavior                                                                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stable`          | Waits `stableDelayHours` (default: 6), then applies with deterministic jitter across `stableJitterHours` (default: 12) for a spread rollout. |
+| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically.                |
+| `beta`            | Checks every `betaCheckIntervalHours` (default: 1) and applies immediately.                                                                  |
+| `dev`             | No automatic apply. Use `openclaw update` manually.                                                                                          |
 
-The gateway also logs an update hint on startup (disable with `update.checkOnStart: false`).
+The gateway also logs an update hint on startup (disable with
+`update.checkOnStart: false`). Stored extended-stable selections use this
+read-only hint path and the existing 24-hour hint interval, but never invoke
+automatic installation, handoff, restart, stable delay/jitter, or beta polling.
 For downgrade or incident recovery, set `OPENCLAW_NO_AUTO_UPDATE=1` in the gateway environment to block automatic applies even when `update.auto.enabled` is configured. Startup update hints can still run unless `update.checkOnStart` is also disabled.
 
 Package-manager updates requested through the live Gateway control-plane handler

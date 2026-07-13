@@ -27,7 +27,7 @@ import { updateCommand } from "./update-command.js";
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
   if (!process.stdin.isTTY) {
     defaultRuntime.error(
-      "Update wizard requires a TTY. Use `openclaw update --channel <stable|beta|dev>` instead.",
+      "Update wizard requires a TTY. Use `openclaw update --channel <stable|extended-stable|beta|dev>` instead.",
     );
     defaultRuntime.exit(1);
     return;
@@ -79,6 +79,15 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         label: "Stable",
         hint: "Tagged releases (npm latest)",
       },
+      ...(updateStatus.installKind === "git"
+        ? []
+        : [
+            {
+              value: "extended-stable" as const,
+              label: "Extended Stable",
+              hint: "Monthly supported release (npm extended-stable)",
+            },
+          ]),
       {
         value: "beta",
         label: "Beta",

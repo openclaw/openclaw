@@ -1,4 +1,5 @@
 name: Full Release Validation
+run-name: ${{ inputs.dispatch_correlation_id || github.workflow }}
 
 on:
   workflow_dispatch:
@@ -7,6 +8,16 @@ on:
         description: Branch, tag, or full commit SHA to validate
         required: true
         default: main
+        type: string
+      dispatch_correlation_id:
+        description: Optional unique dispatch correlation used by release orchestration
+        required: false
+        default: ""
+        type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA target
+        required: false
+        default: ""
         type: string
       provider:
         description: Provider lane for cross-OS onboarding and the end-to-end agent turn
@@ -1082,7 +1093,8 @@ jobs:
             -f repeat=3 \
             -f deep_profile=false \
             -f live_openai_candidate=false \
-            -f fail_on_regression=true
+            -f fail_on_regression=true \
+            -f publish_reports=false
 
           run_id=""
           for _ in $(seq 1 60); do
@@ -1593,6 +1605,14 @@ jobs:
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
           PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
           PERFORMANCE_CONCLUSION: ${{ needs.performance.outputs.conclusion }}
+          PROVIDER: ${{ inputs.provider }}
+          MODE: ${{ inputs.mode }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
@@ -1602,6 +1622,9 @@ jobs:
             --arg runId "$GITHUB_RUN_ID" \
             --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
             --arg workflowRef "$GITHUB_REF_NAME" \
+            --arg workflowSha "$GITHUB_SHA" \
+            --arg workflowFullRef "$GITHUB_REF" \
+            --arg workflowRefType "$GITHUB_REF_TYPE" \
             --arg targetRef "$TARGET_REF" \
             --arg targetSha "$TARGET_SHA" \
             --arg releaseProfile "$RELEASE_PROFILE" \
@@ -1613,20 +1636,42 @@ jobs:
             --arg npmTelegramRunId "$NPM_TELEGRAM_RUN_ID" \
             --arg performanceRunId "$PERFORMANCE_RUN_ID" \
             --arg performanceConclusion "$PERFORMANCE_CONCLUSION" \
+            --arg provider "$PROVIDER" \
+            --arg mode "$MODE" \
+            --arg targetContextRef "$TARGET_CONTEXT_REF" \
+            --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
+            --arg crossOsSuiteFilter "$CROSS_OS_SUITE_FILTER" \
+            --arg releasePackageSpec "$RELEASE_PACKAGE_SPEC" \
+            --arg packageAcceptancePackageSpec "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" \
+            --arg codexPluginSpec "$CODEX_PLUGIN_SPEC" \
             '{
-              version: 2,
+              version: 3,
               workflowName: $workflowName,
               runId: $runId,
               runAttempt: $runAttempt,
               workflowRef: $workflowRef,
+              workflowSha: $workflowSha,
+              workflowFullRef: $workflowFullRef,
+              workflowRefType: $workflowRefType,
               targetRef: $targetRef,
               targetSha: $targetSha,
               releaseProfile: $releaseProfile,
               rerunGroup: $rerunGroup,
               runReleaseSoak: $runReleaseSoak,
+              validationInputs: {
+                provider: $provider,
+                mode: $mode,
+                targetContextRef: $targetContextRef,
+                liveSuiteFilter: $liveSuiteFilter,
+                crossOsSuiteFilter: $crossOsSuiteFilter,
+                releasePackageSpec: $releasePackageSpec,
+                packageAcceptancePackageSpec: $packageAcceptancePackageSpec,
+                codexPluginSpec: $codexPluginSpec
+              },
               controls: {
                 stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),
-                performanceBlocking: true
+                performanceBlocking: true,
+                performanceReportPublication: "artifact-only"
               },
               childRuns: {
                 normalCi: $normalCiRunId,
@@ -1656,3 +1701,4 @@ jobs:
           name: full-release-validation-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-validation
           if-no-files-found: error
+          overwrite: true

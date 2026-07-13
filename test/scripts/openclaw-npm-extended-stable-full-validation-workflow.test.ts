@@ -5,8 +5,9 @@ import { parse } from "yaml";
 
 const fullValidationPath = ".github/workflows/full-release-validation.yml";
 const releaseChecksPath = ".github/workflows/openclaw-release-checks.yml";
+const releasePublishPath = ".github/workflows/openclaw-release-publish.yml";
 
-type Step = { name?: string; run?: string };
+type Step = { name?: string; run?: string; with?: Record<string, unknown> };
 type Job = { steps?: Step[] };
 type Workflow = { jobs?: Record<string, Job> };
 
@@ -88,6 +89,18 @@ describe("extended-stable Full Release Validation workflow", () => {
     expect(fullValidation).toContain(
       "full-release-validation-${{ github.run_id }}-${{ github.run_attempt }}",
     );
+    const legacyAlias = workflow(fullValidationPath).jobs?.summary?.steps?.find(
+      (step) => step.name === "Upload legacy release validation manifest alias",
+    );
+    expect(legacyAlias?.with?.overwrite).toBe(true);
+    expect(fullValidation).toContain("version: 3");
+    expect(fullValidation).toContain("workflowSha: $workflowSha");
+    expect(fullValidation).toContain("workflowFullRef: $workflowFullRef");
+    expect(fullValidation).toContain("workflowRefType: $workflowRefType");
+    expect(fullValidation).toContain('performanceReportPublication: "artifact-only"');
+    expect(
+      stepRun(fullValidationPath, "performance", "Dispatch and monitor OpenClaw Performance"),
+    ).toContain("-f publish_reports=false");
   });
 
   it("accepts only the exact extended-stable/YYYY.M.33 workflow-ref shape", () => {
@@ -112,6 +125,18 @@ describe("extended-stable Full Release Validation workflow", () => {
       expect(result.status, invalid).not.toBe(0);
       expect(result.stderr).toContain("extended-stable/YYYY.M.33");
     }
+  });
+
+  it("requires blocking performance evidence at the publish boundary", () => {
+    const validation = stepRun(
+      releasePublishPath,
+      "resolve_release_target",
+      "Validate full release validation manifest",
+    );
+    expect(validation).toContain(".controls.performanceBlocking // false");
+    expect(validation).toContain(
+      "Full release validation manifest does not record blocking product performance evidence.",
+    );
   });
 
   it("accepts the exact throwaway branch only with a full target SHA", () => {

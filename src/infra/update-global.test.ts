@@ -137,6 +137,28 @@ describe("update global helpers", () => {
     );
   });
 
+  it("resolves scoped package paths from the package manager global root", async () => {
+    const globalRoot = path.join("tmp", "npm-root");
+    const runCommand: CommandRunner = async () => ({
+      stdout: `${globalRoot}\n`,
+      stderr: "",
+      code: 0,
+    });
+
+    await expect(
+      resolveGlobalInstallTarget({
+        manager: "npm",
+        runCommand,
+        timeoutMs: 1000,
+        packageName: "@kevins8/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      manager: "npm",
+      globalRoot,
+      packageRoot: path.join(globalRoot, "@kevins8", "openclaw"),
+    });
+  });
+
   it("maps main and explicit install specs for global installs", () => {
     expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag: "main" })).toBe(
       OPENCLAW_MAIN_PACKAGE_SPEC,
@@ -167,6 +189,19 @@ describe("update global helpers", () => {
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
     });
     expect(explicitEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
+  });
+
+  it("binds both npm registry environment spellings to a verified registry", async () => {
+    const env = await createGlobalInstallEnv(
+      {
+        NPM_CONFIG_REGISTRY: "https://registry.example.com/",
+        npm_config_registry: "https://registry.example.net/",
+      },
+      { registryUrl: "https://registry.npmjs.org/" },
+    );
+
+    expect(env?.NPM_CONFIG_REGISTRY).toBe("https://registry.npmjs.org/");
+    expect(env?.npm_config_registry).toBe("https://registry.npmjs.org/");
   });
 
   it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
@@ -369,6 +404,32 @@ describe("update global helpers", () => {
           "--loglevel=error",
           "--min-release-age=0",
         ]);
+      });
+    });
+  });
+
+  it("honors an explicitly selected scoped npm package root", async () => {
+    await withTempDir({ prefix: "openclaw-update-scoped-npm-root-" }, async (base) => {
+      const owningRoot = path.join(base, "owned", "lib", "node_modules");
+      const pkgRoot = path.join(owningRoot, "@openclaw", "openclaw");
+      const pathNpmRoot = path.join(base, "path", "lib", "node_modules");
+      await fs.mkdir(pkgRoot, { recursive: true });
+
+      const runCommand = createNpmRootRunner({ defaultNpmRoot: pathNpmRoot });
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+          honorPackageRoot: true,
+          packageName: "@openclaw/openclaw",
+        }),
+      ).resolves.toMatchObject({
+        manager: "npm",
+        globalRoot: owningRoot,
+        packageRoot: pkgRoot,
       });
     });
   });

@@ -18,13 +18,19 @@ import { writeJson } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { scheduleGatewaySigusr1Restart } from "./restart.js";
 import { detectRespawnSupervisor, type RespawnSupervisor } from "./supervisor-markers.js";
-import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
+import {
+  channelToNpmTag,
+  normalizeUpdateChannel,
+  DEFAULT_PACKAGE_CHANNEL,
+  type UpdateChannel,
+} from "./update-channels.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "./update-control-plane-sentinel.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
+  lastCheckedChannel?: UpdateChannel;
   lastNotifiedVersion?: string;
   lastNotifiedTag?: string;
   lastAvailableVersion?: string;
@@ -169,21 +175,49 @@ function setUpdateAvailableCache(params: {
   params.onUpdateAvailableChange?.(params.next);
 }
 
-function resolvePersistedUpdateAvailable(state: UpdateCheckState): UpdateAvailable | null {
+function isPersistedAvailabilityForChannel(params: {
+  state: UpdateCheckState;
+  channel: UpdateChannel;
+}): boolean {
+  const tag = params.state.lastAvailableTag?.trim();
+  if (params.channel === "stable") {
+    return !tag || tag === "latest";
+  }
+  if (params.channel === "beta") {
+    return tag === "beta" || tag === "latest";
+  }
+  return tag === params.channel;
+}
+
+function resolvePersistedUpdateAvailable(
+  state: UpdateCheckState,
+  channel: UpdateChannel,
+): UpdateAvailable | null {
   const latestVersion = state.lastAvailableVersion?.trim();
-  if (!latestVersion) {
+  if (!latestVersion || !isPersistedAvailabilityForChannel({ state, channel })) {
     return null;
   }
   const cmp = compareSemverStrings(VERSION, latestVersion);
   if (cmp == null || cmp >= 0) {
     return null;
   }
-  const channel = state.lastAvailableTag?.trim() || DEFAULT_PACKAGE_CHANNEL;
+  const persistedTag = state.lastAvailableTag?.trim() || channelToNpmTag(channel);
   return {
     currentVersion: VERSION,
     latestVersion,
-    channel,
+    channel: persistedTag,
   };
+}
+
+function clearPersistedAvailabilityForChannel(
+  nextState: UpdateCheckState,
+  channel: UpdateChannel,
+): void {
+  if (!isPersistedAvailabilityForChannel({ state: nextState, channel })) {
+    return;
+  }
+  delete nextState.lastAvailableVersion;
+  delete nextState.lastAvailableTag;
 }
 
 function resolveStableJitterMs(params: {
@@ -391,6 +425,21 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
+async function resolveStartupInstallStatus() {
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
+  const status = await checkUpdateStatus({
+    root,
+    timeoutMs: 2500,
+    fetchGit: false,
+    includeRegistry: false,
+  });
+  return { root, status };
+}
+
 export async function runGatewayUpdateCheck(params: {
   cfg: OpenClawConfig;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
@@ -409,12 +458,33 @@ export async function runGatewayUpdateCheck(params: {
   if (params.isNixMode) {
     return;
   }
+  const configuredChannel =
+    normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   const auto = resolveAutoUpdatePolicy(params.cfg);
   const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
-  const shouldRunAutoUpdate = auto.enabled && !autoDisabledByEnv;
+  const isAutoUpdateChannel = configuredChannel === "stable" || configuredChannel === "beta";
+  const shouldRunAutoUpdate = isAutoUpdateChannel && auto.enabled && !autoDisabledByEnv;
   const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
   if (!shouldRunUpdateHints && !shouldRunAutoUpdate) {
+    if (configuredChannel === "extended-stable") {
+      setUpdateAvailableCache({
+        next: null,
+        onUpdateAvailableChange: params.onUpdateAvailableChange,
+      });
+    }
     return;
+  }
+
+  let installStatus: Awaited<ReturnType<typeof resolveStartupInstallStatus>> | undefined;
+  if (configuredChannel === "extended-stable") {
+    installStatus = await resolveStartupInstallStatus();
+    if (installStatus.status.installKind !== "package") {
+      setUpdateAvailableCache({
+        next: null,
+        onUpdateAvailableChange: params.onUpdateAvailableChange,
+      });
+      return;
+    }
   }
 
   const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
@@ -423,8 +493,11 @@ export async function runGatewayUpdateCheck(params: {
   const now = resolveUpdateCheckNowMs(rawNow);
   const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
+  const persistedAvailable = shouldRunUpdateHints
+    ? resolvePersistedUpdateAvailable(state, configuredChannel)
+    : null;
+  const shouldBypassSharedThrottle = state.lastCheckedChannel !== configuredChannel;
   if (shouldRunUpdateHints) {
-    const persistedAvailable = resolvePersistedUpdateAvailable(state);
     setUpdateAvailableCache({
       next: persistedAvailable,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
@@ -438,27 +511,24 @@ export async function runGatewayUpdateCheck(params: {
   const checkIntervalMs = shouldRunAutoUpdate
     ? resolveCheckIntervalMs(params.cfg)
     : UPDATE_CHECK_INTERVAL_MS;
-  if (rawNowIsValid && lastCheckedAt && Number.isFinite(lastCheckedAt)) {
+  if (
+    !shouldBypassSharedThrottle &&
+    rawNowIsValid &&
+    lastCheckedAt &&
+    Number.isFinite(lastCheckedAt)
+  ) {
     if (now - lastCheckedAt < checkIntervalMs) {
       return;
     }
   }
 
-  const root = await resolveOpenClawPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-  });
-  const status = await checkUpdateStatus({
-    root,
-    timeoutMs: 2500,
-    fetchGit: false,
-    includeRegistry: false,
-  });
+  installStatus ??= await resolveStartupInstallStatus();
+  const { root, status } = installStatus;
 
   const nextState: UpdateCheckState = {
     ...state,
     lastCheckedAt: resolveUpdateCheckTimestamp(now),
+    lastCheckedChannel: configuredChannel,
   };
   let pendingAutoUpdateRestartDelayMs: number | null = null;
 
@@ -474,10 +544,20 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const channel = configuredChannel;
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
+    if (channel === "extended-stable") {
+      clearPersistedAvailabilityForChannel(nextState, channel);
+      if (!nextState.lastAvailableVersion) {
+        nextState.lastAvailableTag = channel;
+      }
+      setUpdateAvailableCache({
+        next: null,
+        onUpdateAvailableChange: params.onUpdateAvailableChange,
+      });
+    }
     await writeState(statePath, nextState);
     return;
   }
@@ -507,7 +587,7 @@ export async function runGatewayUpdateCheck(params: {
       nextState.lastNotifiedTag = tag;
     }
 
-    if (auto.enabled && autoDisabledByEnv) {
+    if (channel !== "extended-stable" && auto.enabled && autoDisabledByEnv) {
       params.log.info("auto-update disabled by OPENCLAW_NO_AUTO_UPDATE", {
         version: resolved.version,
         tag,
@@ -589,9 +669,16 @@ export async function runGatewayUpdateCheck(params: {
       }
     }
   } else {
-    delete nextState.lastAvailableVersion;
-    delete nextState.lastAvailableTag;
-    clearAutoState(nextState);
+    if (channel === "extended-stable") {
+      clearPersistedAvailabilityForChannel(nextState, channel);
+      if (!nextState.lastAvailableVersion) {
+        nextState.lastAvailableTag = channel;
+      }
+    } else {
+      delete nextState.lastAvailableVersion;
+      delete nextState.lastAvailableTag;
+      clearAutoState(nextState);
+    }
     setUpdateAvailableCache({
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
@@ -615,6 +702,10 @@ export function scheduleGatewayUpdateCheck(params: {
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
 }): () => void {
+  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  if (channel === "extended-stable" && params.cfg.update?.checkOnStart === false) {
+    return () => {};
+  }
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false;

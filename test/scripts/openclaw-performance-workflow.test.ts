@@ -14,6 +14,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  if?: string;
   steps?: WorkflowStep[];
 };
 
@@ -56,6 +57,10 @@ describe("OpenClaw performance workflow", () => {
     expect(detect.if).toContain("inputs.publish_reports == true");
     expect(prepare.if).toContain("inputs.publish_reports == true");
     expect(publish.if).toContain("inputs.publish_reports == true");
+    const guard = workflow.jobs?.verify_artifact_only;
+    expect(guard?.if).toContain("inputs.publish_reports == false");
+    expect(guard?.steps?.[0]?.name).toBe("Confirm report publication is disabled");
+    expect(guard?.steps?.[0]?.run).toContain('[[ "$PUBLISH_REPORTS" == "false" ]]');
   });
 
   it("uses the clawgrit reports token for every report repo push path", () => {

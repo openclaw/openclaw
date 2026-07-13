@@ -52,6 +52,7 @@ import {
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
+import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
@@ -63,13 +64,17 @@ import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
   DEFAULT_PACKAGE_CHANNEL,
+  EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   normalizeUpdateChannel,
+  type UpdateChannel,
 } from "../../infra/update-channels.js";
 import {
   compareSemverStrings,
   fetchNpmPackageTargetStatus,
+  resolveExtendedStablePackage,
   resolveNpmChannelTag,
   checkUpdateStatus,
+  type ExtendedStableFailureReason,
 } from "../../infra/update-check.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
@@ -1198,9 +1203,9 @@ type UpdateDryRunPreview = {
   switchToGit: boolean;
   switchToPackage: boolean;
   restart: boolean;
-  requestedChannel: "stable" | "beta" | "dev" | null;
-  storedChannel: "stable" | "beta" | "dev" | null;
-  effectiveChannel: "stable" | "beta" | "dev";
+  requestedChannel: UpdateChannel | null;
+  storedChannel: UpdateChannel | null;
+  effectiveChannel: UpdateChannel;
   tag: string;
   currentVersion: string | null;
   targetVersion: string | null;
@@ -1246,6 +1251,30 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
       defaultRuntime.log(`  - ${theme.muted(note)}`);
     }
   }
+}
+
+async function reportPreMutationUpdateFailure(params: {
+  root: string;
+  installKind: "git" | "package" | "unknown";
+  reason: ExtendedStableFailureReason | typeof EXTENDED_STABLE_TAG_UNSUPPORTED_REASON;
+  opts: UpdateCommandOptions;
+  controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
+}): Promise<void> {
+  const result: UpdateRunResult = {
+    status: "error",
+    mode: params.installKind === "git" ? "git" : "unknown",
+    root: params.root,
+    reason: params.reason,
+    steps: [],
+    durationMs: 0,
+  };
+  await writeControlPlaneUpdateRestartSentinelBestEffort({
+    meta: params.controlPlaneUpdateSentinelMeta,
+    result,
+    jsonMode: Boolean(params.opts.json),
+  });
+  printResult(result, params.opts);
+  defaultRuntime.exit(1);
 }
 
 async function refreshGatewayServiceEnv(params: {
@@ -1495,6 +1524,8 @@ async function runPackageInstallUpdate(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
+  installSpec?: string;
+  registryUrl?: string;
   timeoutMs: number;
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
@@ -1509,7 +1540,9 @@ async function runPackageInstallUpdate(params: {
     installKind: params.installKind,
     timeoutMs: params.timeoutMs,
   });
-  const installEnv = await createGlobalInstallEnv();
+  const installEnv = await createGlobalInstallEnv(undefined, {
+    registryUrl: params.registryUrl,
+  });
   const runCommand = createGlobalCommandRunner();
   const installTarget = await resolveGlobalInstallTarget({
     manager,
@@ -1522,11 +1555,13 @@ async function runPackageInstallUpdate(params: {
   const packageName =
     (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
     DEFAULT_PACKAGE_NAME;
-  const installSpec = resolveGlobalInstallSpec({
-    packageName,
-    tag: params.tag,
-    env: installEnv,
-  });
+  const installSpec =
+    params.installSpec ??
+    resolveGlobalInstallSpec({
+      packageName,
+      tag: params.tag,
+      env: installEnv,
+    });
 
   const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
   if (pkgRoot) {
@@ -1637,7 +1672,7 @@ async function runGitUpdate(params: {
   timeoutMs: number | undefined;
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
-  channel: "stable" | "beta" | "dev";
+  channel: UpdateChannel;
   tag: string;
   showProgress: boolean;
   opts: UpdateCommandOptions;
@@ -1731,7 +1766,7 @@ async function runGitUpdate(params: {
 
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
-  channel: "stable" | "beta" | "dev";
+  channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
@@ -1766,23 +1801,40 @@ export async function updatePluginsAfterCoreUpdate(params: {
   const warnings: PostUpdatePluginWarning[] = [];
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
+  const pluginUpdateChannel = params.channel;
+  const exactOfficialPluginVersion =
+    params.channel === "extended-stable" ? await readPackageVersion(params.root) : null;
+  if (params.channel === "extended-stable" && !exactOfficialPluginVersion) {
+    throw new Error("Extended-stable plugin convergence requires the installed core version.");
+  }
   const syncConfig = withPluginInstallRecords(
     params.configSnapshot.sourceConfig,
     pluginInstallRecords,
   );
   const syncResult = await syncPluginsForUpdateChannel({
     config: syncConfig,
-    channel: params.channel,
+    channel: pluginUpdateChannel,
     workspaceDir: params.root,
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
       workspaceDir: params.root,
     }),
+    ...(exactOfficialPluginVersion ? { exactOfficialPluginVersion } : {}),
     logger: pluginLogger,
   });
   for (const error of syncResult.summary.errors) {
     warnings.push(createPostUpdatePluginWarning({ reason: error }));
   }
   let pluginConfig = syncResult.config;
+  const exactOfficialSpecOverrides: Record<string, string> = {};
+  if (exactOfficialPluginVersion) {
+    for (const [pluginId, record] of Object.entries(pluginConfig.plugins?.installs ?? {})) {
+      const officialSpec = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
+      const parsed = officialSpec ? parseRegistryNpmSpec(officialSpec) : null;
+      if (parsed) {
+        exactOfficialSpecOverrides[pluginId] = `${parsed.name}@${exactOfficialPluginVersion}`;
+      }
+    }
+  }
   const integrityDrifts: PostCorePluginUpdateResult["integrityDrifts"] = [];
   const pluginUpdateOutcomes: PluginUpdateOutcome[] = [];
   let pluginsChanged = syncResult.changed || params.configChanged === true;
@@ -1844,7 +1896,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
       config: pluginConfig,
       pluginIds: missingIds,
       timeoutMs: params.timeoutMs,
-      updateChannel: params.channel,
+      updateChannel: pluginUpdateChannel,
+      specOverrides: exactOfficialSpecOverrides,
       skipDisabledPlugins: true,
       syncOfficialPluginInstalls: true,
       disableOnFailure: true,
@@ -1863,8 +1916,13 @@ export async function updatePluginsAfterCoreUpdate(params: {
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
-    updateChannel: params.channel,
-    skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIds]),
+    updateChannel: pluginUpdateChannel,
+    specOverrides: exactOfficialSpecOverrides,
+    skipIds: new Set([
+      ...syncResult.summary.switchedToNpm,
+      ...(syncResult.summary.switchedToClawHub ?? []),
+      ...missingPayloadIds,
+    ]),
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,
     disableOnFailure: true,
@@ -2378,7 +2436,7 @@ async function maybeRestartService(params: {
 
 async function runPostCorePluginUpdate(params: {
   root: string;
-  channel: "stable" | "beta" | "dev";
+  channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
@@ -2402,7 +2460,7 @@ type UpdateFinalizeResult = {
   status: "ok" | "warning" | "error";
   mode: "finalize";
   root: string;
-  channel: "stable" | "beta" | "dev";
+  channel: UpdateChannel;
   restart: false;
   postUpdate: {
     doctor: {
@@ -2462,7 +2520,9 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     : undefined;
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
+    defaultRuntime.error(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+    );
     defaultRuntime.exit(1);
     return;
   }
@@ -2470,6 +2530,24 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
     : null;
   const channel = requestedChannel ?? storedChannel ?? DEFAULT_PACKAGE_CHANNEL;
+  if (channel === "extended-stable") {
+    const updateStatus = await checkUpdateStatus({
+      root,
+      timeoutMs: timeoutMs ?? 3500,
+      fetchGit: false,
+      includeRegistry: false,
+    });
+    if (updateStatus.installKind === "git") {
+      await reportPreMutationUpdateFailure({
+        root,
+        installKind: updateStatus.installKind,
+        reason: "unsupported_git_channel",
+        opts,
+        controlPlaneUpdateSentinelMeta: null,
+      });
+      return;
+    }
+  }
   if (requestedChannel) {
     configSnapshot = await persistRequestedUpdateChannel({
       configSnapshot,
@@ -2553,7 +2631,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
 
 async function persistRequestedUpdateChannel(params: {
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  requestedChannel: "stable" | "beta" | "dev" | null;
+  requestedChannel: UpdateChannel | null;
 }): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
   if (!params.requestedChannel || !params.configSnapshot.valid) {
     return params.configSnapshot;
@@ -2908,8 +2986,8 @@ function preparePostCorePluginInstallRecordsForFreshProcess(params: {
 
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
-  channel: "stable" | "beta" | "dev";
-  requestedChannel: "stable" | "beta" | "dev" | null;
+  channel: UpdateChannel;
+  requestedChannel: UpdateChannel | null;
   opts: UpdateCommandOptions;
   pluginInstallRecords: Record<string, PluginInstallRecord>;
   preUpdateConfig?: PreUpdateConfigRestoreInput;
@@ -3147,8 +3225,12 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     return;
   }
   if (opts.dryRun !== true) {
-    await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
-    assertConfigWriteAllowedInCurrentMode();
+    try {
+      assertConfigWriteAllowedInCurrentMode();
+    } catch (err) {
+      await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+      throw err;
+    }
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
@@ -3156,6 +3238,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   if (postCoreUpdateResume) {
     if (
       postCoreUpdateChannel !== "stable" &&
+      postCoreUpdateChannel !== "extended-stable" &&
       postCoreUpdateChannel !== "beta" &&
       postCoreUpdateChannel !== "dev"
     ) {
@@ -3245,8 +3328,21 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
 
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
+    defaultRuntime.error(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+    );
     defaultRuntime.exit(1);
+    return;
+  }
+
+  if (requestedChannel === "extended-stable" && updateStatus.installKind === "git") {
+    await reportPreMutationUpdateFailure({
+      root,
+      installKind: updateStatus.installKind,
+      reason: "unsupported_git_channel",
+      opts,
+      controlPlaneUpdateSentinelMeta,
+    });
     return;
   }
 
@@ -3269,6 +3365,20 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   }
 
   const installKind = updateStatus.installKind;
+  const selectedChannel =
+    requestedChannel ??
+    storedChannel ??
+    (installKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL);
+  if (selectedChannel === "extended-stable" && installKind === "git") {
+    await reportPreMutationUpdateFailure({
+      root,
+      installKind,
+      reason: "unsupported_git_channel",
+      opts,
+      controlPlaneUpdateSentinelMeta,
+    });
+    return;
+  }
   const switchToGit = requestedChannel === "dev" && installKind !== "git";
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
@@ -3280,12 +3390,24 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     channel === "dev" ? process.env.OPENCLAW_UPDATE_DEV_TARGET_REF?.trim() || undefined : undefined;
 
   const explicitTag = normalizeTag(opts.tag);
+  if (channel === "extended-stable" && explicitTag) {
+    await reportPreMutationUpdateFailure({
+      root,
+      installKind: updateInstallKind,
+      reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      opts,
+      controlPlaneUpdateSentinelMeta,
+    });
+    return;
+  }
   let tag = explicitTag ?? channelToNpmTag(channel);
   let currentVersion: string | null = null;
   let targetVersion: string | null = null;
   let downgradeRisk = false;
   let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
+  let packageInstallRegistryUrl: string | null = null;
+  let installedPackageName = DEFAULT_PACKAGE_NAME;
   let packageAlreadyCurrent = false;
   let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
   // Resolved independently of the root redirect so it covers the common case
@@ -3340,8 +3462,31 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   }
 
   if (updateInstallKind !== "git") {
+    if (updateInstallKind === "package") {
+      installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
+    }
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
-    if (explicitTag) {
+    if (channel === "extended-stable") {
+      const extendedStable = await resolveExtendedStablePackage({
+        installKind: updateInstallKind,
+        timeoutMs,
+        packageName: installedPackageName,
+      });
+      if (extendedStable.status === "failed") {
+        await reportPreMutationUpdateFailure({
+          root,
+          installKind: updateInstallKind,
+          reason: extendedStable.reason,
+          opts,
+          controlPlaneUpdateSentinelMeta,
+        });
+        return;
+      }
+      targetVersion = extendedStable.version;
+      tag = extendedStable.version;
+      packageInstallSpec = extendedStable.packageSpec;
+      packageInstallRegistryUrl = extendedStable.registryUrl;
+    } else if (explicitTag) {
       targetVersion = await resolveTargetVersion(tag, timeoutMs);
     } else {
       targetVersion = await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
@@ -3364,7 +3509,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       !fallbackToLatest &&
       currentVersion != null &&
       (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
-    packageInstallSpec = resolveGlobalInstallSpec({
+    packageInstallSpec ??= resolveGlobalInstallSpec({
       packageName: DEFAULT_PACKAGE_NAME,
       tag,
       env: process.env,
@@ -3495,6 +3640,8 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     }
   }
 
+  await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+
   const showProgress = !opts.json && process.stdout.isTTY;
   if (!opts.json) {
     defaultRuntime.log(theme.heading("Updating OpenClaw..."));
@@ -3582,6 +3729,8 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
             root,
             installKind,
             tag,
+            installSpec: packageInstallSpec ?? undefined,
+            registryUrl: packageInstallRegistryUrl ?? undefined,
             timeoutMs: updateStepTimeoutMs,
             startedAt,
             progress,

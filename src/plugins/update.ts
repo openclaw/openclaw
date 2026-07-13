@@ -57,6 +57,7 @@ import {
 import { installPluginFromMarketplace } from "./marketplace.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import {
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
@@ -939,8 +940,10 @@ function resolveClawHubUpdateSpecs(params: {
 function isBridgeAlreadyInstalledFromPreferredSource(params: {
   bridge: ExternalizedBundledPluginBridge;
   record: PluginInstallRecord;
+  preferredSource?: "clawhub" | "npm";
 }): boolean {
-  const preferredSource = getExternalizedBundledPluginPreferredSource(params.bridge);
+  const preferredSource =
+    params.preferredSource ?? getExternalizedBundledPluginPreferredSource(params.bridge);
   return preferredSource === "clawhub"
     ? isBridgeClawHubInstall(params)
     : isBridgeNpmInstall(params);
@@ -949,8 +952,10 @@ function isBridgeAlreadyInstalledFromPreferredSource(params: {
 function isBridgeInstalledFromFallbackSource(params: {
   bridge: ExternalizedBundledPluginBridge;
   record: PluginInstallRecord;
+  preferredSource?: "clawhub" | "npm";
 }): boolean {
-  const preferredSource = getExternalizedBundledPluginPreferredSource(params.bridge);
+  const preferredSource =
+    params.preferredSource ?? getExternalizedBundledPluginPreferredSource(params.bridge);
   return preferredSource === "clawhub"
     ? isBridgeNpmInstall(params)
     : isBridgeClawHubInstall(params);
@@ -2135,6 +2140,7 @@ export async function syncPluginsForUpdateChannel(params: {
   env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
+  exactOfficialPluginVersion?: string;
 }): Promise<PluginChannelSyncResult> {
   const env = params.env ?? process.env;
   const logger = params.logger ?? {};
@@ -2209,11 +2215,23 @@ export async function syncPluginsForUpdateChannel(params: {
         continue;
       }
 
+      const baseNpmSpec = getExternalizedBundledPluginNpmSpec(bridge);
+      const parsedNpmSpec = baseNpmSpec ? parseRegistryNpmSpec(baseNpmSpec) : null;
+      const exactNpmSpec =
+        params.channel === "extended-stable" && params.exactOfficialPluginVersion && parsedNpmSpec
+          ? `${parsedNpmSpec.name}@${params.exactOfficialPluginVersion}`
+          : baseNpmSpec;
+      const preferredSource =
+        params.channel === "extended-stable" && exactNpmSpec
+          ? "npm"
+          : getExternalizedBundledPluginPreferredSource(bridge);
+
       if (
         existing &&
         isBridgeAlreadyInstalledFromPreferredSource({
           bridge,
           record: existing.record,
+          preferredSource,
         })
       ) {
         if (existing.pluginId !== targetPluginId) {
@@ -2235,13 +2253,13 @@ export async function syncPluginsForUpdateChannel(params: {
         !isBridgeInstalledFromFallbackSource({
           bridge,
           record: existing.record,
+          preferredSource,
         })
       ) {
         continue;
       }
 
-      const preferredSource = getExternalizedBundledPluginPreferredSource(bridge);
-      const npmSpec = getExternalizedBundledPluginNpmSpec(bridge);
+      const npmSpec = exactNpmSpec;
       const clawhubSpec = getExternalizedBundledPluginClawHubSpec(bridge);
       const trustedSourceLinkedOfficialInstall = isTrustedSourceLinkedOfficialBridgeNpmInstall({
         targetPluginId,
@@ -2364,6 +2382,69 @@ export async function syncPluginsForUpdateChannel(params: {
         summary.switchedToNpm.push(resolvedPluginId);
       }
       changed = true;
+    }
+
+    if (params.channel === "extended-stable" && params.exactOfficialPluginVersion) {
+      for (const [pluginId, record] of Object.entries(installs)) {
+        const officialInstall = resolveTrustedSourceLinkedOfficialClawHubInstall({
+          pluginId,
+          record,
+        });
+        const parsedNpmSpec = officialInstall?.npmSpec
+          ? parseRegistryNpmSpec(officialInstall.npmSpec)
+          : null;
+        if (!parsedNpmSpec) {
+          continue;
+        }
+
+        const exactNpmSpec = `${parsedNpmSpec.name}@${params.exactOfficialPluginVersion}`;
+        const result = await installPluginFromNpmSpec({
+          spec: exactNpmSpec,
+          config: params.config,
+          mode: "update",
+          expectedPluginId: pluginId,
+          trustedSourceLinkedOfficialInstall: true,
+          logger,
+        });
+        if (!result.ok) {
+          const message = formatNpmInstallFailure({
+            pluginId,
+            spec: exactNpmSpec,
+            phase: "update",
+            result,
+          });
+          summary.errors.push(message);
+          logger.error?.(message);
+          continue;
+        }
+
+        const resolvedPluginId = result.pluginId;
+        if (pluginId !== resolvedPluginId) {
+          next = migratePluginConfigId(next, pluginId, resolvedPluginId);
+        }
+        const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
+        next = recordPluginInstall(next, {
+          pluginId: resolvedPluginId,
+          source: "npm",
+          spec: resolveNpmInstallRecordSpec({
+            requestedSpec: exactNpmSpec,
+            resolution: result.npmResolution,
+            pinResolvedRegistrySpec: true,
+          }),
+          installPath: result.targetDir,
+          version: nextVersion,
+          ...buildNpmResolutionInstallFields(result.npmResolution),
+        });
+        installs = next.plugins?.installs ?? {};
+        if (record.sourcePath) {
+          loadHelpers.removePath(record.sourcePath);
+        }
+        if (record.installPath) {
+          loadHelpers.removePath(record.installPath);
+        }
+        summary.switchedToNpm.push(resolvedPluginId);
+        changed = true;
+      }
     }
 
     for (const [pluginId, record] of Object.entries(installs)) {

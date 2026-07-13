@@ -38,7 +38,18 @@ function isDefaultClawHubSpecForBetaChannel(spec: string): { name: string } | nu
 export function resolveNpmInstallSpecsForUpdateChannel(params: {
   spec: string;
   updateChannel?: UpdateChannel;
+  exactVersion?: string;
 }): ChannelInstallSpecs {
+  if (params.updateChannel === "extended-stable" && params.exactVersion) {
+    const parsed = parseRegistryNpmSpec(params.spec);
+    if (parsed) {
+      const exactSpec = `${parsed.name}@${params.exactVersion}`;
+      return {
+        installSpec: exactSpec,
+        recordSpec: exactSpec,
+      };
+    }
+  }
   if (params.updateChannel !== "beta") {
     return {
       installSpec: params.spec,

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveRestartSentinelPath } from "./restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
+import type { UpdateChannel } from "./update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
@@ -266,7 +267,7 @@ function isNodeLikeRuntime(execPath: string | undefined): boolean {
 
 function resolveUpdateCliArgv(params: {
   timeoutMs?: number;
-  channel?: "stable" | "beta" | "dev";
+  channel?: UpdateChannel;
   execPath?: string;
   argv1?: string;
 }): string[] {
@@ -291,7 +292,7 @@ function resolveUpdateCliArgv(params: {
 
 export function formatManagedServiceUpdateCommand(params?: {
   timeoutMs?: number;
-  channel?: "stable" | "beta" | "dev";
+  channel?: UpdateChannel;
 }): string {
   const args = ["openclaw", "update", "--yes"];
   if (params?.channel) {
@@ -417,7 +418,7 @@ async function resolveHandoffSpawn(params: {
 export async function startManagedServiceUpdateHandoff(params: {
   root: string;
   timeoutMs?: number;
-  channel?: "stable" | "beta" | "dev";
+  channel?: UpdateChannel;
   restartDelayMs?: number;
   meta: UpdateRestartSentinelMeta;
   handoffId?: string;

@@ -203,7 +203,7 @@ stage matrix, exact workflow job names, profile differences, artifacts, and
 focused rerun handles.
 
 `OpenClaw Release Publish` is the manual mutating release workflow. Dispatch it
-from `release/YYYY.M.PATCH` or `main` after the release tag exists and after the
+from `main` after the release tag exists and after the
 OpenClaw npm preflight has succeeded. It verifies `pnpm plugins:sync:check`,
 dispatches `Plugin NPM Release` for all publishable plugin packages, dispatches
 `Plugin ClawHub Release` for the same release SHA, and only then dispatches
@@ -216,10 +216,12 @@ and checksum contract before publishing the GitHub release draft.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
-  --ref release/YYYY.M.PATCH \
+  --ref main \
   -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f preflight_run_attempt=<successful-openclaw-npm-preflight-run-attempt> \
   -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
+  -f full_release_validation_run_attempt=<successful-full-release-validation-run-attempt> \
   -f npm_dist_tag=beta
 ```
 

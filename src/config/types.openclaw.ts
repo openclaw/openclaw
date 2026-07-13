@@ -138,8 +138,8 @@ export type OpenClawConfig = {
   /** Crestodian rescue/maintenance integration settings. */
   crestodian?: CrestodianConfig;
   update?: {
-    /** Update channel for git + npm installs ("stable", "beta", or "dev"). */
-    channel?: "stable" | "beta" | "dev";
+    /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
+    channel?: "stable" | "extended-stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
     /** Core auto-update policy for package installs. */

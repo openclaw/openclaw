@@ -21,6 +21,7 @@ cleanup() {
   fi
 }
 
+
 trap cleanup EXIT
 
 run_with_timeout() {
@@ -113,25 +114,14 @@ resolve_package_tgz() {
     exit 1
   fi
 
-  echo "==> Write package inventory"
-  node --import tsx scripts/write-package-dist-inventory.ts
-
-  local pack_json_file
   PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
-  pack_json_file="$PACK_DIR/pack.json"
 
   echo "==> Pack OpenClaw tarball"
-  npm pack --ignore-scripts --json --pack-destination "$PACK_DIR" >"$pack_json_file"
   PACKAGE_TGZ="$(
-    node -e '
-const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
-const parsed = JSON.parse(raw);
-const last = Array.isArray(parsed) ? parsed.at(-1) : null;
-if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
-  process.exit(1);
-}
-process.stdout.write(require("node:path").resolve(process.argv[2], last.filename));
-' "$pack_json_file" "$PACK_DIR"
+    node scripts/package-openclaw-for-docker.mjs \
+      --skip-build \
+      --output-dir "$PACK_DIR" \
+      --output-name openclaw-current.tgz
   )"
   if [ -z "$PACKAGE_TGZ" ] || [ ! -f "$PACKAGE_TGZ" ]; then
     echo "missing packed OpenClaw tarball" >&2
@@ -162,7 +152,6 @@ main() {
   export NO_COLOR=1
   mkdir -p "$HOME" "$BUN_INSTALL/bin" "$XDG_CACHE_HOME"
   export PATH="$BUN_INSTALL/bin:$(dirname "$(command -v node)"):$PATH"
-
   echo "==> Bun version"
   "$bun_path" --version
 

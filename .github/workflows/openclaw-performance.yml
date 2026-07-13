@@ -66,6 +66,21 @@ env:
   KOVA_SCENARIO_TIMEOUT_MS: "300000"
 
 jobs:
+  verify_artifact_only:
+    name: Verify artifact-only report mode
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_reports == false }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm report publication is disabled
+        env:
+          PUBLISH_REPORTS: ${{ inputs.publish_reports }}
+        run: |
+          set -euo pipefail
+          [[ "$PUBLISH_REPORTS" == "false" ]] || {
+            echo "Artifact-only performance validation requires publish_reports=false." >&2
+            exit 1
+          }
+
   kova:
     name: ${{ matrix.title }}
     runs-on: blacksmith-16vcpu-ubuntu-2404

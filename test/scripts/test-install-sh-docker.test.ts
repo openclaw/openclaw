@@ -494,7 +494,10 @@ describe("bun global install smoke", () => {
     const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
     const assertions = readFileSync(BUN_GLOBAL_ASSERTIONS_PATH, "utf8");
 
-    expect(script).toContain("npm pack --ignore-scripts --json --pack-destination");
+    expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
+    expect(script).toContain("--skip-build");
+    expect(script).toContain("--output-name openclaw-current.tgz");
+    expect(script).not.toContain("npm pack --ignore-scripts --json --pack-destination");
     expect(script).toContain('"$bun_path" install -g "$PACKAGE_TGZ" --no-progress');
     expect(script).toContain("infer image providers --json");
     expect(script).toContain("assert-image-providers");
@@ -508,6 +511,8 @@ describe("bun global install smoke", () => {
     expect(script).toContain(
       'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"',
     );
+    expect(script).not.toContain("@openclaw/ai");
+    expect(script).not.toContain("packages/ai");
     expect(script).toContain("cleanup_restore_dist() {");
     expect(script).toContain('mv "$ROOT_DIR/dist" "$backup_dir"');
     expect(script).toContain('mv "$temp_dir/dist" "$ROOT_DIR/dist"');
@@ -520,6 +525,15 @@ describe("bun global install smoke", () => {
     expect(script).not.toContain('container_id="$(docker create "$image")"');
     expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
     expect(script).not.toContain('\n  rm -rf "$ROOT_DIR/dist"\n');
+  });
+
+  it("uses the canonical package builder for bundled workspace dependencies", () => {
+    const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
+
+    expect(script).toContain('PACK_DIR="$(mktemp -d');
+    expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
+    expect(script).toContain('--output-dir "$PACK_DIR"');
+    expect(script).toContain("--output-name openclaw-current.tgz");
   });
 
   it("gates workflow Bun install smoke to scheduled and release-check runs", () => {

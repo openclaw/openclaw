@@ -1,17 +1,428 @@
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import {
+  buildReleaseCandidateState,
   buildPublishCommand,
+  candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
   githubApi,
   parseArgs,
   parseRunIdFromDispatchOutput,
+  reconcileReleaseCandidateState,
   resolveArtifactName,
+  run,
+  selectDispatchedWorkflowRunId,
+  validateCandidateChangelogProvenance,
+  validateCandidateCheckout,
+  validateCandidateReleaseNotes,
+  validateFullManifest,
+  validatePreflightManifest,
+  validateTrustedWorkflowRunHead,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
+function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(body), init);
+}
+
+async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS;
+  process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS = value;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS;
+    } else {
+      process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS = previous;
+    }
+  }
+}
+
 describe("release candidate checklist", () => {
+  it("resumes exact workflow runs from matching release candidate state", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4"]);
+    const expected = buildReleaseCandidateState(options, {
+      targetSha: "a".repeat(40),
+      toolingSha: "b".repeat(40),
+    });
+    const resumed = reconcileReleaseCandidateState(
+      JSON.parse(
+        JSON.stringify({
+          ...expected,
+          phase: "waiting",
+          fullReleaseRunId: "111",
+          npmPreflightRunId: "222",
+        }),
+      ),
+      expected,
+    );
+
+    expect(resumed).toMatchObject({
+      phase: "waiting",
+      fullReleaseRunId: "111",
+      npmPreflightRunId: "222",
+    });
+  });
+
+  it("rejects stale or conflicting release candidate state", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4"]);
+    const expected = buildReleaseCandidateState(options, {
+      targetSha: "a".repeat(40),
+      toolingSha: "b".repeat(40),
+    });
+
+    expect(() =>
+      reconcileReleaseCandidateState({ ...expected, targetSha: "c".repeat(40) }, expected),
+    ).toThrow("state mismatch for targetSha");
+    expect(() =>
+      reconcileReleaseCandidateState(
+        { ...expected, fullReleaseRunId: "111" },
+        { ...expected, fullReleaseRunId: "333" },
+      ),
+    ).toThrow("state mismatch for fullReleaseRunId");
+  });
+
+  it("captures changelogs larger than the Node spawnSync default buffer", () => {
+    const output = run(
+      process.execPath,
+      ["-e", "process.stdout.write('x'.repeat(2 * 1024 * 1024))"],
+      { capture: true },
+    );
+
+    expect(output).toHaveLength(2 * 1024 * 1024);
+  });
+
+  it("keeps the frozen release target separate from clean trusted workflow tooling", () => {
+    expect(
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
+      }),
+    ).toEqual({
+      status: "passed",
+      targetSha: "a".repeat(40),
+      toolingSha: "b".repeat(40),
+      workflowRef: "main",
+    });
+    expect(() =>
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        targetHeadSha: "c".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
+      }),
+    ).toThrow("target worktree HEAD");
+    expect(() =>
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: " M package.json",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
+      }),
+    ).toThrow("clean tracked target worktree");
+    expect(() =>
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "c".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
+      }),
+    ).toThrow("does not match trusted main");
+    expect(() =>
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: " M scripts/release-candidate-checklist.mjs",
+        workflowRef: "main",
+      }),
+    ).toThrow("clean tracked tooling checkout");
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    expect(source).toContain('const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url))');
+    expect(source).toContain("`+refs/heads/${workflowRef}:${remoteRef}`");
+    expect(source).toContain('"worktree", "add", "--detach", toolingRoot, trustedToolingSha');
+    expect(source).toContain(
+      '[join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv]',
+    );
+    expect(source).toContain("cwd: targetRoot");
+    expect(source).toContain('"worktree", "remove", "--force", toolingRoot');
+    expect(source).toContain(
+      "const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
+    );
+    expect(source).toContain('targetHeadSha: gitRevParse("HEAD", targetRoot)');
+    expect(source).toContain("toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT)");
+  });
+
+  it("validates the exact tag changelog before dispatching the release matrix", () => {
+    const check = validateCandidateReleaseNotes({
+      changelog: [
+        "# Changelog",
+        "",
+        "## 2026.7.1",
+        "",
+        "### Highlights",
+        "",
+        "- User-facing notes.",
+        "",
+        "### Complete contribution record",
+        "",
+        `- **PR #123** ${"record ".repeat(20_000)}`,
+      ].join("\n"),
+      repository: "openclaw/openclaw",
+      tag: "v2026.7.1-beta.3",
+    });
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const validationIndex = source.indexOf(
+      "const releaseNotesCheck = validateCandidateReleaseNotes",
+    );
+    const fullMatrixDispatchIndex = source.indexOf(
+      "if (!options.fullReleaseRunId && !options.skipDispatch)",
+    );
+
+    expect(check).toMatchObject({ status: "passed", mode: "compact" });
+    expect(validationIndex).toBeGreaterThanOrEqual(0);
+    expect(fullMatrixDispatchIndex).toBeGreaterThan(validationIndex);
+    expect(source).toContain('run("git", ["show", `${targetSha}:CHANGELOG.md`]');
+  });
+
+  it("rejects contribution-record provenance outside the release tag history", () => {
+    const base = "v2026.6.11";
+    const recordedTarget = "a".repeat(40);
+    const targetSha = "b".repeat(40);
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- User-facing notes.",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete ${base}..${recordedTarget} history: 1 merged PR.`,
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #123** fix: example.",
+    ].join("\n");
+    const reachable = vi.fn((ancestor: string, target: string) => {
+      return ancestor === base && target === recordedTarget;
+    });
+
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha,
+        isAncestor: reachable,
+      }),
+    ).toThrow(`contribution record target ${recordedTarget} is not reachable`);
+    expect(reachable).toHaveBeenCalledWith(base, recordedTarget);
+    expect(reachable).toHaveBeenCalledWith(recordedTarget, targetSha);
+  });
+
+  it("rejects duplicate contribution record rows even when the declared count matches", () => {
+    const targetSha = "b".repeat(40);
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- User-facing notes.",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #123** fix: example.",
+      "- **PR #123** fix: duplicate.",
+    ].join("\n");
+
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha,
+        isAncestor: () => true,
+      }),
+    ).toThrow("duplicate contribution record PR rows: #123");
+  });
+
+  it("uses numbered historical record rows and skips Unreleased baseline rows", () => {
+    const changelog = [
+      "# Changelog",
+      "",
+      "## Unreleased",
+      "",
+      "### Complete contribution record",
+      "",
+      "This audited record covers the complete base..HEAD history: 99 merged PRs.",
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #1** fix: not shipped.",
+      "",
+      "## 2026.6.11",
+      "",
+      "### Complete contribution record",
+      "",
+      "This audited record covers the complete base..HEAD history: 0 merged PRs.",
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #2** fix: shipped.",
+    ].join("\n");
+
+    expect([...candidateCumulativeShippedPullRequests(changelog, "test baseline")]).toEqual([2]);
+  });
+
+  it("validates cumulative shipped baseline exclusion metadata", () => {
+    const base = "66e676d29b92d040716376a75aca32bad655cfac";
+    const recordedTarget = "a".repeat(40);
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- User-facing notes.",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete ${base}..${recordedTarget} history: 1 merged PR.`,
+      "",
+      "Shipped baseline exclusions: v2026.6.11 (8 PRs: #101, #102, #103, #104, #105, #106, #107, #108).",
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #123** fix: example.",
+    ].join("\n");
+    const shippedPullRequests = new Set([101, 102, 103, 104, 105, 106, 107, 108]);
+    const loadShippedBaseline = vi.fn(() => ({
+      ref: "v2026.6.11",
+      pullRequests: shippedPullRequests,
+    }));
+    expect(
+      validateCandidateChangelogProvenance({
+        changelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha: recordedTarget,
+        isAncestor: () => true,
+        loadShippedBaseline,
+      }),
+    ).toEqual({
+      status: "passed",
+      base,
+      target: recordedTarget,
+      shippedBaselines: [
+        {
+          ref: "v2026.6.11",
+          count: 8,
+          pullRequests: [101, 102, 103, 104, 105, 106, 107, 108],
+        },
+      ],
+    });
+    expect(loadShippedBaseline).toHaveBeenCalledWith("v2026.6.11");
+
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog: changelog.replace("8 PRs:", "8 pull requests:"),
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha: recordedTarget,
+        isAncestor: () => true,
+        loadShippedBaseline,
+      }),
+    ).toThrow("malformed shipped baseline exclusion");
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha: recordedTarget,
+        isAncestor: () => true,
+        loadShippedBaseline: () => ({
+          ref: "v2026.6.11",
+          pullRequests: new Set([...shippedPullRequests].slice(1)),
+        }),
+      }),
+    ).toThrow("lists PRs absent from shipped baseline v2026.6.11: #101");
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog: changelog.replace(
+          "- **PR #123** fix: example.",
+          "- **PR #101** fix: already shipped.",
+        ),
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha: recordedTarget,
+        isAncestor: () => true,
+        loadShippedBaseline,
+      }),
+    ).toThrow("still contains shipped PRs from v2026.6.11: #101");
+  });
+
+  it("requires contribution records for beta candidates but permits alpha Unreleased fallback", () => {
+    const betaChangelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- User-facing notes.",
+    ].join("\n");
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog: betaChangelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha: "a".repeat(40),
+      }),
+    ).toThrow("missing ### Complete contribution record");
+
+    const alpha = validateCandidateChangelogProvenance({
+      changelog: betaChangelog.replace("## 2026.7.1", "## Unreleased"),
+      version: "2026.7.1",
+      tag: "v2026.7.1-alpha.1",
+      targetSha: "a".repeat(40),
+    });
+    expect(alpha).toEqual({
+      status: "skipped",
+      reason: "alpha release uses the explicit Unreleased fallback",
+      shippedBaselines: [],
+    });
+  });
+
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
     expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
@@ -49,14 +460,250 @@ describe("release candidate checklist", () => {
       candidateParallelsShellCommand(
         ".artifacts/preflight/openclaw candidate.tgz",
         "/opt/homebrew/bin/gtimeout",
+        [".artifacts/preflight/openclaw-ai candidate.tgz"],
       ),
     ).toContain("'--target-tarball' '.artifacts/preflight/openclaw candidate.tgz'");
+    expect(
+      candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [
+        ".artifacts/preflight/openclaw-ai.tgz",
+      ]),
+    ).toEqual([
+      "test:parallels:npm-update",
+      "--",
+      "--target-tarball",
+      ".artifacts/preflight/openclaw.tgz",
+      "--dependency-tarball",
+      ".artifacts/preflight/openclaw-ai.tgz",
+      "--json",
+    ]);
+  });
+
+  it("requires exact dependency tarball metadata in npm preflight manifests", () => {
+    const manifest = {
+      releaseTag: "v2026.7.1-beta.3",
+      releaseSha: "candidate-sha",
+      npmDistTag: "beta",
+      tarballName: "openclaw-2026.7.1-beta.3.tgz",
+      tarballSha256: "root-sha",
+      dependencyTarballs: [
+        {
+          packageName: "@openclaw/ai",
+          packageVersion: "2026.7.1-beta.3",
+          tarballName: "openclaw-ai-2026.7.1-beta.3.tgz",
+          tarballSha256: "ai-sha",
+        },
+      ],
+    };
+    const params = {
+      tag: "v2026.7.1-beta.3",
+      targetSha: "candidate-sha",
+      npmDistTag: "beta",
+    };
+
+    expect(() => validatePreflightManifest(manifest, params)).not.toThrow();
+    expect(() =>
+      validatePreflightManifest({ ...manifest, dependencyTarballs: undefined }, params),
+    ).toThrow("missing dependency tarball metadata");
+    expect(() =>
+      validatePreflightManifest(
+        {
+          ...manifest,
+          dependencyTarballs: [
+            {
+              ...manifest.dependencyTarballs[0],
+              tarballName: "../openclaw-ai.tgz",
+            },
+          ],
+        },
+        params,
+      ),
+    ).toThrow("invalid dependency tarball metadata");
   });
 
   it("requires run ids when dispatch is disabled", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--skip-dispatch"])).toThrow(
       "--skip-dispatch requires --full-release-run and --npm-preflight-run",
     );
+  });
+
+  it("uses trusted main for regular release workflow tooling", () => {
+    expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).workflowRef).toBe("main");
+    expect(() =>
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--workflow-ref", "release/2026.5.14"]),
+    ).toThrow("--workflow-ref must be main");
+  });
+
+  it("preserves the matching Tideclaw alpha workflow source", () => {
+    const workflowRef = "tideclaw/alpha/2026-07-10-1200Z";
+    const options = parseArgs([
+      "--tag",
+      "v2026.7.1-alpha.3",
+      "--workflow-ref",
+      workflowRef,
+      "--npm-dist-tag",
+      "alpha",
+    ]);
+    Object.assign(options, {
+      fullReleaseRunId: "111",
+      fullReleaseRunAttempt: 1,
+      npmPreflightRunId: "222",
+      npmPreflightRunAttempt: 1,
+    });
+
+    expect(options.workflowRef).toBe(workflowRef);
+    expect(buildPublishCommand(options)).toContain(`'--ref' '${workflowRef}'`);
+    expect(() => parseArgs(["--tag", "v2026.7.1-alpha.3"])).toThrow(
+      "--workflow-ref must be the matching tideclaw/alpha/",
+    );
+  });
+
+  it("rejects duplicate release candidate CLI options", () => {
+    const requiredArgs = ["--tag", "v2026.5.14-beta.3"];
+    const duplicateOption = (
+      flag: string,
+      firstValue: string,
+      secondValue: string,
+      prefix = requiredArgs,
+    ): [string, string[]] => [flag, [...prefix, flag, firstValue, flag, secondValue]];
+    const duplicateFlag = (flag: string): [string, string[]] => [
+      flag,
+      [...requiredArgs, flag, flag],
+    ];
+    const duplicateCases = [
+      duplicateOption("--tag", "v2026.5.14-beta.3", "v2026.5.14-beta.4", []),
+      duplicateOption("--workflow-ref", "release/a", "release/b"),
+      duplicateOption("--repo", "openclaw/openclaw", "fork/openclaw"),
+      duplicateOption("--full-release-run", "111", "222"),
+      duplicateOption("--npm-preflight-run", "111", "222"),
+      duplicateOption("--windows-node-tag", "v0.6.3", "v0.6.4"),
+      duplicateFlag("--skip-dispatch"),
+      duplicateFlag("--skip-local-generated-check"),
+      duplicateFlag("--skip-parallels"),
+      duplicateFlag("--skip-telegram"),
+      duplicateOption("--telegram-provider-mode", "mock-openai", "live-frontier"),
+      duplicateOption("--provider", "blacksmith-testbox", "crabbox"),
+      duplicateOption("--mode", "fresh", "upgrade"),
+      duplicateOption("--release-profile", "beta", "stable"),
+      duplicateOption("--npm-dist-tag", "beta", "latest"),
+      duplicateOption("--plugin-publish-scope", "all-publishable", "selected"),
+      duplicateOption("--plugins", "telegram", "discord"),
+      duplicateOption("--output-dir", ".artifacts/a", ".artifacts/b"),
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
+    }
+  });
+
+  it("requires stable validation evidence to include soak and blocking performance", () => {
+    const stableManifest = {
+      workflowName: "Full Release Validation",
+      targetSha: "candidate-sha",
+      releaseProfile: "stable",
+      rerunGroup: "all",
+      runReleaseSoak: "true",
+      controls: { performanceBlocking: true },
+    };
+
+    expect(() =>
+      validateFullManifest(stableManifest, {
+        targetSha: "candidate-sha",
+        releaseProfile: "stable",
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateFullManifest(
+        {
+          ...stableManifest,
+          runReleaseSoak: "false",
+        },
+        {
+          targetSha: "candidate-sha",
+          releaseProfile: "stable",
+        },
+      ),
+    ).toThrow("runReleaseSoak=true");
+    expect(() =>
+      validateFullManifest(
+        {
+          ...stableManifest,
+          controls: { performanceBlocking: false },
+        },
+        {
+          targetSha: "candidate-sha",
+          releaseProfile: "stable",
+        },
+      ),
+    ).toThrow("blocking product performance");
+  });
+
+  it("binds SHA-pinned full validation evidence through its manifest", () => {
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+
+    expect(source).toContain("allowShaPinnedWorkflowRef: true");
+    expect(source).toContain("validateFullReleaseValidationEvidence({");
+    expect(source).toContain("runStrictReleaseEvidenceValidation({ repository, runId })");
+    expect(source).toContain("refs/heads/main:refs/remotes/origin/main");
+    expect(source).toContain("validateTrustedWorkflowRunHead(fullRun");
+    expect(source).toContain("allowShaPinnedWorkflowRef: true");
+    expect(source).toContain("targetSha,");
+  });
+
+  it("binds workflow run heads to trusted tooling while manifests bind the candidate", () => {
+    const trustedToolingSha = "a".repeat(40);
+    expect(() =>
+      validateTrustedWorkflowRunHead(
+        { headSha: trustedToolingSha },
+        { label: "npm preflight", trustedToolingSha },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateTrustedWorkflowRunHead(
+        { headSha: "b".repeat(40) },
+        { label: "Full Release Validation", trustedToolingSha },
+      ),
+    ).toThrow("Full Release Validation workflow SHA mismatch");
+    const targetSha = "c".repeat(40);
+    expect(() =>
+      validateTrustedWorkflowRunHead(
+        { headBranch: `release-ci/${targetSha.slice(0, 12)}-1783705000000`, headSha: targetSha },
+        {
+          allowShaPinnedWorkflowRef: true,
+          label: "Full Release Validation",
+          targetSha,
+          trustedToolingSha,
+        },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateTrustedWorkflowRunHead(
+        {
+          headBranch: `release-ci/${targetSha.slice(0, 12)}-1783705000000`,
+          headSha: "d".repeat(40),
+        },
+        {
+          allowShaPinnedWorkflowRef: true,
+          label: "Full Release Validation",
+          targetSha,
+          trustedToolingSha,
+        },
+      ),
+    ).toThrow(`expected=${targetSha}`);
+
+    expect(() =>
+      validatePreflightManifest(
+        {
+          releaseTag: "v2026.7.1",
+          releaseSha: "c".repeat(40),
+          npmDistTag: "latest",
+          tarballName: "openclaw.tgz",
+          tarballSha256: "d".repeat(64),
+          dependencyTarballs: [],
+        },
+        { tag: "v2026.7.1", targetSha: "e".repeat(40), npmDistTag: "latest" },
+      ),
+    ).toThrow("npm preflight SHA mismatch");
   });
 
   it("stops parsing options after the argument terminator", () => {
@@ -99,21 +746,43 @@ describe("release candidate checklist", () => {
         "--tag",
         "v2026.5.14-beta.3",
         "--workflow-ref",
-        "release/2026.5.14",
+        "main",
         "--full-release-run",
         "111",
         "--npm-preflight-run",
         "222",
         "--skip-dispatch",
       ]),
-      workflowRef: "release/2026.5.14",
+      workflowRef: "main",
+      fullReleaseRunAttempt: 2,
+      npmPreflightRunAttempt: 3,
+      trustedToolingSha: "a".repeat(40),
     };
 
-    expect(buildPublishCommand(options)).toContain("'full_release_validation_run_id=111'");
-    expect(buildPublishCommand(options)).toContain("'preflight_run_id=222'");
-    expect(buildPublishCommand(options)).toContain("'tag=v2026.5.14-beta.3'");
-    expect(buildPublishCommand(options)).toContain("'plugin_publish_scope=all-publishable'");
-    expect(buildPublishCommand(options)).not.toContain("windows_node_tag=");
+    const command = buildPublishCommand(options);
+    expect(command).toContain("'full_release_validation_run_id=111'");
+    expect(command).toContain("'full_release_validation_run_attempt=2'");
+    expect(command).toContain("'preflight_run_id=222'");
+    expect(command).toContain("'preflight_run_attempt=3'");
+    expect(command).toContain("'tag=v2026.5.14-beta.3'");
+    expect(command).toContain("'plugin_publish_scope=all-publishable'");
+    expect(command).toContain("'--ref' 'release-publish/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'");
+    expect(command).toContain(
+      "'git' 'push' 'origin' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:refs/heads/release-publish/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+    );
+    expect(command).not.toContain("windows_node_tag=");
+
+    const workflow = parse(
+      readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
+    ) as {
+      on: { workflow_dispatch: { inputs: Record<string, unknown> } };
+    };
+    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    );
+    for (const input of emittedInputs) {
+      expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
+    }
   });
 
   it("requires and carries an exact Windows Node tag for stable release candidates", () => {
@@ -131,9 +800,14 @@ describe("release candidate checklist", () => {
         "--windows-node-tag",
         "v0.6.3",
         "--workflow-ref",
-        "release/2026.5.14",
+        "main",
       ]),
-      workflowRef: "release/2026.5.14",
+      workflowRef: "main",
+      fullReleaseRunId: "111",
+      fullReleaseRunAttempt: 1,
+      npmPreflightRunId: "222",
+      npmPreflightRunAttempt: 1,
+      trustedToolingSha: "c".repeat(40),
       windowsNodeInstallerDigests: JSON.stringify({
         "OpenClawCompanion-Setup-x64.exe": `sha256:${"a".repeat(64)}`,
         "OpenClawCompanion-Setup-arm64.exe": `sha256:${"b".repeat(64)}`,
@@ -157,16 +831,15 @@ describe("release candidate checklist", () => {
         digest: `sha256:${"b".repeat(64)}`,
       },
     ];
-    const fetchImpl = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    const fetchImpl = vi.fn(async () => {
+      return jsonResponse({
         tag_name: "v0.6.3",
         draft: false,
         prerelease: false,
         html_url: "https://github.com/openclaw/openclaw-windows-node/releases/tag/v0.6.3",
         assets,
-      }),
-    }));
+      });
+    });
 
     await expect(
       validateWindowsSourceRelease("v0.6.3", {
@@ -218,9 +891,8 @@ describe("release candidate checklist", () => {
       "asset OpenClawCompanion-Setup-x64.exe is missing its SHA-256 digest",
     ],
   ])("rejects an invalid stable Windows source release", async (override, message) => {
-    const fetchImpl = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    const fetchImpl = vi.fn(async () => {
+      return jsonResponse({
         tag_name: "v0.6.3",
         draft: false,
         prerelease: false,
@@ -236,8 +908,8 @@ describe("release candidate checklist", () => {
           },
         ],
         ...override,
-      }),
-    }));
+      });
+    });
 
     await expect(
       validateWindowsSourceRelease("v0.6.3", {
@@ -254,15 +926,18 @@ describe("release candidate checklist", () => {
         "--tag",
         "v2026.5.14-beta.3",
         "--workflow-ref",
-        "release/2026.5.14",
+        "main",
         "--full-release-run",
         "111",
         "--npm-preflight-run",
         "222",
         "--skip-dispatch",
       ]),
-      workflowRef: "release/2026.5.14",
+      workflowRef: "main",
       npmTelegramRunId: "333",
+      fullReleaseRunAttempt: 1,
+      npmPreflightRunAttempt: 1,
+      trustedToolingSha: "d".repeat(40),
     };
 
     expect(buildPublishCommand(options)).toContain("'npm_telegram_run_id=333'");
@@ -295,6 +970,31 @@ describe("release candidate checklist", () => {
     ).toBe("25922042055");
   });
 
+  it("selects only the exact correlated workflow dispatch fallback", () => {
+    const expected = {
+      correlationId: "90d733cb-e795-41ad-9599-cb708fbddf85",
+      headSha: "a".repeat(40),
+      workflowFile: "full-release-validation.yml",
+      workflowRef: "main",
+    };
+    const run = {
+      display_title: expected.correlationId,
+      event: "workflow_dispatch",
+      head_branch: expected.workflowRef,
+      head_sha: expected.headSha,
+      id: 123,
+      path: ".github/workflows/full-release-validation.yml@refs/heads/main",
+    };
+
+    expect(selectDispatchedWorkflowRunId([run], expected)).toBe("123");
+    expect(selectDispatchedWorkflowRunId([{ ...run, head_sha: "b".repeat(40) }], expected)).toBe(
+      "",
+    );
+    expect(() => selectDispatchedWorkflowRunId([run, { ...run, id: 124 }], expected)).toThrow(
+      "matched multiple runs",
+    );
+  });
+
   it("falls back to a single compatible artifact from the same run", () => {
     expect(
       resolveArtifactName(
@@ -313,10 +1013,7 @@ describe("release candidate checklist", () => {
         Authorization: "Bearer test-token",
         "X-GitHub-Api-Version": "2022-11-28",
       });
-      return {
-        ok: true,
-        json: async () => ({ workflow_runs: [] }),
-      };
+      return jsonResponse({ workflow_runs: [] });
     });
 
     await expect(
@@ -332,6 +1029,78 @@ describe("release candidate checklist", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+  });
+
+  it("uses a positive integer GitHub API timeout env", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return jsonResponse({ workflow_runs: [] });
+    });
+
+    await withGithubApiTimeoutEnv("2500", async () => {
+      await expect(
+        githubApi("repos/openclaw/openclaw/actions/runs", {
+          fetchImpl,
+          token: "test-token",
+        }),
+      ).resolves.toEqual({ workflow_runs: [] });
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each(["1e3", "10.5", "0", "soon"])(
+    "rejects malformed GitHub API timeout env %s",
+    async (raw) => {
+      const fetchImpl = vi.fn();
+
+      await withGithubApiTimeoutEnv(raw, async () => {
+        await expect(
+          githubApi("repos/openclaw/openclaw/actions/runs", {
+            fetchImpl,
+            token: "test-token",
+          }),
+        ).rejects.toThrow(
+          "OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive integer",
+        );
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it("bounds GitHub API error bodies", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response("x".repeat(65), {
+        headers: { "content-length": "65" },
+        status: 500,
+      });
+    });
+
+    await expect(
+      githubApi("repos/openclaw/openclaw/actions/runs", {
+        fetchImpl,
+        maxBodyBytes: 64,
+        timeoutMs: 1234,
+        token: "test-token",
+      }),
+    ).rejects.toThrow(
+      "GitHub API repos/openclaw/openclaw/actions/runs response body exceeded 64 bytes",
+    );
+  });
+
+  it("keeps GitHub API timeouts active while reading response bodies", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        status: 200,
+      });
+    });
+
+    await expect(
+      githubApi("repos/openclaw/openclaw/actions/runs", {
+        fetchImpl,
+        timeoutMs: 25,
+        token: "test-token",
+      }),
+    ).rejects.toThrow("GitHub API repos/openclaw/openclaw/actions/runs timed out after 25ms");
   });
 
   it("includes the GitHub API path when a request times out", async () => {

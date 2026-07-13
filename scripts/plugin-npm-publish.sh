@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>"
+  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack|--pack-dry-run|--publish] <package-dir> [verified-package.tgz]"
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -33,6 +33,13 @@ if [[ -z "${package_dir}" ]]; then
   echo "missing package dir" >&2
   exit 2
 fi
+publish_target=""
+if [[ "$#" -gt 0 && "${mode}" == "--publish" ]]; then
+  case "$1" in
+    -*) echo "unexpected plugin npm tarball option: $1" >&2; exit 2 ;;
+    *) publish_target="$1"; shift ;;
+  esac
+fi
 if [[ "$#" -gt 0 ]]; then
   echo "unexpected plugin npm publish argument: $1" >&2
   exit 2
@@ -44,6 +51,40 @@ fi
 
 package_name="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.name)' "${package_dir}")"
 package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_dir}")"
+if [[ -n "${publish_target}" ]]; then
+  if [[ ! -f "${publish_target}" ]]; then
+    echo "verified plugin npm tarball not found: ${publish_target}" >&2
+    exit 2
+  fi
+  case "${publish_target}" in
+    /*|./*|../*) ;;
+    *) publish_target="./${publish_target}" ;;
+  esac
+  if ! tarball_package_json="$(tar -xOf "${publish_target}" package/package.json)"; then
+    echo "verified plugin npm tarball is missing package/package.json: ${publish_target}" >&2
+    exit 2
+  fi
+  tarball_identity="$(printf '%s' "${tarball_package_json}" | node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      const pkg = JSON.parse(input);
+      if (!pkg || typeof pkg !== "object" || Array.isArray(pkg) || typeof pkg.name !== "string" || typeof pkg.version !== "string") {
+        throw new Error("package/package.json must contain string name and version");
+      }
+      process.stdout.write(`${pkg.name.trim()}\n${pkg.version.trim()}\n`);
+    });
+  ')" || {
+    echo "verified plugin npm tarball has invalid package identity: ${publish_target}" >&2
+    exit 2
+  }
+  tarball_package_name="$(printf '%s\n' "${tarball_identity}" | sed -n '1p')"
+  tarball_package_version="$(printf '%s\n' "${tarball_identity}" | sed -n '2p')"
+  if [[ "${tarball_package_name}" != "${package_name}" || "${tarball_package_version}" != "${package_version}" ]]; then
+    echo "verified plugin npm tarball identity mismatch: expected ${package_name}@${package_version}, got ${tarball_package_name}@${tarball_package_version}" >&2
+    exit 2
+  fi
+fi
 current_beta_version="$(npm view "${package_name}" dist-tags.beta 2>/dev/null || true)"
 log() {
   if [[ "${mode}" == "--pack" || "${mode}" == "--pack-dry-run" ]]; then
@@ -88,7 +129,19 @@ mirror_auth_source="$(printf '%s\n' "${publish_plan_output}" | sed -n '4p')"
 mirror_auth_requirement="$(printf '%s\n' "${publish_plan_output}" | sed -n '5p')"
 mirror_auth_source="${mirror_auth_source:-none}"
 mirror_auth_requirement="${mirror_auth_requirement:-optional}"
-publish_cmd=(npm publish --access public --tag "${publish_tag}")
+defer_dist_tag_mirrors="${OPENCLAW_PLUGIN_NPM_DEFER_DIST_TAG_MIRRORS:-0}"
+if [[ "${defer_dist_tag_mirrors}" == "1" || "${defer_dist_tag_mirrors}" == "true" ]]; then
+  if [[ "${mode}" != "--publish" || "${OPENCLAW_NPM_PUBLISH_AUTH_MODE:-}" != "trusted-publisher" ]]; then
+    echo "Deferring npm dist-tag mirrors is restricted to trusted-publisher publication." >&2
+    exit 1
+  fi
+  mirror_auth_requirement="optional"
+fi
+publish_cmd=(npm publish)
+if [[ -n "${publish_target}" ]]; then
+  publish_cmd+=("${publish_target}")
+fi
+publish_cmd+=(--access public --tag "${publish_tag}")
 if [[ "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" != "0" && "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" != "false" ]]; then
   publish_cmd+=(--provenance)
 fi
@@ -96,12 +149,18 @@ fi
 log "Resolved package dir: ${package_dir}"
 log "Resolved package name: ${package_name}"
 log "Resolved package version: ${package_version}"
+if [[ -n "${publish_target}" ]]; then
+  log "Resolved verified publish target: ${publish_target}"
+fi
 log "Current beta dist-tag: ${current_beta_version:-<missing>}"
 log "Resolved release channel: ${release_channel}"
 log "Resolved publish tag: ${publish_tag}"
 log "Resolved mirror dist-tags: ${mirror_dist_tags_csv:-<none>}"
 log "Mirror dist-tag auth source: ${mirror_auth_source}"
 log "Mirror dist-tag auth requirement: ${mirror_auth_requirement}"
+if [[ "${defer_dist_tag_mirrors}" == "1" || "${defer_dist_tag_mirrors}" == "true" ]]; then
+  log "Mirror dist-tag execution: deferred to credential-isolated release tooling"
+fi
 
 build_package_runtime() {
   if [[ "${OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD:-1}" == "0" || "${OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD:-1}" == "false" ]]; then
@@ -164,8 +223,10 @@ if [[ "${mode}" == "--dry-run" ]]; then
   exit 0
 fi
 
-build_package_runtime
-check_package_shrinkwrap
+if [[ -z "${publish_target}" ]]; then
+  build_package_runtime
+  check_package_shrinkwrap
+fi
 
 if [[ "${mode}" == "--pack" || "${mode}" == "--pack-dry-run" ]]; then
   pack_args=(npm pack --json --ignore-scripts)
@@ -184,10 +245,22 @@ fi
 
 (
   cleanup_files=()
-  trap 'rm -f "${cleanup_files[@]}"' EXIT
+  cleanup() {
+    if (( ${#cleanup_files[@]} > 0 )); then
+      rm -f "${cleanup_files[@]}"
+    fi
+  }
+  trap cleanup EXIT
   run_with_manifest_overlay() {
     OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
       node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- "$@"
+  }
+  run_publish() {
+    if [[ -n "${publish_target}" ]]; then
+      "$@"
+      return
+    fi
+    run_with_manifest_overlay "$@"
   }
   publish_userconfig=""
   if [[ -n "${publish_auth_token}" ]]; then
@@ -195,12 +268,12 @@ fi
     cleanup_files+=("${publish_userconfig}")
     chmod 0600 "${publish_userconfig}"
     printf '%s\n' "//registry.npmjs.org/:_authToken=${publish_auth_token}" > "${publish_userconfig}"
-    NPM_CONFIG_USERCONFIG="${publish_userconfig}" run_with_manifest_overlay "${publish_cmd[@]}"
+    NPM_CONFIG_USERCONFIG="${publish_userconfig}" run_publish "${publish_cmd[@]}"
   else
-    run_with_manifest_overlay "${publish_cmd[@]}"
+    run_publish "${publish_cmd[@]}"
   fi
 
-  if [[ -n "${mirror_dist_tags_csv}" ]]; then
+  if [[ -n "${mirror_dist_tags_csv}" && "${defer_dist_tag_mirrors}" != "1" && "${defer_dist_tag_mirrors}" != "true" ]]; then
     mirror_userconfig="$(mktemp)"
     cleanup_files+=("${mirror_userconfig}")
     chmod 0600 "${mirror_userconfig}"

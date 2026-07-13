@@ -412,6 +412,7 @@ export function resolveGlobalInstallSpec(params: {
  */
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
+  options: { registryUrl?: string } = {},
 ): Promise<NodeJS.ProcessEnv | undefined> {
   const pathPrepend = await resolvePortableGitPathPrepend();
   const sourceEnv = env ?? process.env;
@@ -420,6 +421,13 @@ export async function createGlobalInstallEnv(
       .filter(([, value]) => value != null)
       .map(([key, value]) => [key, String(value)]),
   ) as Record<string, string>;
+  const registryUrl = options.registryUrl?.trim();
+  if (registryUrl) {
+    // Extended-stable resolution verifies this registry. Keep the package
+    // manager on the same source so install bytes cannot drift afterward.
+    merged.NPM_CONFIG_REGISTRY = registryUrl;
+    merged.npm_config_registry = registryUrl;
+  }
   applyPathPrepend(merged, pathPrepend);
   applyWindowsPackageInstallEnv(merged);
   applyCorepackDownloadPromptEnv(merged);
@@ -542,8 +550,27 @@ function inferGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null 
     return null;
   }
   const normalized = path.resolve(trimmed);
-  const globalRoot = path.dirname(normalized);
+  const packageParent = path.dirname(normalized);
+  const globalRoot = path.basename(packageParent).startsWith("@")
+    ? path.dirname(packageParent)
+    : packageParent;
   return path.basename(globalRoot) === "node_modules" ? globalRoot : null;
+}
+
+function resolvePackageRootFromGlobalRoot(params: {
+  globalRoot: string;
+  packageName?: string;
+}): string {
+  const packageName = params.packageName?.trim() || PRIMARY_PACKAGE_NAME;
+  const parts = packageName.split("/");
+  const hasSafeSegments =
+    parts.length > 0 &&
+    parts.length <= 2 &&
+    parts.every(
+      (part) => part.length > 0 && part !== "." && part !== ".." && !part.includes("\\"),
+    ) &&
+    (parts.length === 1 || parts[0]?.startsWith("@"));
+  return path.join(params.globalRoot, ...(hasSafeSegments ? parts : [PRIMARY_PACKAGE_NAME]));
 }
 
 function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
@@ -714,6 +741,7 @@ export async function resolveGlobalInstallTarget(params: {
   timeoutMs: number;
   pkgRoot?: string | null;
   honorPackageRoot?: boolean;
+  packageName?: string;
 }): Promise<ResolvedGlobalInstallTarget> {
   const honoredPackageRootGlobalRoot = params.honorPackageRoot
     ? inferGlobalRootFromPackageRoot(params.pkgRoot)
@@ -748,7 +776,12 @@ export async function resolveGlobalInstallTarget(params: {
   return {
     ...command,
     globalRoot: targetGlobalRoot,
-    packageRoot: targetGlobalRoot ? path.join(targetGlobalRoot, PRIMARY_PACKAGE_NAME) : null,
+    packageRoot: targetGlobalRoot
+      ? resolvePackageRootFromGlobalRoot({
+          globalRoot: targetGlobalRoot,
+          packageName: params.packageName,
+        })
+      : null,
     ...(honoredPackageRootGlobalRoot &&
     targetGlobalRoot === honoredPackageRootGlobalRoot &&
     honoredDirectNpmRoot

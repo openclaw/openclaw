@@ -399,6 +399,10 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
 ]);
 const BROAD_ONLY_TEST_HELPERS = new Set(["test/helpers/poll.ts"]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
+  [
+    ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs",
+    ["test/scripts/release-notes-ledger.test.ts", "test/scripts/verify-release-notes.test.ts"],
+  ],
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [
     ".github/workflows/ci-check-testbox.yml",
@@ -535,6 +539,50 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/managed-child-process.mjs", ["test/scripts/managed-child-process.test.ts"]],
   ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
+  ["scripts/lib/openclaw-release-clawhub-plan.ts", ["test/plugin-clawhub-release.test.ts"]],
+  [
+    "scripts/lib/actions-artifact-archive.mjs",
+    ["test/scripts/plugin-publication-artifact.test.ts"],
+  ],
+  [
+    "scripts/lib/clawhub-bootstrap-artifact.mjs",
+    [
+      "test/scripts/clawhub-bootstrap-artifact.test.ts",
+      "test/scripts/verify-clawhub-published-artifact.test.ts",
+    ],
+  ],
+  ["scripts/plugin-publication-artifact.mjs", ["test/scripts/plugin-publication-artifact.test.ts"]],
+  [
+    "scripts/materialize-clawhub-cli.sh",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    ".github/release/clawhub-cli/package.json",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    ".github/release/clawhub-cli/package-lock.json",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    "scripts/verify-clawhub-published-artifact.mjs",
+    ["test/scripts/verify-clawhub-published-artifact.test.ts"],
+  ],
+  ["scripts/plugin-clawhub-publish.sh", ["test/plugin-clawhub-release.test.ts"]],
+  ["scripts/lib/release-beta-verifier.ts", ["test/scripts/release-beta-verifier.test.ts"]],
+  [
+    "scripts/lib/plugin-npm-release.ts",
+    ["test/plugin-npm-release.test.ts", "test/plugin-clawhub-release.test.ts"],
+  ],
   ["scripts/lib/source-file-scan-cache.mjs", ["test/scripts/source-file-scan-cache.test.ts"]],
   ["scripts/lib/test-group-report.mjs", ["test/scripts/test-group-report.test.ts"]],
   ["scripts/lib/ts-guard-utils.mjs", ["test/scripts/ts-guard-utils.test.ts"]],
@@ -571,6 +619,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/openclaw-npm-release-check.ts", ["test/openclaw-npm-release-check.test.ts"]],
   ["scripts/openclaw-prepack.ts", ["test/openclaw-prepack.test.ts"]],
   ["scripts/package-changelog.mjs", ["test/scripts/package-changelog.test.ts"]],
+  ["scripts/render-github-release-notes.mjs", ["test/scripts/render-github-release-notes.test.ts"]],
   ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
   ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
   ["scripts/package-openclaw-for-docker.mjs", ["test/scripts/package-openclaw-for-docker.test.ts"]],

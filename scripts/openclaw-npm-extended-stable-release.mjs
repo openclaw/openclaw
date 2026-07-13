@@ -499,10 +499,8 @@ async function main() {
       npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
       expectedWorkflowRef: process.env.EXPECTED_WORKFLOW_REF,
       expectedSha: process.env.EXPECTED_RELEASE_SHA,
-      expectedRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT
-        ? process.env.FULL_RELEASE_VALIDATION_RUN_ID
-        : undefined,
-      expectedRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT || undefined,
+      expectedRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
+      expectedRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
     });
     return;
   }

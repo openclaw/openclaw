@@ -1,4 +1,5 @@
 name: NPM Telegram Beta E2E
+run-name: ${{ inputs.dispatch_correlation_id || github.workflow }}
 
 on:
   workflow_dispatch:
@@ -7,6 +8,11 @@ on:
         description: Published OpenClaw package spec to test when no artifact is supplied
         required: true
         default: openclaw@beta
+        type: string
+      dispatch_correlation_id:
+        description: Optional unique dispatch correlation used by release orchestration
+        required: false
+        default: ""
         type: string
       package_label:
         description: Optional display label for an artifact-backed package candidate
@@ -161,8 +167,8 @@ jobs:
           set -euo pipefail
 
           if [[ -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
-            if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
-              echo "package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
+            if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(alpha|beta|extended-stable|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
+              echo "package_spec must be openclaw@alpha, openclaw@beta, openclaw@extended-stable, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
               exit 1
             fi
           fi

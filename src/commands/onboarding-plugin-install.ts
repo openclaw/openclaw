@@ -1031,26 +1031,34 @@ export async function ensureOnboardingPluginInstalled(params: {
     configChannel: normalizeUpdateChannel(next.update?.channel),
     currentVersion: VERSION,
   });
-  const clawhubSpecs = clawhubSpec
-    ? resolveClawHubInstallSpecsForUpdateChannel({
-        spec: clawhubSpec,
-        updateChannel,
-      })
-    : null;
+  const exactOfficialPluginVersion =
+    updateChannel === "extended-stable" && entry.trustedSourceLinkedOfficialInstall && npmSpec
+      ? VERSION
+      : undefined;
+  const clawhubSpecs =
+    clawhubSpec && !exactOfficialPluginVersion
+      ? resolveClawHubInstallSpecsForUpdateChannel({
+          spec: clawhubSpec,
+          updateChannel,
+        })
+      : null;
   const npmSpecs = npmSpec
     ? resolveNpmInstallSpecsForUpdateChannel({
         spec: npmSpec,
         updateChannel,
+        exactVersion: exactOfficialPluginVersion,
       })
     : null;
-  const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;
+  const clawhubInstallSpec = exactOfficialPluginVersion
+    ? undefined
+    : (clawhubSpecs?.installSpec ?? clawhubSpec);
   const npmInstallSpec = npmSpecs?.installSpec ?? npmSpec;
   const defaultChoice = resolveInstallDefaultChoice({
     cfg: next,
     entry,
     localPath,
     bundledLocalPath,
-    hasClawHubSpec: Boolean(clawhubSpec),
+    hasClawHubSpec: Boolean(clawhubInstallSpec),
     hasNpmSpec: Boolean(npmSpec),
   });
   const choice =

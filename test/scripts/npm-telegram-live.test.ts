@@ -116,6 +116,7 @@ describe("package Telegram live Docker E2E", () => {
   it("can install a resolved package tarball instead of a registry spec", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
+    expect(script).toContain("alpha|beta|extended-stable|latest");
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ");
     expect(script).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
     expect(script).toContain('-e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"');
@@ -128,6 +129,22 @@ describe("package Telegram live Docker E2E", () => {
     expect(script.indexOf('if [ -n "$resolved_package_tgz" ]; then')).toBeLessThan(
       script.indexOf('validate_openclaw_package_spec "$PACKAGE_SPEC"'),
     );
+  });
+
+  it("installs prepared root and companion tarballs through an exact local registry", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR");
+    expect(script).toContain('package_source_kind="prepared-package-set"');
+    expect(script).toContain('package_install_source="openclaw@$(read_package_version');
+    expect(script).toContain('-v "$resolved_package_dir:/package-under-test:ro"');
+    expect(script).toContain(
+      '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-npm-registry-server.mjs:ro"',
+    );
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_SET");
+    expect(script).toContain("node /tmp/openclaw-npm-registry-server.mjs");
+    expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
+    expect(script).toContain('export NPM_CONFIG_REGISTRY="$registry_url"');
   });
 
   it("keeps live Docker artifacts isolated by default", () => {

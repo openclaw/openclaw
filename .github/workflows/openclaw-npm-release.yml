@@ -1,4 +1,5 @@
 name: OpenClaw NPM Release
+run-name: ${{ inputs.dispatch_correlation_id || github.workflow }}
 
 on:
   workflow_dispatch:
@@ -6,6 +7,11 @@ on:
       tag:
         description: Release tag to publish, or any full 40-character commit SHA for validation-only preflight (for example v2026.3.22 or 0123456789abcdef0123456789abcdef01234567)
         required: true
+        type: string
+      dispatch_correlation_id:
+        description: Optional unique dispatch correlation used by release orchestration
+        required: false
+        default: ""
         type: string
       preflight_only:
         description: Run validation/build only and skip the gated publish job
@@ -184,11 +190,45 @@ jobs:
           OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check:architecture
 
+      # Same-SHA re-runs restore the built outputs so a late preflight failure
+      # does not redo the build and Control UI build; every validation step
+      # still runs against the restored artifacts.
+      - name: Resolve preflight build cache key
+        id: preflight_cache_key
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore preflight build outputs
+        id: dist_build_cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            dist/
+            dist-runtime/
+            packages/*/dist/
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
+          key: ${{ runner.os }}-npm-preflight-dist-v1-${{ github.workflow_sha }}-${{ steps.preflight_cache_key.outputs.sha }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Build
+        if: steps.dist_build_cache.outputs.cache-hit != 'true'
         run: pnpm build
 
       - name: Build Control UI
+        if: steps.dist_build_cache.outputs.cache-hit != 'true'
         run: pnpm ui:build
+
+      - name: Save preflight build outputs
+        if: steps.dist_build_cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            dist/
+            dist-runtime/
+            packages/*/dist/
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
+          key: ${{ steps.dist_build_cache.outputs.cache-primary-key }}
 
       - name: Validate release metadata
         if: ${{ inputs.preflight_run_id == '' }}
@@ -273,6 +313,7 @@ jobs:
           name: openclaw-plugin-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.plugin_npm_preflight.outputs.dir }}
           if-no-files-found: error
+          overwrite: true
 
       - name: Generate dependency release evidence
         id: dependency_evidence
@@ -392,6 +433,7 @@ jobs:
             packageVersion: process.env.PACKAGE_VERSION,
             tarballName: process.env.TARBALL_NAME,
             tarballSha256: process.env.TARBALL_SHA256,
+            dependencyTarballs: [],
             dependencyEvidenceDir: "dependency-evidence",
             dependencyEvidenceManifest: "dependency-evidence/dependency-evidence-manifest.json",
           };
@@ -424,6 +466,7 @@ jobs:
           name: openclaw-release-dependency-evidence-${{ inputs.tag }}
           path: ${{ steps.dependency_evidence.outputs.dir }}
           if-no-files-found: error
+          overwrite: true
 
       - name: Upload dependency release evidence tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
@@ -432,6 +475,7 @@ jobs:
           name: openclaw-release-dependency-evidence-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ steps.dependency_evidence.outputs.dir }}
           if-no-files-found: error
+          overwrite: true
 
       - name: Upload immutable prepared npm publish bundle
         uses: actions/upload-artifact@v7
@@ -446,6 +490,7 @@ jobs:
           name: openclaw-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}
           if-no-files-found: error
+          overwrite: true
 
       - name: Upload legacy prepared npm publish bundle tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
@@ -454,6 +499,7 @@ jobs:
           name: openclaw-npm-preflight-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}
           if-no-files-found: error
+          overwrite: true
 
   validate_publish_request:
     if: ${{ !inputs.preflight_only }}
@@ -480,18 +526,26 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           tideclaw_alpha_publish=false
           extended_stable_publish=false
+          release_publish_workflow=false
           if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha_publish=true
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && "${WORKFLOW_REF}" == refs/heads/extended-stable/* ]]; then
             extended_stable_publish=true
           fi
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]] && [[ "${extended_stable_publish}" != "true" ]]; then
-            echo "Real publish runs must be dispatched from main, release/YYYY.M.PATCH, the exact validated extended-stable branch, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
+          if [[ "${WORKFLOW_REF}" == "refs/heads/release-publish/${WORKFLOW_SHA}" ]]; then
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            if git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main; then
+              release_publish_workflow=true
+            fi
+          fi
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]] && [[ "${extended_stable_publish}" != "true" ]] && [[ "${release_publish_workflow}" != "true" ]]; then
+            echo "Real publish runs must be dispatched from main, release/YYYY.M.PATCH, an immutable release-publish/<workflow-sha> main ancestor, the exact validated extended-stable branch, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
             exit 1
           fi
 
@@ -531,11 +585,8 @@ jobs:
               echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
               exit 1
             fi
-          elif [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && ! "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Extended-stable publish requires a positive full_release_validation_run_attempt." >&2
-            exit 1
-          elif [[ -n "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" && ! "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "full_release_validation_run_attempt must be a positive integer when provided." >&2
+          elif [[ ! "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Real publish with full release validation requires a positive full_release_validation_run_attempt." >&2
             exit 1
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && -z "${PLUGIN_NPM_RUN_ID// }" ]]; then
@@ -694,19 +745,21 @@ jobs:
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
           export EXPECTED_RELEASE_SHA
-          if [[ -n "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ]]; then
-            run_file="${RUNNER_TEMP}/full-release-validation-run.json"
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" > "$run_file"
-            jq '{workflowName: .name, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url}' "$run_file" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
-            run_attempt="$(jq -r '.run_attempt // ""' "$run_file")"
-            if [[ "$run_attempt" != "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ]]; then
-              echo "Full Release Validation run ${FULL_RELEASE_VALIDATION_RUN_ID} attempt mismatch: expected ${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run_attempt:-<missing>}." >&2
-              exit 1
-            fi
-          else
-            RUN_JSON="$(gh run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,headSha,event,status,conclusion,url)"
-            printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
-            run_attempt=""
+          run_file="${RUNNER_TEMP}/full-release-validation-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" > "$run_file"
+          jq '{
+            workflowName: .name,
+            headBranch: .head_branch,
+            headSha: .head_sha,
+            event,
+            status,
+            conclusion,
+            url: .html_url
+          }' "$run_file" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
+          run_attempt="$(jq -r '.run_attempt // ""' "$run_file")"
+          if [[ "$run_attempt" != "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ]]; then
+            echo "Full Release Validation run ${FULL_RELEASE_VALIDATION_RUN_ID} attempt mismatch: expected ${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run_attempt:-<missing>}." >&2
+            exit 1
           fi
           echo "attempt=$run_attempt" >> "$GITHUB_OUTPUT"
 
@@ -784,33 +837,27 @@ jobs:
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ steps.full_run.outputs.attempt }}
         run: |
           set -euo pipefail
-          if [[ -n "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ]]; then
-            artifact_name="full-release-validation-${FULL_RELEASE_VALIDATION_RUN_ID}-${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"
-          artifacts_file="${RUNNER_TEMP}/full-validation-artifacts.json"
+          artifact_name="full-release-validation-${FULL_RELEASE_VALIDATION_RUN_ID}-${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"
+          artifacts_file="${RUNNER_TEMP}/full-release-validation-artifacts.json"
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/artifacts?per_page=100" > "$artifacts_file"
-          jq --arg name "$artifact_name" '[.artifacts[] | select(.expired != true and .name == $name)]' "$artifacts_file" > "${RUNNER_TEMP}/full-validation-matches.json"
-          artifact_count="$(jq 'length' "${RUNNER_TEMP}/full-validation-matches.json")"
+          jq --arg name "$artifact_name" '[.artifacts[] | select(.expired != true and .name == $name)]' "$artifacts_file" > "${RUNNER_TEMP}/full-release-validation-matches.json"
+          artifact_count="$(jq 'length' "${RUNNER_TEMP}/full-release-validation-matches.json")"
           if [[ "$artifact_count" != "1" ]]; then
             echo "Expected exactly one immutable artifact named ${artifact_name}; found ${artifact_count}." >&2
             exit 1
           fi
-          artifact_id="$(jq -er '.[0].id' "${RUNNER_TEMP}/full-validation-matches.json")"
-          artifact_digest="$(jq -er '.[0].digest | strings' "${RUNNER_TEMP}/full-validation-matches.json")"
-          artifact_zip="${RUNNER_TEMP}/full-validation-${artifact_id}.zip"
+          artifact_id="$(jq -er '.[0].id' "${RUNNER_TEMP}/full-release-validation-matches.json")"
+          artifact_digest="$(jq -er '.[0].digest | strings' "${RUNNER_TEMP}/full-release-validation-matches.json")"
+          artifact_zip="${RUNNER_TEMP}/full-release-validation-${artifact_id}.zip"
           gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$artifact_zip"
           actual_digest="sha256:$(sha256sum "$artifact_zip" | awk '{print $1}')"
           if [[ "$actual_digest" != "$artifact_digest" ]]; then
-            echo "Immutable full validation artifact digest mismatch: expected ${artifact_digest}, got ${actual_digest}." >&2
+            echo "Immutable full release validation artifact digest mismatch: expected ${artifact_digest}, got ${actual_digest}." >&2
             exit 1
           fi
           rm -rf full-release-validation
           mkdir -p full-release-validation
-            unzip -q "$artifact_zip" -d full-release-validation
-          else
-            rm -rf full-release-validation
-            mkdir -p full-release-validation
-            gh run download "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "full-release-validation-${FULL_RELEASE_VALIDATION_RUN_ID}" --dir full-release-validation
-          fi
+          unzip -q "$artifact_zip" -d full-release-validation
 
       - name: Validate release tag and package metadata
         if: ${{ inputs.preflight_run_id == '' }}
@@ -909,6 +956,7 @@ jobs:
           export EXPECTED_RELEASE_SHA MANIFEST_FILE
           node scripts/openclaw-npm-extended-stable-release.mjs verify-manifest
           RERUN_GROUP="$(jq -r '.rerunGroup // ""' "$MANIFEST_FILE")"
+          RELEASE_PROFILE="$(jq -r '.releaseProfile // ""' "$MANIFEST_FILE")"
           RUN_RELEASE_SOAK="$(jq -r '.runReleaseSoak // ""' "$MANIFEST_FILE")"
           PERFORMANCE_BLOCKING="$(jq -r '.controls.performanceBlocking // false' "$MANIFEST_FILE")"
           if [[ "$RERUN_GROUP" != "all" ]]; then
@@ -919,9 +967,15 @@ jobs:
             echo "Full release validation manifest does not record blocking product performance evidence." >&2
             exit 1
           fi
-          if [[ "$RELEASE_TAG" != *"-alpha."* && "$RELEASE_TAG" != *"-beta."* && "$RUN_RELEASE_SOAK" != "true" ]]; then
-            echo "Stable releases require Full Release Validation with runReleaseSoak=true." >&2
-            exit 1
+          if [[ "$RELEASE_TAG" != *"-alpha."* && "$RELEASE_TAG" != *"-beta."* ]]; then
+            if [[ "$RELEASE_PROFILE" != "stable" && "$RELEASE_PROFILE" != "full" ]]; then
+              echo "Stable releases require stable or full validation; got $RELEASE_PROFILE." >&2
+              exit 1
+            fi
+            if [[ "$RUN_RELEASE_SOAK" != "true" ]]; then
+              echo "Stable releases require Full Release Validation with runReleaseSoak=true." >&2
+              exit 1
+            fi
           fi
 
       - name: Recheck npm release request

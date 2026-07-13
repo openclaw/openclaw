@@ -24,6 +24,29 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   fails, the parent cancels the remaining child matrix and prints the failed
   job summary. Inspect that first red job instead of waiting for unrelated
   matrix tails.
+- In a sparse worktree or Testbox source sync, first confirm `package.json`,
+  `pnpm-lock.yaml`, and every source path the selected check reads. If any are
+  absent, that checkout cannot validate a release dependency or Docker lane:
+  stop and use the repo remote changed gate or a full task worktree. When the
+  inputs are present and a release fix changes `package.json` or
+  `pnpm-lock.yaml`, rebuild only the task-owned disposable box with
+  `CI=true pnpm install --frozen-lockfile`, then run an explicit
+  `require.resolve()` probe before Docker or focused tests. The CI flag permits
+  pnpm to recreate a prewarmed modules directory without an interactive
+  confirmation. Do not weaken the lockfile or label sparse-checkout failures
+  as product/Docker failures.
+- If the candidate is rebased or its base SHA changes after warmup, stop the
+  task-owned box and warm a fresh one before testing. Testbox source sync is
+  relative to the warmed source tree; continuing can mix an old base file with
+  a new candidate diff and produce false lockfile or Docker failures.
+- Reused Testboxes are provenance-gated after their first successful run.
+  Source-only edits may reuse the lease; base, dependency, wrapper, or Testbox
+  workflow drift requires a fresh lease. Do not set
+  `OPENCLAW_TESTBOX_ALLOW_STALE=1` for release evidence.
+- For a committed release candidate, warm the box with
+  `blacksmith testbox warmup ... --ref <candidate-branch-or-sha>`. Do not rely
+  on source sync to overlay committed branch changes onto the workflow's
+  default ref.
 
 ## Preflight
 
@@ -82,23 +105,30 @@ gh workflow run full-release-validation.yml \
   -f rerun_group=all
 ```
 
-Use `release_profile=stable` unless the operator explicitly asks for the broad advisory provider/media matrix. Use narrow `rerun_group` after focused fixes.
+For immutable workflow proof on a moving `main`, use
+`pnpm ci:full-release --sha <release-sha>`. This retained 6.x helper pushes a
+temporary `release-ci/<target-sha>-...` branch at the candidate commit,
+dispatches validation from that ref, verifies child runs use the same SHA, and
+deletes the temporary branch unless `--keep-branch` is set. It does not support
+cross-run evidence reuse.
+
+Use `release_profile=stable` unless the operator explicitly asks for the broad advisory provider/media matrix. Stable and full profiles force the release soak; the beta profile may opt in with `run_release_soak=true`. Use narrow `rerun_group` after focused fixes.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
 
 ## Watch
 
-Use the summary helper instead of repeated raw polling:
+Use the transition-only summary watcher instead of repeated raw polling:
 
 ```bash
-node .agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs <full-release-run-id>
+node scripts/release-ci-summary.mjs <full-release-run-id> --watch
 ```
 
-Then watch only when useful:
+For a one-shot snapshot:
 
 ```bash
-gh run watch <full-release-run-id> --repo openclaw/openclaw --exit-status
+node scripts/release-ci-summary.mjs <full-release-run-id>
 ```
 
 Stop watchers before ending the turn or switching strategy.

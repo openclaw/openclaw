@@ -655,8 +655,11 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
+        bootstrapWorkflowSha: "a".repeat(40),
         releaseTag: "v2026.4.1-beta.1",
+        releaseSha: "b".repeat(40),
         releasePublishBranch: "main",
+        releasePublishRunAttempt: "1",
         releasePublishRunId: "12345",
         pluginPublishScope: "all-publishable",
         plugins: [],
@@ -684,11 +687,15 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     });
     expect(plan.bootstrap).toEqual({
       workflow: "plugin-clawhub-new.yml",
-      ref: "v2026.4.1-beta.1",
+      ref: "main",
       shouldDispatch: true,
       packages: ["@openclaw/demo-two", "@openclaw/demo-three"],
       inputs: {
+        bootstrap_workflow_sha: "a".repeat(40),
+        ref: "b".repeat(40),
+        release_tag: "v2026.4.1-beta.1",
         plugins: "@openclaw/demo-two,@openclaw/demo-three",
+        release_publish_run_attempt: "1",
         release_publish_run_id: "12345",
         release_publish_branch: "main",
       },
@@ -734,8 +741,11 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
+        bootstrapWorkflowSha: "a".repeat(40),
         releaseTag: "v2026.4.1-beta.1",
+        releaseSha: "b".repeat(40),
         releasePublishBranch: "release/2026.4.1",
+        releasePublishRunAttempt: "1",
         releasePublishRunId: "12345",
         pluginPublishScope: "selected",
         plugins: ["@openclaw/demo-plugin"],
@@ -750,11 +760,15 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     expect(plan.normal.shouldDispatch).toBe(false);
     expect(plan.bootstrap).toMatchObject({
       workflow: "plugin-clawhub-new.yml",
-      ref: "v2026.4.1-beta.1",
+      ref: "main",
       shouldDispatch: true,
       packages: ["@openclaw/demo-plugin"],
       inputs: {
+        bootstrap_workflow_sha: "a".repeat(40),
+        ref: "b".repeat(40),
+        release_tag: "v2026.4.1-beta.1",
         plugins: "@openclaw/demo-plugin",
+        release_publish_run_attempt: "1",
         release_publish_run_id: "12345",
         release_publish_branch: "release/2026.4.1",
       },

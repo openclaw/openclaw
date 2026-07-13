@@ -104,6 +104,7 @@ const defaultOptions = (): WindowsOptions => ({
   latestVersion: "",
   mode: "both",
   modelId: undefined,
+  npmRegistry: undefined,
   provider: "openai",
   skipLatestRefCheck: false,
   snapshotHint: "pre-openclaw-native-e2e-2026-03-12",
@@ -138,6 +139,7 @@ Options:
                              then run openclaw update --channel dev.
   --target-package-spec <npm-spec>
                              Install this npm package tarball instead of packing current main.
+  --npm-registry <url>       Registry used for target package installs.
   --skip-latest-ref-check    Skip latest-release ref-mode precheck.
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
@@ -170,6 +172,9 @@ export function parseArgs(argv: string[]): WindowsOptions {
     },
     "--model": (value) => {
       options.modelId = value;
+    },
+    "--npm-registry": (value) => {
+      options.npmRegistry = value;
     },
     "--openai-api-key-env": (value) => {
       options.apiKeyEnv = value;
@@ -560,10 +565,14 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LAST
       die("package artifact/server missing");
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
+    const registryScript = this.options.npmRegistry
+      ? `$env:NPM_CONFIG_REGISTRY = ${psSingleQuote(this.options.npmRegistry)}`
+      : "";
     this.guestPowerShell(
       `$ErrorActionPreference = 'Stop'
 $tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
 curl.exe -fsSL ${psSingleQuote(tgzUrl)} -o $tgz
+${registryScript}
 npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
 if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
 Invoke-OpenClaw --version

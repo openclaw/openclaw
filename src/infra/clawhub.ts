@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { retryClawHubRead } from "./clawhub-retry.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
@@ -705,17 +706,13 @@ async function clawhubRequest(
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () =>
-      controller.abort(
-        new Error(
-          `ClawHub request timed out after ${params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS}ms`,
-        ),
-      ),
-    params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
-  );
-  try {
+  const timeoutMs = params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const request = async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
     const headers = {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
@@ -730,11 +727,23 @@ async function clawhubRequest(
     if (params.json !== undefined) {
       init.body = JSON.stringify(params.json);
     }
-    const response = await (params.fetchImpl ?? fetch)(url, init);
-    return { response, url, hasToken: Boolean(token) };
-  } finally {
-    clearTimeout(timeout);
+    try {
+      const response = await (params.fetchImpl ?? fetch)(url, init);
+      return { response, url, hasToken: Boolean(token) };
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  // Writes can commit before a response fails, so only retry idempotent reads.
+  if ((params.method ?? "GET") !== "GET") {
+    return await request();
   }
+  return await retryClawHubRead(request, {
+    disposeRetry: async ({ response }) => {
+      await response.body?.cancel().catch(() => undefined);
+    },
+  });
 }
 
 async function readErrorBody(response: Response): Promise<string> {
