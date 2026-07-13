@@ -38,7 +38,7 @@ import { transformMessages } from "./transform-messages.js";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
 
-export type GoogleThinkingLevel = `${ThinkingLevel}`;
+type GoogleThinkingLevel = `${ThinkingLevel}`;
 
 type GoogleToolChoice = "auto" | "none" | "any";
 
