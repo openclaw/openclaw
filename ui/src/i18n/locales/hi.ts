@@ -502,6 +502,8 @@ export const hi: TranslationMap = {
     start: "Session शुरू करें",
     starting: "शुरू हो रहा है…",
     createFailed: "Session नहीं बनाया जा सका।",
+    createOutcomeUnknown:
+      "इस सत्र के शुरू होने के दौरान Gateway बदल गया। इस कार्य को दोबारा शुरू करने से पहले हाल के सत्रों की जाँच करें।",
     catalogUnavailable: "यह सत्र लक्ष्य उपलब्ध नहीं है।",
   },
   sessionsView: {

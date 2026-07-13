@@ -1074,6 +1074,11 @@
       "translated": "मॉडल अपडेट नहीं किया जा सका।"
     },
     {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "चिंतन स्तर अपडेट नहीं किया जा सका।"
+    },
+    {
       "id": "native.android.956a394937480f8a",
       "source": "Chat failed before the run started; try again.",
       "translated": "रन शुरू होने से पहले चैट विफल हो गई; फिर से कोशिश करें।"

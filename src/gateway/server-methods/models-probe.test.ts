@@ -95,11 +95,31 @@ describe("models.probe", () => {
   });
 
   it("probes the requested provider so overrides and model selection resolve", async () => {
-    const { options, respond } = createOptions({ provider: "byteplus-plan" });
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "byteplus-plan": {
+            baseUrl: "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+      auth: {
+        profiles: {
+          "byteplus:plan": { provider: "byteplus", mode: "api_key" },
+        },
+        order: { byteplus: ["byteplus:plan"] },
+      },
+      agents: { defaults: { model: { primary: "byteplus-plan/ark-code-latest" } } },
+    };
+    const { options, respond } = createOptions({ provider: "byteplus-plan" }, cfg);
     await handler(options);
     expect(mocks.runAuthProbes).toHaveBeenCalledWith(
       expect.objectContaining({
+        cfg,
         providers: ["byteplus-plan"],
+        modelCandidates: ["byteplus-plan/ark-code-latest"],
         options: expect.objectContaining({ provider: "byteplus-plan" }),
       }),
     );

@@ -137,6 +137,7 @@ import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-transport.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
+import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
@@ -182,10 +183,7 @@ import {
 import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
-import {
-  resolveRunTimeoutDuringCompaction,
-  shouldFlagCompactionTimeout,
-} from "./compaction-timeout.js";
+import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
@@ -1320,6 +1318,7 @@ export async function runEmbeddedAttempt(
       } = preparedHistory;
 
       let yieldAborted = false;
+      const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
       const abortCompaction = () => {
         if (!activeSession.isCompacting) {
           return;
@@ -1439,96 +1438,31 @@ export async function runEmbeddedAttempt(
       let finalPromptText: string | undefined;
       const queueHandleForAbandonment: EmbeddedAgentQueueHandle | undefined = queueHandle;
 
-      let abortWarnTimer: NodeJS.Timeout | undefined;
-      const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-      let abortTimer: NodeJS.Timeout | undefined;
-      let runAbortDeadlineAtMs = Date.now() + params.timeoutMs;
-      let compactionGraceUsed = false;
-      const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
-        runAbortDeadlineAtMs = Date.now() + Math.max(1, delayMs);
-        abortTimer = setTimeout(
-          () => {
-            const timeoutAction = resolveRunTimeoutDuringCompaction({
-              isCompactionPendingOrRetrying: subscription.isCompacting(),
-              isCompactionInFlight: activeSession.isCompacting,
-              graceAlreadyUsed: compactionGraceUsed,
-            });
-            if (timeoutAction === "extend") {
-              compactionGraceUsed = true;
-              if (!isProbeSession) {
-                log.warn(
-                  `embedded run timeout reached during compaction; extending deadline: ` +
-                    `runId=${params.runId} sessionId=${params.sessionId} extraMs=${compactionTimeoutMs}`,
-                );
-              }
-              scheduleAbortTimer(compactionTimeoutMs, "compaction-grace");
-              return;
-            }
-
-            if (!isProbeSession) {
-              log.warn(
-                reason === "compaction-grace"
-                  ? `embedded run timeout after compaction grace: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs} compactionGraceMs=${compactionTimeoutMs}`
-                  : `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
-              );
-            }
-            if (
-              shouldFlagCompactionTimeout({
-                isTimeout: true,
-                isCompactionPendingOrRetrying: subscription.isCompacting(),
-                isCompactionInFlight: activeSession.isCompacting,
-              })
-            ) {
-              timedOutDuringCompaction = true;
-            }
-            timedOutByRunBudget = true;
-            abortRun(true);
-            if (!abortWarnTimer) {
-              abortWarnTimer = setTimeout(() => {
-                if (!activeSession.isStreaming) {
-                  return;
-                }
-                if (!isProbeSession) {
-                  log.warn(
-                    `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
-                  );
-                }
-              }, 10_000);
-            }
-          },
-          Math.max(1, delayMs),
-        );
-      };
-      scheduleAbortTimer(params.timeoutMs, "initial");
-      params.onAttemptTimeoutArmed?.();
-
+      const attemptTimeout = prepareEmbeddedAttemptTimeout({
+        attempt: params,
+        activeSession,
+        compactionState: subscription,
+        compactionTimeoutMs,
+        isProbeSession,
+        abortRun,
+        markExternalAbort: () => {
+          externalAbort = true;
+        },
+        markTimedOutDuringCompaction: () => {
+          timedOutDuringCompaction = true;
+        },
+        markTimedOutByRunBudget: () => {
+          timedOutByRunBudget = true;
+        },
+      });
+      const {
+        getRunAbortDeadlineAtMs,
+        clearTimers: clearAttemptTimeoutTimers,
+        removeAbortSignalListener: removeAttemptAbortSignalListener,
+      } = attemptTimeout;
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
       let sessionFileUsed: string | undefined = params.sessionFile;
-      const onAbort = () => {
-        externalAbort = true;
-        const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
-        const timeout = reason ? isSignalTimeoutReason(reason) : false;
-        if (
-          shouldFlagCompactionTimeout({
-            isTimeout: timeout,
-            isCompactionPendingOrRetrying: subscription.isCompacting(),
-            isCompactionInFlight: activeSession.isCompacting,
-          })
-        ) {
-          timedOutDuringCompaction = true;
-        }
-        abortRun(timeout, reason);
-      };
-      if (params.abortSignal) {
-        if (params.abortSignal.aborted) {
-          onAbort();
-        } else {
-          params.abortSignal.addEventListener("abort", onAbort, {
-            once: true,
-          });
-        }
-      }
 
       const activeSessionManager = sessionManager;
       let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
@@ -2502,7 +2436,7 @@ export async function runEmbeddedAttempt(
           markTimedOutDuringCompaction: () => {
             timedOutDuringCompaction = true;
           },
-          runAbortDeadlineAtMs,
+          runAbortDeadlineAtMs: getRunAbortDeadlineAtMs(),
           runAbortSignal: runAbortController.signal,
           isProbeSession,
           onBlockReplyFlush,
@@ -2584,10 +2518,7 @@ export async function runEmbeddedAttempt(
         sessionIdUsed = afterTurn.sessionIdUsed;
         sessionFileUsed = afterTurn.sessionFileUsed;
       } finally {
-        clearTimeout(abortTimer);
-        if (abortWarnTimer) {
-          clearTimeout(abortWarnTimer);
-        }
+        clearAttemptTimeoutTimers();
         if (!isProbeSession && (aborted || timedOut) && !timedOutDuringCompaction) {
           log.debug(
             `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut}`,
@@ -2612,7 +2543,7 @@ export async function runEmbeddedAttempt(
           params.sessionKey,
           params.sessionFile,
         );
-        params.abortSignal?.removeEventListener?.("abort", onAbort);
+        removeAttemptAbortSignalListener();
       }
 
       const beforeAgentFinalizeRevisionReason = getBeforeAgentFinalizeRevisionReason();
