@@ -42,7 +42,7 @@ export type DetachedRunningTaskCreateParams = DetachedTaskCreateParams & {
   progressSummary?: string | null;
 };
 
-export type DetachedTaskStartParams = {
+type DetachedTaskStartParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -52,7 +52,7 @@ export type DetachedTaskStartParams = {
   eventSummary?: string | null;
 };
 
-export type DetachedTaskProgressParams = {
+type DetachedTaskProgressParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -61,7 +61,7 @@ export type DetachedTaskProgressParams = {
   eventSummary?: string | null;
 };
 
-export type DetachedTaskCompleteParams = {
+type DetachedTaskCompleteParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -73,7 +73,7 @@ export type DetachedTaskCompleteParams = {
   suppressDelivery?: boolean;
 };
 
-export type DetachedTaskFailParams = {
+type DetachedTaskFailParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -105,7 +105,7 @@ export type DetachedTaskTerminalState = Omit<
   "runId" | "runtime" | "sessionKey"
 >;
 
-export type DetachedTaskDeliveryStatusParams = {
+type DetachedTaskDeliveryStatusParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -113,13 +113,13 @@ export type DetachedTaskDeliveryStatusParams = {
   error?: string;
 };
 
-export type DetachedTaskCancelParams = {
+type DetachedTaskCancelParams = {
   cfg: OpenClawConfig;
   taskId: string;
   reason?: string;
 };
 
-export type DetachedTaskCancelResult = {
+type DetachedTaskCancelResult = {
   found: boolean;
   cancelled: boolean;
   reason?: string;

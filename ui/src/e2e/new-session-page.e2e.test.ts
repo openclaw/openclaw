@@ -24,6 +24,7 @@ const TARGET_REPO = "/tmp/target-repo";
 const NODE_HOME = "/Users/peter";
 const NODE_PICKED = "/Users/peter/Projects";
 const NODE_UNC = "\\\\server\\share\\repo";
+const EXEC_ONLY_PICKED = "C:\\Users\\peter\\repo";
 
 function installRepositorySwitchGateway(page: Page, sessionKey: string) {
   return installMockGateway(page, {
@@ -262,6 +263,82 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() => new URL(page.url()).search)
         .toContain(`session=${encodeURIComponent("agent:main:draft-e2e")}`);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("creates a session while a canonical session refresh is pending", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:refresh-overlap-e2e";
+    const listResponse = {
+      count: 0,
+      path: "",
+      sessions: [],
+      ts: Date.now(),
+    };
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "sessions.create": { key: sessionKey },
+        "sessions.list": listResponse,
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const message = page.locator(".new-session-page__message");
+      await message.waitFor({ state: "visible", timeout: 10_000 });
+      const listCalls = (await gateway.getRequests("sessions.list")).length;
+
+      await gateway.deferNext("sessions.list");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        key: "agent:main:other-client",
+        kind: "direct",
+        reason: "update",
+        sessionKey: "agent:main:other-client",
+        updatedAt: Date.now(),
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBe(listCalls + 1);
+
+      await message.fill("create during refresh");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        message: "create during refresh",
+      });
+      expect(new URL(page.url()).pathname).toBe("/new");
+
+      await gateway.resolveDeferred("sessions.list", listResponse);
+      await expect
+        .poll(() => new URL(page.url()).search)
+        .toContain(`session=${encodeURIComponent(sessionKey)}`);
     } finally {
       await context.close();
     }
@@ -520,7 +597,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
-  it("shows Gateway and every node at the browser super-root and browses a capable node", async () => {
+  it("browses capable nodes and accepts manual paths for exec-only nodes", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -651,10 +728,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const oldRoot = roots.getByRole("button", { name: "Old node" });
       expect(await macbookRoot.isEnabled()).toBe(true);
       expect(await macbookRoot.getAttribute("title")).toBeNull();
-      // Disabled rows explain themselves: offline vs. node without browse support.
+      // Offline rows stay disabled; exec-only rows accept a manual path.
       expect(await offlineRoot.isDisabled()).toBe(true);
       expect(await offlineRoot.getAttribute("title")).toBe("Device is offline");
-      expect(await oldRoot.isDisabled()).toBe(true);
+      expect(await oldRoot.isEnabled()).toBe(true);
       expect(await oldRoot.getAttribute("title")).toBe(
         "This device doesn't support folder browsing",
       );
@@ -681,7 +758,8 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe("Agent workspace");
       await expect.poll(() => whereLabel.textContent()).toBe("MacBook");
 
-      // Browse back to the custom folder for the final create assertion.
+      // Browse back to the custom folder, then retarget to the exec-only node
+      // with a manual absolute path for the final create assertion.
       await folderSelect.locator("summary").click();
       await roots.getByRole("button", { name: "MacBook" }).click();
       await roots.getByRole("button", { name: "Projects" }).click();
@@ -690,14 +768,30 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
         .toBe("Projects");
 
+      await folderSelect.locator("summary").click();
+      await roots.getByRole("button", { name: "Old node" }).click();
+      await expect.poll(() => pathInput.inputValue()).toBe("");
+      await pathInput.fill(EXEC_ONLY_PICKED);
+      await pathInput.press("Enter");
+      expect(
+        (await gateway.getRequests("fs.listDir")).filter(
+          (request) => (request.params as { nodeId?: string } | undefined)?.nodeId === "old-node",
+        ),
+      ).toHaveLength(0);
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await expect.poll(() => whereLabel.textContent()).toBe("Old node");
+      await expect
+        .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
+        .toBe("repo");
+
       await page.locator(".new-session-page__message").fill("inspect the remote checkout");
       await page.getByRole("button", { name: "Start session" }).click();
       const createRequest = await gateway.waitForRequest("sessions.create");
       expect(createRequest.params).toMatchObject({
         agentId: "main",
         message: "inspect the remote checkout",
-        execNode: "macbook",
-        cwd: NODE_PICKED,
+        execNode: "old-node",
+        cwd: EXEC_ONLY_PICKED,
       });
       expect(createRequest.params).not.toHaveProperty("worktree");
     } finally {

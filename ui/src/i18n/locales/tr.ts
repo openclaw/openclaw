@@ -219,10 +219,10 @@ export const tr: TranslationMap = {
   lazyView: {
     loadingTitle: "Panel yükleniyor",
     errorTitle: "Panel yüklenemedi",
-    errorSubtitle:
-      "En son Control UI paketini yüklemek için sayfayı yeniden yükleyin veya ağ isteği başarısız olduysa tekrar deneyin.",
+    genericSubtitle: "Bu panel yüklenirken bir sorun oluştu.",
+    staleTitle: "Yeni bir sürüm mevcut",
+    staleSubtitle: "OpenClaw arka planda güncellendi. En son paneli almak için yeniden yükleyin.",
     retry: "Tekrar dene",
-    unknownError: "Bilinmeyen modül yükleme hatası.",
   },
   nodes: {
     pairing: {
@@ -400,6 +400,9 @@ export const tr: TranslationMap = {
     working: "Çalışıyor…",
     ready: "Sohbete hazır",
     whatCanAgentDo: "{name} neler yapabilir?",
+    getHelp: "Yardım alın",
+    discord: "Discord topluluğu",
+    viewChangelog: "Değişiklik günlüğünü görüntüleyin",
   },
   newSession: {
     title: "Yeni oturum",
@@ -1744,8 +1747,6 @@ export const tr: TranslationMap = {
     removedRestart:
       "{name} kaldırıldı. Değişikliği uygulamak için Gateway yeniden başlatılmalıdır.",
     verifiedSource: "Doğrulanmış kaynak",
-    menuLabel: "{name} eylemleri",
-    menuDetails: "Ayrıntıları görüntüle",
     enableAction: "Etkinleştir",
     disableAction: "Devre dışı bırak",
     working: "Çalışıyor…",
@@ -1883,6 +1884,10 @@ export const tr: TranslationMap = {
       useCurrentChatAria: "Revizyon istekleri için mevcut sohbeti kullan",
       useCurrentChatTooltip:
         "Revizyon isteklerini önerinin çalışma alanı oturumu yerine mevcut sohbet oturumuna gönder.",
+      selfLearning: "Kendi kendine öğrenme",
+      selfLearningAria: "Kendi kendine öğrenen beceri önerilerini aç veya kapat",
+      selfLearningTooltip:
+        "Düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceleyerek bekleyen beceri önerilerine dönüştürür. Arka planda ek token harcar; taslaklar bu panoya bekleyen öneriler olarak eklenir.",
       view: "Atölye görünümü",
       board: "Pano",
       today: "Bugün",
@@ -1962,6 +1967,14 @@ export const tr: TranslationMap = {
       noProposalsTitle: "Henüz öneri yok",
       noProposalsBody: "{agent} henüz herhangi bir skill önerisi hazırlamadı.",
       noProposalsFooter: "Yeni öneriler inceleme için burada görünecek.",
+    },
+    selfLearning: {
+      pitchTitle: "Kendi kendine öğrenmeyi aç",
+      pitchBody:
+        "OpenClaw, düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceler, ardından bu pano için beceri önerileri taslakları oluşturur. Arka planda ek token harcar ve taslaklar bekleyen öneriler olarak eklenir.",
+      enable: "Kendi kendine öğrenmeyi etkinleştir",
+      enabling: "Etkinleştiriliyor…",
+      updateError: "Kendi kendine öğrenme ayarı güncellenemedi.",
     },
     today: {
       emptyTitle: "Bugün bekleyen bir şey yok",
@@ -3417,6 +3430,8 @@ export const tr: TranslationMap = {
       empty: "Bu aracı için henüz arka plan görevi yok.",
       running: "Çalışıyor ({count})",
       finished: "Tamamlandı ({count})",
+      statusRunningOne: "1 görev çalışıyor",
+      statusRunningMany: "{count} görev çalışıyor",
       stopTask: "{title} öğesini durdur",
       viewTranscript: "Transkripti görüntüle",
       toolUseOne: "1 araç kullanımı",

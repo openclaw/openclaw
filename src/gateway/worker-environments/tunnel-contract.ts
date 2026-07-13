@@ -7,7 +7,7 @@ export type WorkerTunnelRequest = {
   ownerEpoch: number;
 };
 
-export type WorkerWorkspaceCommand = {
+type WorkerWorkspaceCommand = {
   argv: readonly string[];
   input?: string;
   timeoutMs?: number;

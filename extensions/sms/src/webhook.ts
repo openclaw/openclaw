@@ -46,7 +46,7 @@ type SmsWebhookReplayGuard = {
 
 const replayGuardsByAccount = new Map<string, SmsWebhookReplayGuard>();
 
-export function createSmsWebhookReplayGuard(
+function createSmsWebhookReplayGuard(
   options: {
     ttlMs?: number;
     maxKeys?: number;
@@ -102,8 +102,10 @@ function resolveSmsWebhookReplayGuard(account: ResolvedSmsAccount): SmsWebhookRe
   return created;
 }
 
-export function resetSmsWebhookReplayGuardsForTest(): void {
+function resetSmsWebhookReplayGuardsForTest(): void {
   replayGuardsByAccount.clear();
+  invalidRequestRateLimiter.clear();
+  callbackDispatchRateLimiter.clear();
 }
 
 type SmsWebhookLog = {
@@ -152,10 +154,11 @@ function rejectInvalidRequestRateLimit(params: {
   return true;
 }
 
-export function resetSmsWebhookRateLimiterForTest(): void {
-  invalidRequestRateLimiter.clear();
-  callbackDispatchRateLimiter.clear();
-}
+/** Test-only hooks for webhook state that is otherwise private. */
+export const testing = {
+  createSmsWebhookReplayGuard,
+  resetSmsWebhookReplayGuardsForTest,
+};
 
 // Each account route owns its guard so one saturated account cannot block sibling accounts.
 export function createSmsWebhookHandler(

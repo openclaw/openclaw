@@ -218,10 +218,10 @@ export const hi: TranslationMap = {
   lazyView: {
     loadingTitle: "पैनल लोड हो रहा है",
     errorTitle: "पैनल लोड नहीं हो सका",
-    errorSubtitle:
-      "नवीनतम Control UI bundle लोड करने के लिए पेज पुनः लोड करें, या यदि नेटवर्क अनुरोध विफल हुआ हो तो फिर से प्रयास करें।",
+    genericSubtitle: "इस पैनल को लोड करते समय कुछ गड़बड़ हो गई।",
+    staleTitle: "एक नया संस्करण उपलब्ध है",
+    staleSubtitle: "OpenClaw को बैकग्राउंड में अपडेट किया गया था। नवीनतम पैनल पाने के लिए फिर से लोड करें।",
     retry: "फिर से प्रयास करें",
-    unknownError: "अज्ञात मॉड्यूल लोड त्रुटि।",
   },
   nodes: {
     pairing: {
@@ -396,6 +396,9 @@ export const hi: TranslationMap = {
     working: "काम हो रहा है…",
     ready: "चैट के लिए तैयार",
     whatCanAgentDo: "{name} क्या कर सकता है?",
+    getHelp: "सहायता प्राप्त करें",
+    discord: "Discord समुदाय",
+    viewChangelog: "परिवर्तन सूची देखें",
   },
   newSession: {
     title: "नया सेशन",
@@ -1714,8 +1717,6 @@ export const hi: TranslationMap = {
     cancel: "रद्द करें",
     removedRestart: "{name} हटा दिया गया। परिवर्तन लागू करने के लिए Gateway को पुनः प्रारंभ करना आवश्यक है।",
     verifiedSource: "सत्यापित स्रोत",
-    menuLabel: "{name} कार्रवाइयाँ",
-    menuDetails: "विवरण देखें",
     enableAction: "सक्षम करें",
     disableAction: "अक्षम करें",
     working: "काम हो रहा है…",
@@ -1847,6 +1848,10 @@ export const hi: TranslationMap = {
       useCurrentChat: "वर्तमान चैट का उपयोग करें",
       useCurrentChatAria: "संशोधन अनुरोधों के लिए वर्तमान चैट का उपयोग करें",
       useCurrentChatTooltip: "संशोधन अनुरोध प्रस्ताव के वर्कशॉप सेशन के बजाय वर्तमान चैट सेशन को भेजें।",
+      selfLearning: "स्व-शिक्षण",
+      selfLearningAria: "स्व-शिक्षण Skill प्रस्तावों को टॉगल करें",
+      selfLearningTooltip:
+        "सुधारों और पूरे किए गए महत्वपूर्ण कार्य की समीक्षा करके उन्हें लंबित Skill प्रस्तावों में दर्ज करें। इसमें अतिरिक्त बैकग्राउंड टोकन खर्च होते हैं; ड्राफ़्ट इस बोर्ड पर लंबित प्रस्तावों के रूप में आते हैं।",
       view: "Workshop दृश्य",
       board: "बोर्ड",
       today: "आज",
@@ -1925,6 +1930,14 @@ export const hi: TranslationMap = {
       noProposalsTitle: "अभी तक कोई प्रस्ताव नहीं",
       noProposalsBody: "{agent} ने कोई skill प्रस्ताव तैयार नहीं किया है।",
       noProposalsFooter: "नए प्रस्ताव समीक्षा के लिए यहाँ दिखाई देंगे।",
+    },
+    selfLearning: {
+      pitchTitle: "स्व-शिक्षण चालू करें",
+      pitchBody:
+        "OpenClaw सुधारों और पूरे किए गए महत्वपूर्ण रन की समीक्षा करता है, फिर इस बोर्ड के लिए Skill प्रस्तावों के ड्राफ़्ट तैयार करता है। इसमें अतिरिक्त बैकग्राउंड टोकन खर्च होते हैं और ड्राफ़्ट लंबित प्रस्तावों के रूप में आते हैं।",
+      enable: "स्व-शिक्षण सक्षम करें",
+      enabling: "सक्षम किया जा रहा है…",
+      updateError: "स्व-शिक्षण सेटिंग अपडेट नहीं की जा सकी।",
     },
     today: {
       emptyTitle: "आज कुछ भी प्रतीक्षा में नहीं",
@@ -3365,6 +3378,8 @@ export const hi: TranslationMap = {
       empty: "इस एजेंट के लिए अभी कोई बैकग्राउंड कार्य नहीं हैं।",
       running: "चल रहे हैं ({count})",
       finished: "समाप्त ({count})",
+      statusRunningOne: "1 कार्य चल रहा है",
+      statusRunningMany: "{count} कार्य चल रहे हैं",
       stopTask: "{title} रोकें",
       viewTranscript: "ट्रांसक्रिप्ट देखें",
       toolUseOne: "1 टूल उपयोग",

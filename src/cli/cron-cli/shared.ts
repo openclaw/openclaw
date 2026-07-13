@@ -3,10 +3,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -24,6 +21,7 @@ import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
+import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
 export function parseCronCommandArgv(value: unknown): string[] | undefined {
   if (typeof value !== "string") {
@@ -223,36 +221,15 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
 }
 
 export function parseDurationMs(input: string): number | null {
-  const raw = input.trim();
-  if (!raw) {
+  try {
+    const result = parseSharedDurationMs(input);
+    if (result <= 0) {
+      return null;
+    }
+    return result;
+  } catch {
     return null;
   }
-  const match = raw.match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/i);
-  if (!match) {
-    return null;
-  }
-  const n = Number.parseFloat(match[1] ?? "");
-  if (!Number.isFinite(n) || n <= 0) {
-    return null;
-  }
-  const unit = normalizeLowercaseStringOrEmpty(match[2] ?? "");
-  const factor =
-    unit === "ms"
-      ? 1
-      : unit === "s"
-        ? 1000
-        : unit === "m"
-          ? 60_000
-          : unit === "h"
-            ? 3_600_000
-            : 86_400_000;
-  const result = Math.floor(n * factor);
-  if (!Number.isFinite(result) || result <= 0) {
-    // A finite mantissa can still overflow to Infinity for a large unit (e.g. a long
-    // pure-digit string with "d"); tiny positive values can also floor to 0ms.
-    return null;
-  }
-  return result;
 }
 
 export function parseCronStaggerMs(params: {

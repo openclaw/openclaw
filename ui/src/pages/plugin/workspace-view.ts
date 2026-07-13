@@ -62,6 +62,7 @@ import type {
 } from "../../lib/workspace/types.ts";
 import type { BuiltinWidgetContext } from "../../lib/workspace/widgets/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import "../../styles/workspace.css";
 import { pluginTabRefFromSearch } from "./route.ts";
 
 export type WorkspaceProps = {

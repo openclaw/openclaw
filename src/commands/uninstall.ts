@@ -24,7 +24,7 @@ import {
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
 
-export type UninstallOptions = {
+type UninstallOptions = {
   service?: boolean;
   state?: boolean;
   workspace?: boolean;

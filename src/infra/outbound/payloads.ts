@@ -231,7 +231,7 @@ function createOutboundPayloadPlanEntry(
     extractMarkdownImages: context.extractMarkdownImages,
   });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
-  const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
+  const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrls?.[0];
   const mergedMedia = mergeMediaUrls(
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,

@@ -14,9 +14,9 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   hasCompletedSourceReplyDeliveryEvidence,
+  hasCompletedTerminalDeliveryEvidence,
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
-  resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   hasDeliberateSilentTerminalReply,
@@ -1801,13 +1801,7 @@ export function createFollowupRunner(params: {
         hasVisibleOutboundDeliveryEvidence(runResult) ||
         hasCommittedSourceReplyDeliveryEvidence(runResult) ||
         runResult.didSendDeterministicApprovalPrompt === true;
-      const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
-      const hasExplicitSourceReplyCompletion =
-        resolveExplicitFinalSourceReplyDeliveryEvidence(runResult) !== undefined;
-      const hasCompletedTerminalDelivery =
-        completedSourceReplyDelivery ||
-        (!hasExplicitSourceReplyCompletion && hasVisibleOutboundDeliveryEvidence(runResult)) ||
-        runResult.didSendDeterministicApprovalPrompt === true;
+      const hasCompletedTerminalDelivery = hasCompletedTerminalDeliveryEvidence(runResult);
       const hasDeliveryDestination = Boolean(
         (isRoutableChannel(queued.originatingChannel) && queued.originatingTo) ||
         opts?.onBlockReply,

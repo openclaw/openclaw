@@ -50,6 +50,10 @@ import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversatio
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import {
+  renderBackgroundTasksStatusRow,
+  type BackgroundTasksProps,
+} from "./chat-background-tasks.ts";
+import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
@@ -145,6 +149,8 @@ type ChatThreadProps = {
   /** Sends a detached /btw side question built from the selection popup. */
   onSideQuestion?: (command: string) => void;
   onOpenSession?: (sessionKey: string) => void;
+  /** Tasks-rail snapshot backing the post-turn running-tasks status row. */
+  backgroundTasks?: BackgroundTasksProps;
 };
 
 type ChatPinnedMessagesProps = Pick<
@@ -988,6 +994,9 @@ export function renderChatThread(props: ChatThreadProps) {
           },
         )}
         ${renderRealtimeTalkConversation(props)}
+        ${!props.runWorking && !isEmpty && !showLoadingSkeleton
+          ? renderBackgroundTasksStatusRow(props.backgroundTasks)
+          : nothing}
       </div>
     </div>
   `;

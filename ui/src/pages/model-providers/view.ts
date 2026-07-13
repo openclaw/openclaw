@@ -4,6 +4,8 @@ import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import { t } from "../../i18n/index.ts";
 import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
+import "../../styles/model-providers.css";
+import "../../styles/usage.css";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
 export type ModelProvidersViewProps = {

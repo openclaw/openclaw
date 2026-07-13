@@ -132,7 +132,7 @@ type TaskDeliveryOwner = {
   flowId?: string;
 };
 
-export type ParentFlowLinkErrorCode =
+type ParentFlowLinkErrorCode =
   | "scope_kind_not_session"
   | "parent_flow_not_found"
   | "owner_key_mismatch"

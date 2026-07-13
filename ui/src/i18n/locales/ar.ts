@@ -216,10 +216,10 @@ export const ar: TranslationMap = {
   lazyView: {
     loadingTitle: "جارٍ تحميل اللوحة",
     errorTitle: "فشل تحميل اللوحة",
-    errorSubtitle:
-      "أعد تحميل الصفحة لتحميل أحدث حزمة Control UI، أو أعد المحاولة إذا فشل طلب الشبكة.",
+    genericSubtitle: "حدث خطأ ما أثناء تحميل هذه اللوحة.",
+    staleTitle: "يتوفر إصدار جديد",
+    staleSubtitle: "تم تحديث OpenClaw في الخلفية. أعد التحميل للحصول على أحدث لوحة.",
     retry: "إعادة المحاولة",
-    unknownError: "خطأ غير معروف في تحميل الوحدة.",
   },
   nodes: {
     pairing: {
@@ -394,6 +394,9 @@ export const ar: TranslationMap = {
     working: "جارٍ العمل…",
     ready: "جاهز للدردشة",
     whatCanAgentDo: "ما الذي يمكن لـ {name} فعله؟",
+    getHelp: "الحصول على المساعدة",
+    discord: "مجتمع Discord",
+    viewChangelog: "عرض سجل التغييرات",
   },
   newSession: {
     title: "جلسة جديدة",
@@ -1716,8 +1719,6 @@ export const ar: TranslationMap = {
     cancel: "إلغاء",
     removedRestart: "تمت إزالة {name}. يلزم إعادة تشغيل Gateway لتطبيق التغيير.",
     verifiedSource: "مصدر موثّق",
-    menuLabel: "إجراءات {name}",
-    menuDetails: "عرض التفاصيل",
     enableAction: "تمكين",
     disableAction: "تعطيل",
     working: "جارٍ العمل…",
@@ -1851,6 +1852,10 @@ export const ar: TranslationMap = {
       useCurrentChatAria: "استخدام المحادثة الحالية لطلبات المراجعة",
       useCurrentChatTooltip:
         "إرسال طلبات المراجعة إلى جلسة المحادثة الحالية بدلاً من جلسة workshop الخاصة بالمقترح.",
+      selfLearning: "التعلّم الذاتي",
+      selfLearningAria: "تبديل مقترحات مهارات التعلّم الذاتي",
+      selfLearningTooltip:
+        "التقط التصحيحات وراجع الأعمال المهمة المكتملة لتحويلها إلى مقترحات Skills معلّقة. يستهلك ذلك رموزًا إضافية في الخلفية، وتظهر المسودات على هذه اللوحة كمقترحات معلّقة.",
       view: "عرض ورشة العمل",
       board: "اللوحة",
       today: "اليوم",
@@ -1928,6 +1933,14 @@ export const ar: TranslationMap = {
       noProposalsTitle: "لا توجد مقترحات بعد",
       noProposalsBody: "لم يصغ {agent} أي مقترحات لمهارات.",
       noProposalsFooter: "ستظهر المقترحات الجديدة هنا لمراجعتها.",
+    },
+    selfLearning: {
+      pitchTitle: "تشغيل التعلّم الذاتي",
+      pitchBody:
+        "يراجع OpenClaw التصحيحات وعمليات التشغيل المهمة المكتملة، ثم يُعدّ مسودات لمقترحات Skills لهذه اللوحة. يستهلك رموزًا إضافية في الخلفية، وتصل المسودات كمقترحات معلّقة.",
+      enable: "تفعيل التعلّم الذاتي",
+      enabling: "جارٍ التفعيل…",
+      updateError: "تعذّر تحديث إعداد التعلّم الذاتي.",
     },
     today: {
       emptyTitle: "لا شيء ينتظر اليوم",
@@ -3370,6 +3383,8 @@ export const ar: TranslationMap = {
       empty: "لا توجد مهام في الخلفية لهذا الوكيل حتى الآن.",
       running: "قيد التشغيل ({count})",
       finished: "مكتملة ({count})",
+      statusRunningOne: "مهمة واحدة قيد التشغيل",
+      statusRunningMany: "{count} مهام قيد التشغيل",
       stopTask: "إيقاف {title}",
       viewTranscript: "عرض النص",
       toolUseOne: "استخدام واحد لأداة",

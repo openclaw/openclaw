@@ -345,6 +345,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
+import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
@@ -1298,6 +1299,7 @@ export async function runEmbeddedAttempt(
       !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
+      params.skillWorkshopProposalOnly !== true &&
       params.toolsAllow?.length !== 0 &&
       codeModeConfig.enabled;
     const toolSearchControlsEnabledForRun =
@@ -1305,6 +1307,7 @@ export async function runEmbeddedAttempt(
       !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
+      params.skillWorkshopProposalOnly !== true &&
       params.toolsAllow?.length !== 0 &&
       !codeModeControlsEnabledForRun &&
       toolSearchConfig.enabled;
@@ -1467,6 +1470,11 @@ export async function runEmbeddedAttempt(
             abortSignal: runAbortController.signal,
             modelProvider: params.provider,
             modelId: params.modelId,
+            skillWorkshop: {
+              proposalOnly: params.skillWorkshopProposalOnly,
+              origin: params.skillWorkshopOrigin,
+              proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+            },
             modelCompat: extractModelCompat(params.model),
             modelApi: params.model.api,
             modelContextWindowTokens: params.model.contextWindow,
@@ -5385,23 +5393,15 @@ export async function runEmbeddedAttempt(
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
             },
-            ctx: {
-              runId: params.runId,
-              trace: freezeDiagnosticTraceContext(diagnosticTrace),
+            ctx: buildEmbeddedAgentEndContext({
+              run: params,
               agentId: hookAgentId,
-              sessionKey: params.sessionKey,
-              sessionId: params.sessionId,
-              workspaceDir: params.workspaceDir,
-              trigger: params.trigger,
-              ...(params.config ? { config: params.config } : {}),
-              ...buildAgentHookContextChannelFields(params),
-              ...buildAgentHookContextIdentityFields({
-                trigger: params.trigger,
-                senderId: params.senderId,
-                chatId: params.chatId,
-                channelContext: params.channelContext,
-              }),
-            },
+              trace: freezeDiagnosticTraceContext(diagnosticTrace),
+              skillWorkshopAvailable: uncompactedEffectiveTools.some(
+                (tool) => tool.name === "skill_workshop",
+              ),
+              compacted: compactionOccurredThisAttempt,
+            }),
             hookRunner,
           });
         }
