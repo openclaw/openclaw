@@ -5,8 +5,15 @@ type BrowserSessionGate = {
   cleanupActive: boolean;
   ownerClaimSequence: number;
   latestOwnerClaim?: { ownerId: string; sequence: number };
-  accessWaiters: Array<(release: () => void) => void>;
+  accessWaiters: BrowserSessionAccessWaiter[];
   cleanupWaiters: Array<(release: () => void) => void>;
+};
+
+type BrowserSessionAccessWaiter = {
+  resolve: (release: () => void) => void;
+  reject: (reason?: unknown) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
 };
 
 const browserSessionGates = new Map<string, BrowserSessionGate>();
@@ -58,8 +65,15 @@ function pumpBrowserSessionGate(
     return;
   }
   while (gate.accessWaiters.length > 0) {
+    const waiter = gate.accessWaiters.shift();
+    if (!waiter || waiter.signal?.aborted) {
+      continue;
+    }
+    if (waiter.signal && waiter.onAbort) {
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+    }
     gate.activeAccesses += 1;
-    gate.accessWaiters.shift()?.(releaseBrowserSessionAccess(sessionKey, gate, hasTrackedTabs));
+    waiter.resolve(releaseBrowserSessionAccess(sessionKey, gate, hasTrackedTabs));
   }
   if (
     gate.activeAccesses === 0 &&
@@ -113,14 +127,30 @@ export function isCurrentBrowserSessionOwnerClaim(params: {
 export function acquireBrowserSessionAccess(
   sessionKey: string,
   hasTrackedTabs: (sessionKey: string) => boolean,
+  signal?: AbortSignal,
 ): Promise<() => void> {
+  signal?.throwIfAborted();
   const gate = getBrowserSessionGate(sessionKey);
   if (!gate.cleanupActive && gate.cleanupWaiters.length === 0) {
     gate.activeAccesses += 1;
     return Promise.resolve(releaseBrowserSessionAccess(sessionKey, gate, hasTrackedTabs));
   }
-  return new Promise((resolve) => {
-    gate.accessWaiters.push(resolve);
+  return new Promise((resolve, reject) => {
+    const waiter: BrowserSessionAccessWaiter = { resolve, reject, signal };
+    const onAbort = () => {
+      const index = gate.accessWaiters.indexOf(waiter);
+      if (index >= 0) {
+        gate.accessWaiters.splice(index, 1);
+      }
+      reject(signal?.reason);
+      pumpBrowserSessionGate(sessionKey, gate, hasTrackedTabs);
+    };
+    waiter.onAbort = onAbort;
+    gate.accessWaiters.push(waiter);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+    }
   });
 }
 

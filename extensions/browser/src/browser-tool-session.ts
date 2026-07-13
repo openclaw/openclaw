@@ -38,6 +38,7 @@ export function withBrowserSessionAccess(
   return async function (this: void, ...args: Parameters<AnyAgentTool["execute"]>) {
     const releaseSessionAccess = await browserToolSessionDeps.acquireTrackedBrowserSessionAccess({
       sessionKey: opts.agentSessionKey,
+      signal: args[2],
     });
     try {
       args[2]?.throwIfAborted();

@@ -94,7 +94,7 @@ function createLazyBrowserTool(opts?: {
         sessionKey && opts?.runId ? claimBrowserSessionOwner(sessionKey, opts.runId) : undefined;
       let hasTrackedTabs = () => false;
       const releaseSessionAccess = sessionKey
-        ? await acquireBrowserSessionAccess(sessionKey, () => hasTrackedTabs())
+        ? await acquireBrowserSessionAccess(sessionKey, () => hasTrackedTabs(), signal)
         : () => {};
       try {
         signal?.throwIfAborted();

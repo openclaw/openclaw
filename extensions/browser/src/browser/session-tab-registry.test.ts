@@ -246,6 +246,14 @@ describe("session tab registry", () => {
     await Promise.resolve();
     expect(successorAccessStarted).toBe(false);
 
+    const abortController = new AbortController();
+    const cancelledAccess = acquireTrackedBrowserSessionAccess({
+      sessionKey: "agent:main:subagent:child",
+      signal: abortController.signal,
+    });
+    abortController.abort(new Error("cancelled"));
+    await expect(cancelledAccess).rejects.toThrow("cancelled");
+
     releaseClose?.();
     await cleanup;
     const releaseSuccessorAccess = await successorAccess;

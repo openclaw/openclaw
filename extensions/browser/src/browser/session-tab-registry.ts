@@ -174,12 +174,17 @@ export function claimTrackedBrowserSessionOwner(params: {
 /** Holds browser access for a session until the caller's operation completes. */
 export function acquireTrackedBrowserSessionAccess(params: {
   sessionKey?: string;
+  signal?: AbortSignal;
 }): Promise<() => void> {
   const sessionKey = normalizeSessionKey(params.sessionKey ?? "");
   if (!sessionKey) {
     return Promise.resolve(() => {});
   }
-  return acquireBrowserSessionAccess(sessionKey, (key) => trackedTabsBySession.has(key));
+  return acquireBrowserSessionAccess(
+    sessionKey,
+    (key) => trackedTabsBySession.has(key),
+    params.signal,
+  );
 }
 
 function isIgnorableCloseError(err: unknown): boolean {
