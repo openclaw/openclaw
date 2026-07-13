@@ -7,6 +7,7 @@ import {
 } from "../runtime-api.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { formatUnknownError } from "./errors.js";
+import { withMSTeamsRequestDeadline } from "./request-timeout.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { loadDelegatedTokens, resolveMSTeamsCredentials } from "./token.js";
@@ -72,7 +73,16 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
   try {
     const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(cfg));
     const tokenProvider = createMSTeamsTokenProvider(app);
-    const botTokenValue = await tokenProvider.getAccessToken("https://api.botframework.com");
+    // Bound the SDK token acquisition: the Bot Framework and Graph SDK calls
+    // do not carry an inherent deadline, so a stalled Azure AD token endpoint
+    // would otherwise pin the probe indefinitely. Sibling MS Teams paths
+    // (attachments/bot-framework.ts, attachments/graph.ts,
+    // monitor-handler/message-handler.ts) already use withMSTeamsRequestDeadline
+    // for the same SDK calls; the probe was the one missing site.
+    const botTokenValue = await withMSTeamsRequestDeadline({
+      label: "MS Teams Bot Framework probe token",
+      work: () => tokenProvider.getAccessToken("https://api.botframework.com"),
+    });
     if (!botTokenValue) {
       throw new Error("Failed to acquire bot token");
     }
@@ -86,7 +96,10 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
         }
       | undefined;
     try {
-      const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+      const graphTokenValue = await withMSTeamsRequestDeadline({
+        label: "MS Teams Graph probe token",
+        work: () => tokenProvider.getAccessToken("https://graph.microsoft.com"),
+      });
       const accessToken = readAccessToken(graphTokenValue);
       const payload = accessToken ? decodeJwtPayload(accessToken) : null;
       graph = {
