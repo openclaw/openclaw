@@ -38,4 +38,12 @@ describe("normalizeSqliteNumber", () => {
   it("converts negative bigint", () => {
     expect(normalizeSqliteNumber(BigInt(-1))).toBe(-1);
   });
+
+  it("returns undefined for bigint exceeding MAX_SAFE_INTEGER", () => {
+    expect(normalizeSqliteNumber(BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1))).toBeUndefined();
+  });
+
+  it("returns undefined for bigint below -MAX_SAFE_INTEGER", () => {
+    expect(normalizeSqliteNumber(BigInt(-Number.MAX_SAFE_INTEGER) - BigInt(1))).toBeUndefined();
+  });
 });
