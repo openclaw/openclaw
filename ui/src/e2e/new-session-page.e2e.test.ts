@@ -431,11 +431,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
         .toBe(2);
-      await gateway.rejectDeferred("sessions.catalog.list", {
-        code: "UNAVAILABLE",
-        message: "catalog still warming up",
-        retryable: true,
-      });
+      await gateway.resolveDeferred("sessions.catalog.list", { catalogs: [] });
       await expect
         .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length, {
           timeout: 10_000,

@@ -28,9 +28,7 @@ async function loadNewSessionData(
     );
     const catalog = result.catalogs.find((candidate) => candidate.id === location.catalogId);
     const model = catalog?.capabilities.createSession?.model.trim();
-    return catalog && model
-      ? { ...location, model, catalogLabel: catalog.label }
-      : { ...plain, catalogId: "" };
+    return catalog && model ? { ...location, model, catalogLabel: catalog.label } : plain;
   } catch {
     return plain;
   }
