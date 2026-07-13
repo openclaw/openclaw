@@ -144,6 +144,12 @@ describe("pristine startup state", () => {
       skipAllStateMigrations: false,
       skipCoreStateMigrations: false,
     });
+    expect(
+      planPristineStartupConfigMigrations({ agents: { $include: "agents.json" } }, env),
+    ).toEqual({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
   });
 
   it("rejects enabled plugin entries and includes", () => {
