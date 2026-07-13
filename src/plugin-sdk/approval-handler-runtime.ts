@@ -44,6 +44,7 @@ import {
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
+import { normalizeApprovalSlug } from "../shared/approval-slug.js";
 import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -63,7 +64,7 @@ export function buildChannelApprovalResolvedText(params: {
     : "";
   const payload = buildApprovalResolvedReplyPayload({
     approvalId: params.request.id,
-    approvalSlug: params.request.id.slice(0, 8),
+    approvalSlug: normalizeApprovalSlug(params.request.id),
     text: `✅ Exec approval ${params.resolved.decision}.${resolvedByText} ID: ${params.request.id}`,
   });
   return payload.text ?? "";
