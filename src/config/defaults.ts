@@ -242,6 +242,15 @@ export function applyModelDefaults(
           modelMutated = true;
         }
 
+        const contextTokens = isPositiveNumber(raw.contextTokens)
+          ? raw.contextTokens
+          : isPositiveNumber(nextProvider.contextTokens)
+            ? nextProvider.contextTokens
+            : undefined;
+        if (raw.contextTokens !== contextTokens) {
+          modelMutated = true;
+        }
+
         if (!modelMutated) {
           return model;
         }
@@ -254,6 +263,7 @@ export function applyModelDefaults(
           contextWindow,
           maxTokens,
           api,
+          contextTokens,
         }) as ModelDefinitionConfig;
       });
 
