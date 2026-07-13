@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { clearAgentHarnesses } from "../agents/harness/registry.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
@@ -1285,11 +1286,10 @@ function validatePluginConfig(params: {
   schema?: Record<string, unknown>;
   cacheKey?: string;
   value?: unknown;
-}): { ok: boolean; value?: Record<string, unknown>; errors?: string[] } {
-  const value = params.value;
-  const schema = params.schema;
+}): Result<Record<string, unknown> | undefined, string[]> {
+  const { schema, value } = params;
   if (!schema) {
-    return { ok: true, value: value as Record<string, unknown> | undefined };
+    return ok(value as Record<string, unknown> | undefined);
   }
   if (isEmptyPluginConfigJsonSchema(schema)) {
     if (
@@ -1299,12 +1299,12 @@ function validatePluginConfig(params: {
         !Array.isArray(value) &&
         Object.keys(value).length === 0)
     ) {
-      return { ok: true, value: {} };
+      return ok({});
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return { ok: false, errors: ["<root>: must be object"] };
+      return resultError(["<root>: must be object"]);
     }
-    return { ok: false, errors: ["<root>: config must be empty"] };
+    return resultError(["<root>: config must be empty"]);
   }
   const cacheKey = params.cacheKey ?? JSON.stringify(schema);
   const result = validateJsonSchemaValue({
@@ -1314,9 +1314,9 @@ function validatePluginConfig(params: {
     applyDefaults: true,
   });
   if (result.ok) {
-    return { ok: true, value: result.value as Record<string, unknown> | undefined };
+    return ok(result.value as Record<string, unknown> | undefined);
   }
-  return { ok: false, errors: result.errors.map((error) => error.text) };
+  return resultError(result.errors.map((error) => error.text));
 }
 
 function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
@@ -2051,10 +2051,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
 
       if (!validatedConfig.ok) {
-        logger.error(
-          `[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`,
-        );
-        pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
+        logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`);
+        pushPluginLoadError(`invalid config: ${validatedConfig.error.join(", ")}`);
         continue;
       }
 
@@ -2812,8 +2810,8 @@ export async function loadOpenClawPluginCliRegistry(
       value: entry?.config,
     });
     if (!validatedConfig.ok) {
-      logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
-      pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
+      logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`);
+      pushPluginLoadError(`invalid config: ${validatedConfig.error.join(", ")}`);
       continue;
     }
 

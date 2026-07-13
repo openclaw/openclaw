@@ -76,6 +76,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["error-coercion", "error-coercion.ts"],
       ["number-coercion", "number-coercion.ts"],
       ["record-coerce", "record-coerce.ts"],
+      ["result", "result.ts"],
       ["string-coerce", "string-coerce.ts"],
       ["string-normalization", "string-normalization.ts"],
       ["utf16-slice", "utf16-slice.ts"],

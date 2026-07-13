@@ -218,10 +218,11 @@ export const it: TranslationMap = {
   lazyView: {
     loadingTitle: "Caricamento pannello",
     errorTitle: "Impossibile caricare il pannello",
-    errorSubtitle:
-      "Ricarica la pagina per caricare il bundle Control UI più recente oppure riprova se la richiesta di rete non è riuscita.",
+    genericSubtitle: "Si è verificato un problema durante il caricamento di questo pannello.",
+    staleTitle: "È disponibile una nuova versione",
+    staleSubtitle:
+      "OpenClaw è stato aggiornato in background. Ricarica per visualizzare il pannello più recente.",
     retry: "Riprova",
-    unknownError: "Errore sconosciuto di caricamento modulo.",
   },
   nodes: {
     pairing: {
@@ -1749,8 +1750,6 @@ export const it: TranslationMap = {
     cancel: "Annulla",
     removedRestart: "{name} rimosso. È necessario riavviare il Gateway per applicare la modifica.",
     verifiedSource: "Fonte verificata",
-    menuLabel: "Azioni {name}",
-    menuDetails: "Visualizza dettagli",
     enableAction: "Abilita",
     disableAction: "Disabilita",
     working: "Elaborazione…",

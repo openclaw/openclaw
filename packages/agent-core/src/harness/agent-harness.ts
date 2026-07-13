@@ -1,4 +1,5 @@
 // Agent Core module implements agent harness behavior.
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type {
   AssistantMessage,
   ImageContent,
@@ -52,13 +53,7 @@ import type {
   Session,
   Skill,
 } from "./types.js";
-import {
-  AgentHarnessError,
-  BranchSummaryError,
-  CompactionError,
-  SessionError,
-  toError,
-} from "./types.js";
+import { AgentHarnessError, BranchSummaryError, CompactionError, SessionError } from "./types.js";
 
 // CoreAgentHarness coordinates session state, resources, tools, compaction, and
 // streaming callbacks around the lower-level agent loop.
@@ -164,7 +159,7 @@ function normalizeHarnessError(
   if (error instanceof AgentHarnessError) {
     return error;
   }
-  const cause = toError(error);
+  const cause = toErrorObject(error, "Non-Error thrown");
   if (cause instanceof SessionError) {
     return new AgentHarnessError("session", cause.message, cause);
   }
@@ -672,7 +667,7 @@ export class CoreAgentHarness<
           );
         } catch (failureError) {
           const cause = new AggregateError(
-            [toError(error), toError(failureError)],
+            [error, failureError].map((value) => toErrorObject(value, "Non-Error thrown")),
             "Agent run failed and failure reporting failed",
           );
           throw new AgentHarnessError("unknown", cause.message, cause);
@@ -1130,17 +1125,17 @@ export class CoreAgentHarness<
     try {
       await this.emitQueueUpdate();
     } catch (error) {
-      errors.push(toError(error));
+      errors.push(toErrorObject(error, "Non-Error thrown"));
     }
     try {
       await this.waitForIdle();
     } catch (error) {
-      errors.push(toError(error));
+      errors.push(toErrorObject(error, "Non-Error thrown"));
     }
     try {
       await this.emitOwn({ type: "abort", clearedSteer, clearedFollowUp });
     } catch (error) {
-      errors.push(toError(error));
+      errors.push(toErrorObject(error, "Non-Error thrown"));
     }
     if (errors.length > 0) {
       const cause =

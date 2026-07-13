@@ -218,10 +218,11 @@ export const fa: TranslationMap = {
   lazyView: {
     loadingTitle: "در حال بارگیری پنل",
     errorTitle: "پنل بارگیری نشد",
-    errorSubtitle:
-      "برای بارگیری آخرین بسته Control UI صفحه را دوباره بارگیری کنید، یا اگر درخواست شبکه ناموفق بود دوباره تلاش کنید.",
+    genericSubtitle: "هنگام بارگذاری این پنل مشکلی پیش آمد.",
+    staleTitle: "نسخه جدیدی در دسترس است",
+    staleSubtitle:
+      "OpenClaw در پس‌زمینه به‌روزرسانی شد. برای دریافت جدیدترین پنل، دوباره بارگذاری کنید.",
     retry: "تلاش دوباره",
-    unknownError: "خطای نامشخص در بارگیری ماژول.",
   },
   nodes: {
     pairing: {
@@ -1725,8 +1726,6 @@ export const fa: TranslationMap = {
     cancel: "لغو",
     removedRestart: "{name} حذف شد. برای اعمال تغییر، راه‌اندازی مجدد Gateway لازم است.",
     verifiedSource: "منبع تأییدشده",
-    menuLabel: "اقدامات {name}",
-    menuDetails: "مشاهده جزئیات",
     enableAction: "فعال کردن",
     disableAction: "غیرفعال کردن",
     working: "در حال انجام…",

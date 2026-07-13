@@ -402,7 +402,6 @@ type EmbeddedAgentParams = {
     tool?: string;
     toolCallId?: string;
     itemId?: string;
-    firstModelCallStarted?: boolean;
   }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
@@ -1718,7 +1717,6 @@ describe("runAgentTurnWithFallback", () => {
         phase: "model_call_started",
         provider: "openai",
         model: "gpt-5.4",
-        firstModelCallStarted: true,
       });
       return { payloads: [{ text: "final" }], meta: {} };
     });

@@ -381,6 +381,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       "normalization-core",
       "boolean-coercion.ts",
     );
+    const resultSource = writeInternalCorePackageSource(root, "normalization-core", "result.ts");
     const mediaCoreSource = writeInternalCorePackageSource(root, "media-core", "mime.ts");
     const markdownCoreSource = writeInternalCorePackageSource(
       root,
@@ -416,6 +417,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
 
     expect(installedAliases).toContain("@openclaw/normalization-core/string-coerce");
     expect(installedAliases).toContain("@openclaw/normalization-core/boolean-coercion");
+    expect(installedAliases).toContain("@openclaw/normalization-core/result");
     expect(installedAliases).toContain("@openclaw/media-core/mime");
     expect(installedAliases).toContain("@openclaw/markdown-core/code-spans");
     expect(installedAliases).toContain("@openclaw/ai/internal/retry-after");
@@ -432,6 +434,9 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         requireFromCoreSource.resolve("@openclaw/normalization-core/boolean-coercion"),
       ),
     ).toBe(fs.realpathSync(booleanCoercionSource));
+    expect(
+      fs.realpathSync(requireFromCoreSource.resolve("@openclaw/normalization-core/result")),
+    ).toBe(fs.realpathSync(resultSource));
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/media-core/mime"))).toBe(
       fs.realpathSync(mediaCoreSource),
     );
@@ -454,6 +459,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(() =>
       requireFromPlugin.resolve("@openclaw/normalization-core/boolean-coercion"),
     ).toThrow();
+    expect(() => requireFromPlugin.resolve("@openclaw/normalization-core/result")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/media-core/mime")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/markdown-core/code-spans")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/retry-after")).toThrow();

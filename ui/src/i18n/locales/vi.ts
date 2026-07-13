@@ -218,10 +218,11 @@ export const vi: TranslationMap = {
   lazyView: {
     loadingTitle: "Đang tải bảng điều khiển",
     errorTitle: "Không tải được bảng điều khiển",
-    errorSubtitle:
-      "Tải lại trang để tải gói Control UI mới nhất, hoặc thử lại nếu yêu cầu mạng thất bại.",
+    genericSubtitle: "Đã xảy ra lỗi khi tải bảng điều khiển này.",
+    staleTitle: "Đã có phiên bản mới",
+    staleSubtitle:
+      "OpenClaw đã được cập nhật trong nền. Hãy tải lại để xem bảng điều khiển mới nhất.",
     retry: "Thử lại",
-    unknownError: "Lỗi tải mô-đun không xác định.",
   },
   nodes: {
     pairing: {
@@ -1728,8 +1729,6 @@ export const vi: TranslationMap = {
     cancel: "Hủy",
     removedRestart: "Đã gỡ bỏ {name}. Cần khởi động lại Gateway để áp dụng thay đổi.",
     verifiedSource: "Nguồn đã xác minh",
-    menuLabel: "Thao tác {name}",
-    menuDetails: "Xem chi tiết",
     enableAction: "Bật",
     disableAction: "Tắt",
     working: "Đang xử lý…",

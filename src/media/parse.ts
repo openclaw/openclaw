@@ -489,8 +489,6 @@ export function splitMediaFromOutput(
 ): {
   text: string;
   mediaUrls?: string[];
-  /** @deprecated Use mediaUrls[0]. */
-  mediaUrl?: string;
   audioAsVoice?: boolean; // true if [[audio_as_voice]] tag was found
   segments?: ParsedMediaOutputSegment[];
 } {
@@ -718,7 +716,6 @@ export function splitMediaFromOutput(
   return {
     text: cleanedText,
     mediaUrls: media,
-    mediaUrl: media[0],
     segments: segments.length > 0 ? segments : [{ type: "text", text: cleanedText }],
     ...(hasAudioAsVoice ? { audioAsVoice: true } : {}),
   };

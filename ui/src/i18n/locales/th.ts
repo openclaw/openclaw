@@ -216,9 +216,10 @@ export const th: TranslationMap = {
   lazyView: {
     loadingTitle: "กำลังโหลดแผง",
     errorTitle: "โหลดแผงไม่สำเร็จ",
-    errorSubtitle: "โหลดหน้าใหม่เพื่อโหลดบันเดิล Control UI ล่าสุด หรือลองอีกครั้งหากคำขอเครือข่ายล้มเหลว",
+    genericSubtitle: "เกิดข้อผิดพลาดขณะโหลดแผงนี้",
+    staleTitle: "มีเวอร์ชันใหม่พร้อมใช้งาน",
+    staleSubtitle: "OpenClaw ได้รับการอัปเดตในเบื้องหลัง โหลดใหม่เพื่อใช้แผงเวอร์ชันล่าสุด",
     retry: "ลองอีกครั้ง",
-    unknownError: "ข้อผิดพลาดในการโหลดโมดูลที่ไม่ทราบสาเหตุ",
   },
   nodes: {
     pairing: {
@@ -1707,8 +1708,6 @@ export const th: TranslationMap = {
     cancel: "ยกเลิก",
     removedRestart: "ลบ {name} แล้ว ต้องรีสตาร์ท Gateway เพื่อใช้การเปลี่ยนแปลง",
     verifiedSource: "แหล่งที่มายืนยันแล้ว",
-    menuLabel: "การดำเนินการของ {name}",
-    menuDetails: "ดูรายละเอียด",
     enableAction: "เปิดใช้งาน",
     disableAction: "ปิดใช้งาน",
     working: "กำลังดำเนินการ…",

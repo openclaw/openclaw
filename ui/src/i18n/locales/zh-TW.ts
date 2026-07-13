@@ -216,9 +216,10 @@ export const zh_TW: TranslationMap = {
   lazyView: {
     loadingTitle: "正在載入面板",
     errorTitle: "面板載入失敗",
-    errorSubtitle: "重新載入頁面以載入最新的 Control UI bundle，或在網路請求失敗時重試。",
+    genericSubtitle: "載入此面板時發生錯誤。",
+    staleTitle: "有新版本可用",
+    staleSubtitle: "OpenClaw 已在背景更新。請重新載入以取得最新面板。",
     retry: "重試",
-    unknownError: "未知的模組載入錯誤。",
   },
   nodes: {
     pairing: {
@@ -1705,8 +1706,6 @@ export const zh_TW: TranslationMap = {
     cancel: "取消",
     removedRestart: "已移除 {name}。需要重新啟動 Gateway 才能套用變更。",
     verifiedSource: "已驗證來源",
-    menuLabel: "{name} 動作",
-    menuDetails: "檢視詳細資料",
     enableAction: "啟用",
     disableAction: "停用",
     working: "處理中…",

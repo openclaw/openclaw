@@ -161,7 +161,7 @@ describe("session cost usage", () => {
     } as unknown as OpenClawConfig;
 
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30, config });
+      const summary = await loadCostUsageSummary({ config });
       // Daily series fills every calendar day in the requested range, even
       // days with zero activity, so the chart shows one bar per day.
       expect(summary.daily.length).toBe(summary.days);
@@ -405,7 +405,7 @@ describe("session cost usage", () => {
     const costSpy = vi.spyOn(usageFormat, "resolveModelCostConfig");
     try {
       await withStateDir(root, async () => {
-        const summary = await loadCostUsageSummary({ days: 30, config });
+        const summary = await loadCostUsageSummary({ config });
         expect(summary.totals.totalTokens).toBe(360);
         expect(summary.totals.totalCost).toBeCloseTo(0.0006, 8);
       });
@@ -451,7 +451,7 @@ describe("session cost usage", () => {
     // not an intentional "free" price.
     clearGatewayModelPricingCacheState();
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30 });
+      const summary = await loadCostUsageSummary();
       expect(summary.totals.totalTokens).toBe(23287);
       expect(summary.totals.totalCost).toBe(0);
       // Unknown pricing must be surfaced as missing rather than reported as a
@@ -511,7 +511,7 @@ describe("session cost usage", () => {
 
     clearGatewayModelPricingCacheState();
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30, config });
+      const summary = await loadCostUsageSummary({ config });
       expect(summary.totals.totalTokens).toBe(23287);
       expect(summary.totals.totalCost).toBe(0);
       expect(summary.totals.missingCostEntries).toBe(1);
@@ -1056,7 +1056,7 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30 });
+      const summary = await loadCostUsageSummary();
       expect(summary.daily.length).toBe(summary.days);
       const populated = summary.daily.filter((d) => d.totalTokens > 0);
       expect(populated).toHaveLength(1);

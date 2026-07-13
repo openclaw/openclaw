@@ -216,10 +216,10 @@ export const ar: TranslationMap = {
   lazyView: {
     loadingTitle: "جارٍ تحميل اللوحة",
     errorTitle: "فشل تحميل اللوحة",
-    errorSubtitle:
-      "أعد تحميل الصفحة لتحميل أحدث حزمة Control UI، أو أعد المحاولة إذا فشل طلب الشبكة.",
+    genericSubtitle: "حدث خطأ ما أثناء تحميل هذه اللوحة.",
+    staleTitle: "يتوفر إصدار جديد",
+    staleSubtitle: "تم تحديث OpenClaw في الخلفية. أعد التحميل للحصول على أحدث لوحة.",
     retry: "إعادة المحاولة",
-    unknownError: "خطأ غير معروف في تحميل الوحدة.",
   },
   nodes: {
     pairing: {
@@ -1719,8 +1719,6 @@ export const ar: TranslationMap = {
     cancel: "إلغاء",
     removedRestart: "تمت إزالة {name}. يلزم إعادة تشغيل Gateway لتطبيق التغيير.",
     verifiedSource: "مصدر موثّق",
-    menuLabel: "إجراءات {name}",
-    menuDetails: "عرض التفاصيل",
     enableAction: "تمكين",
     disableAction: "تعطيل",
     working: "جارٍ العمل…",

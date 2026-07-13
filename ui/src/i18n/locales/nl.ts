@@ -218,10 +218,11 @@ export const nl: TranslationMap = {
   lazyView: {
     loadingTitle: "Paneel laden",
     errorTitle: "Paneel kan niet worden geladen",
-    errorSubtitle:
-      "Laad de pagina opnieuw om de nieuwste Control UI-bundel te laden, of probeer het opnieuw als de netwerkaanvraag is mislukt.",
+    genericSubtitle: "Er is iets misgegaan bij het laden van dit paneel.",
+    staleTitle: "Er is een nieuwe versie beschikbaar",
+    staleSubtitle:
+      "OpenClaw is op de achtergrond bijgewerkt. Laad opnieuw om het nieuwste paneel te zien.",
     retry: "Opnieuw proberen",
-    unknownError: "Onbekende fout bij laden van module.",
   },
   nodes: {
     pairing: {
@@ -1736,8 +1737,6 @@ export const nl: TranslationMap = {
     removedRestart:
       "{name} verwijderd. Een herstart van de Gateway is vereist om de wijziging toe te passen.",
     verifiedSource: "Geverifieerde bron",
-    menuLabel: "{name}-acties",
-    menuDetails: "Details bekijken",
     enableAction: "Inschakelen",
     disableAction: "Uitschakelen",
     working: "Bezig…",

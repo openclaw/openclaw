@@ -217,10 +217,11 @@ export const ko: TranslationMap = {
   lazyView: {
     loadingTitle: "패널 로드 중",
     errorTitle: "패널을 로드하지 못했습니다",
-    errorSubtitle:
-      "최신 Control UI 번들을 로드하려면 페이지를 새로고침하거나, 네트워크 요청이 실패한 경우 다시 시도하세요.",
+    genericSubtitle: "이 패널을 불러오는 중에 문제가 발생했습니다.",
+    staleTitle: "새 버전을 사용할 수 있습니다",
+    staleSubtitle:
+      "OpenClaw가 백그라운드에서 업데이트되었습니다. 최신 패널을 사용하려면 새로고침하세요.",
     retry: "다시 시도",
-    unknownError: "알 수 없는 모듈 로드 오류입니다.",
   },
   nodes: {
     pairing: {
@@ -1724,8 +1725,6 @@ export const ko: TranslationMap = {
     removedRestart:
       "{name}이(가) 제거되었습니다. 변경 사항을 적용하려면 Gateway를 다시 시작해야 합니다.",
     verifiedSource: "인증된 출처",
-    menuLabel: "{name} 작업",
-    menuDetails: "세부 정보 보기",
     enableAction: "활성화",
     disableAction: "비활성화",
     working: "작업 중…",

@@ -1541,6 +1541,75 @@
   color: var(--ok);
 }
 
+/* Lazy route load failure — a centered panel state, not a stretched callout. */
+.lazy-view-error {
+  margin: auto;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  text-align: center;
+  max-width: 440px;
+  padding: 48px 24px;
+}
+
+.lazy-view-error--inline {
+  margin: 16px auto;
+  padding: 24px;
+}
+
+.lazy-view-error__icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--danger-subtle);
+  color: var(--danger);
+  margin-bottom: 4px;
+}
+
+/* A stale-chunk reload prompt is routine after an update, not a failure. */
+.lazy-view-error--stale .lazy-view-error__icon {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.lazy-view-error__icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lazy-view-error__title {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.lazy-view-error__subtitle {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.lazy-view-error__action {
+  margin-top: 8px;
+}
+
+.lazy-view-error__detail {
+  margin-top: 8px;
+  max-width: 100%;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 /* Compaction indicator */
 .compaction-indicator {
   align-self: center;
