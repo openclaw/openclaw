@@ -334,6 +334,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private sessionsScrollElement: HTMLElement | null = null;
   private sessionsScrollResizeObserver: ResizeObserver | null = null;
   private sessionCatalogTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private sessionCatalogAgentId: string | null = null;
   private sessionCatalogGeneration = 0;
   private sessionCatalogRevision = 0;
   private sessionCatalogRequestGeneration: number | null = null;
@@ -410,6 +411,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   override updated() {
     this.syncSessionsScrollObserver();
     const snapshot = this.context?.gateway.snapshot;
+    if (this.context) {
+      this.synchronizeSessionCatalogAgent(this.expandedAgentId());
+    }
     if (
       !snapshot?.connected ||
       !snapshot.client ||
@@ -420,6 +424,26 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     void this.refreshSessionCatalogs();
+  }
+
+  private synchronizeSessionCatalogAgent(agentId: string) {
+    if (agentId === this.sessionCatalogAgentId) {
+      return;
+    }
+    this.sessionCatalogAgentId = agentId;
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogRevision += 1;
+    this.loadingMoreSessionCatalogIds = new Set();
+    if (this.sessionCatalogTimer) {
+      globalThis.clearTimeout(this.sessionCatalogTimer);
+      this.sessionCatalogTimer = null;
+    }
+    if (this.sessionCatalogs.some((catalog) => catalog.capabilities.createSession)) {
+      this.sessionCatalogs = this.sessionCatalogs.map((catalog) => {
+        const { createSession: _createSession, ...capabilities } = catalog.capabilities;
+        return { ...catalog, capabilities };
+      });
+    }
   }
 
   private readonly handleCatalogSessionContinued = (
@@ -446,12 +470,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     const generation = this.sessionCatalogGeneration;
     const revision = this.sessionCatalogRevision;
+    const agentId = this.sessionCatalogAgentId ?? this.expandedAgentId();
     if (this.sessionCatalogRequestGeneration === generation) {
       return;
     }
     this.sessionCatalogRequestGeneration = generation;
     try {
       const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId,
         limitPerHost: 40,
       });
       if (generation !== this.sessionCatalogGeneration || client !== this.gatewayClient) {

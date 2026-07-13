@@ -884,6 +884,55 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
+  it("refreshes catalog creation capability for the expanded agent", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar, context } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+          agents: [{ id: "main" }, { id: "research" }],
+        },
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", {
+        agentId: "main",
+        limitPerHost: 40,
+      });
+
+      const selection = context.agentSelection.state as {
+        selectedId: string | null;
+        scopeId: string | null;
+      };
+      selection.selectedId = "research";
+      selection.scopeId = "research";
+      sidebar.requestUpdate();
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+        agentId: "research",
+        limitPerHost: 40,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("hides catalog groups that have no sessions", async () => {
     vi.useFakeTimers();
     try {
@@ -1050,6 +1099,7 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+        agentId: "main",
         limitPerHost: 40,
       });
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
