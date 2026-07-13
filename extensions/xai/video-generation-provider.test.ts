@@ -8,7 +8,6 @@ import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generatio
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
-  executeProviderOperationWithRetryMock,
   postJsonRequestMock,
   fetchWithTimeoutGuardedMock,
   fetchWithTimeoutMock,
@@ -107,33 +106,7 @@ function requireFetchInitCall(index: number): {
   return {
     url: call[0],
     init: call[1],
-    timeoutMs: typeof call[2] === "function" ? call[2]() : call[2],
-  };
-}
-
-function requireGuardedFetchCall(index: number): {
-  url?: string;
-  init?: { method?: string; headers?: Headers };
-  options?: { ssrfPolicy?: unknown; dispatcherPolicy?: unknown; auditContext?: string };
-} {
-  const call = (
-    fetchWithTimeoutGuardedMock.mock.calls as unknown as Array<
-      [
-        string,
-        { method?: string; headers?: Headers },
-        unknown,
-        typeof fetch,
-        { ssrfPolicy?: unknown; dispatcherPolicy?: unknown; auditContext?: string } | undefined,
-      ]
-    >
-  )[index];
-  if (!call) {
-    throw new Error(`Expected fetchWithTimeoutGuarded call ${index}`);
-  }
-  return {
-    url: call[0],
-    init: call[1],
-    options: call[4],
+    timeoutMs: call[2],
   };
 }
 
