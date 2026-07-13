@@ -72,6 +72,9 @@ function summarizeSelection(selectedLabels: string[], allLabel: string) {
   return `${selectedLabels[0]} +${selectedLabels.length - 1}`;
 }
 
+const FILTER_OPTION_PREFIX = "option:";
+const FILTER_COMMAND_PREFIX = "command:";
+
 function renderFilterDropdown(params: {
   id: string;
   title: string;
@@ -87,8 +90,15 @@ function renderFilterDropdown(params: {
         class="cron-filter-dropdown__details"
         placement="bottom-start"
         @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-          if (event.detail.item.value !== "clear") {
+          const value = event.detail.item.value;
+          if (value === `${FILTER_COMMAND_PREFIX}clear`) {
+            params.onClear();
+            return;
+          }
+          if (value?.startsWith(FILTER_OPTION_PREFIX)) {
             event.preventDefault();
+            const optionValue = value.slice(FILTER_OPTION_PREFIX.length);
+            params.onToggle(optionValue, !params.selected.includes(optionValue));
           }
         }}
       >
@@ -109,16 +119,15 @@ function renderFilterDropdown(params: {
             <wa-dropdown-item
               class="cron-filter-dropdown__option"
               type="checkbox"
-              value=${option.value}
+              value=${`${FILTER_OPTION_PREFIX}${option.value}`}
               .checked=${params.selected.includes(option.value)}
-              @click=${() => params.onToggle(option.value, !params.selected.includes(option.value))}
             >
               ${option.label}
             </wa-dropdown-item>
           `,
         )}
         <div class="session-menu__separator" role="separator"></div>
-        <wa-dropdown-item value="clear" @click=${params.onClear}>
+        <wa-dropdown-item value=${`${FILTER_COMMAND_PREFIX}clear`}>
           ${t("cron.runs.clear")}
         </wa-dropdown-item>
       </wa-dropdown>

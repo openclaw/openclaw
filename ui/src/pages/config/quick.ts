@@ -923,12 +923,10 @@ function renderAppearanceCard(props: QuickSettingsProps) {
           <wa-radio-group
             class="qs-segmented"
             label=${t("quickSettings.appearance.textSize")}
-            .value=${props.textScale}
+            .value=${String(props.textScale)}
             orientation="horizontal"
             @change=${(event: Event) => {
-              const value = Number(
-                (event.currentTarget as HTMLElement & { value?: string | number }).value,
-              );
+              const value = Number((event.currentTarget as HTMLElement & { value?: string }).value);
               if (TEXT_SCALE_OPTIONS.some((option) => option.value === value)) {
                 props.setTextScale(value);
               }

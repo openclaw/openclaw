@@ -114,7 +114,7 @@ import {
 } from "./lobster-pet.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
-import { createDropdownDismissalFocusController } from "./web-awesome.ts";
+import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type SidebarRecentSession = {
   key: string;
@@ -2161,7 +2161,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (!menu) {
       return nothing;
     }
-    const dismissalFocus = createDropdownDismissalFocusController();
     return html`
       <openclaw-menu-surface>
         <wa-dropdown
@@ -2170,9 +2169,26 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           placement="bottom-start"
           .distance=${0}
           aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
-          @keydown=${dismissalFocus.onKeydown}
-          @wa-after-hide=${() =>
-            this.closeSessionGroupMenu({ restoreFocus: dismissalFocus.shouldRestoreFocus() })}
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            const value = event.detail.item.value;
+            this.closeSessionGroupMenu();
+            switch (value) {
+              case "rename-group":
+                this.renameSessionGroupFromMenu(menu.group);
+                break;
+              case "new-group":
+                this.createSessionGroup();
+                break;
+              case "delete-group":
+                this.deleteSessionGroupFromMenu(menu.group);
+                break;
+            }
+          }}
+          @keydown=${trackDropdownKeyboardDismissal}
+          @wa-after-hide=${(event: Event) =>
+            this.closeSessionGroupMenu({
+              restoreFocus: consumeDropdownKeyboardDismissal(event),
+            })}
         >
           <button
             slot="trigger"
@@ -2185,22 +2201,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             class="session-menu__item"
             value="rename-group"
             ?disabled=${!this.connected}
-            @click=${() => {
-              this.closeSessionGroupMenu();
-              this.renameSessionGroupFromMenu(menu.group);
-            }}
           >
             <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
             <span class="session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
           </wa-dropdown-item>
-          <wa-dropdown-item
-            class="session-menu__item"
-            value="new-group"
-            @click=${() => {
-              this.closeSessionGroupMenu();
-              this.createSessionGroup();
-            }}
-          >
+          <wa-dropdown-item class="session-menu__item" value="new-group">
             <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
             <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
           </wa-dropdown-item>
@@ -2210,10 +2215,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             value="delete-group"
             variant="danger"
             ?disabled=${!this.connected}
-            @click=${() => {
-              this.closeSessionGroupMenu();
-              this.deleteSessionGroupFromMenu(menu.group);
-            }}
           >
             <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
             <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
@@ -2232,7 +2233,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       { grouping: "category", label: t("sessionsView.groupByCategory") },
       { grouping: "none", label: t("sessionsView.groupByNone") },
     ] as const satisfies ReadonlyArray<{ grouping: SidebarSessionsGrouping; label: string }>;
-    const dismissalFocus = createDropdownDismissalFocusController();
     return html`
       <openclaw-menu-surface>
         <wa-dropdown
@@ -2241,9 +2241,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           placement="bottom-end"
           .distance=${0}
           aria-label=${t("chat.sidebar.sortSessions")}
-          @keydown=${dismissalFocus.onKeydown}
-          @wa-after-hide=${() =>
-            this.closeSessionSortMenu({ restoreFocus: dismissalFocus.shouldRestoreFocus() })}
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            const value = event.detail.item.value;
+            if (value?.startsWith("grouping:")) {
+              this.setSessionsGrouping(value.slice("grouping:".length) as SidebarSessionsGrouping);
+            } else if (value?.startsWith("sort:")) {
+              this.sessionSortMode = value.slice("sort:".length) as SidebarSessionSortMode;
+            } else if (value === "show-cron") {
+              this.setSessionsShowCron(!this.sessionsShowCron);
+            }
+            this.closeSessionSortMenu({ restoreFocus: true });
+          }}
+          @keydown=${trackDropdownKeyboardDismissal}
+          @wa-after-hide=${(event: Event) =>
+            this.closeSessionSortMenu({
+              restoreFocus: consumeDropdownKeyboardDismissal(event),
+            })}
         >
           <button
             slot="trigger"
@@ -2260,10 +2273,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 type="checkbox"
                 value=${`grouping:${option.grouping}`}
                 .checked=${this.sessionsGrouping === option.grouping}
-                @click=${() => {
-                  this.setSessionsGrouping(option.grouping);
-                  this.closeSessionSortMenu({ restoreFocus: true });
-                }}
               >
                 <span class="session-menu__text">${option.label}</span>
               </wa-dropdown-item>
@@ -2278,10 +2287,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 type="checkbox"
                 value=${`sort:${option.mode}`}
                 .checked=${this.sessionSortMode === option.mode}
-                @click=${() => {
-                  this.sessionSortMode = option.mode;
-                  this.closeSessionSortMenu({ restoreFocus: true });
-                }}
               >
                 <span class="session-menu__text">${t(option.labelKey)}</span>
               </wa-dropdown-item>
@@ -2293,10 +2298,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             type="checkbox"
             value="show-cron"
             .checked=${this.sessionsShowCron}
-            @click=${() => {
-              this.setSessionsShowCron(!this.sessionsShowCron);
-              this.closeSessionSortMenu({ restoreFocus: true });
-            }}
           >
             <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
           </wa-dropdown-item>

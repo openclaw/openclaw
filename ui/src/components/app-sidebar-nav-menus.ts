@@ -16,7 +16,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
-import { createDropdownDismissalFocusController } from "./web-awesome.ts";
+import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
 
@@ -144,10 +144,10 @@ function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavR
       @pointerleave=${params.onCancelPreload}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
+          (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";
           return;
         }
         event.preventDefault();
-        params.onNavigateRoute(routeId);
       }}
     >
       <a href=${pathForRoute(routeId, params.basePath)} tabindex="-1">
@@ -173,10 +173,10 @@ function renderMoreMenuPluginTab(params: SidebarMoreMenuParams, tab: GatewayCont
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
+          (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";
           return;
         }
         event.preventDefault();
-        params.onNavigatePluginTab(search);
       }}
     >
       <a href=${`${pathForRoute("plugin", params.basePath)}${search}`} tabindex="-1">
@@ -195,7 +195,6 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
   const moreRoutes = sidebarMoreRoutes(params.pinnedRoutes).filter((routeId) =>
     params.isRouteEnabled(routeId),
   );
-  const dismissalFocus = createDropdownDismissalFocusController();
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
@@ -204,8 +203,32 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
         placement="bottom-start"
         .distance=${0}
         aria-label=${t("nav.more")}
-        @keydown=${dismissalFocus.onKeydown}
-        @wa-after-hide=${() => params.onClose(dismissalFocus.shouldRestoreFocus())}
+        @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+          const item = event.detail.item;
+          if (item.dataset.nativeNavigation) {
+            delete item.dataset.nativeNavigation;
+            return;
+          }
+          const value = item.value;
+          if (value === "customize") {
+            params.onEditPinnedItems();
+            return;
+          }
+          if (value?.startsWith("plugin:")) {
+            const tab = params.pluginTabs.find(
+              (candidate) => `plugin:${pluginTabKey(candidate)}` === value,
+            );
+            if (tab) {
+              params.onNavigatePluginTab(pluginTabSearch(tab));
+            }
+            return;
+          }
+          if (value && moreRoutes.includes(value as SidebarNavRoute)) {
+            params.onNavigateRoute(value as SidebarNavRoute);
+          }
+        }}
+        @keydown=${trackDropdownKeyboardDismissal}
+        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
       >
         <button
           slot="trigger"
@@ -217,11 +240,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
         ${moreRoutes.map((routeId) => renderMoreMenuRoute(params, routeId))}
         ${params.pluginTabs.map((tab) => renderMoreMenuPluginTab(params, tab))}
         <div class="sidebar-customize-menu__separator" role="separator"></div>
-        <wa-dropdown-item
-          class="sidebar-customize-menu__item"
-          value="customize"
-          @click=${() => params.onEditPinnedItems()}
-        >
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="customize">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.penLine}</span>
           <span class="sidebar-customize-menu__text">${t("nav.customize")}</span>
         </wa-dropdown-item>
@@ -244,7 +263,6 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
   if (!position) {
     return nothing;
   }
-  const dismissalFocus = createDropdownDismissalFocusController();
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
@@ -253,9 +271,17 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         placement="bottom-start"
         .distance=${0}
         aria-label=${t("nav.customize")}
-        @wa-select=${(event: Event) => event.preventDefault()}
-        @keydown=${dismissalFocus.onKeydown}
-        @wa-after-hide=${() => params.onClose(dismissalFocus.shouldRestoreFocus())}
+        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+          event.preventDefault();
+          const value = event.detail.item.value;
+          if (value === "reset") {
+            params.onReset();
+          } else if (value && SIDEBAR_NAV_ROUTES.includes(value as SidebarNavRoute)) {
+            params.onToggleRoute(value as SidebarNavRoute);
+          }
+        }}
+        @keydown=${trackDropdownKeyboardDismissal}
+        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
       >
         <button
           slot="trigger"
@@ -273,7 +299,6 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
               type="checkbox"
               value=${routeId}
               .checked=${pinned}
-              @click=${() => params.onToggleRoute(routeId)}
             >
               <span slot="icon" class="nav-item__icon" aria-hidden="true"
                 >${icons[navigationIconForRoute(routeId)]}</span
@@ -283,11 +308,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           `;
         })}
         <div class="sidebar-customize-menu__separator" role="separator"></div>
-        <wa-dropdown-item
-          class="sidebar-customize-menu__item"
-          value="reset"
-          @click=${() => params.onReset()}
-        >
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="reset">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
           <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
         </wa-dropdown-item>

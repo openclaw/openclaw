@@ -412,7 +412,30 @@ export function renderUsage(props: UsageProps) {
       <wa-dropdown
         class="usage-filter-select"
         placement="bottom-start"
-        @wa-select=${(event: Event) => event.preventDefault()}
+        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+          event.preventDefault();
+          const value = event.detail.item.value;
+          if (value === "command:select-all") {
+            filterActions.onQueryDraftChange(
+              setQueryTokensForKey(filters.queryDraft, key, options),
+            );
+            return;
+          }
+          if (value === "command:clear") {
+            filterActions.onQueryDraftChange(setQueryTokensForKey(filters.queryDraft, key, []));
+            return;
+          }
+          if (value?.startsWith("option:")) {
+            const optionValue = decodeURIComponent(value.slice("option:".length));
+            const token = `${key}:${optionValue}`;
+            const checked = selectedSet.has(normalizeQueryText(optionValue));
+            filterActions.onQueryDraftChange(
+              checked
+                ? removeQueryToken(filters.queryDraft, token)
+                : addQueryToken(filters.queryDraft, token),
+            );
+          }
+        }}
       >
         <button slot="trigger" type="button" class="usage-filter-trigger">
           <span>${label}</span>
@@ -420,24 +443,10 @@ export function renderUsage(props: UsageProps) {
             ? html`<span class="usage-filter-badge">${selectedCount}</span>`
             : html` <span class="usage-filter-badge">${t("usage.filters.all")}</span> `}
         </button>
-        <wa-dropdown-item
-          value="select-all"
-          ?disabled=${allSelected}
-          @click=${() => {
-            filterActions.onQueryDraftChange(
-              setQueryTokensForKey(filters.queryDraft, key, options),
-            );
-          }}
-        >
+        <wa-dropdown-item value="command:select-all" ?disabled=${allSelected}>
           ${t("usage.filters.selectAll")}
         </wa-dropdown-item>
-        <wa-dropdown-item
-          value="clear"
-          ?disabled=${selectedCount === 0}
-          @click=${() => {
-            filterActions.onQueryDraftChange(setQueryTokensForKey(filters.queryDraft, key, []));
-          }}
-        >
+        <wa-dropdown-item value="command:clear" ?disabled=${selectedCount === 0}>
           ${t("usage.filters.clear")}
         </wa-dropdown-item>
         <div class="session-menu__separator" role="separator"></div>
@@ -447,16 +456,8 @@ export function renderUsage(props: UsageProps) {
             <wa-dropdown-item
               class="usage-filter-option"
               type="checkbox"
-              value=${value}
+              value=${`option:${encodeURIComponent(value)}`}
               .checked=${checked}
-              @click=${() => {
-                const token = `${key}:${value}`;
-                filterActions.onQueryDraftChange(
-                  checked
-                    ? removeQueryToken(filters.queryDraft, token)
-                    : addQueryToken(filters.queryDraft, token),
-                );
-              }}
             >
               ${value}
             </wa-dropdown-item>
@@ -507,51 +508,55 @@ export function renderUsage(props: UsageProps) {
             >
               ${display.headerPinned ? t("usage.filters.pinned") : t("usage.filters.pin")}
             </button>
-            <wa-dropdown class="usage-export-menu" placement="bottom-end">
+            <wa-dropdown
+              class="usage-export-menu"
+              placement="bottom-end"
+              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                switch (event.detail.item.value) {
+                  case "sessions-csv":
+                    downloadTextFile(
+                      `openclaw-usage-sessions-${exportStamp}.csv`,
+                      buildSessionsCsv(filteredSessions),
+                      "text/csv",
+                    );
+                    break;
+                  case "daily-csv":
+                    downloadTextFile(
+                      `openclaw-usage-daily-${exportStamp}.csv`,
+                      buildDailyCsv(filteredDaily),
+                      "text/csv",
+                    );
+                    break;
+                  case "json":
+                    downloadTextFile(
+                      `openclaw-usage-${exportStamp}.json`,
+                      JSON.stringify(
+                        {
+                          totals: displayTotals,
+                          sessions: filteredSessions,
+                          daily: filteredDaily,
+                          aggregates: activeAggregates,
+                        },
+                        null,
+                        2,
+                      ),
+                      "application/json",
+                    );
+                    break;
+                }
+              }}
+            >
               <button slot="trigger" type="button" class="btn btn--sm">
                 ${t("usage.export.label")} ▾
               </button>
-              <wa-dropdown-item
-                value="sessions-csv"
-                @click=${() =>
-                  downloadTextFile(
-                    `openclaw-usage-sessions-${exportStamp}.csv`,
-                    buildSessionsCsv(filteredSessions),
-                    "text/csv",
-                  )}
-                ?disabled=${filteredSessions.length === 0}
-              >
+              <wa-dropdown-item value="sessions-csv" ?disabled=${filteredSessions.length === 0}>
                 ${t("usage.export.sessionsCsv")}
               </wa-dropdown-item>
-              <wa-dropdown-item
-                value="daily-csv"
-                @click=${() =>
-                  downloadTextFile(
-                    `openclaw-usage-daily-${exportStamp}.csv`,
-                    buildDailyCsv(filteredDaily),
-                    "text/csv",
-                  )}
-                ?disabled=${filteredDaily.length === 0}
-              >
+              <wa-dropdown-item value="daily-csv" ?disabled=${filteredDaily.length === 0}>
                 ${t("usage.export.dailyCsv")}
               </wa-dropdown-item>
               <wa-dropdown-item
                 value="json"
-                @click=${() =>
-                  downloadTextFile(
-                    `openclaw-usage-${exportStamp}.json`,
-                    JSON.stringify(
-                      {
-                        totals: displayTotals,
-                        sessions: filteredSessions,
-                        daily: filteredDaily,
-                        aggregates: activeAggregates,
-                      },
-                      null,
-                      2,
-                    ),
-                    "application/json",
-                  )}
                 ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
               >
                 ${t("usage.export.json")}

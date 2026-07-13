@@ -392,7 +392,17 @@ function renderTabStrip(state: WorkspaceUiState, workspace: WorkspaceDocument): 
       })}
       ${hidden.length > 0
         ? html`
-            <wa-dropdown slot="nav" class="workspace-tabs__hidden" placement="bottom-end">
+            <wa-dropdown
+              slot="nav"
+              class="workspace-tabs__hidden"
+              placement="bottom-end"
+              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                const slug = event.detail.item.value;
+                if (slug) {
+                  navigateToWorkspaceTab(slug);
+                }
+              }}
+            >
               <button slot="trigger" class="workspace-tab workspace-tab--overflow" type="button">
                 <span class="workspace-tab__icon" aria-hidden="true">${icons.eyeOff}</span>
                 <span class="workspace-tab__label"
@@ -401,11 +411,7 @@ function renderTabStrip(state: WorkspaceUiState, workspace: WorkspaceDocument): 
               </button>
               ${hidden.map(
                 (tab) => html`
-                  <wa-dropdown-item
-                    class="workspace-tabs__hidden-item"
-                    .value=${tab.slug}
-                    @click=${() => navigateToWorkspaceTab(tab.slug)}
-                  >
+                  <wa-dropdown-item class="workspace-tabs__hidden-item" .value=${tab.slug}>
                     ${tab.title}
                   </wa-dropdown-item>
                 `,

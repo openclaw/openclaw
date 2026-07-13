@@ -369,6 +369,15 @@ function renderFileSidebarContent(
                             class="sidebar-file-view__editor-menu"
                             placement="bottom-end"
                             .open=${controls.editorMenuOpen}
+                            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                              const editor = event.detail.item.value;
+                              if (
+                                editor &&
+                                EDITOR_IDS.includes(editor as (typeof EDITOR_IDS)[number])
+                              ) {
+                                controls.onOpenEditor(editor as (typeof EDITOR_IDS)[number]);
+                              }
+                            }}
                             @wa-show=${() => controls.onEditorMenuOpenChange(true)}
                             @wa-hide=${() => controls.onEditorMenuOpenChange(false)}
                           >
@@ -389,7 +398,6 @@ function renderFileSidebarContent(
                                     <wa-dropdown-item
                                       class="sidebar-file-view__editor-item"
                                       value=${editor}
-                                      @click=${() => controls.onOpenEditor(editor)}
                                     >
                                       ${EDITOR_LABELS[editor]}
                                     </wa-dropdown-item>

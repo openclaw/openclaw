@@ -83,7 +83,7 @@ openclaw-new-session-page {
 }
 
 .new-session-page__trigger:hover,
-.new-session-page__select[open] > .new-session-page__trigger {
+.new-session-page__trigger[aria-expanded="true"] {
   color: var(--text);
 }
 
@@ -94,6 +94,11 @@ openclaw-new-session-page {
 
 .new-session-page__trigger--disabled:hover {
   color: var(--muted);
+}
+
+/* Keep the anchor focusable while Web Awesome finishes its hide animation. */
+.new-session-page__trigger--hiding {
+  pointer-events: none;
 }
 
 .new-session-page__trigger-label {
@@ -129,7 +134,11 @@ openclaw-new-session-page {
 
 /* Menu panel anchored under its trigger; item rows reuse the shared
    .session-menu__* styles so every menu in the app reads the same. */
-wa-dropdown.new-session-page__select::part(menu) {
+wa-popover.new-session-page__select {
+  --max-width: min(320px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__select::part(body) {
   min-width: 224px;
   max-width: min(320px, calc(100vw - 24px));
   padding: 6px;
@@ -179,7 +188,7 @@ wa-dropdown.new-session-page__select::part(menu) {
 }
 
 /* The folder menu hosts the directory browser; wider than the list menus. */
-wa-dropdown.new-session-page__select--folder::part(menu) {
+wa-popover.new-session-page__select--folder::part(body) {
   width: min(420px, calc(100vw - 24px));
   max-width: none;
   padding: 0;
@@ -370,7 +379,7 @@ wa-dropdown.new-session-page__select--folder::part(menu) {
     position: static;
   }
 
-  wa-dropdown.new-session-page__select::part(menu) {
+  wa-popover.new-session-page__select::part(body) {
     width: auto;
     max-width: none;
   }

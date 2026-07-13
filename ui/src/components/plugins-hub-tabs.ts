@@ -15,7 +15,7 @@ const HUB_TABS: readonly PluginsHubTab[] = ["installed", "discover", "skills", "
 // Time-bounded so an aborted navigation cannot steal focus much later.
 const PENDING_FOCUS_WINDOW_MS = 2000;
 let pendingFocus: { tab: PluginsHubTab; at: number } | null = null;
-let keyboardActivation = false;
+let pointerActivation = false;
 
 export type PluginsHubTabsProps = {
   active: PluginsHubTab;
@@ -44,10 +44,10 @@ function selectHubTab(tab: PluginsHubTab, props: PluginsHubTabsProps) {
   // destination strip pull focus after the route swap. Skip
   // same-tab activation: it does not navigate, and a lingering entry would
   // let a later re-render steal focus from whatever the user moved on to.
-  if (keyboardActivation && tab !== props.active) {
+  if (!pointerActivation && tab !== props.active) {
     pendingFocus = { tab, at: Date.now() };
   }
-  keyboardActivation = false;
+  pointerActivation = false;
   props.onSelect(tab);
 }
 
@@ -93,11 +93,16 @@ export function renderPluginsHubTabs(props: PluginsHubTabsProps) {
             panel=${tab}
             aria-controls="plugins-hub-panel"
             ?active=${selected}
-            @keydown=${(event: KeyboardEvent) => {
-              keyboardActivation = event.key === "Enter" || event.key === " ";
+            @click=${(event: MouseEvent) => {
+              // Trusted pointer clicks carry a click count. Keyboard and AT
+              // synthesized clicks use detail=0 and need focus recovery.
+              pointerActivation = event.detail > 0;
             }}
-            @pointerdown=${() => {
-              keyboardActivation = false;
+            @keydown=${() => {
+              // Any keyboard interaction supersedes a prior pointer click.
+              // This also clears clicks on the already-active tab, which do
+              // not emit wa-tab-show and would otherwise leave stale state.
+              pointerActivation = false;
             }}
             ${selected ? ref((element) => reclaimFocus(tab, element)) : nothing}
           >

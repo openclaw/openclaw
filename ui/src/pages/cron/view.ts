@@ -506,16 +506,35 @@ function renderTasksPanel(props: CronProps) {
 
 function renderJobsFilterPopover(props: CronProps, active: boolean) {
   return html`
-    <wa-dropdown class="cron-filter-popover" placement="bottom-end">
-      <button
-        slot="trigger"
-        type="button"
-        class="btn btn--sm cron-filter-popover__trigger ${active ? "active" : ""}"
-        title=${t("cron.list.filters")}
-        aria-label=${t("cron.list.filters")}
-      >
-        ${icon("listFilter")}
-      </button>
+    <button
+      id="cron-jobs-filter-trigger"
+      type="button"
+      class="btn btn--sm cron-filter-popover__trigger ${active ? "active" : ""}"
+      title=${t("cron.list.filters")}
+      aria-label=${t("cron.list.filters")}
+      aria-haspopup="dialog"
+      aria-expanded="false"
+    >
+      ${icon("listFilter")}
+    </button>
+    <wa-popover
+      class="cron-filter-popover"
+      for="cron-jobs-filter-trigger"
+      placement="bottom-end"
+      without-arrow
+      @wa-show=${(event: Event) => {
+        (event.currentTarget as Element).previousElementSibling?.setAttribute(
+          "aria-expanded",
+          "true",
+        );
+      }}
+      @wa-hide=${(event: Event) => {
+        (event.currentTarget as Element).previousElementSibling?.setAttribute(
+          "aria-expanded",
+          "false",
+        );
+      }}
+    >
       <div class="cron-filter-popover__panel">
         <label class="field">
           <span>${t("cron.jobs.schedule")}</span>
@@ -588,7 +607,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
           ${t("cron.jobs.reset")}
         </button>
       </div>
-    </wa-dropdown>
+    </wa-popover>
   `;
 }
 
@@ -732,7 +751,23 @@ function renderLastRunCell(job: CronJob) {
 // the menu only carries the low-traffic actions.
 function renderJobMenu(props: CronProps, job: CronJob) {
   return html`
-    <wa-dropdown class="cron-job-menu" placement="bottom-end">
+    <wa-dropdown
+      class="cron-job-menu"
+      placement="bottom-end"
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        switch (event.detail.item.value) {
+          case "run-if-due":
+            props.onRun(job, "due");
+            break;
+          case "clone":
+            props.onClone(job);
+            break;
+          case "remove":
+            props.onRemove(job);
+            break;
+        }
+      }}
+    >
       <button
         slot="trigger"
         type="button"
@@ -742,11 +777,9 @@ function renderJobMenu(props: CronProps, job: CronJob) {
       >
         ${icon("moreHorizontal")}
       </button>
-      ${renderMenuItem(props, "run-if-due", t("cron.actions.runIfDue"), () =>
-        props.onRun(job, "due"),
-      )}
-      ${renderMenuItem(props, "clone", t("cron.actions.clone"), () => props.onClone(job))}
-      ${renderMenuItem(props, "remove", t("cron.actions.remove"), () => props.onRemove(job), {
+      ${renderMenuItem(props, "run-if-due", t("cron.actions.runIfDue"))}
+      ${renderMenuItem(props, "clone", t("cron.actions.clone"))}
+      ${renderMenuItem(props, "remove", t("cron.actions.remove"), {
         danger: true,
       })}
     </wa-dropdown>
@@ -1020,7 +1053,6 @@ function renderMenuItem(
   props: CronProps,
   value: string,
   label: string,
-  action: () => void,
   options?: { danger?: boolean },
 ) {
   return html`
@@ -1029,7 +1061,6 @@ function renderMenuItem(
       value=${value}
       variant=${options?.danger ? "danger" : "default"}
       ?disabled=${props.busy}
-      @click=${action}
     >
       ${label}
     </wa-dropdown-item>

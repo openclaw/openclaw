@@ -246,8 +246,11 @@
 }
 
 .cron-filter-popover {
-  position: relative;
-  flex: 0 0 auto;
+  --max-width: min(280px, calc(100vw - 48px));
+}
+
+.cron-filter-popover::part(body) {
+  padding: 0;
 }
 
 .cron-filter-popover__trigger {

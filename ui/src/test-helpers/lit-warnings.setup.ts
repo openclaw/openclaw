@@ -5,6 +5,29 @@ const issuedWarnings = ((globalThis as { litIssuedWarnings?: Set<string> }).litI
 
 issuedWarnings.add("dev-mode");
 
+// Web Awesome resolves `for` targets while Lit content is still in a detached
+// render root. The app renders into a connected root; JSDOM unit helpers do not.
+const findElementById = (root: ParentNode, id: string) =>
+  [...root.querySelectorAll<HTMLElement>("[id]")].find((element) => element.id === id) ?? null;
+
+if (typeof DocumentFragment !== "undefined" && !("getElementById" in DocumentFragment.prototype)) {
+  Object.defineProperty(DocumentFragment.prototype, "getElementById", {
+    configurable: true,
+    value(this: DocumentFragment, id: string) {
+      return findElementById(this, id);
+    },
+  });
+}
+
+if (typeof Element !== "undefined" && !("getElementById" in Element.prototype)) {
+  Object.defineProperty(Element.prototype, "getElementById", {
+    configurable: true,
+    value(this: Element, id: string) {
+      return findElementById(this, id);
+    },
+  });
+}
+
 // JSDOM has no Web Animations API. Web Awesome uses this probe to skip
 // animations when none are active.
 if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {

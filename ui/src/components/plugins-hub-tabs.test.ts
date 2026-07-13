@@ -99,6 +99,25 @@ describe("renderPluginsHubTabs", () => {
     });
   });
 
+  it("hands focus to the destination strip after synthesized activation", async () => {
+    const source = await mount({ active: "installed", onSelect: () => undefined });
+    source.querySelector("wa-tab-group")?.dispatchEvent(
+      new CustomEvent("wa-tab-show", {
+        bubbles: true,
+        composed: true,
+        detail: { name: "discover" },
+      }),
+    );
+    source.remove();
+
+    const destination = await mount({ active: "discover", onSelect: () => undefined });
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(
+        destination.querySelector<HTMLElement>("#plugins-tab-discover"),
+      );
+    });
+  });
+
   it("does not queue focus recovery for same-tab keyboard activation", async () => {
     const container = await mount({ active: "installed", onSelect: () => undefined });
     const installed = container.querySelector<HTMLElement>("#plugins-tab-installed");
@@ -127,7 +146,7 @@ describe("renderPluginsHubTabs", () => {
     const source = await mount({ active: "installed", onSelect: () => undefined });
     source
       .querySelector<HTMLElement>("#plugins-tab-skills")
-      ?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1 }));
     source.querySelector("wa-tab-group")?.dispatchEvent(
       new CustomEvent("wa-tab-show", {
         bubbles: true,
@@ -142,5 +161,29 @@ describe("renderPluginsHubTabs", () => {
     expect(document.activeElement).not.toBe(
       destination.querySelector<HTMLElement>("#plugins-tab-skills"),
     );
+  });
+
+  it("clears a same-tab pointer source when keyboard navigation follows", async () => {
+    const source = await mount({ active: "installed", onSelect: () => undefined });
+    const active = source.querySelector<HTMLElement>("#plugins-tab-installed");
+    active?.dispatchEvent(new MouseEvent("click", { detail: 1 }));
+    active?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, composed: true }),
+    );
+    source.querySelector("wa-tab-group")?.dispatchEvent(
+      new CustomEvent("wa-tab-show", {
+        bubbles: true,
+        composed: true,
+        detail: { name: "discover" },
+      }),
+    );
+    source.remove();
+
+    const destination = await mount({ active: "discover", onSelect: () => undefined });
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(
+        destination.querySelector<HTMLElement>("#plugins-tab-discover"),
+      );
+    });
   });
 });

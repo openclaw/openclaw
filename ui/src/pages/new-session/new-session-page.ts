@@ -76,6 +76,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private browserError: string | null = null;
   @state() private browserListing: FsListDirResult | null = null;
   @state() private browserTarget: BrowserTarget | null = null;
+  @state() private wherePopoverOpen = false;
+  @state() private wherePopoverHiding = false;
+  @state() private folderPopoverHiding = false;
   // Live head input; absolute paths stay applicable even without fs.listDir.
   @state() private browserPathDraft = "";
 
@@ -172,6 +175,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.message = "";
     this.submitting = false;
     this.error = null;
+    this.wherePopoverHiding = false;
+    this.folderPopoverHiding = false;
+    this.closeWherePopover();
     this.closeBrowser();
     this.adoptAgentDefaults();
     void this.updateComplete.then(() => {
@@ -318,6 +324,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.error = null;
     // Collapse menus and retire browser requests before awaiting the Gateway;
     // otherwise a now-hidden picker can keep mutating the submitted draft.
+    this.closeWherePopover();
     this.closeBrowser();
     for (const dropdown of this.querySelectorAll<HTMLElement & { open: boolean }>(
       "wa-dropdown[open]",
@@ -447,12 +454,41 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserListing = null;
     this.browserTarget = null;
     this.browserPathDraft = "";
-    const dropdown = this.querySelector<HTMLElement & { open: boolean }>(
+    const popover = this.querySelector<HTMLElement & { open: boolean }>(
       ".new-session-page__select--folder[open]",
     );
-    if (dropdown) {
-      dropdown.open = false;
+    if (popover) {
+      popover.open = false;
     }
+  }
+
+  private closeWherePopover() {
+    this.wherePopoverOpen = false;
+    const popover = this.querySelector<HTMLElement & { open: boolean }>(
+      ".new-session-page__where-popover[open]",
+    );
+    if (popover) {
+      popover.open = false;
+    }
+  }
+
+  private guardPopoverTransition(event: Event, hiding: boolean) {
+    if (!hiding) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  private restorePopoverTrigger(id: string, popoverSelector: string) {
+    const active = this.ownerDocument.activeElement;
+    const popover = this.querySelector(popoverSelector);
+    // Light-dismissal may already have moved focus to another control. Only
+    // recover when focus stayed in the closing popover or fell back to body.
+    if (active && active !== this.ownerDocument.body && !popover?.contains(active)) {
+      return;
+    }
+    this.querySelector<HTMLButtonElement>(`#${id}`)?.focus();
   }
 
   private showBrowserRoot() {
@@ -698,20 +734,25 @@ class NewSessionPage extends OpenClawLightDomElement {
     checked: boolean;
     disabled?: boolean;
     title?: string;
+    keepOpen?: boolean;
     onSelect: () => void;
   }) {
     return html`
-      <wa-dropdown-item
+      <button
+        type="button"
         class="session-menu__item"
-        type="checkbox"
-        value=${params.value}
-        .checked=${params.checked}
+        data-value=${params.value}
+        data-popover=${params.keepOpen ? nothing : "close"}
+        aria-pressed=${String(params.checked)}
         title=${params.title ?? nothing}
         ?disabled=${this.submitting || (params.disabled ?? false)}
         @click=${params.onSelect}
       >
+        <span class="session-menu__check" aria-hidden="true"
+          >${params.checked ? icons.check : nothing}</span
+        >
         <span class="session-menu__text">${params.label}</span>
-      </wa-dropdown-item>
+      </button>
     `;
   }
 
@@ -758,21 +799,20 @@ class NewSessionPage extends OpenClawLightDomElement {
     const worktreeAvailable = this.worktreeAvailable();
     const branches = this.branches;
     return html`
-      <wa-dropdown
-        class="new-session-page__select"
-        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-          if (event.detail.item.value === "worktree") {
-            event.preventDefault();
-          }
-        }}
-      >
+      <span class="new-session-page__select">
         <button
-          slot="trigger"
+          id="new-session-where-trigger"
           type="button"
-          class="new-session-page__trigger"
+          class="new-session-page__trigger ${this.wherePopoverHiding
+            ? "new-session-page__trigger--hiding"
+            : ""}"
           title=${t("newSession.where")}
           data-worktree=${String(this.worktree)}
+          aria-haspopup="dialog"
+          aria-expanded=${String(this.wherePopoverOpen)}
           ?disabled=${this.submitting}
+          @click=${(event: MouseEvent) =>
+            this.guardPopoverTransition(event, this.wherePopoverHiding)}
         >
           <span class="new-session-page__target-icon" aria-hidden="true">${icons.monitor}</span>
           <span class="new-session-page__trigger-label">${whereLabel}</span>
@@ -785,6 +825,27 @@ class NewSessionPage extends OpenClawLightDomElement {
             >${icons.chevronDown}</span
           >
         </button>
+      </span>
+      <wa-popover
+        class="new-session-page__select new-session-page__where-popover"
+        for="new-session-where-trigger"
+        placement="bottom-start"
+        without-arrow
+        @wa-show=${() => {
+          this.wherePopoverOpen = true;
+        }}
+        @wa-hide=${() => {
+          this.wherePopoverOpen = false;
+          this.wherePopoverHiding = true;
+        }}
+        @wa-after-hide=${() => {
+          this.wherePopoverHiding = false;
+          this.restorePopoverTrigger(
+            "new-session-where-trigger",
+            ".new-session-page__where-popover",
+          );
+        }}
+      >
         ${showNodes
           ? html`
               <div class="new-session-page__menu-title">${t("newSession.where")}</div>
@@ -828,6 +889,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                     this.maybeLoadBranches();
                   }
                 },
+                keepOpen: true,
               })}
               ${this.worktree
                 ? html`
@@ -874,7 +936,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                 : nothing}
             `
           : nothing}
-      </wa-dropdown>
+      </wa-popover>
     `;
   }
 
@@ -889,26 +951,21 @@ class NewSessionPage extends OpenClawLightDomElement {
         ? t("newSession.folderPlaceholder")
         : folderDisplayName(this.workspacePath()) || t("newSession.folderPlaceholder");
     return html`
-      <wa-dropdown
-        class="new-session-page__select new-session-page__select--folder"
-        @wa-show=${() => {
-          this.browserOpen = true;
-          this.showBrowserRoot();
-        }}
-        @wa-hide=${() => {
-          if (this.browserOpen) {
-            this.closeBrowser();
-          }
-        }}
-      >
+      <span class="new-session-page__select">
         <button
-          slot="trigger"
+          id="new-session-folder-trigger"
           type="button"
           class="new-session-page__trigger ${browseAvailable
             ? ""
-            : "new-session-page__trigger--disabled"}"
+            : "new-session-page__trigger--disabled"} ${this.folderPopoverHiding
+            ? "new-session-page__trigger--hiding"
+            : ""}"
           title=${browseAvailable ? t("newSession.browse") : t("newSession.browseRequiresAdmin")}
+          aria-haspopup="dialog"
+          aria-expanded=${String(this.browserOpen)}
           ?disabled=${this.submitting || !browseAvailable}
+          @click=${(event: MouseEvent) =>
+            this.guardPopoverTransition(event, this.folderPopoverHiding)}
         >
           <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
           <span class="new-session-page__trigger-label">${label}</span>
@@ -916,8 +973,32 @@ class NewSessionPage extends OpenClawLightDomElement {
             >${icons.chevronDown}</span
           >
         </button>
+      </span>
+      <wa-popover
+        class="new-session-page__select new-session-page__select--folder"
+        for="new-session-folder-trigger"
+        placement="bottom-start"
+        without-arrow
+        @wa-show=${() => {
+          this.browserOpen = true;
+          this.showBrowserRoot();
+        }}
+        @wa-hide=${() => {
+          this.folderPopoverHiding = true;
+          if (this.browserOpen) {
+            this.closeBrowser();
+          }
+        }}
+        @wa-after-hide=${() => {
+          this.folderPopoverHiding = false;
+          this.restorePopoverTrigger(
+            "new-session-folder-trigger",
+            ".new-session-page__select--folder",
+          );
+        }}
+      >
         <div class="new-session-page__browser-menu">${this.renderBrowser()}</div>
-      </wa-dropdown>
+      </wa-popover>
     `;
   }
 

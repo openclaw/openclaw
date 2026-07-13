@@ -274,7 +274,9 @@ describe("cron view list pane", () => {
     const runIfDue = Array.from(
       container.querySelectorAll(".cron-table__row .cron-job-menu__item"),
     ).find((item) => item.textContent?.trim() === "Run if due") as HTMLButtonElement;
-    runIfDue.click();
+    runIfDue
+      .closest("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: runIfDue }, bubbles: true }));
     expect(onRun).toHaveBeenCalledWith(job, "due");
     expect(onSelectJob).not.toHaveBeenCalled();
   });
@@ -414,11 +416,25 @@ describe("cron view run history", () => {
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsQuery: "fail" });
 
     const statusOption = container.querySelector<HTMLElement & { checked: boolean }>(
-      '[data-filter="status"] wa-dropdown-item[value="error"]',
+      '[data-filter="status"] wa-dropdown-item[value="option:error"]',
     );
     expect(statusOption).not.toBeNull();
-    statusOption?.click();
+    statusOption
+      ?.closest("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: statusOption }, bubbles: true }),
+      );
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] });
+
+    const clearCommand = container.querySelector<HTMLElement>(
+      '[data-filter="status"] wa-dropdown-item[value="command:clear"]',
+    );
+    clearCommand
+      ?.closest("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: clearCommand }, bubbles: true }),
+      );
+    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: [] });
   });
 
   it("renders run summaries as sanitized markdown", () => {
@@ -681,11 +697,27 @@ describe("cron view editor", () => {
     toggle.click();
     expect(onToggle).toHaveBeenCalledWith(job, false);
 
-    container.querySelector<HTMLElement>('wa-dropdown-item[value="run-if-due"]')?.click();
+    const jobMenu = container.querySelector("wa-dropdown.cron-job-menu");
+    const runIfDue = jobMenu?.querySelector<HTMLElement>('wa-dropdown-item[value="run-if-due"]');
+    if (runIfDue) {
+      jobMenu?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: runIfDue }, bubbles: true }),
+      );
+    }
     expect(onRun).toHaveBeenCalledWith(job, "due");
-    container.querySelector<HTMLElement>('wa-dropdown-item[value="clone"]')?.click();
+    const clone = jobMenu?.querySelector<HTMLElement>('wa-dropdown-item[value="clone"]');
+    if (clone) {
+      jobMenu?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: clone }, bubbles: true }),
+      );
+    }
     expect(onClone).toHaveBeenCalledWith(job);
-    container.querySelector<HTMLElement>('wa-dropdown-item[value="remove"]')?.click();
+    const remove = jobMenu?.querySelector<HTMLElement>('wa-dropdown-item[value="remove"]');
+    if (remove) {
+      jobMenu?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: remove }, bubbles: true }),
+      );
+    }
     expect(onRemove).toHaveBeenCalledWith(job);
 
     container

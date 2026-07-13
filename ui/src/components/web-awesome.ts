@@ -4,6 +4,7 @@ import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import "@awesome.me/webawesome/dist/components/option/option.js";
+import "@awesome.me/webawesome/dist/components/popover/popover.js";
 import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/select/select.js";
@@ -12,18 +13,23 @@ import "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import "@awesome.me/webawesome/dist/components/tab/tab.js";
 import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 
-/** Transient menus use hidden triggers. Track Escape explicitly so pointer
- * dismissal never steals focus while keyboard dismissal restores the opener. */
-export function createDropdownDismissalFocusController() {
-  let restoreFocus = false;
-  return {
-    onKeydown(event: KeyboardEvent) {
-      restoreFocus ||= event.key === "Escape";
-    },
-    shouldRestoreFocus() {
-      return restoreFocus;
-    },
-  };
+const keyboardDismissedDropdowns = new WeakSet<EventTarget>();
+
+/** Transient menus use hidden triggers. Keep Escape intent on the host so Lit
+ * re-renders cannot lose it before Web Awesome finishes hiding the popup. */
+export function trackDropdownKeyboardDismissal(event: KeyboardEvent) {
+  if (event.key === "Escape" && event.currentTarget) {
+    keyboardDismissedDropdowns.add(event.currentTarget);
+  }
+}
+
+export function consumeDropdownKeyboardDismissal(event: Event): boolean {
+  const dropdown = event.currentTarget;
+  if (!dropdown || !keyboardDismissedDropdowns.has(dropdown)) {
+    return false;
+  }
+  keyboardDismissedDropdowns.delete(dropdown);
+  return true;
 }
 
 // Web Awesome labels its trigger but leaves the internal menu unnamed. Copy

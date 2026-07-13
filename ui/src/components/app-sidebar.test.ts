@@ -354,6 +354,46 @@ describe("AppSidebar agent chip", () => {
     expect(onNavigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Atask" });
   });
 
+  it("keeps agent ids distinct from utility command values", async () => {
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const setSessionKey = vi.fn();
+    (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
+      setSessionKey;
+    const agents = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+      agents: [{ id: "main" }, { id: "settings" }],
+    } as AgentsListResult;
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      agents,
+    );
+    const onNavigate = vi.fn();
+    sidebar.connected = true;
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    const settingsAgent = [
+      ...(menu?.querySelectorAll<HTMLElement>('wa-dropdown-item[type="checkbox"]') ?? []),
+    ].find((row) => row.textContent?.includes("settings"));
+    menu?.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: settingsAgent }, bubbles: true }),
+    );
+    await sidebar.updateComplete;
+
+    expect(setSessionKey).toHaveBeenCalledWith("agent:settings:main");
+    expect(onNavigate).toHaveBeenCalledWith("chat", {
+      search: "?session=agent%3Asettings%3Amain",
+    });
+    expect(onNavigate).not.toHaveBeenCalledWith("config");
+  });
+
   it("shows offline in the chip subtitle when disconnected", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
@@ -597,6 +637,18 @@ describe("AppSidebar agent chip", () => {
     if (!input) {
       throw new Error("Expected agent menu filter input");
     }
+    const dropdown = sidebar.querySelector("wa-dropdown");
+    const onDropdownKeydown = vi.fn();
+    dropdown?.addEventListener("keydown", onDropdownKeydown);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(onDropdownKeydown).toHaveBeenCalledOnce();
+    onDropdownKeydown.mockClear();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(onDropdownKeydown).toHaveBeenCalledOnce();
+    onDropdownKeydown.mockClear();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(onDropdownKeydown).not.toHaveBeenCalled();
+
     input.value = "agent-11";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await sidebar.updateComplete;

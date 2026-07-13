@@ -1083,25 +1083,21 @@ function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boole
   return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
 }
 
-function clickComposerInput(event: MouseEvent, selector: string) {
-  const target = event.currentTarget;
-  if (!(target instanceof HTMLElement)) {
-    return;
-  }
+function clickComposerInput(target: HTMLElement, selector: string) {
   target.closest("details")?.removeAttribute("open");
   target.closest(".agent-chat__composer-shell")?.querySelector<HTMLInputElement>(selector)?.click();
 }
 
-function clickComposerFileInput(event: MouseEvent) {
-  clickComposerInput(event, ".agent-chat__file-input");
+function clickComposerFileInput(target: HTMLElement) {
+  clickComposerInput(target, ".agent-chat__file-input");
 }
 
-function clickComposerPhotoInput(event: MouseEvent) {
-  clickComposerInput(event, ".agent-chat__photo-input");
+function clickComposerPhotoInput(target: HTMLElement) {
+  clickComposerInput(target, ".agent-chat__photo-input");
 }
 
-function clickComposerCameraInput(event: MouseEvent) {
-  clickComposerInput(event, ".agent-chat__camera-input");
+function clickComposerCameraInput(target: HTMLElement) {
+  clickComposerInput(target, ".agent-chat__camera-input");
 }
 
 function generateAttachmentId(): string {
@@ -2655,7 +2651,24 @@ export function renderChatComposer(props: ChatComposerProps) {
         })}
 
         <div class="agent-chat__composer-input-row">
-          <wa-dropdown class="agent-chat__attach-menu" placement="top-start">
+          <wa-dropdown
+            class="agent-chat__attach-menu"
+            placement="top-start"
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              const menu = event.currentTarget as HTMLElement;
+              switch (event.detail.item.value) {
+                case "camera":
+                  clickComposerCameraInput(menu);
+                  break;
+                case "photo":
+                  clickComposerPhotoInput(menu);
+                  break;
+                case "file":
+                  clickComposerFileInput(menu);
+                  break;
+              }
+            }}
+          >
             <button
               slot="trigger"
               type="button"
@@ -2671,27 +2684,15 @@ export function renderChatComposer(props: ChatComposerProps) {
             >
               ${icons.plus}
             </button>
-            <wa-dropdown-item
-              class="agent-chat__attach-menu-option"
-              value="camera"
-              @click=${clickComposerCameraInput}
-            >
+            <wa-dropdown-item class="agent-chat__attach-menu-option" value="camera">
               <span slot="icon" aria-hidden="true">${icons.camera}</span>
               <span>${t("chat.composer.takePhoto")}</span>
             </wa-dropdown-item>
-            <wa-dropdown-item
-              class="agent-chat__attach-menu-option"
-              value="photo"
-              @click=${clickComposerPhotoInput}
-            >
+            <wa-dropdown-item class="agent-chat__attach-menu-option" value="photo">
               <span slot="icon" aria-hidden="true">${icons.image}</span>
               <span>${t("chat.composer.attachPhoto")}</span>
             </wa-dropdown-item>
-            <wa-dropdown-item
-              class="agent-chat__attach-menu-option"
-              value="file"
-              @click=${clickComposerFileInput}
-            >
+            <wa-dropdown-item class="agent-chat__attach-menu-option" value="file">
               <span slot="icon" aria-hidden="true">${icons.folder}</span>
               <span>${t("chat.composer.attachFileOption")}</span>
             </wa-dropdown-item>

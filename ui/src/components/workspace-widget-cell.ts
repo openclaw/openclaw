@@ -90,37 +90,21 @@ function renderProvenanceChip(widget: WorkspaceWidget): TemplateResult | typeof 
   >`;
 }
 
-function renderMenu(
-  widget: WorkspaceWidget,
-  callbacks: WorkspaceWidgetCellCallbacks,
-): TemplateResult {
+function renderMenu(): TemplateResult {
   return html`
-    <wa-dropdown-item
-      class="workspace-widget__menu-item"
-      value="edit-title"
-      @click=${() => callbacks.onEditTitle(widget)}
-    >
+    <wa-dropdown-item class="workspace-widget__menu-item" value="edit-title">
       ${t("workspaces.widget.menu.editTitle")}
     </wa-dropdown-item>
-    <wa-dropdown-item
-      class="workspace-widget__menu-item"
-      value="move-to-tab"
-      @click=${() => callbacks.onMoveToTab(widget)}
-    >
+    <wa-dropdown-item class="workspace-widget__menu-item" value="move-to-tab">
       ${t("workspaces.widget.menu.moveToTab")}
     </wa-dropdown-item>
-    <wa-dropdown-item
-      class="workspace-widget__menu-item"
-      value="hide"
-      @click=${() => callbacks.onHide(widget)}
-    >
+    <wa-dropdown-item class="workspace-widget__menu-item" value="hide">
       ${t("workspaces.widget.menu.hide")}
     </wa-dropdown-item>
     <wa-dropdown-item
       class="workspace-widget__menu-item workspace-widget__menu-item--danger"
       value="remove"
       variant="danger"
-      @click=${() => callbacks.onRemove(widget)}
     >
       ${t("workspaces.widget.menu.remove")}
     </wa-dropdown-item>
@@ -318,6 +302,22 @@ export function renderWidgetCell(props: WorkspaceWidgetCellProps): TemplateResul
           placement="bottom-end"
           .open=${props.menuOpen}
           @pointerdown=${(event: PointerEvent) => event.stopPropagation()}
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            switch (event.detail.item.value) {
+              case "edit-title":
+                callbacks.onEditTitle(widget);
+                break;
+              case "move-to-tab":
+                callbacks.onMoveToTab(widget);
+                break;
+              case "hide":
+                callbacks.onHide(widget);
+                break;
+              case "remove":
+                callbacks.onRemove(widget);
+                break;
+            }
+          }}
           @wa-show=${() => {
             if (!props.menuOpen) {
               callbacks.onToggleMenu(widget);
@@ -337,7 +337,7 @@ export function renderWidgetCell(props: WorkspaceWidgetCellProps): TemplateResul
           >
             ${icons.moreHorizontal}
           </button>
-          ${renderMenu(widget, callbacks)}
+          ${renderMenu()}
         </wa-dropdown>
       </header>
       ${widget.collapsed

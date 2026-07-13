@@ -53,6 +53,12 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
         placement="bottom-start"
         .distance=${0}
         aria-label=${t("nativeLinkMenu.label")}
+        @wa-select=${(event: CustomEvent<{ item: { value?: NativeLinkMenuAction } }>) => {
+          const action = event.detail.item.value;
+          if (action) {
+            this.runAction(action);
+          }
+        }}
         @wa-after-hide=${() => {
           this.onClose();
         }}
@@ -69,7 +75,6 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
           value="inline"
           data-shortcut="s"
           aria-keyshortcuts="S"
-          @click=${() => this.runAction("inline")}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true"
             >${icons.panelRightOpen}</span
@@ -82,7 +87,6 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
           value="external"
           data-shortcut="b"
           aria-keyshortcuts="B"
-          @click=${() => this.runAction("external")}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true"
             >${icons.externalLink}</span
@@ -96,7 +100,6 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
           value="copy"
           data-shortcut="c"
           aria-keyshortcuts="C"
-          @click=${() => this.runAction("copy")}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
           <span class="session-menu__text">${t("nativeLinkMenu.copy")}</span>

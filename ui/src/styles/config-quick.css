@@ -597,7 +597,7 @@ openclaw-logs-page {
 }
 
 .qs-segmented__btn:hover,
-.qs-segmented__btn[checked] {
+.qs-segmented__btn:state(checked) {
   color: var(--text);
 }
 
@@ -606,7 +606,7 @@ openclaw-logs-page {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.qs-segmented__btn[checked]::part(control) {
+.qs-segmented__btn:state(checked)::part(control) {
   background: var(--bg-elevated);
   color: var(--text-strong);
   box-shadow: var(--shadow-sm);
