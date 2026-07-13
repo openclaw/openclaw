@@ -150,10 +150,7 @@ function copyRuntimeMessageFields(source: Message, target: Message): void {
   }
 }
 
-function shouldHydrateDiscordMessage(params: { message: Message }) {
-  if (hasMissingReferencedMessagePayload(params.message)) {
-    return true;
-  }
+function shouldHydrateDiscordMessagePayload(params: { message: Message }) {
   let currentText;
   try {
     currentText = resolveDiscordMessageText(params.message, {
@@ -233,23 +230,22 @@ export async function hydrateDiscordMessageIfNeeded(params: {
   channelInfo?: DiscordChannelInfo | null;
 }): Promise<Message> {
   void params.channelInfo;
-  if (!shouldHydrateDiscordMessage({ message: params.message })) {
-    return params.message;
-  }
   let hydrated = params.message;
-  try {
-    const fetched = (await getChannelMessage(
-      params.client.rest,
-      params.messageChannelId,
-      params.message.id,
-    )) as APIMessage | null | undefined;
-    if (fetched) {
-      logVerbose(`discord: hydrated inbound payload via REST for ${params.message.id}`);
-      hydrated = mergeFetchedDiscordMessage(params.message, fetched);
+  if (shouldHydrateDiscordMessagePayload({ message: params.message })) {
+    try {
+      const fetched = (await getChannelMessage(
+        params.client.rest,
+        params.messageChannelId,
+        params.message.id,
+      )) as APIMessage | null | undefined;
+      if (fetched) {
+        logVerbose(`discord: hydrated inbound payload via REST for ${params.message.id}`);
+        hydrated = mergeFetchedDiscordMessage(params.message, fetched);
+      }
+    } catch (err) {
+      logVerbose(`discord: failed to hydrate message ${params.message.id}: ${String(err)}`);
+      return params.message;
     }
-  } catch (err) {
-    logVerbose(`discord: failed to hydrate message ${params.message.id}: ${String(err)}`);
-    return params.message;
   }
   return hydrateDiscordReplyReference({
     client: params.client,

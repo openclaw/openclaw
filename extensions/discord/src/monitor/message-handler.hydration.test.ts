@@ -111,14 +111,29 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     expect(hydrated.referencedMessage?.content).toBe("earlier");
   });
 
-  it("hydrates reply references when Discord omits referenced_message", async () => {
+  it("uses referenced messages supplied by current-message hydration", async () => {
     const client = createInternalTestClient();
     const rest = createFakeRestClient([
       createDefaultReplyPayload({
+        content: "hello <@123>",
+        mentions: [
+          {
+            id: "123",
+            username: "bob",
+            global_name: null,
+            discriminator: "0",
+            avatar: null,
+          },
+        ],
         referenced_message: createReferencedMessagePayload("the replied-to message"),
       }),
     ]);
-    const message = new Message(client, createDefaultReplyPayload());
+    const message = new Message(
+      client,
+      createDefaultReplyPayload({
+        content: "hello <@123>",
+      }),
+    );
 
     const hydrated = await hydrateDiscordMessageIfNeeded({
       client: { rest },
@@ -126,14 +141,13 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       messageChannelId: "c1",
     });
 
-    expect(rest.calls).toHaveLength(1);
+    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/m1"]);
     expect(hydrated.referencedMessage?.content).toBe("the replied-to message");
   });
 
   it("fetches the referenced message when the hydrated reply still omits it", async () => {
     const client = createInternalTestClient();
     const rest = createFakeRestClient([
-      createDefaultReplyPayload(),
       createReferencedMessagePayload("the directly fetched message"),
     ]);
     const message = new Message(client, createDefaultReplyPayload());
@@ -144,10 +158,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       messageChannelId: "c1",
     });
 
-    expect(rest.calls.map((call) => call.path)).toEqual([
-      "/channels/c1/messages/m1",
-      "/channels/c1/messages/m0",
-    ]);
+    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/m0"]);
     expect(hydrated.referencedMessage?.content).toBe("the directly fetched message");
 
     const ctx = await createBaseDiscordMessageContext({
@@ -179,7 +190,6 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       },
     });
     const rest = createFakeRestClient([
-      reply,
       createReferencedMessagePayload("the cross-channel message"),
     ]);
     const message = new Message(client, reply);
@@ -190,7 +200,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       messageChannelId: "c1",
     });
 
-    expect(rest.calls[1]?.path).toBe("/channels/c2/messages/m0");
+    expect(rest.calls[0]?.path).toBe("/channels/c2/messages/m0");
     expect(hydrated.referencedMessage?.content).toBe("the cross-channel message");
   });
 
