@@ -366,13 +366,6 @@
       "text": "NIP-05"
     },
     {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/view.ts",
-      "text": "Some channel checks did not finish before the UI budget."
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",

@@ -129,6 +129,52 @@ export const pl: TranslationMap = {
     lastError: "Ostatni błąd",
     refreshingStaleSnapshot:
       "Odświeżanie statusu kanału w tle; wyświetlanie ostatniej udanej migawki.",
+    hub: {
+      connectedTitle: "Twoje kanały",
+      addTitle: "Dodaj kanał",
+      addSubtitle: "Wybierz usługę i postępuj zgodnie z instrukcjami konfiguracji.",
+      updatedAgo: "Zaktualizowano {ago}",
+      noneConnected: "Nie połączono jeszcze żadnych kanałów. Wybierz jeden poniżej, aby rozpocząć.",
+      partialSnapshot: "Niektóre testy kanałów nie zakończyły się w limicie czasu interfejsu.",
+      stateRunning: "W toku",
+      stateConfigured: "Skonfigurowano",
+      stateAttention: "Wymaga uwagi",
+      setUp: "Skonfiguruj",
+      guidedSetup: "Konfiguracja z instrukcjami krok po kroku",
+      openDetails: "Otwórz szczegóły",
+      lastMessageAgo: "Ostatnia wiadomość: {ago}",
+      browseAllTitle: "Więcej kanałów…",
+      browseAllSubtitle:
+        "Przeglądaj wszystkie dostępne kanały, w tym wtyczki możliwe do zainstalowania.",
+      runSetup: "Uruchom konfigurację",
+      saveBeforeSetup:
+        "Masz niezapisane zmiany konfiguracji kanału. Zapisz je lub wczytaj ponownie przed uruchomieniem konfiguracji z instrukcjami.",
+    },
+    setup: {
+      dialogLabel: "Skonfiguruj kanał {channel}",
+      title: "Skonfiguruj kanał {channel}",
+      genericTitle: "kanał",
+      subtitle:
+        "Krótka konfiguracja z instrukcjami — później możesz dostosować wszystkie ustawienia.",
+      starting: "Rozpoczynanie konfiguracji…",
+      working: "Pracuje…",
+      continue: "Kontynuuj",
+      finish: "Zakończ",
+      copyText: "Kopiuj",
+      openLink: "Otwórz link",
+      docs: "Dokumentacja",
+      doneTitle: "Kanał skonfigurowany",
+      doneBody:
+        "Konfiguracja została zapisana. Gateway automatycznie ponownie wczyta kanał; sprawdź jego kartę, aby zobaczyć aktualny stan.",
+      whatsappScanTitle: "Połącz WhatsApp, skanując kod QR",
+      whatsappScanHelp:
+        "Na telefonie otwórz WhatsApp → Ustawienia → Połączone urządzenia → Połącz urządzenie, a następnie zeskanuj ten kod.",
+      whatsappQrLoading: "Generowanie kodu QR…",
+      whatsappQrHint: "Kliknij Pokaż kod QR, aby wygenerować kod parowania.",
+      whatsappLinked: "WhatsApp jest połączony i gotowy.",
+      regenerateQr: "Nowy kod QR",
+      linkLater: "Połącz później",
+    },
     config: {
       schemaUnavailable: "Schemat niedostępny. Użyj trybu Raw.",
       channelSchemaUnavailable: "Schemat konfiguracji kanału niedostępny.",
