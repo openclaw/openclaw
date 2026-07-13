@@ -1353,8 +1353,13 @@ async function* parseWebSocket(
     resolve();
   };
 
+  // Decode/parse must stay in arrival order. Blob-like frames await arrayBuffer()
+  // while strings resolve immediately; independent async handlers can reorder the
+  // queue and corrupt the Responses stream.
+  let messageChain: Promise<void> = Promise.resolve();
+
   const onMessage: WebSocketListener = (event) => {
-    void (async () => {
+    messageChain = messageChain.then(async () => {
       let text: string | null = null;
       try {
         if (!event || typeof event !== "object" || !("data" in event)) {
@@ -1387,7 +1392,7 @@ async function* parseWebSocket(
         done = true;
         wake();
       }
-    })();
+    });
   };
 
   const onError: WebSocketListener = (event) => {
