@@ -274,7 +274,11 @@ export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[
   }
   let out = "";
   for (const s of segments) {
-    out += typeof s === "number" ? `[${s}]` : out ? `${out}.${s}` : s;
+    if (typeof s === "number") {
+      out += `[${s}]`;
+    } else {
+      out = out ? `${out}.${s}` : s;
+    }
   }
   return out;
 }
