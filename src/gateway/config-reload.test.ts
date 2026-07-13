@@ -173,7 +173,51 @@ describe("buildGatewayReloadPlan", () => {
       listAccountIds: () => [],
       resolveAccount: () => ({}),
     },
-    reload: { configPrefixes: ["channels.telegram"] },
+    reload: {
+      configPrefixes: [
+        "channels.telegram.botToken",
+        "channels.telegram.tokenFile",
+        "channels.telegram.apiRoot",
+        "channels.telegram.network",
+        "channels.telegram.webhookSecret",
+        "channels.telegram.accounts",
+      ],
+      // Runtime-only noop prefixes - each individually listed, no catch-all.
+      // The accounts.*.X patterns rely on the `*` single-segment wildcard in
+      // matchRule to match config paths like accounts.mybot.dmPolicy.
+      noopPrefixes: [
+        "channels.telegram.groups",
+        "channels.telegram.dmPolicy",
+        "channels.telegram.allowFrom",
+        "channels.telegram.defaultTo",
+        "channels.telegram.groupAllowFrom",
+        "channels.telegram.groupPolicy",
+        "channels.telegram.mentionPatterns",
+        "channels.telegram.contextVisibility",
+        "channels.telegram.historyLimit",
+        "channels.telegram.dmHistoryLimit",
+        "channels.telegram.streaming",
+        "channels.telegram.welcome",
+        "channels.telegram.commandDescriptions",
+        "channels.telegram.agentConfig",
+        "channels.telegram.blockStreaming",
+        "channels.telegram.accounts.*.groups",
+        "channels.telegram.accounts.*.dmPolicy",
+        "channels.telegram.accounts.*.allowFrom",
+        "channels.telegram.accounts.*.defaultTo",
+        "channels.telegram.accounts.*.groupAllowFrom",
+        "channels.telegram.accounts.*.groupPolicy",
+        "channels.telegram.accounts.*.mentionPatterns",
+        "channels.telegram.accounts.*.contextVisibility",
+        "channels.telegram.accounts.*.historyLimit",
+        "channels.telegram.accounts.*.dmHistoryLimit",
+        "channels.telegram.accounts.*.streaming",
+        "channels.telegram.accounts.*.welcome",
+        "channels.telegram.accounts.*.commandDescriptions",
+        "channels.telegram.accounts.*.agentConfig",
+        "channels.telegram.accounts.*.blockStreaming",
+      ],
+    },
   };
   const whatsappPlugin: ChannelPlugin = {
     id: "whatsapp",
@@ -330,6 +374,42 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set());
     expect(plan.noopPaths).toContain("channels.whatsapp.replyToMode");
+  });
+
+  it("keeps runtime-only channels.telegram.* changes as hot no-ops (does not restart the channel)", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.dmPolicy"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.noopPaths).toContain("channels.telegram.dmPolicy");
+  });
+
+  it("keeps account-scoped runtime-only channels.telegram.accounts.* changes as hot no-ops (wildcard match)", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.accounts.mybot.dmPolicy"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.noopPaths).toContain("channels.telegram.accounts.mybot.dmPolicy");
+  });
+
+  it("restarts the telegram channel when an account-scoped transport-affecting path changes (wildcard noop does not match botToken)", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.accounts.mybot.botToken"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toContain("telegram");
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("keeps nested account-scoped group/topic runtime-only changes as hot no-ops (subtree wildcard, no restart)", () => {
+    // Regression: a per-group/topic policy edit nested under an account must not
+    // fall through to the broad channels.telegram.accounts restart rule, which
+    // would discard live Telegram session state.
+    for (const path of [
+      "channels.telegram.accounts.mybot.groups.-1001234567.dmPolicy",
+      "channels.telegram.accounts.mybot.groups.-1001234567.topics.42.groupPolicy",
+    ]) {
+      const plan = buildGatewayReloadPlan([path]);
+      expect(plan.restartGateway, path).toBe(false);
+      expect(plan.restartChannels, path).toEqual(new Set());
+      expect(plan.noopPaths, path).toContain(path);
+    }
   });
 
   it("refreshes channel reload rules when only the tracked channel registry changes", () => {

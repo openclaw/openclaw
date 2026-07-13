@@ -241,13 +241,62 @@ function listReloadRules(): ReloadRule[] {
   return rules;
 }
 
+/**
+ * Match a config path against reload rules, supporting `*` as a single-segment
+ * wildcard.  When multiple rules match (e.g. a concrete prefix and a wildcard
+ * variant), the rule with the most matching segments wins.  This ensures that
+ * a specific prefix like `channels.telegram.botToken` takes priority over a
+ * wildcard like `channels.telegram.*.botToken`.
+ *
+ * The `*` matches exactly one dot-separated segment, but a wildcard rule still
+ * matches deeper subtree paths the same way a plain prefix does. So
+ * `channels.telegram.accounts.*.groups` covers both
+ * `channels.telegram.accounts.mybot.groups` and the nested
+ * `channels.telegram.accounts.mybot.groups.-100.dmPolicy`; without this a nested
+ * account-scoped policy edit would fall through to the broad
+ * `channels.telegram.accounts` restart rule and discard live session state.
+ */
 function matchRule(path: string): ReloadRule | null {
+  const pathSegments = path.split(".");
+  let best: ReloadRule | null = null;
+  let bestSegmentCount = -1;
+
   for (const rule of listReloadRules()) {
-    if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
-      return rule;
+    const prefixSegments = rule.prefix.split(".");
+    const wildcardIndex = prefixSegments.indexOf("*");
+    if (wildcardIndex === -1) {
+      // No wildcard: exact match or prefix match.
+      if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
+        if (prefixSegments.length > bestSegmentCount) {
+          best = rule;
+          bestSegmentCount = prefixSegments.length;
+        }
+      }
+    } else {
+      // Wildcard: the path must have at least as many segments as the pattern so
+      // the wildcard binds one segment; extra trailing segments are a subtree
+      // match (e.g. accounts.<id>.groups also covers accounts.<id>.groups.<gid>.x).
+      if (pathSegments.length < prefixSegments.length) {
+        continue;
+      }
+      let matches = true;
+      for (let i = 0; i < prefixSegments.length; i++) {
+        if (prefixSegments[i] === "*") {
+          continue;
+        }
+        if (pathSegments[i] !== prefixSegments[i]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches && prefixSegments.length > bestSegmentCount) {
+        best = rule;
+        bestSegmentCount = prefixSegments.length;
+      }
     }
   }
-  return null;
+
+  return best;
 }
 
 export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
