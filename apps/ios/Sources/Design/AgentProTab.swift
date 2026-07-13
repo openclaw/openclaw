@@ -31,6 +31,7 @@ struct AgentProTab: View {
     @State var clawHubErrorText: String?
     @State var clawHubInstallSlug: String?
     @State var cronActionBusyIDs: Set<String> = []
+    @State var pendingCronRuns = AgentAutomationPendingRunRegistry()
     @State var cronActionStatusText: String?
     @State var automationQuery = ""
     @State var automationListFilter: AutomationListFilter = .all
@@ -137,7 +138,6 @@ struct AgentProTab: View {
     struct AutomationEditorSelection: Identifiable {
         let initialJob: CronJob
         let sourceGatewayID: String
-        let pendingRunID: String?
 
         var id: String {
             self.initialJob.id
@@ -188,10 +188,17 @@ struct AgentProTab: View {
             AgentAutomationDetailScreen(
                 initialJob: selection.initialJob,
                 sourceGatewayID: selection.sourceGatewayID,
-                initialPendingRunID: selection.pendingRunID)
-            {
-                Task { await self.refreshOverview(force: true) }
-            }
+                pendingRunRegistry: self.pendingCronRuns,
+                onRunQueued: { runID, processInstanceID in
+                    self.reservePendingCronRun(
+                        jobID: selection.initialJob.id,
+                        runID: runID,
+                        processInstanceID: processInstanceID,
+                        sourceGatewayID: selection.sourceGatewayID)
+                },
+                onChanged: {
+                    Task { await self.refreshOverview(force: true) }
+                })
         }
     }
 

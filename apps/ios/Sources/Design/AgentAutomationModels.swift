@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OpenClawProtocol
 
 enum AgentAutomationScheduleDraft: Equatable {
@@ -122,7 +123,32 @@ struct AgentAutomationRunResult: Decodable {
     let ran: Bool?
     let enqueued: Bool?
     let runId: String?
+    let processInstanceId: String?
     let reason: String?
+}
+
+@Observable
+@MainActor
+final class AgentAutomationPendingRunRegistry {
+    private var runIDsByJobID: [String: String] = [:]
+
+    func runID(for jobID: String) -> String? {
+        self.runIDsByJobID[jobID]
+    }
+
+    @discardableResult
+    func reserve(jobID: String, runID: String) -> Bool {
+        guard self.runIDsByJobID[jobID] == nil else { return false }
+        self.runIDsByJobID[jobID] = runID
+        return true
+    }
+
+    func release(jobID: String, runID: String) {
+        // Only the owning tracker may clear a reservation; a stale completion
+        // must not reopen Run while a newer exact run is still pending.
+        guard self.runIDsByJobID[jobID] == runID else { return }
+        self.runIDsByJobID.removeValue(forKey: jobID)
+    }
 }
 
 func agentAutomationRunSkipShouldRefresh(reason: String?) -> Bool {

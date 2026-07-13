@@ -78,6 +78,20 @@ struct AgentAutomationModelsTests {
         #expect(!agentAutomationRunSkipShouldRefresh(reason: nil))
     }
 
+    @Test @MainActor func `queued run registry keeps exact reservation until terminal release`() {
+        let registry = AgentAutomationPendingRunRegistry()
+
+        #expect(registry.reserve(jobID: "job-1", runID: "run-1"))
+        #expect(!registry.reserve(jobID: "job-1", runID: "run-2"))
+        #expect(registry.runID(for: "job-1") == "run-1")
+
+        registry.release(jobID: "job-1", runID: "run-2")
+        #expect(registry.runID(for: "job-1") == "run-1")
+
+        registry.release(jobID: "job-1", runID: "run-1")
+        #expect(registry.runID(for: "job-1") == nil)
+    }
+
     @Test func `successful delete-after-run one-shot dismisses`() {
         let oneShot = Self.job(
             schedule: AnyCodable(["kind": AnyCodable("at"), "at": AnyCodable("2026-07-14T16:00:00Z")]),
@@ -145,13 +159,11 @@ struct AgentAutomationModelsTests {
         let job = Self.job()
         let selection = AgentProTab.AutomationEditorSelection(
             initialJob: job,
-            sourceGatewayID: "gateway-a",
-            pendingRunID: "run-123")
+            sourceGatewayID: "gateway-a")
 
         #expect(selection.id == job.id)
         #expect(selection.initialJob.name == job.name)
         #expect(selection.sourceGatewayID == "gateway-a")
-        #expect(selection.pendingRunID == "run-123")
     }
 
     @Test func `detail source guards route and exact queued run`() throws {
@@ -167,7 +179,11 @@ struct AgentAutomationModelsTests {
         #expect(source.contains("gatewayChangedAfterDispatch"))
         #expect(source.contains("ifGatewayID: self.sourceGatewayID"))
         #expect(source.contains("\"runId\": runID"))
-        #expect(source.contains("initialPendingRunID"))
+        #expect(source.contains("pendingRunRegistry"))
+        #expect(!source.contains("self.pendingRunID = nil"))
+        #expect(source.contains("self.pendingRunRegistry.release(jobID: self.job.id, runID: runID)"))
+        #expect(source.contains("\"expectedProcessInstanceId\": processInstanceID"))
+        #expect(source.contains("guard self.pendingRunID == runID else { return }"))
         #expect(models.contains("expectedConfigRevision"))
         #expect(source.contains("Delete Automation"))
         #expect(source.contains("OpenClawType.subheadSemiBold"))
@@ -182,7 +198,12 @@ struct AgentAutomationModelsTests {
         #expect(tabSource.contains("initialJob: selection.initialJob"))
         #expect(!tabSource.contains("overview.cronJobs.first(where:"))
         #expect(cronSource.contains("sourceGatewayID: sourceGatewayID"))
-        #expect(cronSource.contains("guard cronActionBusyIDs.insert(job.id).inserted else { return }"))
+        #expect(cronSource.contains("guard pendingCronRuns.runID(for: job.id) == nil else { return }"))
+        #expect(cronSource.contains("self.pendingCronRuns.reserve(jobID: jobID, runID: runID)"))
+        #expect(cronSource.contains("entries.contains(where: { $0.runid == runID })"))
+        #expect(cronSource.contains("method: \"system.info\""))
+        #expect(cronSource.contains("\"expectedProcessInstanceId\": processInstanceID"))
+        #expect(cronSource.contains("guard currentInstanceID == processInstanceID else"))
         #expect(cronSource
             .contains(
                 "presentAutomationEditor(\n                    job: job,\n                    sourceGatewayID: sourceGatewayID"))

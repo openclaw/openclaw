@@ -45,6 +45,7 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
   applyCronCreateCallerScopeDefault,
@@ -807,7 +808,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as CronJobIdParams & { mode?: "due" | "force" };
+    const p = params as CronJobIdParams & {
+      mode?: "due" | "force";
+      expectedProcessInstanceId?: string;
+    };
     const callerScope = readCronCallerScope(client);
     const jobId = resolveCronJobId(p);
     if (!jobId) {
@@ -826,6 +830,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.run", "id not found");
       return;
     }
+    if (
+      p.expectedProcessInstanceId &&
+      p.expectedProcessInstanceId !== getGatewayProcessInstanceId()
+    ) {
+      respondInvalidCronParams(respond, "cron.run", "Gateway process changed after preflight");
+      return;
+    }
     let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
     try {
       result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
@@ -840,7 +851,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
       throw error;
     }
-    respond(true, result, undefined);
+    respond(true, { ...result, processInstanceId: getGatewayProcessInstanceId() }, undefined);
   },
   "cron.runs": async ({ params, respond, context, client }) => {
     if (!validateCronRunsParams(params)) {

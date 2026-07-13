@@ -11,6 +11,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import type { GatewayClient } from "./types.js";
 
 const getRuntimeConfig = vi.hoisted(() =>
@@ -2128,16 +2129,41 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.run",
-      { id: "cron-1", mode: "due" },
+      {
+        id: "cron-1",
+        mode: "due",
+        expectedProcessInstanceId: getGatewayProcessInstanceId(),
+      },
       { context, client: callerClient("ops") },
     );
 
     expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "due");
     expect(respond).toHaveBeenCalledWith(
       true,
-      { ok: true, enqueued: true, runId: "run-1" },
+      {
+        ok: true,
+        enqueued: true,
+        runId: "run-1",
+        processInstanceId: getGatewayProcessInstanceId(),
+      },
       undefined,
     );
+  });
+
+  it("rejects cron.run before enqueue when the Gateway process changed after preflight", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+
+    const { respond } = await invokeCron(
+      "cron.run",
+      { id: "cron-1", expectedProcessInstanceId: "stale-process" },
+      { context, client: callerClient("ops") },
+    );
+
+    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Gateway process changed after preflight",
+    });
   });
 
   it("hides caller-scoped cron.run for a foreign agent", async () => {

@@ -12931,7 +12931,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 96,
+      "line": 99,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Automation",
       "surface": "apple",
@@ -12939,7 +12939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 103,
+      "line": 106,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Close",
       "surface": "apple",
@@ -12947,7 +12947,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 114,
+      "line": 117,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Refresh automation",
       "surface": "apple",
@@ -12955,7 +12955,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 124,
+      "line": 126,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Delete this automation?",
       "surface": "apple",
@@ -12963,7 +12963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 131,
+      "line": 133,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Delete Automation",
       "surface": "apple",
@@ -12971,7 +12971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 135,
+      "line": 137,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -12979,7 +12979,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 139,
+      "line": 141,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "This permanently removes the automation and its schedule from the Gateway.",
       "surface": "apple",
@@ -12987,7 +12987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 174,
+      "line": 180,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "active",
       "surface": "apple",
@@ -12995,7 +12995,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 174,
+      "line": 180,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "paused",
       "surface": "apple",
@@ -13003,7 +13003,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 179,
+      "line": 185,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Next run",
       "surface": "apple",
@@ -13011,7 +13011,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 182,
+      "line": 188,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Last run",
       "surface": "apple",
@@ -13019,7 +13019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 205,
+      "line": 211,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Automation detail",
       "surface": "apple",
@@ -13027,7 +13027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 232,
+      "line": 238,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Editing unavailable",
       "surface": "apple",
@@ -13035,7 +13035,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 238,
+      "line": 244,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Details",
       "surface": "apple",
@@ -13043,7 +13043,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 240,
+      "line": 246,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Name",
       "surface": "apple",
@@ -13051,7 +13051,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 242,
+      "line": 248,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Automation name",
       "surface": "apple",
@@ -13059,7 +13059,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 244,
+      "line": 250,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Description",
       "surface": "apple",
@@ -13067,7 +13067,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 246,
+      "line": 252,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Optional context",
       "surface": "apple",
@@ -13075,7 +13075,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 252,
+      "line": 258,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Schedule",
       "surface": "apple",
@@ -13083,7 +13083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 260,
+      "line": 266,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Delete after successful run",
       "surface": "apple",
@@ -13091,7 +13091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 262,
+      "line": 268,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Useful for one-time automations.",
       "surface": "apple",
@@ -13099,7 +13099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 277,
+      "line": 283,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "ISO date and time",
       "surface": "apple",
@@ -13107,7 +13107,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 279,
+      "line": 285,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "2030-01-15T09:00:00Z",
       "surface": "apple",
@@ -13115,7 +13115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 282,
+      "line": 288,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Interval (milliseconds)",
       "surface": "apple",
@@ -13123,7 +13123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 287,
+      "line": 293,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Anchor (milliseconds)",
       "surface": "apple",
@@ -13131,7 +13131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 293,
+      "line": 299,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Cron expression",
       "surface": "apple",
@@ -13139,7 +13139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 297,
+      "line": 303,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Time zone",
       "surface": "apple",
@@ -13147,7 +13147,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 299,
+      "line": 305,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "America/Los_Angeles",
       "surface": "apple",
@@ -13155,7 +13155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 301,
+      "line": 307,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Stagger (milliseconds)",
       "surface": "apple",
@@ -13163,7 +13163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 307,
+      "line": 313,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Command to watch",
       "surface": "apple",
@@ -13171,7 +13171,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 309,
+      "line": 315,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "pnpm build",
       "surface": "apple",
@@ -13179,7 +13179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 318,
+      "line": 324,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Action",
       "surface": "apple",
@@ -13187,7 +13187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 331,
+      "line": 337,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Event text",
       "surface": "apple",
@@ -13195,7 +13195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 333,
+      "line": 339,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "What should the agent know?",
       "surface": "apple",
@@ -13203,7 +13203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 337,
+      "line": 343,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Message",
       "surface": "apple",
@@ -13211,7 +13211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 339,
+      "line": 345,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "What should the agent do?",
       "surface": "apple",
@@ -13219,7 +13219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 342,
+      "line": 348,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Model",
       "surface": "apple",
@@ -13227,7 +13227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 346,
+      "line": 352,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -13235,7 +13235,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 348,
+      "line": 354,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Gateway default",
       "surface": "apple",
@@ -13243,7 +13243,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 351,
+      "line": 357,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Arguments (JSON array)",
       "surface": "apple",
@@ -13251,7 +13251,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 356,
+      "line": 362,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Working directory",
       "surface": "apple",
@@ -13259,7 +13259,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 358,
+      "line": 364,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Optional",
       "surface": "apple",
@@ -13267,7 +13267,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 363,
+      "line": 369,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Execution",
       "surface": "apple",
@@ -13275,7 +13275,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 365,
+      "line": 371,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Session target",
       "surface": "apple",
@@ -13283,7 +13283,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 367,
+      "line": 373,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "main, isolated, current, or session:<id>",
       "surface": "apple",
@@ -13291,7 +13291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 369,
+      "line": 375,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Wake mode",
       "surface": "apple",
@@ -13299,7 +13299,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 371,
+      "line": 377,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "now or next-heartbeat",
       "surface": "apple",
@@ -13307,7 +13307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 373,
+      "line": 379,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Delivery and failure routing remain visible and editable in the Control UI.",
       "surface": "apple",
@@ -13315,7 +13315,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 381,
+      "line": 387,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Manage",
       "surface": "apple",
@@ -13323,7 +13323,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 383,
+      "line": 389,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Admin scope is required to change, run, or delete automations.",
       "surface": "apple",
@@ -13331,7 +13331,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 389,
+      "line": 395,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Save",
       "surface": "apple",
@@ -13339,7 +13339,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 397,
+      "line": 403,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Run Now",
       "surface": "apple",
@@ -13347,7 +13347,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 397,
+      "line": 403,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Running",
       "surface": "apple",
@@ -13355,7 +13355,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 406,
+      "line": 412,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Enable",
       "surface": "apple",
@@ -13363,7 +13363,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 406,
+      "line": 412,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Pause",
       "surface": "apple",
@@ -13371,7 +13371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 413,
+      "line": 419,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Delete",
       "surface": "apple",
@@ -13379,7 +13379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 430,
+      "line": 436,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Save or discard edits before running, pausing, or enabling this automation.",
       "surface": "apple",
@@ -13387,7 +13387,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 440,
+      "line": 446,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Recent runs",
       "surface": "apple",
@@ -13395,7 +13395,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 441,
+      "line": 447,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Loading",
       "surface": "apple",
@@ -13403,7 +13403,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 441,
+      "line": 447,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -13411,7 +13411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 447,
+      "line": 453,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "No runs yet",
       "surface": "apple",
@@ -13419,7 +13419,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 448,
+      "line": 454,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Completed runs and delivery outcomes will appear here.",
       "surface": "apple",
@@ -13427,7 +13427,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 565,
+      "line": 571,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Schedule configured",
       "surface": "apple",
@@ -13435,7 +13435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 567,
+      "line": 573,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "One time",
       "surface": "apple",
@@ -13443,7 +13443,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 570,
+      "line": 576,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Every %@",
       "surface": "apple",
@@ -13451,7 +13451,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 571,
+      "line": 577,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Interval",
       "surface": "apple",
@@ -13459,7 +13459,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 573,
+      "line": 579,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "After command exits",
       "surface": "apple",
@@ -13467,7 +13467,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 613,
+      "line": 619,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Unsaved changes",
       "surface": "apple",
@@ -13475,7 +13475,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 614,
+      "line": 620,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Save or close this automation before refreshing.",
       "surface": "apple",
@@ -13483,7 +13483,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 634,
+      "line": 640,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Edits preserved",
       "surface": "apple",
@@ -13491,7 +13491,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 636,
+      "line": 642,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Gateway data changed while you edited. Save will validate the current revision.",
       "surface": "apple",
@@ -13499,7 +13499,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 644,
+      "line": 650,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Could not load automation",
       "surface": "apple",
@@ -13507,7 +13507,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 674,
+      "line": 680,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Could not load run history",
       "surface": "apple",
@@ -13515,7 +13515,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 680,
+      "line": 686,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Saving automation",
       "surface": "apple",
@@ -13523,7 +13523,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 691,
+      "line": 697,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Automation saved",
       "surface": "apple",
@@ -13531,7 +13531,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 692,
+      "line": 698,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "The Gateway accepted the latest revision.",
       "surface": "apple",
@@ -13539,7 +13539,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 700,
+      "line": 706,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Enabling automation",
       "surface": "apple",
@@ -13547,7 +13547,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 701,
+      "line": 707,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Pausing automation",
       "surface": "apple",
@@ -13555,7 +13555,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 713,
+      "line": 719,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Automation enabled",
       "surface": "apple",
@@ -13563,7 +13563,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 714,
+      "line": 720,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Automation paused",
       "surface": "apple",
@@ -13571,7 +13571,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 716,
+      "line": 722,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Future runs are active.",
       "surface": "apple",
@@ -13579,7 +13579,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 717,
+      "line": 723,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Future scheduled runs are paused.",
       "surface": "apple",
@@ -13587,7 +13587,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 724,
+      "line": 731,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Queueing run",
       "surface": "apple",
@@ -13595,7 +13595,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 757,
+      "line": 775,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Run queued",
       "surface": "apple",
@@ -13603,7 +13603,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 759,
+      "line": 777,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Refresh History to follow the result.",
       "surface": "apple",
@@ -13611,7 +13611,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 760,
+      "line": 778,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "This run stays tracked until its exact result appears.",
       "surface": "apple",
@@ -13619,7 +13619,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 813,
+      "line": 832,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Run still pending",
       "surface": "apple",
@@ -13627,7 +13627,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 814,
+      "line": 833,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "The Gateway has not reported a result yet. Refresh History later.",
       "surface": "apple",
@@ -13635,7 +13635,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 827,
+      "line": 846,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Run finished",
       "surface": "apple",
@@ -13643,7 +13643,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 828,
+      "line": 847,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "History now shows the completed result.",
       "surface": "apple",
@@ -13651,7 +13651,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 832,
+      "line": 851,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Run skipped",
       "surface": "apple",
@@ -13659,7 +13659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 833,
+      "line": 852,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "The Gateway skipped this run. History shows the result.",
       "surface": "apple",
@@ -13667,7 +13667,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 837,
+      "line": 856,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Run failed",
       "surface": "apple",
@@ -13675,7 +13675,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 838,
+      "line": 857,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "History shows the failure details.",
       "surface": "apple",
@@ -13683,7 +13683,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 842,
+      "line": 861,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Run result available",
       "surface": "apple",
@@ -13691,7 +13691,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 843,
+      "line": 862,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "History shows the Gateway result.",
       "surface": "apple",
@@ -13699,7 +13699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 867,
+      "line": 886,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Deleting automation",
       "surface": "apple",
@@ -13707,7 +13707,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 888,
+      "line": 907,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Automation action failed",
       "surface": "apple",
@@ -13715,7 +13715,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 939,
+      "line": 958,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "This automation is not due yet.",
       "surface": "apple",
@@ -13723,7 +13723,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 940,
+      "line": 959,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "This automation is already running.",
       "surface": "apple",
@@ -13731,7 +13731,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 941,
+      "line": 960,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Gateway restart recovery is still in progress.",
       "surface": "apple",
@@ -13739,7 +13739,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 942,
+      "line": 961,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "This automation has an invalid configuration.",
       "surface": "apple",
@@ -13747,7 +13747,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 943,
+      "line": 962,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "The automation scheduler is stopped.",
       "surface": "apple",
@@ -13755,7 +13755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 944,
+      "line": 963,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "The Gateway did not start this automation.",
       "surface": "apple",
@@ -13763,7 +13763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 949,
+      "line": 968,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "not scheduled",
       "surface": "apple",
@@ -13771,7 +13771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1019,
+      "line": 1037,
       "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift",
       "source": "Could not track queued run",
       "surface": "apple",
@@ -13779,7 +13779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 12,
+      "line": 13,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "One time",
       "surface": "apple",
@@ -13787,7 +13787,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 13,
+      "line": 14,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Interval",
       "surface": "apple",
@@ -13795,7 +13795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 14,
+      "line": 15,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Cron expression",
       "surface": "apple",
@@ -13803,7 +13803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 15,
+      "line": 16,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "On command exit",
       "surface": "apple",
@@ -13811,7 +13811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 27,
+      "line": 28,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "System event",
       "surface": "apple",
@@ -13819,7 +13819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 28,
+      "line": 29,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Agent turn",
       "surface": "apple",
@@ -13827,7 +13827,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 29,
+      "line": 30,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Command",
       "surface": "apple",
@@ -13835,7 +13835,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 175,
+      "line": 201,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "This automation uses fields this app cannot edit safely.",
       "surface": "apple",
@@ -13843,7 +13843,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 176,
+      "line": 202,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Update the Gateway before saving automation changes from iOS.",
       "surface": "apple",
@@ -13851,7 +13851,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 177,
+      "line": 203,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "No automation changes to save.",
       "surface": "apple",
@@ -13859,7 +13859,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 178,
+      "line": 204,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Automation name is required.",
       "surface": "apple",
@@ -13867,7 +13867,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 180,
+      "line": 206,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Session target must be main, isolated, current, or session:<id>.",
       "surface": "apple",
@@ -13875,7 +13875,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 181,
+      "line": 207,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Wake mode must be now or next-heartbeat.",
       "surface": "apple",
@@ -13883,7 +13883,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 183,
+      "line": 209,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "The connected Gateway changed. Refresh Automations and try again.",
       "surface": "apple",
@@ -13891,7 +13891,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 185,
+      "line": 211,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "The Gateway changed after the request was sent. Check current state before retrying.",
       "surface": "apple",
@@ -13899,7 +13899,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 186,
+      "line": 212,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "The Gateway returned an unexpected automation response.",
       "surface": "apple",
@@ -13907,7 +13907,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 284,
+      "line": 310,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "One-time automations need an ISO time.",
       "surface": "apple",
@@ -13915,7 +13915,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 291,
+      "line": 317,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Interval must be a positive number of milliseconds.",
       "surface": "apple",
@@ -13923,7 +13923,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 295,
+      "line": 321,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Anchor must be a non-negative number of milliseconds.",
       "surface": "apple",
@@ -13931,7 +13931,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 303,
+      "line": 329,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Cron expression is required.",
       "surface": "apple",
@@ -13939,7 +13939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 308,
+      "line": 334,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Stagger must be a non-negative number of milliseconds.",
       "surface": "apple",
@@ -13947,7 +13947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 322,
+      "line": 348,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "On-exit automations need a command.",
       "surface": "apple",
@@ -13955,7 +13955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 331,
+      "line": 357,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Changing schedule type is available in the Control UI.",
       "surface": "apple",
@@ -13963,7 +13963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 352,
+      "line": 378,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "System event text is required.",
       "surface": "apple",
@@ -13971,7 +13971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 359,
+      "line": 385,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Agent message is required.",
       "surface": "apple",
@@ -13979,7 +13979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 377,
+      "line": 403,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Command arguments must be a JSON array of non-empty strings.",
       "surface": "apple",
@@ -13987,7 +13987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 382,
+      "line": 408,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "The Gateway can change this command path but cannot clear it.",
       "surface": "apple",
@@ -13995,7 +13995,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 399,
+      "line": 425,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Changing action type is available in the Control UI.",
       "surface": "apple",
@@ -14003,7 +14003,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 406,
+      "line": 432,
       "path": "apps/ios/Sources/Design/AgentAutomationModels.swift",
       "source": "Could not encode automation changes.",
       "surface": "apple",
@@ -14843,7 +14843,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 233,
+      "line": 250,
       "path": "apps/ios/Sources/Design/AgentProTab+Cron.swift",
       "source": "Tracking %@ in run history.",
       "surface": "apple",
@@ -14851,7 +14851,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 236,
+      "line": 253,
       "path": "apps/ios/Sources/Design/AgentProTab+Cron.swift",
       "source": "Ran %@. Open Edit for run history.",
       "surface": "apple",
@@ -14859,7 +14859,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 260,
+      "line": 276,
       "path": "apps/ios/Sources/Design/AgentProTab+Cron.swift",
       "source": "Enabled %@.",
       "surface": "apple",
@@ -14867,7 +14867,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 261,
+      "line": 277,
       "path": "apps/ios/Sources/Design/AgentProTab+Cron.swift",
       "source": "Paused %@.",
       "surface": "apple",
@@ -14875,7 +14875,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 318,
+      "line": 441,
       "path": "apps/ios/Sources/Design/AgentProTab+Cron.swift",
       "source": "This automation is not due yet.",
       "surface": "apple",
@@ -14883,7 +14883,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 319,
+      "line": 442,
       "path": "apps/ios/Sources/Design/AgentProTab+Cron.swift",
       "source": "This automation is already running.",
       "surface": "apple",
@@ -14891,7 +14891,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 320,
+      "line": 443,
       "path": "apps/ios/Sources/Design/AgentProTab+Cron.swift",
       "source": "Gateway restart recovery is still in progress.",
       "surface": "apple",
@@ -14899,7 +14899,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 321,
+      "line": 444,
       "path": "apps/ios/Sources/Design/AgentProTab+Cron.swift",
       "source": "This automation has an invalid configuration.",
       "surface": "apple",
@@ -14907,7 +14907,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 322,
+      "line": 445,
       "path": "apps/ios/Sources/Design/AgentProTab+Cron.swift",
       "source": "The automation scheduler is stopped.",
       "surface": "apple",
@@ -14915,7 +14915,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 323,
+      "line": 446,
       "path": "apps/ios/Sources/Design/AgentProTab+Cron.swift",
       "source": "The Gateway did not start this automation.",
       "surface": "apple",
@@ -15931,7 +15931,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 63,
+      "line": 64,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Enabled",
       "surface": "apple",
@@ -15939,7 +15939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 64,
+      "line": 65,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Off",
       "surface": "apple",
@@ -15947,7 +15947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 65,
+      "line": 66,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Setup",
       "surface": "apple",
@@ -15955,7 +15955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 66,
+      "line": 67,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Blocked",
       "surface": "apple",
@@ -15963,7 +15963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 83,
+      "line": 84,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Online",
       "surface": "apple",
@@ -15971,7 +15971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 84,
+      "line": 85,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Ready",
       "surface": "apple",
@@ -15979,7 +15979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 108,
+      "line": 109,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "All",
       "surface": "apple",
@@ -15987,7 +15987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 109,
+      "line": 110,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Active",
       "surface": "apple",
@@ -15995,7 +15995,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 110,
+      "line": 111,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Paused",
       "surface": "apple",

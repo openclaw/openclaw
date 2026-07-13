@@ -48,23 +48,26 @@ struct AgentAutomationDetailScreen: View {
     @State private var selectedSection: AgentAutomationDetailSection = .settings
     @State private var loading = false
     @State private var actionName: String?
-    @State private var pendingRunID: String?
     @State private var notice: AgentAutomationNotice?
     @State private var confirmDelete = false
 
     private let sourceGatewayID: String
+    private let pendingRunRegistry: AgentAutomationPendingRunRegistry
+    private let onRunQueued: (String, String?) -> Void
     private let onChanged: () -> Void
 
     init(
         initialJob: CronJob,
         sourceGatewayID: String,
-        initialPendingRunID: String? = nil,
+        pendingRunRegistry: AgentAutomationPendingRunRegistry,
+        onRunQueued: @escaping (String, String?) -> Void,
         onChanged: @escaping () -> Void)
     {
         self._job = State(initialValue: initialJob)
         self._draft = State(initialValue: AgentAutomationDraft(job: initialJob))
-        self._pendingRunID = State(initialValue: initialPendingRunID)
         self.sourceGatewayID = sourceGatewayID
+        self.pendingRunRegistry = pendingRunRegistry
+        self.onRunQueued = onRunQueued
         self.onChanged = onChanged
     }
 
@@ -119,7 +122,6 @@ struct AgentAutomationDetailScreen: View {
         .presentationDetents([.large])
         .interactiveDismissDisabled(self.isBusy)
         .task { await self.initialLoad() }
-        .onDisappear { self.pendingRunID = nil }
         .confirmationDialog(
             "Delete this automation?",
             isPresented: self.$confirmDelete,
@@ -143,6 +145,10 @@ struct AgentAutomationDetailScreen: View {
 
     private var isBusy: Bool {
         self.actionName != nil
+    }
+
+    private var pendingRunID: String? {
+        self.pendingRunRegistry.runID(for: self.job.id)
     }
 
     private var canAdmin: Bool {
@@ -721,11 +727,24 @@ struct AgentAutomationDetailScreen: View {
 
     @MainActor
     private func runNow() async {
+        guard self.pendingRunID == nil else { return }
         await self.performAction(String(localized: "Queueing run")) {
             let route = try await self.gatewayRoute()
+            let systemInfoData = try await self.request(
+                method: "system.info",
+                paramsJSON: Self.params([:]),
+                timeoutSeconds: 20,
+                route: route)
+            let processInstanceID = try JSONDecoder()
+                .decode(SystemInfoResult.self, from: systemInfoData)
+                .processinstanceid
+            var runParams: [String: Any] = ["id": self.job.id, "mode": "force"]
+            if let processInstanceID {
+                runParams["expectedProcessInstanceId"] = processInstanceID
+            }
             let data = try await self.request(
                 method: "cron.run",
-                paramsJSON: Self.params(["id": self.job.id, "mode": "force"]),
+                paramsJSON: Self.params(runParams),
                 timeoutSeconds: 20,
                 route: route)
             let result = try JSONDecoder().decode(AgentAutomationRunResult.self, from: data)
@@ -751,7 +770,6 @@ struct AgentAutomationDetailScreen: View {
             if result.enqueued == true, result.runId == nil {
                 throw AgentAutomationEditError.invalidResponse
             }
-            self.pendingRunID = result.runId
             self.notice = AgentAutomationNotice(
                 tone: .success,
                 title: String(localized: "Run queued"),
@@ -761,6 +779,7 @@ struct AgentAutomationDetailScreen: View {
             self.selectedSection = .history
             self.onChanged()
             if let runID = result.runId {
+                self.onRunQueued(runID, result.processInstanceId ?? processInstanceID)
                 Task { await self.trackRun(runID, route: route) }
             } else {
                 await self.loadHistory(route: route)
@@ -784,8 +803,9 @@ struct AgentAutomationDetailScreen: View {
                     timeoutSeconds: 20,
                     route: route)
                 let entries = try JSONDecoder().decode(AgentAutomationRunsResponse.self, from: data).entries
+                guard self.pendingRunID == runID else { return }
                 if let entry = entries.first(where: { $0.runid == runID }) {
-                    self.pendingRunID = nil
+                    self.pendingRunRegistry.release(jobID: self.job.id, runID: runID)
                     await self.loadHistory(route: route)
                     let outcome = agentAutomationRunOutcome(
                         status: AgentAutomationValue.string(entry.status),
@@ -801,13 +821,12 @@ struct AgentAutomationDetailScreen: View {
                 }
             } catch {
                 guard await self.appModel.operatorSession.currentRoute() == route else {
-                    self.pendingRunID = nil
                     return
                 }
             }
             try? await Task.sleep(for: .seconds(1))
         }
-        self.pendingRunID = nil
+        guard self.pendingRunID == runID else { return }
         self.notice = AgentAutomationNotice(
             tone: .warning,
             title: String(localized: "Run still pending"),
@@ -1015,7 +1034,6 @@ extension AgentAutomationDetailScreen {
             let route = try await self.gatewayRoute()
             await self.trackRun(runID, route: route)
         } catch {
-            self.pendingRunID = nil
             self.showError(title: String(localized: "Could not track queued run"), error: error)
         }
     }

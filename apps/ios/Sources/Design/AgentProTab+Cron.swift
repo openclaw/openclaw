@@ -141,7 +141,8 @@ extension AgentProTab {
     }
 
     func cronJobDetailRow(_ job: CronJob) -> some View {
-        let busy = cronActionBusyIDs.contains(job.id)
+        let pendingRunID = pendingCronRuns.runID(for: job.id)
+        let busy = cronActionBusyIDs.contains(job.id) || pendingRunID != nil
         return HStack(alignment: .top, spacing: 12) {
             ProIconBadge(
                 systemName: job.enabled ? "clock.arrow.circlepath" : "pause.circle",
@@ -163,8 +164,7 @@ extension AgentProTab {
                         guard let sourceGatewayID = self.overview?.gatewayID else { return }
                         self.presentAutomationEditor(
                             job: job,
-                            sourceGatewayID: sourceGatewayID,
-                            pendingRunID: nil)
+                            sourceGatewayID: sourceGatewayID)
                     } label: {
                         Label("Edit", systemImage: "slider.horizontal.3")
                             .font(OpenClawType.captionSemiBold)
@@ -209,9 +209,22 @@ extension AgentProTab {
     func runCronJob(_ job: CronJob) async {
         guard let sourceGatewayID = self.overview?.gatewayID else { return }
         await self.runCronAction(job) {
+            let systemInfoData = try await self.requestAutomationGateway(
+                method: "system.info",
+                paramsJSON: Self.automationParams([:]),
+                sourceGatewayID: sourceGatewayID)
+            let processInstanceID = try JSONDecoder()
+                .decode(SystemInfoResult.self, from: systemInfoData)
+                .processinstanceid
+            var runParams: [String: Any] = ["id": job.id, "mode": "force"]
+            // Shipped Gateways predate process identity. Without it, preserve Run Now
+            // and hold the reservation until exact history, route change, or app reset.
+            if let processInstanceID {
+                runParams["expectedProcessInstanceId"] = processInstanceID
+            }
             let data = try await self.requestAutomationGateway(
                 method: "cron.run",
-                paramsJSON: Self.automationParams(["id": job.id, "mode": "force"]),
+                paramsJSON: Self.automationParams(runParams),
                 sourceGatewayID: sourceGatewayID)
             let result = try JSONDecoder().decode(AgentAutomationRunResult.self, from: data)
             guard result.ok else { throw AgentAutomationEditError.invalidResponse }
@@ -225,10 +238,14 @@ extension AgentProTab {
                 throw AgentAutomationEditError.invalidResponse
             }
             if let runID = result.runId {
+                self.reservePendingCronRun(
+                    jobID: job.id,
+                    runID: runID,
+                    processInstanceID: result.processInstanceId ?? processInstanceID,
+                    sourceGatewayID: sourceGatewayID)
                 self.presentAutomationEditor(
                     job: job,
-                    sourceGatewayID: sourceGatewayID,
-                    pendingRunID: runID)
+                    sourceGatewayID: sourceGatewayID)
                 return String(
                     format: String(localized: "Tracking %@ in run history."),
                     job.name)
@@ -238,13 +255,12 @@ extension AgentProTab {
     }
 
     @MainActor
-    func presentAutomationEditor(job: CronJob, sourceGatewayID: String, pendingRunID: String?) {
+    func presentAutomationEditor(job: CronJob, sourceGatewayID: String) {
         // Keep the tapped snapshot while the sheet is open. Overview refreshes may
         // temporarily omit cron jobs, but must not blank an active editor or lose run tracking.
         self.automationEditorSelection = AutomationEditorSelection(
             initialJob: job,
-            sourceGatewayID: sourceGatewayID,
-            pendingRunID: pendingRunID)
+            sourceGatewayID: sourceGatewayID)
     }
 
     @MainActor
@@ -271,6 +287,7 @@ extension AgentProTab {
         guard liveGatewayConnected, appModel.hasOperatorAdminScope else { return }
         // The view's disabled state can lag a rapid second tap. Main-actor insertion
         // is the admission gate that prevents duplicate mutation and run RPCs.
+        guard pendingCronRuns.runID(for: job.id) == nil else { return }
         guard cronActionBusyIDs.insert(job.id).inserted else { return }
         cronActionStatusText = nil
         defer { self.cronActionBusyIDs.remove(job.id) }
@@ -280,6 +297,112 @@ extension AgentProTab {
         } catch {
             cronActionStatusText = Self.skillMutationMessage(error)
         }
+    }
+
+    @MainActor
+    func reservePendingCronRun(
+        jobID: String,
+        runID: String,
+        processInstanceID: String?,
+        sourceGatewayID: String)
+    {
+        guard self.pendingCronRuns.reserve(jobID: jobID, runID: runID) else { return }
+        // cron.run acknowledges before lane admission. Parent-owned tracking keeps
+        // the job reserved when the detail sheet disappears, preventing a second run.
+        Task {
+            await self.trackPendingCronRun(
+                jobID: jobID,
+                runID: runID,
+                processInstanceID: processInstanceID,
+                sourceGatewayID: sourceGatewayID)
+        }
+    }
+
+    @MainActor
+    private func trackPendingCronRun(
+        jobID: String,
+        runID: String,
+        processInstanceID: String?,
+        sourceGatewayID: String) async
+    {
+        var attempt = 0
+        while self.pendingCronRuns.runID(for: jobID) == runID {
+            do {
+                let data = try await self.requestAutomationGateway(
+                    method: "cron.runs",
+                    paramsJSON: Self.automationParams([
+                        "id": jobID,
+                        "runId": runID,
+                        "limit": 1,
+                        "sortDir": "desc",
+                    ]),
+                    sourceGatewayID: sourceGatewayID)
+                let entries = try JSONDecoder().decode(AgentAutomationRunsResponse.self, from: data).entries
+                if entries.contains(where: { $0.runid == runID }) {
+                    self.pendingCronRuns.release(jobID: jobID, runID: runID)
+                    await self.refreshOverview(force: true)
+                    return
+                }
+            } catch {
+                guard self.keepPendingCronRunOnRequestFailure(
+                    jobID: jobID,
+                    runID: runID,
+                    sourceGatewayID: sourceGatewayID)
+                else { return }
+            }
+            if let processInstanceID {
+                do {
+                    let systemInfoData = try await self.requestAutomationGateway(
+                        method: "system.info",
+                        paramsJSON: Self.automationParams([:]),
+                        sourceGatewayID: sourceGatewayID)
+                    let currentInstanceID = try JSONDecoder()
+                        .decode(SystemInfoResult.self, from: systemInfoData)
+                        .processinstanceid
+                    guard currentInstanceID == processInstanceID else {
+                        // A queued continuation cannot survive a process restart. The
+                        // enqueue response binds this exact per-start identity atomically.
+                        self.releaseUnconfirmedPendingCronRun(jobID: jobID, runID: runID)
+                        return
+                    }
+                } catch {
+                    guard self.keepPendingCronRunOnRequestFailure(
+                        jobID: jobID,
+                        runID: runID,
+                        sourceGatewayID: sourceGatewayID)
+                    else { return }
+                }
+            }
+            attempt += 1
+            do {
+                try await Task.sleep(for: .seconds(attempt < 120 ? 1 : 10))
+            } catch {
+                return
+            }
+        }
+    }
+
+    @MainActor
+    private func keepPendingCronRunOnRequestFailure(
+        jobID: String,
+        runID: String,
+        sourceGatewayID: String) -> Bool
+    {
+        guard self.appModel.connectedGatewayID == nil ||
+            self.appModel.connectedGatewayID == sourceGatewayID
+        else {
+            self.pendingCronRuns.release(jobID: jobID, runID: runID)
+            self.cronActionStatusText = AgentAutomationEditError.gatewayChanged.localizedDescription
+            return false
+        }
+        return true
+    }
+
+    @MainActor
+    private func releaseUnconfirmedPendingCronRun(jobID: String, runID: String) {
+        guard self.pendingCronRuns.runID(for: jobID) == runID else { return }
+        self.pendingCronRuns.release(jobID: jobID, runID: runID)
+        self.cronActionStatusText = AgentAutomationEditError.invalidResponse.localizedDescription
     }
 
     @MainActor
