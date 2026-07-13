@@ -248,9 +248,10 @@ describe("gateway lock", () => {
           readProcessCmdline: () => ["openclaw-gateway"],
         }),
       ).rejects.toBeInstanceOf(GatewayLockError);
-      expect(connectSpy).toHaveBeenCalled();
+      expect(connectSpy).not.toHaveBeenCalled();
     } finally {
       await lock.release();
+      connectSpy.mockRestore();
     }
   });
 
@@ -328,21 +329,99 @@ describe("gateway lock", () => {
     statSpy.mockRestore();
   });
 
-  it("treats lock as stale when owner pid is alive but configured port is free", async () => {
-    vi.useRealTimers();
+  it("keeps a stale startup lock while its verified owner has not bound the port", async () => {
     const env = await makeEnv();
-    await writeRecentLockFile(env);
+    let now = Date.parse("2026-07-11T00:00:00.000Z");
+    const { lockPath } = await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date(now - 10_001).toISOString(),
+    });
+    await fs.utimes(lockPath, new Date(now - 10_001), new Date(now - 10_001));
     const connectSpy = createPortProbeConnectionSpy("refused");
 
-    const lock = await acquireForTest(env, {
-      timeoutMs: 80,
-      pollIntervalMs: 5,
+    const result = await acquireForTest(env, {
+      timeoutMs: 5,
+      pollIntervalMs: 2,
       staleMs: 10_000,
       platform: "darwin",
       port: 18789,
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+      readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
+    }).then(
+      (lock) => ({ lock, error: null }),
+      (error: unknown) => ({ lock: null, error }),
+    );
+
+    try {
+      expect(result.error).toBeInstanceOf(GatewayLockError);
+      expect(connectSpy).not.toHaveBeenCalled();
+    } finally {
+      await result.lock?.release();
+      connectSpy.mockRestore();
+    }
+  });
+
+  it("reclaims a stale lock when owner identity is unknown and the port is free", async () => {
+    const env = await makeEnv();
+    const now = Date.parse("2026-07-11T00:00:00.000Z");
+    const { lockPath, configPath } = resolveLockPath(env);
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date(now - 10_001).toISOString(),
+        configPath,
+      }),
+      "utf8",
+    );
+    const connectSpy = createPortProbeConnectionSpy("refused");
+
+    try {
+      const lock = await acquireForTest(env, {
+        timeoutMs: 80,
+        pollIntervalMs: 5,
+        staleMs: 10_000,
+        platform: "linux",
+        port: 18789,
+        now: () => now,
+        sleep: async () => {},
+        readProcessCmdline: () => null,
+      });
+      expect(connectSpy).toHaveBeenCalled();
+      await expectGatewayLock(lock).release();
+    } finally {
+      connectSpy.mockRestore();
+    }
+  });
+
+  it("reclaims a stale darwin lock when cmdline is unavailable and the port is free", async () => {
+    const env = await makeEnv();
+    const now = Date.parse("2026-07-11T00:00:00.000Z");
+    await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date(now - 10_001).toISOString(),
     });
-    await expectGatewayLock(lock).release();
-    connectSpy.mockRestore();
+    const connectSpy = createPortProbeConnectionSpy("refused");
+
+    try {
+      const lock = await acquireForTest(env, {
+        timeoutMs: 80,
+        pollIntervalMs: 5,
+        staleMs: 10_000,
+        platform: "darwin",
+        port: 18789,
+        now: () => now,
+        sleep: async () => {},
+        readProcessCmdline: () => null,
+      });
+      expect(connectSpy).toHaveBeenCalled();
+      await expectGatewayLock(lock).release();
+    } finally {
+      connectSpy.mockRestore();
+    }
   });
 
   it("keeps lock when configured port is busy and owner pid is alive", async () => {
@@ -476,6 +555,35 @@ describe("gateway lock", () => {
     await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
 
     openSpy.mockRestore();
+  });
+
+  it("leaves a successor lock intact when an old handle releases", async () => {
+    const env = await makeEnv();
+    const lock = expectGatewayLock(await acquireForTest(env));
+    const successorOwnerId = "00000000-0000-4000-8000-000000000001";
+
+    try {
+      const firstPayload = JSON.parse(await fs.readFile(lock.lockPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      await fs.rm(lock.lockPath);
+      await fs.writeFile(
+        lock.lockPath,
+        JSON.stringify({ ...firstPayload, ownerId: successorOwnerId }),
+        { encoding: "utf8", flag: "wx" },
+      );
+
+      await lock.release();
+
+      const successorPayload = JSON.parse(await fs.readFile(lock.lockPath, "utf8")) as {
+        ownerId?: string;
+      };
+      expect(successorPayload.ownerId).toBe(successorOwnerId);
+    } finally {
+      await lock.release();
+      await fs.rm(lock.lockPath, { force: true });
+    }
   });
 
   it("clears stale lock on win32 when process cmdline is not a gateway", async () => {
