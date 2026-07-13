@@ -257,7 +257,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarPinnedRoutes: readonly SidebarNavRoute[] =
     DEFAULT_SIDEBAR_PINNED_ROUTES;
-  @property({ attribute: false }) sidebarMoreExpanded = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) lobsterPetVisits = true;
   @property({ attribute: false }) lobsterPetSounds = false;
@@ -271,7 +270,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
   /** Agent id of the in-flight new-session draft; renders the draft row. */
   @property({ attribute: false }) draftSessionAgentId = "";
-  @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
@@ -281,6 +279,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
+  @state() private moreMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
   // Multi-select set for batch menu actions; stale keys are dropped lazily by
   // selectedVisibleSessions() so list refreshes never need to prune here.
@@ -309,6 +308,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
+  private moreMenuTrigger: HTMLElement | null = null;
   private sessionMenuTrigger: HTMLElement | null = null;
   // Guards the async work fetch: a menu reopened for another session must not
   // adopt a stale response.
@@ -658,12 +658,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   dismissTransientMenus(): boolean {
     const hadTransientMenu = Boolean(
       this.customizeMenuPosition ||
+      this.moreMenuPosition ||
       this.sessionMenu ||
       this.sessionGroupMenu ||
       this.sessionSortMenuPosition ||
       this.agentMenuPosition,
     );
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
@@ -1211,6 +1213,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     // Clamp so the fixed-position menu never overflows the viewport.
     const menuWidth = 240;
     const menuMaxHeight = 420;
+    this.closeMoreMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
@@ -1231,6 +1234,43 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const trigger = this.customizeMenuTrigger;
     this.customizeMenuTrigger = null;
     this.customizeMenuPosition = null;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private toggleMoreMenu(trigger: HTMLElement) {
+    if (this.moreMenuPosition) {
+      this.closeMoreMenu();
+      return;
+    }
+    // Clamp so the fixed-position menu never overflows the viewport.
+    const menuWidth = 240;
+    const menuMaxHeight = 420;
+    const rect = trigger.getBoundingClientRect();
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.closeSessionGroupMenu();
+    this.closeSessionSortMenu();
+    this.closeAgentMenu();
+    this.moreMenuTrigger = trigger;
+    this.moreMenuPosition = {
+      x: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-more-menu .sidebar-customize-menu__item")?.focus();
+    });
+  }
+
+  private closeMoreMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.moreMenuTrigger;
+    this.moreMenuTrigger = null;
+    this.moreMenuPosition = null;
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
@@ -1259,6 +1299,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     trigger: HTMLElement | null = null,
   ) {
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.closeAgentMenu();
@@ -1307,6 +1348,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const menuWidth = 224;
     const menuMaxHeight = 160;
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionMenu();
     this.closeSessionSortMenu();
     this.closeAgentMenu();
@@ -1343,6 +1385,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const menuMaxHeight = 280;
     const rect = trigger.getBoundingClientRect();
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeAgentMenu();
@@ -1377,6 +1420,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const menuWidth = 240;
     const rect = trigger.getBoundingClientRect();
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
@@ -1768,6 +1812,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (this.agentMenuTrigger && path.includes(this.agentMenuTrigger)) {
       return;
     }
+    if (this.moreMenuTrigger && path.includes(this.moreMenuTrigger)) {
+      return;
+    }
     const menu = this.querySelector(
       ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu, .sidebar-agent-menu",
     );
@@ -1775,6 +1822,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     this.closeCustomizeMenu();
+    this.closeMoreMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.closeAgentMenu();
@@ -1787,6 +1835,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       event.preventDefault();
       event.stopPropagation();
       this.closeCustomizeMenu({ restoreFocus: true });
+      this.closeMoreMenu({ restoreFocus: true });
       this.closeSessionGroupMenu({ restoreFocus: true });
       this.closeSessionSortMenu({ restoreFocus: true });
       this.closeAgentMenu({ restoreFocus: true });
@@ -1796,6 +1845,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       // Menu items stay outside the page tab order. Restore the durable trigger
       // before the browser performs its normal forward/backward Tab movement.
       this.closeCustomizeMenu({ restoreFocus: true });
+      this.closeMoreMenu({ restoreFocus: true });
       this.closeSessionGroupMenu({ restoreFocus: true });
       this.closeSessionSortMenu({ restoreFocus: true });
       this.closeAgentMenu({ restoreFocus: true });
@@ -2249,13 +2299,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
+  /** Settings routes highlight Settings; Plugins hub tabs highlight Plugins. */
+  private isRouteActive(routeId: NavigationRouteId): boolean {
+    if (this.activeRouteId === undefined) {
+      return false;
+    }
+    if (routeId === "config") {
+      return isSettingsNavigationRoute(this.activeRouteId);
+    }
+    if (routeId === "plugins") {
+      return isPluginsHubRoute(this.activeRouteId);
+    }
+    return this.activeRouteId === routeId;
+  }
+
   private renderRoute(routeId: NavigationRouteId) {
-    const active =
-      routeId === "config"
-        ? this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId)
-        : routeId === "plugins"
-          ? this.activeRouteId !== undefined && isPluginsHubRoute(this.activeRouteId)
-          : this.activeRouteId === routeId;
+    const active = this.isRouteActive(routeId);
     // Disabled routes (e.g. Workboard with the plugin off) stay hidden rather
     // than rendering an inert nav item.
     if (!this.isRouteEnabled(routeId)) {
@@ -2299,7 +2358,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
-  /** Dynamic plugin tabs stay in More; only stable static route ids can be persisted as pins. */
+  /** Dynamic plugin tabs stay in the More menu; only stable static route ids can be persisted as pins. */
   private pluginTabs(): GatewayControlUiPluginTab[] {
     const tabs = this.context?.gateway.snapshot.hello?.controlUiTabs ?? [];
     return ["chat", "control", "agent", "settings"].flatMap((group) =>
@@ -2307,27 +2366,26 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     );
   }
 
-  private renderPluginTab(tab: GatewayControlUiPluginTab) {
+  private renderMoreMenuPluginTab(tab: GatewayControlUiPluginTab) {
     const ref = { pluginId: tab.pluginId, id: tab.id };
     const search = pluginTabSearch(ref);
-    const href = `${pathForRoute("plugin", this.basePath)}${search}`;
     const active = this.activeRouteId === "plugin" && this.activePluginTabId === pluginTabKey(ref);
     const iconName = tab.icon && Object.hasOwn(icons, tab.icon) ? (tab.icon as IconName) : "puzzle";
     return html`
-      <a
-        href=${href}
-        class="nav-item ${active ? "nav-item--active" : ""}"
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
+      <button
+        type="button"
+        class="sidebar-customize-menu__item ${active ? "sidebar-customize-menu__item--active" : ""}"
+        role="menuitem"
+        tabindex="-1"
+        aria-current=${active ? "page" : nothing}
+        @click=${() => {
+          this.closeMoreMenu({ restoreFocus: true });
           this.onNavigate?.("plugin", { search });
         }}
       >
         <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
-        <span class="nav-item__text">${tab.label}</span>
-      </a>
+        <span class="sidebar-customize-menu__text">${tab.label}</span>
+      </button>
     `;
   }
 
@@ -2865,36 +2923,88 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
-  private renderMoreSection() {
-    const moreRoutes = sidebarMoreRoutes(this.sidebarPinnedRoutes);
-    const expanded = this.sidebarMoreExpanded;
+  /** Unpinned routes, plugin tabs, and the pin editor live in a popup behind this row. */
+  private renderMoreRow() {
+    const open = this.moreMenuPosition !== null;
+    const holdsActiveRoute =
+      this.activeRouteId === "plugin" ||
+      sidebarMoreRoutes(this.sidebarPinnedRoutes).some(
+        (routeId) => this.isRouteEnabled(routeId) && this.isRouteActive(routeId),
+      );
     return html`
-      <section class="nav-section nav-section--more ${expanded ? "" : "nav-section--collapsed"}">
-        <button
-          class="nav-section__label"
-          @click=${() => this.onToggleMore?.()}
-          aria-expanded=${String(expanded)}
+      <button
+        type="button"
+        class="nav-item nav-item--action ${holdsActiveRoute ? "nav-item--active" : ""}"
+        aria-haspopup="menu"
+        aria-expanded=${String(open)}
+        @click=${(event: MouseEvent) => this.toggleMoreMenu(event.currentTarget as HTMLElement)}
+      >
+        <span class="nav-item__icon" aria-hidden="true">${icons.moreHorizontal}</span>
+        <span class="nav-item__text">${t("nav.more")}</span>
+      </button>
+    `;
+  }
+
+  private renderMoreMenuRoute(routeId: SidebarNavRoute) {
+    const active = this.isRouteActive(routeId);
+    return html`
+      <button
+        type="button"
+        class="sidebar-customize-menu__item ${active ? "sidebar-customize-menu__item--active" : ""}"
+        role="menuitem"
+        tabindex="-1"
+        aria-current=${active ? "page" : nothing}
+        @pointerenter=${(event: Event) => this.preloadRoute(routeId, event)}
+        @pointerleave=${this.cancelPreload}
+        @click=${() => {
+          this.closeMoreMenu({ restoreFocus: true });
+          this.onNavigate?.(routeId);
+        }}
+      >
+        <span class="nav-item__icon" aria-hidden="true"
+          >${icons[navigationIconForRoute(routeId)]}</span
         >
-          <span class="nav-section__label-text">${t("nav.more")}</span>
-          <span class="nav-section__chevron">${icons.chevronDown}</span>
-        </button>
-        <div class="nav-section__items">
-          ${moreRoutes.map((routeId) => this.renderRoute(routeId))}
-          ${this.pluginTabs().map((tab) => this.renderPluginTab(tab))}
+        <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
+      </button>
+    `;
+  }
+
+  private renderMoreMenu() {
+    const position = this.moreMenuPosition;
+    if (!position) {
+      return nothing;
+    }
+    const moreRoutes = sidebarMoreRoutes(this.sidebarPinnedRoutes).filter((routeId) =>
+      this.isRouteEnabled(routeId),
+    );
+    return html`
+      <openclaw-menu-surface>
+        <div
+          class="sidebar-customize-menu sidebar-more-menu"
+          role="menu"
+          aria-label=${t("nav.more")}
+          style="left: ${position.x}px; top: ${position.y}px;"
+        >
+          ${moreRoutes.map((routeId) => this.renderMoreMenuRoute(routeId))}
+          ${this.pluginTabs().map((tab) => this.renderMoreMenuPluginTab(tab))}
+          <div class="sidebar-customize-menu__separator" role="separator"></div>
           <button
             type="button"
-            class="nav-item nav-item--action"
-            @click=${(event: MouseEvent) => {
-              const trigger = event.currentTarget as HTMLElement;
-              const rect = trigger.getBoundingClientRect();
-              this.openCustomizeMenu(rect.left, rect.bottom + 4, trigger);
+            class="sidebar-customize-menu__item"
+            role="menuitem"
+            tabindex="-1"
+            @click=${() => {
+              // Hand the durable More row over as the pin editor's trigger so
+              // Escape restores focus there once this menu is gone.
+              const trigger = this.moreMenuTrigger;
+              this.openCustomizeMenu(position.x, position.y, trigger);
             }}
           >
             <span class="nav-item__icon" aria-hidden="true">${icons.penLine}</span>
-            <span class="nav-item__text">${t("nav.customize")}</span>
+            <span class="sidebar-customize-menu__text">${t("nav.customize")}</span>
           </button>
         </div>
-      </section>
+      </openclaw-menu-surface>
     `;
   }
 
@@ -2941,8 +3051,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
               <div class="nav-section__items">
                 ${this.sidebarPinnedRoutes.map((routeId) => this.renderRoute(routeId))}
+                ${this.renderMoreRow()}
               </div>
-              ${this.renderMoreSection()}
             </nav>
             ${this.renderSessions()}
           </div>
@@ -2986,8 +3096,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ></openclaw-sidebar-agent-chip>
           </div>
         </div>
-        ${this.renderCustomizeMenu()} ${this.renderAgentMenu()} ${this.renderSessionMenu()}
-        ${this.renderSessionGroupMenu()} ${this.renderSessionSortMenu()}
+        ${this.renderCustomizeMenu()} ${this.renderMoreMenu()} ${this.renderAgentMenu()}
+        ${this.renderSessionMenu()} ${this.renderSessionGroupMenu()} ${this.renderSessionSortMenu()}
       </aside>
     `;
   }
