@@ -8,7 +8,7 @@ import type {
 } from "./config.js";
 
 /** Tool names owned by Codex app-server and normally excluded from OpenClaw dynamic tools. */
-export const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
+const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "read",
   "write",
   "edit",
@@ -76,7 +76,7 @@ function normalizeCodexModelId(modelId: string | undefined): string {
 }
 
 /** Returns true when model behavior requires direct dynamic-tool registration. */
-export function shouldUseDirectCodexDynamicToolsForModel(modelId: string | undefined): boolean {
+function shouldUseDirectCodexDynamicToolsForModel(modelId: string | undefined): boolean {
   return shouldDisableCodexToolSearchForModel(modelId);
 }
 

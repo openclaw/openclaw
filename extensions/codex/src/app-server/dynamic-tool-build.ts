@@ -21,6 +21,7 @@ import {
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   filterCodexDynamicTools,
   isCrestodianOnlyCodexDynamicToolAllowlist,
@@ -42,7 +43,7 @@ type OpenClawCodingToolsOptions = NonNullable<
 type OpenClawExecOptions = NonNullable<OpenClawCodingToolsOptions["exec"]>;
 
 /** Factory seam for constructing OpenClaw runtime tools without eagerly loading agent-harness. */
-export type OpenClawCodingToolsFactory =
+type OpenClawCodingToolsFactory =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
 type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
 type OpenClawSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
@@ -74,7 +75,7 @@ function preserveRingZeroCrestodianTool<T extends { name: string; catalogMode?: 
   return [crestodian, ...filteredTools.filter((tool) => tool.name !== "crestodian")];
 }
 /** Runtime inputs needed to derive the exact Codex dynamic tool surface for a turn. */
-export type DynamicToolBuildParams = {
+type DynamicToolBuildParams = {
   params: EmbeddedRunAttemptParams;
   resolvedWorkspace: string;
   effectiveWorkspace: string;
@@ -102,15 +103,6 @@ export type DynamicToolBuildParams = {
     frameImageIdentity?: string;
   };
 };
-let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
-/** Overrides the runtime tool factory for tests that need deterministic tool catalogs. */
-export function setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
-  openClawCodingToolsFactoryForTests = factory;
-}
-/** Clears the test-only runtime tool factory override. */
-export function resetOpenClawCodingToolsFactoryForTests(): void {
-  openClawCodingToolsFactoryForTests = undefined;
-}
 /** Splits sandbox and run session keys so tool calls can bind to both scopes when needed. */
 export function resolveOpenClawCodingToolsSessionKeys(
   params: EmbeddedRunAttemptParams,
@@ -230,7 +222,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
   const agentHarness = await import("openclaw/plugin-sdk/agent-harness");
   const createOpenClawCodingTools =
-    openClawCodingToolsFactoryForTests ?? agentHarness.createOpenClawCodingTools;
+    dynamicToolBuildState.openClawCodingToolsFactory ?? agentHarness.createOpenClawCodingTools;
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
@@ -513,7 +505,7 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   );
 }
 /** Returns true when OpenClaw policy requires the Node-owned exec/process tools instead. */
-export function isCodexNativeExecutionBlockedByNodeExecHost(
+function isCodexNativeExecutionBlockedByNodeExecHost(
   params: EmbeddedRunAttemptParams,
   options: {
     agentId?: string;
@@ -615,7 +607,7 @@ export function resolveCodexAppServerExecutionCwd(params: {
   });
 }
 /** Projects a local OpenClaw workspace cwd into the remote Codex app-server workspace root. */
-export function mapCodexAppServerRemoteWorkspacePath(params: {
+function mapCodexAppServerRemoteWorkspacePath(params: {
   value: string;
   localWorkspaceRoot: string;
   remoteWorkspaceRoot?: string;
@@ -679,7 +671,7 @@ export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPlu
   };
 }
 /** Adds sandbox_exec/process aliases when native Code Mode cannot directly honor the sandbox. */
-export function addSandboxShellDynamicToolsIfAvailable(
+function addSandboxShellDynamicToolsIfAvailable(
   filteredTools: OpenClawDynamicTool[],
   allTools: OpenClawDynamicTool[],
   input: DynamicToolBuildParams,
@@ -989,7 +981,7 @@ export function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
   });
 }
 /** Detects the wildcard allowlist marker after Codex tool-name normalization. */
-export function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
+function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
   return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
 /** Forces message delivery through the message tool when the source channel requires it. */
