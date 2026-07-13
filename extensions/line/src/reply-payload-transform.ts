@@ -287,7 +287,9 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
     if (parts.length >= 2) {
       const title = expectDefined(parts[0], "agenda title field");
       const eventsStr = expectDefined(parts[1], "agenda events field");
-      const events = eventsStr.split(",").map((eventStr) => {
+      // normalizeStringEntries drops blank entries from trailing/double commas; an empty
+      // event title becomes an empty Flex text component, which LINE rejects with HTTP 400.
+      const events = normalizeStringEntries(eventsStr.split(",")).map((eventStr) => {
         const trimmed = eventStr.trim();
         const colonIdx = trimmed.lastIndexOf(":");
         if (colonIdx > 0) {
@@ -321,7 +323,7 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
       const [, deviceType, status, controlsStr] = parts;
       const deviceKey = toSlug(deviceName || "device");
       const controls = controlsStr
-        ? controlsStr.split(",").map((ctrlStr) => {
+        ? normalizeStringEntries(controlsStr.split(",")).map((ctrlStr) => {
             const controlParts = ctrlStr.split(":").map((s) => s.trim());
             const label = expectDefined(controlParts[0], "device control label");
             const data = controlParts[1];
