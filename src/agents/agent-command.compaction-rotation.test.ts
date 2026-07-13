@@ -513,6 +513,38 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(storedEntry?.pendingFinalDeliveryText).toBeUndefined();
   });
 
+  it("preserves media directives in the pending final persisted before compaction", async () => {
+    const sessionId = "media-directive-compaction-failure";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const text = "Rendered chart\nMEDIA:/tmp/chart.png";
+    let pendingTextSeenByCompaction: string | undefined;
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
+    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
+      pendingTextSeenByCompaction = params.sessionEntry?.pendingFinalDeliveryText ?? undefined;
+      throw new Error(COMPACTION_ERROR);
+    });
+
+    const result = await agentCommand({
+      message: "room message",
+      sessionId,
+      sessionKey,
+      cwd: state.workspaceDir,
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
+      deliver: true,
+    });
+
+    expect(pendingTextSeenByCompaction).toBe(text);
+    expect(result).toMatchObject({ deliverySucceeded: true });
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payloads: [{ text }] }),
+    );
+    const storedEntry = findStoredSessionEntry(sessionKey);
+    expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(storedEntry?.pendingFinalDeliveryText).toBeUndefined();
+  });
+
   it("adopts a successful compaction successor for delivery and marker cleanup", async () => {
     const sessionId = "pre-compaction-session";
     const successorSessionId = "post-compaction-session";
@@ -770,6 +802,77 @@ describe("agentCommand compaction transcript rotation", () => {
       expect(readLifecyclePhases()).toContain("error");
     },
   );
+
+  it("skips post-turn compaction before delivering sendable finals that pending text cannot replay", async () => {
+    const sessionId = "unrecoverable-media-before-compaction";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const payloads = [{ mediaUrl: "/tmp/reply.ogg", audioAsVoice: true }];
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text: "", payloads }));
+
+    const result = await agentCommand({
+      message: "room message",
+      sessionId,
+      sessionKey,
+      cwd: state.workspaceDir,
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
+      deliver: true,
+    });
+
+    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payloads }),
+    );
+    expect(result).toMatchObject({ deliverySucceeded: true });
+    const storedEntry = findStoredSessionEntry(sessionKey);
+    expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(storedEntry?.pendingFinalDeliveryText).toBeUndefined();
+  });
+
+  it("keeps post-turn compaction for no-delivery runs with unrecoverable sendable finals", async () => {
+    const sessionId = "unrecoverable-media-no-delivery";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const payloads = [{ mediaUrl: "/tmp/reply.ogg", audioAsVoice: true }];
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text: "", payloads }));
+
+    await agentCommand({
+      message: "local model run",
+      sessionId,
+      sessionKey,
+      cwd: state.workspaceDir,
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
+      deliver: false,
+    });
+
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps post-turn compaction failures fatal for no-delivery runs", async () => {
+    const sessionId = "no-delivery-compaction-failure";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text: "local final" }));
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(new Error(COMPACTION_ERROR));
+
+    await expect(
+      agentCommand({
+        message: "local model run",
+        sessionId,
+        sessionKey,
+        cwd: state.workspaceDir,
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        deliver: false,
+      }),
+    ).rejects.toThrow("Summarization failed: Connection error");
+
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+  });
 
   it("resumes the next turn from the rotated successor", async () => {
     const storePath = requireStorePath();

@@ -3,8 +3,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import {
-  buildPendingFinalDeliveryText,
+  buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
+  normalizePendingFinalRecoveryPayloads,
 } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   formatThinkingLevels,
@@ -2701,8 +2702,11 @@ async function agentCommandInternal(
         }
 
         const payloads = result.payloads ?? [];
+        const recoveryFinalPayloads = normalizePendingFinalRecoveryPayloads(payloads);
         const sendableFinalPayloads = normalizePendingFinalDeliveryPayloads(payloads);
         const hasSendableFinalPayload = sendableFinalPayloads.length > 0;
+        const recoverableFinalDeliveryText =
+          buildRecoverablePendingFinalDeliveryText(recoveryFinalPayloads);
         let pendingFinalDeliveryTextForThisRun: string | undefined;
 
         // Persist the completed final before optional post-turn compaction. A compaction
@@ -2717,16 +2721,15 @@ async function agentCommandInternal(
           !isSubagentSessionKey(sessionKey)
         ) {
           const now = Date.now();
-          const combinedPayload = buildPendingFinalDeliveryText(sendableFinalPayloads);
-          pendingFinalDeliveryTextForThisRun = combinedPayload || undefined;
 
-          if (combinedPayload) {
+          if (recoverableFinalDeliveryText && hasSendableFinalPayload) {
+            pendingFinalDeliveryTextForThisRun = recoverableFinalDeliveryText;
             const entry = sessionStore[sessionKey] ?? sessionEntry;
             if (entry) {
               const next: SessionEntry = {
                 ...entry,
                 pendingFinalDelivery: true,
-                pendingFinalDeliveryText: combinedPayload,
+                pendingFinalDeliveryText: recoverableFinalDeliveryText,
                 pendingFinalDeliveryContext: currentRunDeliveryContext,
                 pendingFinalDeliveryCreatedAt: now,
                 updatedAt: now,
@@ -2745,7 +2748,16 @@ async function agentCommandInternal(
           }
         }
 
-        if (persistedCliTurnTranscript && !suppressVisibleSessionEffects) {
+        const canSafelyRunPostTurnCompaction =
+          opts.deliver !== true ||
+          !hasSendableFinalPayload ||
+          Boolean(recoverableFinalDeliveryText);
+
+        if (
+          persistedCliTurnTranscript &&
+          !suppressVisibleSessionEffects &&
+          canSafelyRunPostTurnCompaction
+        ) {
           try {
             const compactedSessionEntry = await (
               await loadCliCompactionRuntime()
@@ -2785,7 +2797,11 @@ async function agentCommandInternal(
               throw error;
             }
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-            if (!hasSendableFinalPayload) {
+            if (
+              opts.deliver !== true ||
+              !recoverableFinalDeliveryText ||
+              !hasSendableFinalPayload
+            ) {
               throw error;
             }
             log.warn(
