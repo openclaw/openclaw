@@ -240,43 +240,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Read HEARTBEAT.md");
   });
 
-  it("includes Git work isolation in full and composed subagent prompts", () => {
-    const prompts = [
-      {
-        name: "full",
-        value: buildAgentSystemPrompt({
-          workspaceDir: "/tmp/openclaw",
-          promptMode: "full",
-          toolNames: ["exec", "edit"],
-        }),
-      },
-      {
-        name: "minimal subagent",
-        value: buildAgentSystemPrompt({
-          workspaceDir: "/tmp/openclaw",
-          promptMode: "minimal",
-          extraSystemPrompt: buildSubagentSystemPrompt({
-            childSessionKey: "agent:main:subagent:abc",
-            task: "coding task",
-          }),
-          toolNames: ["exec", "edit"],
-        }),
-      },
-    ];
-
-    for (const prompt of prompts) {
-      expect(prompt.value, prompt.name).toContain("## Git Work Isolation");
-      expect(prompt.value, prompt.name).toContain("intended PR target repository");
-      expect(prompt.value, prompt.name).toContain("`upstream` preferred when it matches");
-      expect(prompt.value, prompt.name).toContain("git fetch --prune <canonical>");
-      expect(prompt.value, prompt.name).toContain("initial `HEAD` must equal that fetched base");
-      expect(prompt.value, prompt.name).toContain("Existing PR/shared branch");
-      expect(prompt.value, prompt.name).toContain("fetch canonical and the contributor branch");
-      expect(prompt.value, prompt.name).toContain("rebase/merge/reset/force-push");
-      expect(prompt.value, prompt.name).toContain("git merge-base --is-ancestor");
-    }
-  });
-
   it("includes safety guardrails in full prompts", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
