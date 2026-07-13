@@ -64,6 +64,15 @@ describe("hasJSON5Comments", () => {
     expect(hasJSON5Comments('{ "key": "escaped \\\\ backslash" // real comment }')).toBe(true);
   });
 
+  it("detects comments immediately adjacent to closing quotes", () => {
+    // Scanner backtracks after the closing quote (i-- then for-loop i++)
+    // so the character after the quote is not skipped.
+    expect(hasJSON5Comments('{"a":"x"/* note */}')).toBe(true);
+    expect(hasJSON5Comments('{"a":"x"// note\n}')).toBe(true);
+    expect(hasJSON5Comments('{"a":"x","b":"y"/* note */}')).toBe(true);
+    expect(hasJSON5Comments('{"a":"x"/*note*/}')).toBe(true);
+  });
+
   it("ignores comment markers across JSON5 line continuations (U+2028 / U+2029)", () => {
     // A string continued across a line/paragraph separator; the // after it stays inside the string.
     const ls = String.fromCodePoint(0x2028);
