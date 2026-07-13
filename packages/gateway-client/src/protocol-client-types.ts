@@ -16,7 +16,7 @@ export type GatewayProtocolRequestOptions = {
   onAccepted?: (payload: unknown) => void;
   signal?: AbortSignal;
 };
-export type GatewayProtocolConnectContext<TPlan> = {
+type GatewayProtocolConnectContext<TPlan> = {
   generation: number;
   nonce: string | null;
   plan: TPlan;
@@ -30,14 +30,14 @@ export type GatewayProtocolCloseContext = {
   connectRequestSent: boolean;
   connectFailure?: { error: Error; reconnectDelayMs?: number };
 };
-export type GatewayProtocolConnectDecision = {
+type GatewayProtocolConnectDecision = {
   closeCode: number;
   closeReason: string;
   reconnectDelayMs?: number;
   stop?: boolean;
   error?: Error;
 };
-export type GatewayProtocolCloseDecision = {
+type GatewayProtocolCloseDecision = {
   retry: boolean;
   notify: boolean;
   reconnectDelayMs?: number;
