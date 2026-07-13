@@ -1,8 +1,8 @@
 // Feishu plugin module implements reply dispatcher behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  createChannelMessageReplyPipeline,
   formatChannelProgressDraftLineForEntry,
   isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
@@ -34,8 +34,6 @@ import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } fr
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
-
-/** Detect if text contains markdown elements that benefit from card rendering */
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
@@ -194,7 +192,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     accountId,
     typing: {
       start: async () => {
-        // Check if typing indicator is enabled (default: true)
         if (!(account.config.typingIndicator ?? true)) {
           return;
         }
@@ -258,8 +255,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu", accountId);
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
-  // Streaming cards default to enabled: only streaming.mode "off" (or raw
-  // render mode) disables them, matching the legacy `streaming: false` boolean.
   const streamingEnabled =
     resolveChannelPreviewStreamMode(account.config, "partial") !== "off" && renderMode !== "raw";
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
@@ -509,8 +504,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       : materializeFeishuPostMarkdownLineBreaks(
           core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode),
         );
-    // Raw Feishu posts still receive prepared Markdown; keep fences/tables
-    // balanced inside each sent post instead of splitting them as plain text.
     const chunks = resolveTextChunksWithFallback(
       chunkSource,
       core.channel.text.chunkMarkdownTextWithMode(chunkSource, textChunkLimit, chunkMode),

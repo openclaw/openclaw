@@ -1,7 +1,7 @@
 // Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { buildFeishuPostMessagePayload } from "./send.js";
+import { buildFeishuPostMessagePayload } from "./post-message-payload.js";
 
 const {
   mockConvertMarkdownTables,

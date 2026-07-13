@@ -1,5 +1,4 @@
 // Feishu plugin module implements outbound behavior.
-import path from "node:path";
 import { createReplyToFanout } from "openclaw/plugin-sdk/channel-outbound";
 import {
   attachChannelToResult,
@@ -13,19 +12,12 @@ import {
   renderMessagePresentationFallbackText,
   resolveInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
-import {
-  isRecord,
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { isRecord, normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -42,8 +34,9 @@ import {
   resolveFeishuCardTemplate,
   sanitizeNativeFeishuCard,
 } from "./native-card.js";
+import { normalizePossibleLocalImagePath, resolveFeishuReplyMode } from "./outbound-helpers.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
-import { materializeFeishuPostMarkdownLineBreaks } from "./post-markdown.js";
+import { prepareFeishuPostMarkdownForChunking } from "./post-message-payload.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCardElements,
@@ -59,47 +52,6 @@ import {
 const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
 const FEISHU_PRESENTATION_FALLBACK_MARKER = "__openclawPresentationFallback";
 const FEISHU_TEXT_CHUNK_LIMIT = 4000;
-
-function normalizePossibleLocalImagePath(text: string | undefined): string | null {
-  const raw = text?.trim();
-  if (!raw) {
-    return null;
-  }
-
-  // Only auto-convert when the message is a pure path-like payload.
-  // Avoid converting regular sentences that merely contain a path.
-  const hasWhitespace = /\s/.test(raw);
-  if (hasWhitespace) {
-    return null;
-  }
-
-  // Ignore links/data URLs; those should stay in normal mediaUrl/text paths.
-  if (/^(https?:\/\/|data:|file:\/\/)/i.test(raw)) {
-    return null;
-  }
-
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(raw));
-  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
-    ext,
-  );
-  if (!isImageExt) {
-    return null;
-  }
-
-  if (!path.isAbsolute(raw)) {
-    return null;
-  }
-  try {
-    const stat = statRegularFileSync(raw);
-    if (stat.missing) {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-
-  return raw;
-}
 
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
@@ -298,31 +250,6 @@ function renderFeishuPresentationPayload({
   };
 }
 
-type FeishuReplyMode =
-  | { normalizedReplyToId: string; replyToMessageId: string; replyInThread: false }
-  | { normalizedReplyToId: undefined; replyToMessageId: string; replyInThread: true }
-  | { normalizedReplyToId: undefined; replyToMessageId: undefined; replyInThread: false };
-
-// Target selection and thread mode are one decision; all payload parts reuse this result.
-function resolveFeishuReplyMode(params: {
-  replyToId?: string | null;
-  threadId?: string | number | null;
-}): FeishuReplyMode {
-  const replyToMessageId = params.replyToId?.trim();
-  if (replyToMessageId) {
-    return { normalizedReplyToId: replyToMessageId, replyToMessageId, replyInThread: false };
-  }
-
-  const threadId = params.threadId == null ? undefined : String(params.threadId).trim();
-  return threadId
-    ? { normalizedReplyToId: undefined, replyToMessageId: threadId, replyInThread: true }
-    : {
-        normalizedReplyToId: undefined,
-        replyToMessageId: undefined,
-        replyInThread: false,
-      };
-}
-
 async function sendCommentThreadReply(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
@@ -427,17 +354,6 @@ async function sendOutboundText(params: {
   });
 }
 
-function prepareFeishuPostMarkdownForChunking(params: {
-  cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
-  text: string;
-}): string {
-  const tableMode = resolveMarkdownTableMode({
-    cfg: params.cfg,
-    channel: "feishu",
-  });
-  return materializeFeishuPostMarkdownLineBreaks(convertMarkdownTables(params.text, tableMode));
-}
-
 async function sendFeishuFallbackPayload(params: {
   ctx: FeishuSendPayloadContext;
   payload: FeishuOutboundPayload;
@@ -447,9 +363,7 @@ async function sendFeishuFallbackPayload(params: {
   const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(params.payload));
   const rawText = params.payload.text ?? "";
   const sendsCommentReply = Boolean(parseFeishuCommentTarget(ctx.to));
-  const text = sendsCommentReply
-    ? rawText
-    : prepareFeishuPostMarkdownForChunking({ cfg: ctx.cfg, text: rawText });
+  const text = sendsCommentReply ? rawText : prepareFeishuPostMarkdownForChunking(ctx.cfg, rawText);
   const textChunks = text ? chunkTextForOutbound(text, FEISHU_TEXT_CHUNK_LIMIT) : [];
   const hasChunkedText = textChunks.length > 1;
   const shouldSeparate =

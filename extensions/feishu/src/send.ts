@@ -1,8 +1,6 @@
 // Feishu plugin module implements send behavior.
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -15,7 +13,12 @@ import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
-import { materializeFeishuPostMarkdownLineBreaks } from "./post-markdown.js";
+import {
+  buildFeishuPostMessageEditPayload,
+  buildFeishuPostMessagePayloads,
+  combineFeishuSendResults,
+  resolveFeishuPostTextChunkLimit,
+} from "./post-message-payload.js";
 import { parsePostContent } from "./post.js";
 import {
   assertFeishuMessageApiSuccess,
@@ -541,134 +544,6 @@ type SendFeishuMessageParams = {
   accountId?: string;
 };
 
-type FeishuPostMessageElement =
-  | { tag: "at"; user_id: string; user_name?: string }
-  | { tag: "md"; text: string };
-
-function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostMessageElement[] {
-  if (!mentions?.length) {
-    return [];
-  }
-
-  const elements: FeishuPostMessageElement[] = [];
-  for (const mention of mentions) {
-    const userId = mention.openId.trim();
-    if (!userId) {
-      continue;
-    }
-    const userName = mention.name.trim();
-    elements.push({
-      tag: "at",
-      user_id: userId,
-      ...(userName ? { user_name: userName } : {}),
-    });
-  }
-  return elements;
-}
-
-function resolveFeishuPostTextChunkLimit(params: {
-  account?: { config?: { textChunkLimit?: number } };
-}): number {
-  const limit = params.account?.config?.textChunkLimit;
-  return typeof limit === "number" && Number.isFinite(limit) && limit > 0
-    ? limit
-    : FEISHU_TEXT_CHUNK_LIMIT;
-}
-
-export function buildFeishuPostMessagePayload(params: {
-  messageText: string;
-  mentions?: MentionTarget[];
-  preparedPostMarkdown?: boolean;
-}): {
-  content: string;
-  msgType: string;
-} {
-  return buildFeishuPostMessagePayloadFromText({
-    postText: params.preparedPostMarkdown
-      ? params.messageText
-      : materializeFeishuPostMarkdownLineBreaks(params.messageText),
-    mentions: params.mentions,
-  });
-}
-
-function buildFeishuPostMessagePayloadFromText(params: {
-  postText: string;
-  mentions?: MentionTarget[];
-}): {
-  content: string;
-  msgType: string;
-} {
-  const { postText, mentions } = params;
-  const content: FeishuPostMessageElement[] = [
-    ...buildFeishuPostMentionElements(mentions),
-    {
-      tag: "md",
-      text: postText,
-    },
-  ];
-  return {
-    content: JSON.stringify({
-      zh_cn: {
-        content: [content],
-      },
-    }),
-    msgType: "post",
-  };
-}
-
-function buildFeishuPostMessagePayloads(params: {
-  messageText: string;
-  mentions?: MentionTarget[];
-  maxMarkdownTextLength: number;
-  preparedPostMarkdown?: boolean;
-}): ReturnType<typeof buildFeishuPostMessagePayload>[] {
-  const materializedText = params.preparedPostMarkdown
-    ? params.messageText
-    : materializeFeishuPostMarkdownLineBreaks(params.messageText);
-  const chunks =
-    materializedText.length > params.maxMarkdownTextLength
-      ? chunkMarkdownTextWithMode(materializedText, params.maxMarkdownTextLength, "length")
-      : [materializedText];
-  return (chunks.length ? chunks : [""]).map((chunk, index) =>
-    buildFeishuPostMessagePayloadFromText({
-      postText: chunk,
-      mentions: index === 0 ? params.mentions : undefined,
-    }),
-  );
-}
-
-function buildFeishuPostMessageEditPayload(params: {
-  messageText: string;
-  maxMarkdownTextLength: number;
-}): ReturnType<typeof buildFeishuPostMessagePayload> {
-  const materializedText = materializeFeishuPostMarkdownLineBreaks(params.messageText);
-  if (materializedText.length > params.maxMarkdownTextLength) {
-    throw new Error(
-      `Feishu edit text exceeds the Feishu post edit limit (${materializedText.length} > ${params.maxMarkdownTextLength}); send a new message instead.`,
-    );
-  }
-  return buildFeishuPostMessagePayloadFromText({ postText: materializedText });
-}
-
-function combineFeishuSendResults(
-  results: readonly FeishuSendResult[],
-  chatId: string,
-): FeishuSendResult {
-  if (results.length === 1 && results[0]) {
-    return results[0];
-  }
-  const receipt = createMessageReceiptFromOutboundResults({
-    results,
-    kind: "text",
-    threadId: chatId,
-  });
-  return {
-    messageId: receipt.primaryPlatformMessageId ?? results[0]?.messageId ?? "unknown",
-    chatId,
-    receipt,
-  };
-}
-
 export async function sendMessageFeishu(
   params: SendFeishuMessageParams,
 ): Promise<FeishuSendResult> {
@@ -697,7 +572,10 @@ export async function sendMessageFeishu(
           channel: "feishu",
         }),
       );
-  const textChunkLimit = resolveFeishuPostTextChunkLimit({ account });
+  const textChunkLimit = resolveFeishuPostTextChunkLimit({
+    account,
+    defaultLimit: FEISHU_TEXT_CHUNK_LIMIT,
+  });
   const payloads = buildFeishuPostMessagePayloads({
     messageText,
     mentions,
