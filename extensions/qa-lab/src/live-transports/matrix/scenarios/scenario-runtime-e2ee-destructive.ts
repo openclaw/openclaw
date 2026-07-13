@@ -80,6 +80,7 @@ type MatrixQaCliVerificationStatus = {
 };
 
 type MatrixQaDestructiveSetup = {
+  backupVersion: string;
   encodedRecoveryKey: string;
   owner: MatrixQaE2eeScenarioClient;
   ownerAccessToken: string;
@@ -292,6 +293,7 @@ async function prepareMatrixQaDestructiveSetup(
       roomId,
     });
     return {
+      backupVersion: ready.backupVersion,
       encodedRecoveryKey: ready.encodedRecoveryKey,
       owner,
       ownerAccessToken: account.accessToken,
@@ -433,14 +435,55 @@ function assertMatrixQaCliBackupRestoreSucceeded(restore: MatrixQaCliBackupStatu
 }
 
 function assertMatrixQaCliBackupRestoreFailed(
-  restore: MatrixQaCliBackupStatus | MatrixQaCliVerificationStatus,
-  label: string,
+  restore: {
+    payload: MatrixQaCliBackupStatus;
+    result: Pick<MatrixQaCliRunResult, "exitCode">;
+  },
+  params: {
+    expectedBackupVersion: string;
+    failureKind: "missing-recovery-key" | "rejected-recovery-key";
+    label: string;
+  },
 ) {
-  if (restore.success === true) {
-    throw new Error(`${label} unexpectedly succeeded`);
+  if (restore.result.exitCode === 0) {
+    throw new Error(`${params.label} returned a successful exit code`);
   }
-  if (!restore.error) {
-    throw new Error(`${label} failed without an actionable diagnostic`);
+  if (restore.payload.success === true) {
+    throw new Error(`${params.label} unexpectedly succeeded`);
+  }
+  if (!restore.payload.error) {
+    throw new Error(`${params.label} failed without an actionable diagnostic`);
+  }
+  if (restore.payload.backupVersion !== params.expectedBackupVersion) {
+    throw new Error(
+      `${params.label} failed against backup ${restore.payload.backupVersion ?? "<none>"}; expected ${params.expectedBackupVersion}`,
+    );
+  }
+  const backup = restore.payload.backup;
+  const backupKeyUnusable =
+    backup?.decryptionKeyCached === false ||
+    backup?.matchesDecryptionKey === false ||
+    Boolean(backup?.keyLoadError);
+  if (!backupKeyUnusable) {
+    throw new Error(`${params.label} failed without evidence that the backup key was rejected`);
+  }
+  // The Matrix CLI has no machine-readable backup issue code, so pin these to
+  // its SDK diagnostics to keep transport/auth failures from satisfying QA.
+  const error = restore.payload.error.toLowerCase();
+  const keyLoadError = backup?.keyLoadError?.toLowerCase() ?? "";
+  const expectedDiagnostic =
+    params.failureKind === "missing-recovery-key"
+      ? keyLoadError.includes("getsecretstoragekey callback returned falsey") ||
+        (!keyLoadError &&
+          backup?.decryptionKeyCached === false &&
+          error.includes(
+            "backup decryption key is not loaded on this device (secret storage did not return a key)",
+          ))
+      : ["bad mac", "backup key mismatch", "does not have the matching backup decryption key"].some(
+          (expected) => keyLoadError.includes(expected),
+        );
+  if (!expectedDiagnostic) {
+    throw new Error(`${params.label} failed without the expected ${params.failureKind} diagnostic`);
   }
 }
 
@@ -780,7 +823,11 @@ export async function runMatrixQaE2eeStateLossNoRecoveryKeyScenario(
       runtime: cli,
       timeoutMs: context.timeoutMs,
     });
-    assertMatrixQaCliBackupRestoreFailed(restored.payload, "no recovery-key restore");
+    assertMatrixQaCliBackupRestoreFailed(restored, {
+      expectedBackupVersion: setup.backupVersion,
+      failureKind: "missing-recovery-key",
+      label: "no recovery-key restore",
+    });
     return {
       artifacts: {
         recoveryDeviceId: device.deviceId,
@@ -809,7 +856,7 @@ export async function runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario(
     "matrix-e2ee-stale-recovery-key-after-backup-reset",
   );
   const rotated = await setup.owner.resetRoomKeyBackup({ rotateRecoveryKey: true });
-  if (!rotated.success) {
+  if (!rotated.success || !rotated.createdVersion) {
     await setup.owner.stop().catch(() => undefined);
     throw new Error(
       `Matrix recovery-key rotation failed before stale-key check: ${rotated.error ?? "unknown"}`,
@@ -847,7 +894,11 @@ export async function runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario(
       stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
-    assertMatrixQaCliBackupRestoreFailed(restored.payload, "stale recovery-key restore");
+    assertMatrixQaCliBackupRestoreFailed(restored, {
+      expectedBackupVersion: rotated.createdVersion,
+      failureKind: "rejected-recovery-key",
+      label: "stale recovery-key restore",
+    });
     return {
       artifacts: {
         backupCreatedVersion: rotated.createdVersion,
@@ -1473,21 +1524,19 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
   } finally {
     await driver?.stop().catch(() => undefined);
     if (gatewayAccountReplaced) {
-      await context
-        .restartGatewayAfterStateMutation(
-          async () => {
-            await replaceMatrixQaGatewayMatrixAccount({
-              accountConfig: originalAccountConfig,
-              accountId: restoreAccountId,
-              configPath,
-            });
-          },
-          {
-            timeoutMs: context.timeoutMs,
-            waitAccountId: restoreAccountId,
-          },
-        )
-        .catch(() => undefined);
+      await context.restartGatewayAfterStateMutation(
+        async () => {
+          await replaceMatrixQaGatewayMatrixAccount({
+            accountConfig: originalAccountConfig,
+            accountId: restoreAccountId,
+            configPath,
+          });
+        },
+        {
+          timeoutMs: context.timeoutMs,
+          waitAccountId: restoreAccountId,
+        },
+      );
     }
   }
 }
@@ -1513,7 +1562,7 @@ export async function runMatrixQaE2eeWrongAccountRecoveryKeyScenario(
     userId: context.observerUserId,
   });
   try {
-    await ensureMatrixQaOwnerReady({
+    const observerReady = await ensureMatrixQaOwnerReady({
       allowCrossSigningResetOnRepair: true,
       client: observer,
       label: "observer",
@@ -1552,7 +1601,11 @@ export async function runMatrixQaE2eeWrongAccountRecoveryKeyScenario(
         stdin: `${driverSetup.encodedRecoveryKey}\n`,
         timeoutMs: context.timeoutMs,
       });
-      assertMatrixQaCliBackupRestoreFailed(restored.payload, "wrong-account recovery-key restore");
+      assertMatrixQaCliBackupRestoreFailed(restored, {
+        expectedBackupVersion: observerReady.backupVersion,
+        failureKind: "rejected-recovery-key",
+        label: "wrong-account recovery-key restore",
+      });
       return {
         artifacts: {
           observerRecoveryDeviceId: device.deviceId,
@@ -1633,4 +1686,8 @@ export async function runMatrixQaE2eeHistoryExistsBackupEmptyScenario(
   }
 }
 
+export const testing = {
+  assertMatrixQaCliBackupRestoreFailed,
+  findMatrixQaCliAccountRoot,
+};
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

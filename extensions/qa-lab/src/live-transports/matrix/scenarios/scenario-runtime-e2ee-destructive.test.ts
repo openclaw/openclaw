@@ -59,3 +59,117 @@ describe("Matrix destructive E2EE storage discovery", () => {
     ).resolves.toBe(accountRoot);
   });
 });
+
+describe("Matrix destructive E2EE backup failure assertions", () => {
+  it("requires a nonzero CLI exit", () => {
+    expect(() =>
+      testing.assertMatrixQaCliBackupRestoreFailed(
+        {
+          payload: {
+            backup: { decryptionKeyCached: false },
+            backupVersion: "1",
+            error: "backup key unavailable",
+            success: false,
+          },
+          result: { exitCode: 0 },
+        },
+        {
+          expectedBackupVersion: "1",
+          failureKind: "missing-recovery-key",
+          label: "restore",
+        },
+      ),
+    ).toThrow("returned a successful exit code");
+  });
+
+  it("rejects unrelated CLI failures without backup-key evidence", () => {
+    expect(() =>
+      testing.assertMatrixQaCliBackupRestoreFailed(
+        {
+          payload: {
+            backup: { decryptionKeyCached: false },
+            backupVersion: "1",
+            error: "network unavailable",
+            success: false,
+          },
+          result: { exitCode: 1 },
+        },
+        {
+          expectedBackupVersion: "1",
+          failureKind: "missing-recovery-key",
+          label: "restore",
+        },
+      ),
+    ).toThrow("without the expected missing-recovery-key diagnostic");
+  });
+
+  it("accepts a failed restore with structured backup-key evidence", () => {
+    expect(() =>
+      testing.assertMatrixQaCliBackupRestoreFailed(
+        {
+          payload: {
+            backup: {
+              keyLoadError: "Error decrypting secret: Bad MAC",
+              matchesDecryptionKey: false,
+            },
+            backupVersion: "1",
+            error: "Matrix room key backup is not usable",
+            success: false,
+          },
+          result: { exitCode: 1 },
+        },
+        {
+          expectedBackupVersion: "1",
+          failureKind: "rejected-recovery-key",
+          label: "restore",
+        },
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects a wrapper-only key-mismatch diagnostic", () => {
+    expect(() =>
+      testing.assertMatrixQaCliBackupRestoreFailed(
+        {
+          payload: {
+            backup: { matchesDecryptionKey: false },
+            backupVersion: "1",
+            error: "backup key mismatch",
+            success: false,
+          },
+          result: { exitCode: 1 },
+        },
+        {
+          expectedBackupVersion: "1",
+          failureKind: "rejected-recovery-key",
+          label: "restore",
+        },
+      ),
+    ).toThrow("without the expected rejected-recovery-key diagnostic");
+  });
+
+  it("accepts the SDK secret-storage load diagnostic", () => {
+    expect(() =>
+      testing.assertMatrixQaCliBackupRestoreFailed(
+        {
+          payload: {
+            backup: {
+              decryptionKeyCached: false,
+              keyLoadError: "getSecretStorageKey callback returned falsey",
+            },
+            backupVersion: "1",
+            error:
+              "Matrix room key backup is not usable: backup decryption key could not be loaded from secret storage (getSecretStorageKey callback returned falsey).",
+            success: false,
+          },
+          result: { exitCode: 1 },
+        },
+        {
+          expectedBackupVersion: "1",
+          failureKind: "missing-recovery-key",
+          label: "restore",
+        },
+      ),
+    ).not.toThrow();
+  });
+});
