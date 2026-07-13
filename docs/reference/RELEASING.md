@@ -44,6 +44,70 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - If a beta tag has been pushed or published and needs a fix, maintainers cut the next `-beta.N` tag instead of deleting or recreating the old one
 - Detailed release procedure, approvals, credentials, and recovery notes are maintainer-only
 
+## Release-train scope contract
+
+This prospective maintainer-owned contract applies only to a named
+`release/YYYY.M.PATCH` branch. It complements the existing Code SHA and
+Release SHA evidence model; it does not change that model or freeze `main`.
+Normal development continues on `main`.
+
+Before creating a new `release/YYYY.M.PATCH` branch, create one maintainer-owned
+GitHub issue for that train. The issue is the authoritative scope record and
+must include this copyable template:
+
+```md
+## Release train
+
+## Release captain
+
+## Goal
+
+## Non-goals
+
+## Cut SHA
+
+## Allowed change classes
+
+## Exit criteria
+
+## Approved exceptions
+```
+
+The allowed classes are exactly:
+
+- `release-preparation`
+- `release-blocker`
+- `exact-backport`
+- `release-infrastructure`
+- `changelog-only`
+- `exception`
+
+Pull requests targeting `release/**` include this copyable metadata block:
+
+```md
+Release train: #issue
+Release class: <class>
+Blocker: #issue | not applicable
+Source on main: full SHA and PR | not applicable
+Exception decision: contract link | not required
+```
+
+The explicit metadata and the train issue are authoritative; commit prefixes
+are signals only. Apply the classes deterministically:
+
+- `release-preparation` is restricted to expected version and generated release
+  surfaces.
+- `release-blocker` cites its blocker issue.
+- `exact-backport` cites a full SHA on `main` and must be patch-equivalent.
+- `release-infrastructure` covers release-owned operational machinery.
+- `changelog-only` changes exactly `CHANGELOG.md`.
+- `exception` requires the named release captain's approval and a listing in the
+  train issue.
+
+The initial ClawSweeper integration is advisory. A ClawSweeper required check
+needs a completed shadow train and separate maintainer approval before it can
+become required.
+
 ## Monthly npm-only extended-stable publication
 
 This is a dedicated exception to the regular release procedure below. For a

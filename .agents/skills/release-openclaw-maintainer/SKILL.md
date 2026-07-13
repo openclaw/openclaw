@@ -31,6 +31,55 @@ GHSA-specific advisory work outside this skill.
   user-facing documentation contract changed.
 - Normal release work happens on a branch cut from `main`, not directly on
   `main`. Use `release/YYYY.M.PATCH` for the branch name.
+- Before creating a new `release/YYYY.M.PATCH` branch, create one
+  maintainer-owned GitHub issue for that train. This prospective scope contract
+  complements the Code SHA / Release SHA evidence model; it does not freeze
+  `main`, and normal development continues there.
+- The train issue is authoritative and records: release train, release captain,
+  goal, non-goals, cut SHA, allowed change classes, exit criteria, and approved
+  exceptions. Use this copyable template:
+
+  ```md
+  ## Release train
+
+  ## Release captain
+
+  ## Goal
+
+  ## Non-goals
+
+  ## Cut SHA
+
+  ## Allowed change classes
+
+  ## Exit criteria
+
+  ## Approved exceptions
+  ```
+
+- The allowed classes are exactly `release-preparation`, `release-blocker`,
+  `exact-backport`, `release-infrastructure`, `changelog-only`, and `exception`.
+  Pull requests targeting `release/**` use this copyable metadata block:
+
+  ```md
+  Release train: #issue
+  Release class: <class>
+  Blocker: #issue | not applicable
+  Source on main: full SHA and PR | not applicable
+  Exception decision: contract link | not required
+  ```
+
+- Explicit metadata and the train issue are authoritative; commit prefixes are
+  signals only. Apply classes deterministically: `release-preparation` is
+  restricted to expected version and generated release surfaces;
+  `release-blocker` cites its blocker issue; `exact-backport` cites a full SHA
+  on `main` and must be patch-equivalent; `release-infrastructure` covers
+  release-owned operational machinery; `changelog-only` changes exactly
+  `CHANGELOG.md`; and `exception` requires the named release captain's approval
+  plus a listing in the train issue.
+- The initial ClawSweeper integration is advisory. A ClawSweeper required
+  check needs a completed shadow train and separate maintainer approval before
+  it can become required.
 - If the operator asks for a release without saying stable/full, default to
   beta only. Continue from beta to stable only when the operator explicitly asks
   for the full release or an automated beta-and-stable train.
