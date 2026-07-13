@@ -1,5 +1,4 @@
 // Agent Core type module defines shared TypeScript contracts.
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import type {
   ImageContent,
@@ -21,7 +20,17 @@ export type { Result } from "@openclaw/normalization-core/result";
  * Kept through the next major release for the shipped agent-core plugin API.
  */
 export function toError(error: unknown): Error {
-  return toErrorObject(error, "Non-Error thrown");
+  if (error instanceof Error) {
+    return error;
+  }
+  if (typeof error === "string") {
+    return new Error(error);
+  }
+  try {
+    return new Error(JSON.stringify(error));
+  } catch {
+    return new Error(String(error));
+  }
 }
 
 /**
