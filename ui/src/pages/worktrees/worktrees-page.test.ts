@@ -311,6 +311,43 @@ describe("WorktreesPage lifecycle", () => {
     expect(page.busyId).toBeNull();
   });
 
+  it("keeps a mutation error visible after a successful post-operation list refresh", async () => {
+    // Regression for #106158: a failed mutation assigns an actionable error,
+    // then the mandatory finally->load() refresh used to clear it (load() set
+    // this.error = null before requesting worktrees.list). The error must stay
+    // visible after a successful refresh so the user knows the operation failed.
+    const pendingRestore = deferred<unknown>();
+    let listCalls = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.restore") {
+        return pendingRestore.promise;
+      }
+      if (method === "worktrees.list") {
+        listCalls += 1;
+        return Promise.resolve({ worktrees: [] });
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const source = mutableGateway(client);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(source.gateway);
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+
+    const restoring = page.restore(worktree());
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("worktrees.restore", { id: "worktree-1" }),
+    );
+    pendingRestore.reject(new Error("restore failed: worktree busy"));
+    await restoring;
+    // The post-operation list refresh runs and succeeds; the mutation error
+    // must survive it.
+    await vi.waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(2));
+    expect(page.error).toContain("restore failed: worktree busy");
+    expect(page.busyId).toBeNull();
+  });
+
   it("clears pending create state across a same-client reconnect", async () => {
     const pendingCreate = deferred<unknown>();
     const request = vi.fn((method: string) => {

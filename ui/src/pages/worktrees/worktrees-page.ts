@@ -151,7 +151,6 @@ class WorktreesPage extends OpenClawLightDomElement {
     }
     const generation = ++this.loadGeneration;
     this.loading = true;
-    this.error = null;
     try {
       const result = await client.request<WorktreesListResult>("worktrees.list", {});
       if (generation === this.loadGeneration && client === this.client) {
@@ -159,6 +158,8 @@ class WorktreesPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (generation === this.loadGeneration && client === this.client) {
+        // A list-refresh failure may replace a prior mutation error so the
+        // user sees the newest actionable failure.
         this.error = String(error);
       }
     } finally {
