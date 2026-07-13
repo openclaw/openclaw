@@ -41,8 +41,12 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("approval.resolve");
   });
 
-  it("appends model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().at(-1)).toBe("models.probe");
+  it("appends memory migration after model probing without shifting older method indices", () => {
+    expect(listGatewayMethods().slice(-3)).toEqual([
+      "models.probe",
+      "migrations.memory.plan",
+      "migrations.memory.apply",
+    ]);
   });
 
   it("advertises ClawHub skill trust methods", () => {
