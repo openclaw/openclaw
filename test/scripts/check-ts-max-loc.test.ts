@@ -111,6 +111,12 @@ describe("scripts/check-ts-max-loc", () => {
     }
   });
 
+  it("excludes Control UI locale bundles", () => {
+    expect(isProductionTypeScriptFile("ui/src/i18n/locales/en.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("ui/src/i18n/locales/fr.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("ui/src/i18n/lib/translate.ts")).toBe(true);
+  });
+
   it("allows baseline updates only for decreases and removals", () => {
     const violations = findLocBaselineUpdateViolations({
       maxLines: 500,
