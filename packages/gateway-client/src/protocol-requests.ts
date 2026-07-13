@@ -49,7 +49,6 @@ export class GatewayProtocolRequests<TPlan> {
         expectFinal: options?.expectFinal === true,
         acceptedNotified: false,
         onAccepted: options?.onAccepted,
-        cleanup: () => cleanup(),
         unbounded: timeoutMs === undefined,
         method,
         startedAtMs: this.opts.nowMs?.() ?? Date.now(),

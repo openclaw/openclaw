@@ -10,7 +10,7 @@ import {
   type GatewayProtocolCloseContext,
   type GatewayProtocolRequestOptions,
   type GatewayProtocolSocket,
-  type GatewayProtocolTimingPhase,
+  type GatewayProtocolTiming,
 } from "./protocol-client-types.js";
 import { GatewayProtocolRequests } from "./protocol-requests.js";
 
@@ -128,7 +128,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   recordTiming(
-    phase: GatewayProtocolTimingPhase,
+    phase: GatewayProtocolTiming<TPlan>["phase"],
     generation: number,
     plan?: TPlan,
     detail?: unknown,

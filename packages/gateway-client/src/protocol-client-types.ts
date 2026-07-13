@@ -43,17 +43,16 @@ type GatewayProtocolCloseDecision = {
   reconnectDelayMs?: number;
   pendingError?: Error;
 };
-export type GatewayProtocolTimingPhase =
-  | "socket-open"
-  | "challenge"
-  | "fallback"
-  | "device-identity-ready"
-  | "connect-plan-ready"
-  | "request-sent"
-  | "hello"
-  | "failed";
 export type GatewayProtocolTiming<TPlan> = {
-  phase: GatewayProtocolTimingPhase;
+  phase:
+    | "socket-open"
+    | "challenge"
+    | "fallback"
+    | "device-identity-ready"
+    | "connect-plan-ready"
+    | "request-sent"
+    | "hello"
+    | "failed";
   generation: number;
   durationMs: number;
   phaseDurationMs: number;

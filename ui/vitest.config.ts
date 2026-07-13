@@ -23,12 +23,8 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/gateway-protocol/src/$1.ts"),
   },
   {
-    find: "@openclaw/gateway-protocol",
-    replacement: path.resolve(repoRoot, "packages/gateway-protocol/src/index.ts"),
-  },
-  {
-    find: "@openclaw/retry",
-    replacement: path.resolve(repoRoot, "packages/retry/src/index.ts"),
+    find: /^@openclaw\/(gateway-protocol|retry)$/u,
+    replacement: path.resolve(repoRoot, "packages/$1/src/index.ts"),
   },
   {
     find: "../logging/redact.js",

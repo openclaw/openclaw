@@ -1,11 +1,11 @@
-// @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/** @vitest-environment node */
 import {
   ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../lib/nodes/index.ts";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
@@ -664,8 +664,7 @@ describe("GatewayBrowserClient", () => {
       "connect-plan-ready",
       "request-sent",
     ]);
-    expect(sentPayloads[0]?.durationMs).toBe(25);
-    expect(sentPayloads[0]?.phaseDurationMs).toBe(25);
+    expect([sentPayloads[0]?.durationMs, sentPayloads[0]?.phaseDurationMs]).toEqual([25, 25]);
     for (const payload of sentPayloads) {
       expect(payload.generation).toBe(1);
       expect(payload.durationMs).toBeTypeOf("number");
