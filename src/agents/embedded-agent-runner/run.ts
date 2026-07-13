@@ -5076,7 +5076,6 @@ function resolveAuthProfileStateProvider(
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
 }
-
 export const testing = {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,

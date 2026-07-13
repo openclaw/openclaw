@@ -5,6 +5,7 @@ import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts
 import { t } from "../i18n/index.ts";
 import { formatTimeAgo } from "../lib/format.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { PollController } from "../lit/poll-controller.ts";
 import "./tooltip.ts";
 
 const BRANCH_DISPLAY_LENGTH = 14;
@@ -46,21 +47,8 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) onNavigate?: (routeId: "about") => void;
 
-  private ageTimer: ReturnType<typeof setInterval> | undefined;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    // Relative age must advance without sidebar renders; teardown keeps tests and reconnects clean.
-    this.ageTimer = setInterval(() => this.requestUpdate(), 60_000);
-  }
-
-  override disconnectedCallback() {
-    if (this.ageTimer !== undefined) {
-      clearInterval(this.ageTimer);
-      this.ageTimer = undefined;
-    }
-    super.disconnectedCallback();
-  }
+  // Relative age must advance without sidebar renders; controller teardown keeps reconnects clean.
+  readonly polling = new PollController(this, 60_000, () => this.requestUpdate());
 
   override render() {
     const text = formatBuildChipText(CONTROL_UI_BUILD_INFO, Date.now());

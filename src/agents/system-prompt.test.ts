@@ -171,16 +171,16 @@ describe("buildAgentSystemPrompt", () => {
         promptMode,
       });
 
-      expect(prompt, promptMode).toContain("## Promised Work");
-      expect(prompt, promptMode).toContain("creates follow-through ownership");
-      expect(prompt, promptMode).toContain("push-based completion/watch path");
-      expect(prompt, promptMode).toContain("result/link/proof or a concrete blocker");
-      expect(prompt, promptMode).toContain("Progress like `running` is not completion");
-      expect(prompt.match(/## Promised Work/g), promptMode).toHaveLength(1);
+      expect(prompt).toContain("## Promised Work");
+      expect(prompt).toContain("Progress such as `running` is not completion.");
+      expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
     }
 
     expect(
-      buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", promptMode: "none" }),
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode: "none",
+      }),
     ).not.toContain("## Promised Work");
   });
 

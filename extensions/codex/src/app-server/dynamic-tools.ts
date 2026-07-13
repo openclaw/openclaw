@@ -1123,7 +1123,6 @@ function resolveCodexDynamicToolResultMaxChars(
   });
   return configured ?? DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
 }
-
 function resolveAgentContextLimitValue(params: {
   config: EmbeddedRunAttemptParams["config"] | undefined;
   agentId?: string;
@@ -1149,7 +1148,6 @@ function resolveAgentContextLimitValue(params: {
   );
   return agentValue ?? defaultValue;
 }
-
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
   const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
   if (activeSignals.length === 0) {
@@ -1160,7 +1158,6 @@ function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortS
   }
   return AbortSignal.any(activeSignals);
 }
-
 function collectToolTelemetry(params: {
   toolName: string;
   args: Record<string, unknown>;
@@ -1252,7 +1249,6 @@ function collectToolTelemetry(params: {
     ...(params.sourceReplyFinal !== undefined ? { sourceReplyFinal: params.sourceReplyFinal } : {}),
   });
 }
-
 function extractInternalSourceReplyPayload(
   details: unknown,
 ): MessagingToolSourceReplyPayload | undefined {
@@ -1287,14 +1283,12 @@ function extractInternalSourceReplyPayload(
     ? payload
     : undefined;
 }
-
 function readPositiveInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
   return Math.floor(value);
 }
-
 function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
   if (isToolResultError(result)) {
     return true;
@@ -1334,7 +1328,6 @@ function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
     status !== "yielded"
   );
 }
-
 function isToolResultYield(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   if (!isRecord(details) || typeof details.status !== "string") {
@@ -1342,12 +1335,10 @@ function isToolResultYield(result: AgentToolResult<unknown>): boolean {
   }
   return details.status.trim().toLowerCase() === "yielded";
 }
-
 function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   return isRecord(details) && details.async === true && details.status === "started";
 }
-
 function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
   response: T,
   terminalType: CodexDynamicToolDiagnosticTerminalType,
@@ -1359,7 +1350,6 @@ function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
   });
   return response;
 }
-
 function withDiagnosticFailureDisposition<T extends CodexDynamicToolCallResponse>(
   response: T,
   disposition: "blocked" | CodexDynamicToolDiagnosticTerminalReason | undefined,
@@ -1377,7 +1367,6 @@ function withDiagnosticFailureDisposition<T extends CodexDynamicToolCallResponse
   }
   return response;
 }
-
 function withSideEffectEvidence<T extends CodexDynamicToolCallResponse>(
   response: T,
   sideEffectEvidence: boolean,
@@ -1392,7 +1381,6 @@ function withSideEffectEvidence<T extends CodexDynamicToolCallResponse>(
   });
   return response;
 }
-
 function withDynamicToolTermination<T extends CodexDynamicToolCallResponse>(
   response: T,
   terminate: boolean,
@@ -1407,7 +1395,6 @@ function withDynamicToolTermination<T extends CodexDynamicToolCallResponse>(
   });
   return response;
 }
-
 function withDynamicToolAsyncStarted<T extends CodexDynamicToolCallResponse>(
   response: T,
   asyncStarted: boolean,
@@ -1422,13 +1409,11 @@ function withDynamicToolAsyncStarted<T extends CodexDynamicToolCallResponse>(
   });
   return response;
 }
-
 function normalizeToolResultMaxChars(maxChars: number): number {
   return typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
     ? Math.floor(maxChars)
     : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
 }
-
 function convertToolContents(
   content: Array<TextContent | ImageContent>,
   toolResultMaxChars = DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS,
@@ -1441,14 +1426,12 @@ function convertToolContents(
   if (totalTextChars <= maxChars) {
     return content.flatMap(convertToolContent);
   }
-
   const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, showing ${maxChars}; rerun with narrower args.)`;
   const notice = `\n${noticeText}`;
   const textBudget = Math.max(0, maxChars - notice.length);
   let remainingTextBudget = textBudget;
   let appendedNotice = false;
   const output: CodexDynamicToolCallOutputContentItem[] = [];
-
   for (const item of content) {
     if (item.type !== "text") {
       output.push(...convertToolContent(item));
@@ -1475,13 +1458,11 @@ function convertToolContents(
       output.push({ type: "inputText", text });
     }
   }
-
   if (!appendedNotice) {
     output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
   }
   return output;
 }
-
 function convertToolContent(
   content: TextContent | ImageContent,
 ): CodexDynamicToolCallOutputContentItem[] {
@@ -1499,14 +1480,12 @@ function convertToolContent(
     },
   ];
 }
-
 function jsonObjectToRecord(value: JsonValue | undefined): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
   return value as Record<string, unknown>;
 }
-
 function readFirstString(record: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -1519,7 +1498,6 @@ function readFirstString(record: Record<string, unknown>, keys: string[]): strin
   }
   return undefined;
 }
-
 function collectMediaUrls(record: Record<string, unknown>): string[] {
   const urls: string[] = [];
   const pushMediaUrl = (value: unknown) => {
@@ -1566,7 +1544,6 @@ function collectMediaUrls(record: Record<string, unknown>): string[] {
   }
   return urls;
 }
-
 function isCronAddAction(args: Record<string, unknown>): boolean {
   const action = args.action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";

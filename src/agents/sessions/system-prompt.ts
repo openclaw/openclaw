@@ -145,6 +145,7 @@ Guidelines:
 ${guidelines}
 
 ${buildPromisedWorkPromptSection().join("\n")}
+
 Embedded agent documentation (read only when the user asks about the embedded agent SDK, extensions, themes, skills, or TUI):
 - Main documentation: ${readmePath}
 - Additional docs: ${docsPath}

@@ -44,10 +44,7 @@ import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
-import {
-  buildExecutionBiasPromptSection,
-  buildPromisedWorkPromptSection,
-} from "./promised-work-prompt.js";
+import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import {
   buildOpenClawToolFallbackText,
   shouldRenderOpenClawToolWorkflowHints,
@@ -459,6 +456,23 @@ function buildWebchatCanvasSection(params: {
     "- Never local/file:// or arbitrary URL. URL must start `/__openclaw__/canvas/`; else use `ref`.",
     "- Hosted root is profile-, not workspace-scoped; stage there.",
     "- Quote attributes. Prefer `ref`; use `url` only with full hosted URL.",
+    "",
+  ];
+}
+
+function buildExecutionBiasSection(params: { isMinimal: boolean }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  return [
+    "## Execution Bias",
+    "- Actionable request: act now.",
+    "- Non-final turn: advance with tools, or ask one safety-blocking decision.",
+    "- Continue to done/real blocker; no plan-only finish when tools can act.",
+    "- Weak/empty result: vary query/path/command/source, then conclude.",
+    "- Mutable facts: live-check files/git/time/versions/services/processes/packages.",
+    "- Final claim needs evidence or named blocker.",
+    "- Long work: brief update, keep going; background/subagents when useful.",
     "",
   ];
 }
@@ -1125,7 +1139,7 @@ export function buildAgentSystemPrompt(params: {
       }),
       ...buildOverridablePromptSection({
         override: providerSectionOverrides.execution_bias,
-        fallback: buildExecutionBiasPromptSection({
+        fallback: buildExecutionBiasSection({
           isMinimal,
         }),
       }),

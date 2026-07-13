@@ -87,9 +87,6 @@ type ChatThreadState = {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
-  relativeTimeTimer: ReturnType<typeof setInterval> | null;
-  relativeTimeRequestUpdate: (() => void) | null;
-  relativeTimeVersion: number;
 };
 
 type ChatThreadProps = {
@@ -168,24 +165,7 @@ function createChatThreadState(): ChatThreadState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
-    relativeTimeTimer: null,
-    relativeTimeRequestUpdate: null,
-    relativeTimeVersion: 0,
   };
-}
-
-const RELATIVE_TIME_REFRESH_MS = 60_000;
-
-// Footer timestamps render relative labels ("5m ago") that go stale on idle
-// panes; one per-pane minute tick keeps them fresh without per-message timers.
-// The version bump must accompany requestUpdate: the message subtree is
-// memoized by guard(), so a tick only re-renders it via this dependency.
-function ensureRelativeTimeRefresh(state: ChatThreadState, requestUpdate: () => void) {
-  state.relativeTimeRequestUpdate = requestUpdate;
-  state.relativeTimeTimer ??= setInterval(() => {
-    state.relativeTimeVersion = (state.relativeTimeVersion + 1) % Number.MAX_SAFE_INTEGER;
-    state.relativeTimeRequestUpdate?.();
-  }, RELATIVE_TIME_REFRESH_MS);
 }
 
 const threadStates = new Map<string, ChatThreadState>();
@@ -234,11 +214,6 @@ export function resetChatThreadPresentationState(paneId?: string) {
     }
     if (state.historyRenderAnchorFrame != null) {
       cancelAnimationFrame(state.historyRenderAnchorFrame);
-    }
-    if (state.relativeTimeTimer != null) {
-      clearInterval(state.relativeTimeTimer);
-      state.relativeTimeTimer = null;
-      state.relativeTimeRequestUpdate = null;
     }
   }
   if (paneId) {
@@ -738,7 +713,6 @@ function renderLoadingSkeleton() {
 export function renderChatThread(props: ChatThreadProps) {
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  ensureRelativeTimeRefresh(state, requestUpdate);
   const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
   // Equivalence, not exact match: the default session travels under alias
@@ -878,7 +852,8 @@ export function renderChatThread(props: ChatThreadProps) {
             deletedChatItemsSignature(deleted, chatItems),
             stableBooleanMapSignature(expandedToolCards),
             getAssistantAttachmentAvailabilityRenderVersion(),
-            state.relativeTimeVersion,
+            // The host minute poll requests an update; this key crosses guard() memoization.
+            Math.floor(Date.now() / 60_000),
             getToolTitlesVersion(),
             props.sessionKey,
             props.fullMessageAgentId,
