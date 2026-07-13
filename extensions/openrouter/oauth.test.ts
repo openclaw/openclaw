@@ -141,7 +141,7 @@ function createOpenRouterOAuthContext(params: {
 async function requestLocalOpenRouterOAuthCallback(
   query: string,
 ): Promise<{ callback: Promise<unknown>; response: Response; body: string }> {
-  let markReady!: () => void;
+  let markReady = () => {};
   const ready = new Promise<void>((resolve) => {
     markReady = resolve;
   });
