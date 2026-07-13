@@ -34,6 +34,7 @@ import { resolveProviderEnvAuthEvidence } from "../../agents/model-auth-env.js";
 import {
   isKnownEnvApiKeyMarker,
   listKnownNonSecretApiKeyMarkers,
+  NON_ENV_SECRETREF_MARKER,
 } from "../../agents/model-auth-markers.js";
 import {
   resolveProviderEntryApiKeyProfileReference,
@@ -490,6 +491,29 @@ function resolveConfigBoundProfileIds(cfg: OpenClawConfig, store: AuthProfileSto
   return profileIds;
 }
 
+function resolveConfiguredApiKeyProviders(cfg: OpenClawConfig): Set<string> {
+  const providers = new Set<string>();
+  const nonSecretMarkers = new Set(listKnownNonSecretApiKeyMarkers());
+  for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
+    const normalized = normalizeProviderId(id);
+    if (!normalized || !hasConfiguredSecretInput(provider?.apiKey, cfg.secrets?.defaults)) {
+      continue;
+    }
+    const rawKey = typeof provider?.apiKey === "string" ? provider.apiKey.trim() : "";
+    // Unresolved credentials still need a missing status row. Local no-auth
+    // markers do not: they intentionally represent providers without secrets.
+    if (
+      rawKey &&
+      rawKey !== NON_ENV_SECRETREF_MARKER &&
+      nonSecretMarkers.has(rawKey)
+    ) {
+      continue;
+    }
+    providers.add(normalized);
+  }
+  return providers;
+}
+
 function resolveConfiguredProviders(
   cfg: OpenClawConfig,
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
@@ -665,6 +689,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const apiKeys = resolveProviderApiKeys(cfg, store);
       const configured = resolveConfiguredProviders(cfg, apiKeys);
       const statusProviderIds = new Set(configured.providers);
+      for (const provider of resolveConfiguredApiKeyProviders(cfg)) {
+        statusProviderIds.add(provider);
+      }
       for (const provider of apiKeys.keys()) {
         statusProviderIds.add(provider);
       }

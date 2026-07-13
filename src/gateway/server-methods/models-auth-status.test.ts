@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -501,6 +502,9 @@ describe("models.authStatus", () => {
 
   it("does not report unresolved persisted markers as API keys", async () => {
     await withEnvAsync(Object.fromEntries([["ANTHROPIC_API_KEY", undefined]]), async () => {
+      const actualAuthHealth = await vi.importActual<
+        typeof import("../../agents/auth-health.js")
+      >("../../agents/auth-health.js");
       mocks.getRuntimeConfig.mockReturnValue({
         models: {
           providers: {
@@ -508,20 +512,19 @@ describe("models.authStatus", () => {
           },
         },
       });
-      mocks.buildAuthHealthSummary.mockReturnValue({
-        now: 0,
-        warnAfterMs: 0,
-        profiles: [],
-        providers: [{ provider: "anthropic", status: "missing", profiles: [] }],
-      });
+      mocks.buildAuthHealthSummary.mockImplementationOnce(actualAuthHealth.buildAuthHealthSummary);
 
       const provider = await firstAuthStatusProvider();
+      expect(provider?.provider).toBe("anthropic");
       expect(provider?.apiKey).toBeUndefined();
       expect(provider?.status).toBe("missing");
     });
   });
 
   it("does not report a local no-auth marker as a configured API key", async () => {
+    const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
+      "../../agents/auth-health.js",
+    );
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
@@ -529,15 +532,29 @@ describe("models.authStatus", () => {
         },
       },
     });
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles: [],
-      providers: [{ provider: "ollama", status: "missing", profiles: [] }],
-    });
+    mocks.buildAuthHealthSummary.mockImplementationOnce(actualAuthHealth.buildAuthHealthSummary);
 
     const provider = await firstAuthStatusProvider();
+    expect(provider).toBeUndefined();
+  });
+
+  it("keeps unresolved managed SecretRef markers visible as missing", async () => {
+    const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
+      "../../agents/auth-health.js",
+    );
+    mocks.getRuntimeConfig.mockReturnValue({
+      models: {
+        providers: {
+          openai: { ...Object.fromEntries([["apiKey", NON_ENV_SECRETREF_MARKER]]) },
+        },
+      },
+    });
+    mocks.buildAuthHealthSummary.mockImplementationOnce(actualAuthHealth.buildAuthHealthSummary);
+
+    const provider = await firstAuthStatusProvider();
+    expect(provider?.provider).toBe("openai");
     expect(provider?.apiKey).toBeUndefined();
+    expect(provider?.status).toBe("missing");
   });
 
   it("does not duplicate profile references as config API keys", async () => {
