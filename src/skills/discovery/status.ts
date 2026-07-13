@@ -315,6 +315,9 @@ function buildSkillStatus(
           skillDir: entry.skill.baseDir,
           skillKey,
           lockRead: isGlobalManagedSkill ? context.managedLockRead : context.clawhubLockRead,
+          // Keep invalid diagnostics truthful: a globally-managed skill is
+          // checked against the managed lockfile, not the workspace one.
+          lockfileScope: isGlobalManagedSkill ? "managed" : "workspace",
         })
       : undefined;
   const skillCard = resolveLocalSkillCardStatusSync(entry.skill.baseDir);

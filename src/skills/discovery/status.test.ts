@@ -288,11 +288,12 @@ describe("buildWorkspaceSkillStatus", () => {
         entries: [createEntry("agentreceipt", { baseDir: skillDir, source: "openclaw-managed" })],
       });
 
-      // No managed lockfile -> the global skill is genuinely untracked, not linked.
+      // No managed lockfile -> the global skill is genuinely untracked. The
+      // diagnostic must name the managed scope (not the workspace lockfile).
       expect(report.skills[0]?.clawhub).toMatchObject({
         status: "invalid",
         valid: false,
-        reason: expect.stringContaining("not tracked"),
+        reason: expect.stringContaining("not tracked by the managed ClawHub lockfile"),
       });
     } finally {
       await fs.rm(managedParentDir, { recursive: true, force: true });

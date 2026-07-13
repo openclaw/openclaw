@@ -737,9 +737,17 @@ export function resolveClawHubSkillStatusLinkSync(params: {
   skillDir: string;
   skillKey: string;
   lockRead?: ClawHubSkillsLockfileStatusRead;
+  /**
+   * Which lockfile scope `lockRead` belongs to. Diagnostics name this scope so a
+   * globally-managed skill (tracked in the managed lockfile) does not get a
+   * misleading "workspace ClawHub lockfile" troubleshooting message. Defaults to
+   * "workspace" for backward compatibility with workspace-scoped callers.
+   */
+  lockfileScope?: "workspace" | "managed";
 }): ClawHubSkillStatusLink | undefined {
   const originRead = readClawHubSkillOriginStatusSync(params.skillDir);
   const lockRead = params.lockRead ?? readClawHubSkillsLockfileStatusSync(params.workspaceDir);
+  const lockfileScopeLabel = params.lockfileScope === "managed" ? "managed" : "workspace";
 
   if (originRead.kind === "missing") {
     let trackedSlug: string;
@@ -755,7 +763,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" is tracked by the workspace ClawHub lockfile but is missing local ClawHub origin metadata.`,
+      reason: `Skill "${trackedSlug}" is tracked by the ${lockfileScopeLabel} ClawHub lockfile but is missing local ClawHub origin metadata.`,
       slug: trackedSlug,
       installedVersion: locked.version,
       installedAt: locked.installedAt,
@@ -795,7 +803,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the workspace ClawHub lockfile.`,
+      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the ${lockfileScopeLabel} ClawHub lockfile.`,
       registry: originRead.origin.registry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -807,7 +815,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Malformed workspace ClawHub lockfile at ${lockRead.path}: ${lockRead.error}`,
+      reason: `Malformed ${lockfileScopeLabel} ClawHub lockfile at ${lockRead.path}: ${lockRead.error}`,
       registry: originRead.origin.registry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -821,7 +829,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the workspace ClawHub lockfile.`,
+      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the ${lockfileScopeLabel} ClawHub lockfile.`,
       registry: originRead.origin.registry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -872,7 +880,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" ClawHub origin metadata does not match the workspace ClawHub lockfile.`,
+      reason: `Skill "${trackedSlug}" ClawHub origin metadata does not match the ${lockfileScopeLabel} ClawHub lockfile.`,
       registry: lockedRegistry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
