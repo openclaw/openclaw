@@ -4,7 +4,7 @@ import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { AgentsRouteData } from "./agents-page.ts";
 
-export async function loadAgentsRouteData(
+async function loadAgentsRouteData(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<AgentsRouteData> {
