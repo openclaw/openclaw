@@ -97,6 +97,70 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
     }
 }
 
+@Suite(.serialized) struct GatewayReconnectErrorRetentionTests {
+    @Test @MainActor func `retained display problem does not control next retry`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        appModel._test_prepareForGatewayConnect(
+            stableID: "manual|gateway.example.com|443",
+            preservingGatewayProblem: true)
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+
+        let cancelled = NSError(
+            domain: URLError.errorDomain,
+            code: URLError.cancelled.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "gateway receive: cancelled"])
+        let mapped = appModel._test_mapNodeGatewayConnectionError(cancelled)
+        #expect(mapped?.kind == .websocketCancelled)
+        #expect(mapped?.requestId == nil)
+        #expect(mapped?.pauseReconnect == false)
+    }
+
+    @Test @MainActor func `active operator problem survives node cancellation`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        let cancelled = NSError(
+            domain: URLError.errorDomain,
+            code: URLError.cancelled.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "gateway receive: cancelled"])
+        let applied = appModel._test_applyNodeGatewayConnectionError(cancelled)
+
+        #expect(applied == problem)
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == "req-admin")
+
+        appModel._test_clearOperatorGatewayConnectionProblemIfCurrent()
+        #expect(appModel.lastGatewayProblem == nil)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+    }
+}
+
 @Suite(.serialized) struct GatewayConnectionControllerTests {
     @Test @MainActor func `chat owner survives reconnect while session refresh identity changes`() {
         let appModel = NodeAppModel()
