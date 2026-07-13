@@ -290,6 +290,19 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
 
     expect(provider.defaultModel).toBe("gpt-realtime-2.1");
+    // Pins the advertised voice set documented in docs/nodes/talk.md.
+    expect(provider.voices).toEqual([
+      "alloy",
+      "ash",
+      "ballad",
+      "coral",
+      "echo",
+      "sage",
+      "shimmer",
+      "verse",
+      "marin",
+      "cedar",
+    ]);
     expect(provider.capabilities).toEqual({
       transports: ["webrtc", "gateway-relay"],
       inputAudioFormats: [

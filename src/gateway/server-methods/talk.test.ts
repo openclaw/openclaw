@@ -201,6 +201,14 @@ describe("talk.catalog handler", () => {
         voices: ["voice-1"],
         isConfigured: vi.fn(() => true),
       } as never,
+      {
+        id: "acme",
+        label: "Acme Speech",
+        // Empty model/voice lists must be omitted from the catalog, not advertised.
+        models: [],
+        voices: [],
+        isConfigured: vi.fn(() => false),
+      } as never,
     ]);
     mocks.getResolvedSpeechProviderConfig.mockReturnValue({ apiKey: "speech-key" });
     mocks.listRealtimeTranscriptionProviders.mockReturnValue([
@@ -209,6 +217,7 @@ describe("talk.catalog handler", () => {
         label: "OpenAI Realtime Transcription",
         aliases: ["openai-realtime"],
         defaultModel: "gpt-4o-transcribe",
+        models: ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
         resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
         isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "stt-key"),
       } as never,
@@ -225,6 +234,8 @@ describe("talk.catalog handler", () => {
         id: "google",
         label: "Google Live Voice",
         defaultModel: "gemini-live",
+        models: ["gemini-live", "gemini-live-exp"],
+        voices: ["puck", "aoede"],
         resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
         isConfigured: vi.fn(
           ({ providerConfig }) =>
@@ -248,6 +259,8 @@ describe("talk.catalog handler", () => {
       {
         id: "openai",
         label: "OpenAI Realtime",
+        // Empty voice lists must be omitted from the catalog, not advertised.
+        voices: [],
         resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
         isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "openai-key"),
         createBridge: vi.fn(),
@@ -317,6 +330,13 @@ describe("talk.catalog handler", () => {
               models: ["eleven_flash_v2_5"],
               voices: ["voice-1"],
             },
+            {
+              id: "acme",
+              label: "Acme Speech",
+              configured: false,
+              modes: ["stt-tts"],
+              brains: ["agent-consult"],
+            },
           ],
         },
         transcription: {
@@ -332,6 +352,7 @@ describe("talk.catalog handler", () => {
               transports: ["gateway-relay"],
               brains: ["none"],
               defaultModel: "gpt-4o-transcribe",
+              models: ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
             },
             {
               id: "deepgram",
@@ -353,6 +374,8 @@ describe("talk.catalog handler", () => {
               label: "Google Live Voice",
               configured: true,
               defaultModel: "gemini-live",
+              models: ["gemini-live", "gemini-live-exp"],
+              voices: ["puck", "aoede"],
               modes: ["realtime"],
               transports: ["provider-websocket", "gateway-relay"],
               brains: ["agent-consult"],

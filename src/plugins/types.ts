@@ -2010,6 +2010,8 @@ export type RealtimeVoiceProviderPlugin = {
   aliases?: string[];
   defaultModel?: string;
   models?: readonly string[];
+  /** Selectable voice ids advertised via `talk.catalog` — the provider's canonical set of known voice ids, omitted when the provider has no fixed voice list. */
+  voices?: readonly string[];
   autoSelectOrder?: number;
   capabilities?: RealtimeVoiceProviderCapabilities;
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
@@ -2067,9 +2069,7 @@ export type PluginCommandDiagnosticsSession = {
   threadParentId?: string;
 };
 
-/**
- * Context passed to plugin command handlers.
- */
+/** Context passed to plugin command handlers. */
 export type PluginCommandContext = {
   /** The sender's identifier (for example a channel-scoped user ID) */
   senderId?: string;

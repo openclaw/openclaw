@@ -803,6 +803,7 @@ catalog, API-key auth, and dynamic model resolution.
         api.registerRealtimeVoiceProvider({
           id: "acme-ai",
           label: "Acme Realtime Voice",
+          voices: ["nova", "sol"],
           capabilities: {
             transports: ["gateway-relay"],
             inputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
@@ -831,7 +832,13 @@ catalog, API-key auth, and dynamic model resolution.
 
         Declare `capabilities` so `talk.catalog` can expose valid modes,
         transports, audio formats, and feature flags to browser and native Talk
-        clients. Implement `handleBargeIn` when a transport can detect that a
+        clients. List selectable voice ids in `voices` to advertise them through
+        `talk.catalog` the same way speech providers do, so clients can offer a
+        provider-specific voice picker instead of a hard-coded list. The list is
+        provider-wide: advertise the provider's canonical set of known,
+        selectable voice ids, and omit the field when the provider has no fixed
+        voice set. Implement
+        `handleBargeIn` when a transport can detect that a
         human is interrupting assistant playback and the provider supports
         truncating or clearing the active audio response.
         `submitToolResult` may return `void` for synchronous submission, or a
