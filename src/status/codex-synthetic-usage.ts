@@ -50,8 +50,8 @@ export function shouldUseCodexSyntheticUsageForRuntime(params: {
   const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
   const provider = normalizeOptionalLowercaseString(params.provider);
   return (
-    harness === CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER &&
-    (provider === CODEX_SYNTHETIC_USAGE_PROVIDER || provider === "codex")
+    provider === CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER ||
+    (harness === CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER && provider === CODEX_SYNTHETIC_USAGE_PROVIDER)
   );
 }
 

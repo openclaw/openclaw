@@ -265,19 +265,17 @@ async function requestCodexAppServerRateLimitsLazy(options: {
   agentDir?: string;
   authProfileId?: string;
   config?: Parameters<
-    typeof import("./src/app-server/request.js").requestCodexAppServerJson
+    typeof import("./src/app-server/request.js").requestCodexAppServerRateLimits
   >[0]["config"];
   startOptions?: CodexAppServerStartOptions;
 }): Promise<unknown> {
-  const { requestCodexAppServerJson } = await import("./src/app-server/request.js");
-  return await requestCodexAppServerJson({
-    method: "account/rateLimits/read",
+  const { requestCodexAppServerRateLimits } = await import("./src/app-server/request.js");
+  return await requestCodexAppServerRateLimits({
     timeoutMs: options.timeoutMs,
     agentDir: options.agentDir,
     ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
     config: options.config,
     startOptions: options.startOptions,
-    isolated: true,
   });
 }
 

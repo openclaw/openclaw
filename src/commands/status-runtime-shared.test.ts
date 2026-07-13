@@ -213,6 +213,34 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("adds Codex synthetic usage for configured Codex providers on the default runtime", async () => {
+    await resolveStatusUsageSummary({
+      timeoutMs: 3456,
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "codex/gpt-5.4" },
+          },
+        },
+      },
+      agentDir: "/tmp/status-agent",
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
+      timeoutMs: 3456,
+      providers: ["openai"],
+      auth: [
+        expect.objectContaining({
+          provider: "openai",
+          hookProvider: "codex",
+        }),
+      ],
+      config: expect.any(Object),
+      agentDir: "/tmp/status-agent",
+    });
+  });
+
   it("keeps existing OpenAI usage when Codex synthetic usage has no windows", async () => {
     mocks.loadProviderUsageSummary
       .mockResolvedValueOnce({

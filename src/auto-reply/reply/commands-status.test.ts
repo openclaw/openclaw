@@ -1314,6 +1314,62 @@ describe("buildStatusReply subagent summary", () => {
     });
   });
 
+  it("shows Codex usage when the resolved runtime falls back to OpenClaw Default", async () => {
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "Codex",
+          windows: [{ label: "5h", usedPercent: 22 }],
+        },
+      ],
+    });
+
+    await withTempHome(async (dir) => {
+      saveStatusTestAuthProfile({
+        dir,
+        profileId: "openai:status",
+        provider: "openai",
+      });
+      const text = await buildStatusText({
+        cfg: baseCfg,
+        sessionEntry: {
+          sessionId: "sess-status-codex-default-runtime",
+          updatedAt: 0,
+          modelProvider: "codex",
+          model: "gpt-5.4",
+        },
+        sessionKey: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        statusChannel: "mobilechat",
+        provider: "codex",
+        model: "gpt-5.4",
+        resolvedHarness: "openclaw",
+        contextTokens: 272_000,
+        resolvedFastMode: false,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "high",
+        resolveDefaultThinkingLevel: async () => undefined,
+        isGroup: false,
+        defaultGroupActivation: () => "mention",
+      });
+
+      const normalized = normalizeTestText(text);
+      expect(normalized).toContain("Model: codex/gpt-5.4");
+      expect(normalized).toContain("oauth (openai:status)");
+      expect(normalized).toContain("Runtime: OpenClaw Default");
+      expect(normalized).toContain("Usage: 5h 78% left");
+      expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providers: ["openai"],
+          auth: expectedCodexRuntimeUsageAuth,
+        }),
+      );
+    });
+  });
+
   it("does not forward stale non-OpenAI profile overrides to Codex usage", async () => {
     registerStatusCodexHarness();
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({

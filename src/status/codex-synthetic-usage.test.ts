@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { mergeUsageSummaries } from "./codex-synthetic-usage.js";
+import {
+  mergeUsageSummaries,
+  shouldUseCodexSyntheticUsageForRuntime,
+} from "./codex-synthetic-usage.js";
+
+describe("shouldUseCodexSyntheticUsageForRuntime", () => {
+  it.each([
+    ["codex", "openclaw", true],
+    ["openai", "codex", true],
+    ["openai", "openclaw", false],
+  ] as const)(
+    "resolves provider=%s runtime=%s eligibility",
+    (provider, effectiveHarness, expected) => {
+      expect(
+        shouldUseCodexSyntheticUsageForRuntime({
+          provider,
+          effectiveHarness,
+        }),
+      ).toBe(expected);
+    },
+  );
+});
 
 describe("mergeUsageSummaries", () => {
   it("preserves OAuth plan and billing when synthetic Codex windows win", () => {

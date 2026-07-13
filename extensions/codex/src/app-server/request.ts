@@ -2,7 +2,13 @@
  * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
  * checks, shared-client leasing, and isolated-client shutdown handling.
  */
-import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
+import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
+import {
+  resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileStore,
+  resolveCodexAppServerPreparedAuthHandoff,
+  type resolveCodexAppServerAuthProfileIdForAgent,
+} from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type {
@@ -11,6 +17,7 @@ import type {
   CodexAppServerRequestResult,
   JsonValue,
 } from "./protocol.js";
+import { readRecentCodexRateLimits, rememberCodexRateLimitsRead } from "./rate-limit-cache.js";
 import { resolveCodexAppServerDirectSandboxBypassBlock } from "./sandbox-guard.js";
 import {
   createIsolatedCodexAppServerClient,
@@ -18,6 +25,7 @@ import {
   isCodexAppServerStartSelectionChangedError,
   releaseLeasedSharedCodexAppServerClient,
   retireSharedCodexAppServerClientIfCurrent,
+  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { withTimeout } from "./timeout.js";
 
@@ -29,6 +37,26 @@ type CodexAppServerClientRequestParams = {
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionKey?: string;
   sessionId?: string;
+};
+
+type CodexAppServerJsonRequestParams = {
+  method: string;
+  requestParams?: unknown;
+  timeoutMs?: number;
+  pluginConfig?: unknown;
+  startOptions?: CodexAppServerStartOptions;
+  authProfileId?: string | null;
+  agentDir?: string;
+  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
+  isolated?: boolean;
+};
+
+type CodexAppServerJsonInternalRequestParams<T> = CodexAppServerJsonRequestParams & {
+  sharedClientAuth?: Pick<CodexAppServerClientOptions, "authBindingFingerprint" | "preparedAuth">;
+  onRequestResult?: (client: CodexAppServerClient, value: T) => void;
+  resolveRequestErrorFallback?: (client: CodexAppServerClient, error: unknown) => T | undefined;
 };
 
 /** Sends one guarded request over a client lease owned by the caller. */
@@ -80,19 +108,87 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   sessionId?: string;
   isolated?: boolean;
 }): Promise<T>;
-export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
-  method: string;
-  requestParams?: unknown;
+export async function requestCodexAppServerJson<T = JsonValue | undefined>(
+  params: CodexAppServerJsonRequestParams,
+): Promise<T> {
+  return await requestCodexAppServerJsonInternal<T>(params);
+}
+
+/** Reads rate limits through the session-scoped shared client with a recent-cache fallback. */
+export async function requestCodexAppServerRateLimits(params: {
   timeoutMs?: number;
   pluginConfig?: unknown;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string | null;
   agentDir?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  sessionKey?: string;
-  sessionId?: string;
-  isolated?: boolean;
-}): Promise<T> {
+  config?: CodexAppServerJsonRequestParams["config"];
+}): Promise<JsonValue | undefined> {
+  const sharedClientAuth = await resolveCodexRateLimitsSharedClientAuth(params);
+  return await requestCodexAppServerJsonInternal<JsonValue | undefined>({
+    ...params,
+    method: "account/rateLimits/read",
+    isolated: false,
+    ...(sharedClientAuth ? { sharedClientAuth } : {}),
+    onRequestResult: (client, value) => rememberCodexRateLimitsRead(client, value),
+    // Shared-client identity includes agent/auth selection. Falling back on that
+    // exact physical client prevents one account's quota from leaking to another.
+    resolveRequestErrorFallback: (client) => readRecentCodexRateLimits(client),
+  });
+}
+
+async function resolveCodexRateLimitsSharedClientAuth(params: {
+  authProfileId?: string | null;
+  agentDir?: string;
+  config?: CodexAppServerJsonRequestParams["config"];
+  startOptions?: CodexAppServerStartOptions;
+}): Promise<
+  Pick<CodexAppServerClientOptions, "authBindingFingerprint" | "preparedAuth"> | undefined
+> {
+  if (params.authProfileId === null || params.startOptions?.homeScope === "user") {
+    return undefined;
+  }
+  const authProfileStore = resolveCodexAppServerAuthProfileStore({
+    authProfileId: params.authProfileId,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+  const authProfileId = resolveCodexAppServerAuthProfileId({
+    authProfileId: params.authProfileId,
+    store: authProfileStore,
+    config: params.config,
+  });
+  if (!authProfileId) {
+    return undefined;
+  }
+  // Status must reproduce the turn's prepared-auth key. A legacy profile-only
+  // acquisition would start a second client and miss the active client's cache.
+  const authHandoff = await resolveCodexAppServerPreparedAuthHandoff({
+    authRequirement: "subscription",
+    authProfileId,
+    authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+    subscriptionProfileRequiredError: "Codex usage requires an OpenAI OAuth or token profile.",
+    subscriptionProfileUnusableError: `Codex usage auth profile "${authProfileId}" is unusable.`,
+  });
+  if (!authHandoff.preparedAuth) {
+    return undefined;
+  }
+  const authBinding = await prepareCodexAppServerAuthBinding({
+    authProfileId,
+    authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+  return {
+    preparedAuth: authHandoff.preparedAuth,
+    ...(authBinding ? { authBindingFingerprint: authBinding.fingerprint } : {}),
+  };
+}
+
+async function requestCodexAppServerJsonInternal<T = JsonValue | undefined>(
+  params: CodexAppServerJsonInternalRequestParams<T>,
+): Promise<T> {
   const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
     method: params.method,
     requestParams: params.requestParams,
@@ -130,19 +226,28 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
             startOptions: params.startOptions,
             pluginConfig: params.pluginConfig,
             timeoutMs: remainingTimeoutMs(),
-            authProfileId: params.authProfileId,
+            ...params.sharedClientAuth,
+            ...(!params.sharedClientAuth?.preparedAuth && {
+              authProfileId: params.authProfileId,
+            }),
             agentDir: params.agentDir,
             config: params.config,
             abandonSignal: timeoutController.signal,
           });
           try {
             throwIfAbandoned();
-            return await client.request<T>(params.method, params.requestParams, {
+            const result = await client.request<T>(params.method, params.requestParams, {
               timeoutMs: remainingTimeoutMs(),
               signal: timeoutController.signal,
             });
+            params.onRequestResult?.(client, result);
+            return result;
           } catch (error) {
             if (!isCodexAppServerStartSelectionChangedError(error) || attempt > 0) {
+              const fallback = params.resolveRequestErrorFallback?.(client, error);
+              if (fallback !== undefined) {
+                return fallback;
+              }
               throw error;
             }
             if (!params.isolated) {

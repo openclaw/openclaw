@@ -244,7 +244,7 @@ function resolveStatusRuntimeProvider(params: {
 }): string {
   const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
   const provider = normalizeOptionalLowercaseString(params.provider);
-  if (harness === "codex" && (provider === "openai" || provider === "codex")) {
+  if (provider === "codex" || (harness === "codex" && provider === "openai")) {
     return "openai";
   }
   if (harness === "claude-cli" && provider === "anthropic") {
@@ -351,8 +351,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider: selectedLookupProvider,
     effectiveHarness,
   });
+  const selectedAuthProvider =
+    selectedStatusProvider === "openai" ? selectedStatusProvider : selectedLookupProvider;
   const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: selectedLookupProvider,
+    provider: selectedAuthProvider,
     harnessRuntime: effectiveHarness,
     config: cfg,
   });
@@ -361,8 +363,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider: activeProvider,
     effectiveHarness,
   });
+  const activeAuthProvider =
+    activeStatusProvider === "openai" ? activeStatusProvider : activeProvider;
   const activeAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: activeProvider,
+    provider: activeAuthProvider,
     harnessRuntime: effectiveHarness,
     config: cfg,
   });
@@ -428,7 +432,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const useCodexSyntheticUsage =
     selectedUsageCredentialType !== "api_key" &&
     shouldUseCodexSyntheticUsageForRuntime({
-      provider: usageStatusProvider,
+      provider: usageProvider,
       effectiveHarness,
     });
   const codexUsageAuthProfileId = useCodexSyntheticUsage

@@ -15,12 +15,33 @@ const sharedClientMocks = vi.hoisted(() => ({
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),
 }));
 
+const authMocks = vi.hoisted(() => {
+  const authProfileStore = { profiles: {} };
+  return {
+    authProfileStore,
+    prepareCodexAppServerAuthBinding: vi.fn(),
+    resolveCodexAppServerAuthProfileId: vi.fn(),
+    resolveCodexAppServerAuthProfileStore: vi.fn(),
+    resolveCodexAppServerPreparedAuthHandoff: vi.fn(),
+  };
+});
+
+vi.mock("./auth-binding.js", () => ({
+  prepareCodexAppServerAuthBinding: authMocks.prepareCodexAppServerAuthBinding,
+}));
+
+vi.mock("./auth-bridge.js", () => ({
+  resolveCodexAppServerAuthProfileId: authMocks.resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileStore: authMocks.resolveCodexAppServerAuthProfileStore,
+  resolveCodexAppServerPreparedAuthHandoff: authMocks.resolveCodexAppServerPreparedAuthHandoff,
+}));
+
 vi.mock("./shared-client.js", () => ({
   ...sharedClientMocks,
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
 }));
 
-const { requestCodexAppServerJson } = await import("./request.js");
+const { requestCodexAppServerJson, requestCodexAppServerRateLimits } = await import("./request.js");
 
 const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });
@@ -31,6 +52,26 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
     sharedClientMocks.retireSharedCodexAppServerClientIfCurrent.mockReset();
+    authMocks.prepareCodexAppServerAuthBinding.mockReset();
+    authMocks.resolveCodexAppServerAuthProfileId.mockReset();
+    authMocks.resolveCodexAppServerAuthProfileStore.mockReset();
+    authMocks.resolveCodexAppServerPreparedAuthHandoff.mockReset();
+    authMocks.resolveCodexAppServerAuthProfileStore.mockReturnValue(authMocks.authProfileStore);
+    authMocks.resolveCodexAppServerAuthProfileId.mockReturnValue("openai:work");
+    authMocks.resolveCodexAppServerPreparedAuthHandoff.mockResolvedValue({
+      authProfileId: "openai:work",
+      nativeAuthProfile: true,
+      preparedAuth: {
+        kind: "profile",
+        profileId: "openai:work",
+        store: authMocks.authProfileStore,
+        snapshot: { loginParams: { type: "chatgptAuthTokens" }, secretFreeCacheKey: "account" },
+      },
+    });
+    authMocks.prepareCodexAppServerAuthBinding.mockResolvedValue({
+      authProfileStore: authMocks.authProfileStore,
+      fingerprint: "auth-binding",
+    });
   });
 
   afterEach(() => {
@@ -83,6 +124,63 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     ).resolves.toEqual({ ok: true });
 
     expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, expectDeadlineOptions());
+  });
+
+  it("falls back to recent rate limits from the same shared client", async () => {
+    const rateLimits = {
+      rateLimits: { limitId: "codex", primary: { usedPercent: 9 } },
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimits)
+      .mockRejectedValueOnce(new Error("chatgpt authentication required to read rate limits"));
+    const client = { request };
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+    const params = {
+      timeoutMs: 3_500,
+      agentDir: "/tmp/agent-a",
+      authProfileId: "openai:work",
+    };
+
+    await expect(requestCodexAppServerRateLimits(params)).resolves.toEqual(rateLimits);
+    await expect(requestCodexAppServerRateLimits(params)).resolves.toEqual(rateLimits);
+
+    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/agent-a",
+        authBindingFingerprint: "auth-binding",
+        preparedAuth: expect.objectContaining({
+          kind: "profile",
+          profileId: "openai:work",
+        }),
+        timeoutMs: expect.any(Number),
+      }),
+    );
+    expect(sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0]).not.toHaveProperty(
+      "authProfileId",
+    );
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse rate limits from another physical client", async () => {
+    const firstClient = {
+      request: vi.fn(async () => ({ rateLimits: { limitId: "codex" } })),
+    };
+    const secondError = new Error("chatgpt authentication required to read rate limits");
+    const secondClient = {
+      request: vi.fn(async () => {
+        throw secondError;
+      }),
+    };
+    sharedClientMocks.getSharedCodexAppServerClient
+      .mockResolvedValueOnce(firstClient)
+      .mockResolvedValueOnce(secondClient);
+
+    await expect(requestCodexAppServerRateLimits({ timeoutMs: 3_500 })).resolves.toEqual({
+      rateLimits: { limitId: "codex" },
+    });
+    await expect(requestCodexAppServerRateLimits({ timeoutMs: 3_500 })).rejects.toBe(secondError);
   });
 
   it("allows current native thread management methods in sandboxed sessions", async () => {

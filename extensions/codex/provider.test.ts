@@ -595,11 +595,11 @@ describe("codex provider", () => {
   });
 
   it("keeps synthetic usage rate-limit reads on the configured Codex auth bridge", async () => {
-    const requestCodexAppServerJson = vi.fn(async (_params: unknown) => ({
+    const requestCodexAppServerRateLimits = vi.fn(async (_params: unknown) => ({
       rateLimitsByLimitId: {},
     }));
     vi.doMock("./src/app-server/request.js", () => ({
-      requestCodexAppServerJson,
+      requestCodexAppServerRateLimits,
     }));
     try {
       const provider = buildCodexProvider();
@@ -622,8 +622,7 @@ describe("codex provider", () => {
         fetchFn: fetch,
       } as never);
 
-      expect(requestCodexAppServerJson).toHaveBeenCalledWith({
-        method: "account/rateLimits/read",
+      expect(requestCodexAppServerRateLimits).toHaveBeenCalledWith({
         timeoutMs: 3500,
         agentDir: undefined,
         authProfileId: "openai:work",
@@ -641,7 +640,6 @@ describe("codex provider", () => {
           commandSource: "config",
           args: ["app-server", "--listen", "stdio://"],
         }),
-        isolated: true,
       });
     } finally {
       vi.doUnmock("./src/app-server/request.js");
