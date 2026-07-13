@@ -1290,7 +1290,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/wizard/setup.migration-import.ts: inspectSetupMigrationFreshness",
   "src/wizard/setup.official-plugins.ts: resolveOfficialPluginOnboardingInstallEntries",
   "src/wizard/setup.official-plugins.ts: testing",
-  "ui/src/pages/chat/chat-settings-patches.ts: trackPendingChatSettingsPatch",
 ];
 
 // Platform-variant findings. Allowed when present; never required.
