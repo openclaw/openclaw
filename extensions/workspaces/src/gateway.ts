@@ -2,19 +2,24 @@ import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { rememberWorkspaceBroadcast } from "./broadcast.js";
+import type {
+  WorkspaceChangeRequestState,
+  WorkspaceRequester,
+  WorkspaceTabProposal,
+} from "./change-requests.js";
 import { resolveBinding, type ResolveBindingOptions } from "./data-read.js";
 import { snapshotApprovedWidget } from "./manifest.js";
 import { scaffoldWorkspaceWidget } from "./scaffold.js";
-import {
-  validateWorkspaceDoc,
-  type WorkspaceActor,
-  type WorkspaceBinding,
-  type WorkspaceGrid,
-  type WorkspaceTab,
-  type WorkspaceWidget,
-  type JsonValue,
-  type WorkspaceDoc,
+import type {
+  WorkspaceActor,
+  WorkspaceBinding,
+  WorkspaceGrid,
+  WorkspaceTab,
+  WorkspaceWidget,
+  JsonValue,
+  WorkspaceDoc,
 } from "./schema.js";
+import { projectSharedChangeRequest, projectSharedTab } from "./sharing-projection.js";
 import { WorkspaceStore } from "./store.js";
 
 const READ_SCOPE = "operator.read" as const;
@@ -26,18 +31,107 @@ const APPROVE_SCOPE = "operator.approvals" as const;
 const TAB_SLUG_PATTERN = /^[a-z0-9-]{1,40}$/;
 const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,48}$/;
 const CUSTOM_WIDGET_NAME_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
+const RESOURCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 type GatewayMethodContext = Parameters<
   Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
 >[0];
 type GatewayRespond = GatewayMethodContext["respond"];
 type GatewayBroadcast = GatewayMethodContext["context"]["broadcast"];
+type TeamsRequestContext = Parameters<
+  OpenClawPluginApi["teams"]["resources"]["owner"]
+>[0]["context"];
 
 type WorkspaceGatewayMethodOptions = {
   api: OpenClawPluginApi;
   store?: WorkspaceStore;
+  storeForDomain?: (isolationDomainId: string) => WorkspaceStore;
   dataRead?: ResolveBindingOptions;
+  /** Injectable clock for exact-tab presence tests. */
+  presenceNow?: () => number;
 };
+
+type WorkspacePresenceParticipant = {
+  id: string;
+  kind: "human" | "agent";
+  self: boolean;
+};
+
+const WORKSPACE_PRESENCE_TTL_MS = 30_000;
+const MAX_WORKSPACE_PRESENCE_ENTRIES = 1_024;
+
+type WorkspacePresenceEntry = {
+  domainId: string;
+  workspaceId: string;
+  tabId: string;
+  principalId: string;
+  kind: "human" | "agent";
+  seenAt: number;
+};
+
+function presenceKey(entry: Omit<WorkspacePresenceEntry, "seenAt">): string {
+  return JSON.stringify([
+    entry.domainId,
+    entry.workspaceId,
+    entry.tabId,
+    entry.kind,
+    entry.principalId,
+  ]);
+}
+
+function createWorkspacePresenceRegistry(now: () => number) {
+  const entries = new Map<string, WorkspacePresenceEntry>();
+
+  const prune = (at: number) => {
+    for (const [key, entry] of entries) {
+      if (entry.seenAt + WORKSPACE_PRESENCE_TTL_MS <= at) {
+        entries.delete(key);
+      }
+    }
+    while (entries.size >= MAX_WORKSPACE_PRESENCE_ENTRIES) {
+      const oldest = entries.keys().next().value as string | undefined;
+      if (!oldest) {
+        break;
+      }
+      entries.delete(oldest);
+    }
+  };
+
+  return {
+    touch(params: {
+      context: TeamsRequestContext;
+      workspaceId: string;
+      tabId: string;
+    }): WorkspacePresenceParticipant[] {
+      const seenAt = now();
+      const current = {
+        domainId: params.context.isolationDomainId,
+        workspaceId: params.workspaceId,
+        tabId: params.tabId,
+        principalId: params.context.principal.id,
+        kind: params.context.principal.kind,
+      } as const;
+      const key = presenceKey(current);
+      // Delete before set so insertion order also tracks recency for bounded eviction.
+      entries.delete(key);
+      prune(seenAt);
+      entries.set(key, { ...current, seenAt });
+      return [...entries.values()]
+        .filter(
+          (entry) =>
+            entry.domainId === current.domainId &&
+            entry.workspaceId === current.workspaceId &&
+            entry.tabId === current.tabId,
+        )
+        .toSorted((left, right) => right.seenAt - left.seenAt)
+        .map((entry) => ({
+          id: entry.principalId,
+          kind: entry.kind,
+          self: entry.kind === current.kind && entry.principalId === current.principalId,
+        }));
+    },
+  };
+}
 
 function respondError(respond: GatewayRespond, error: unknown) {
   const code =
@@ -114,6 +208,79 @@ function readWidgetId(record: Record<string, unknown>, key = "id"): string {
     throw new Error(`${key} is invalid`);
   }
   return id;
+}
+
+function readResourceId(record: Record<string, unknown>, key: string): string {
+  const id = readRequiredString(record, key, key);
+  if (!RESOURCE_ID_PATTERN.test(id)) {
+    throw new Error(`${key} is invalid`);
+  }
+  return id;
+}
+
+function readExactTabParams(params: unknown): { workspaceId: string; id: string } {
+  const record = readParams(params, ["workspaceId", "id"]);
+  return {
+    workspaceId: readResourceId(record, "workspaceId"),
+    id: readResourceId(record, "id"),
+  };
+}
+
+function workspaceTabNotFound(): Error & { code: string } {
+  return Object.assign(new Error("workspace tab not found"), { code: "workspace_not_found" });
+}
+
+function workspaceRevisionConflict(): Error & { code: string } {
+  return Object.assign(new Error("workspace tab revision conflict"), {
+    code: "workspace_conflict",
+  });
+}
+
+function readOptionalRevision(record: Record<string, unknown>): number | undefined {
+  const value = record.ifRevision;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(value) || (value as number) < 1) {
+    throw new Error("ifRevision must be a positive integer");
+  }
+  return value as number;
+}
+
+function readRequiredRevision(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+  if (!Number.isInteger(value) || (value as number) < 1) {
+    throw new Error(`${key} must be a positive integer`);
+  }
+  return value as number;
+}
+
+function readChangeRequestState(
+  record: Record<string, unknown>,
+): WorkspaceChangeRequestState | undefined {
+  const state = readOptionalString(record, "state");
+  if (
+    state !== undefined &&
+    !["pending", "approved", "rejected", "cancelled", "conflict"].includes(state)
+  ) {
+    throw new Error("state is invalid");
+  }
+  return state as WorkspaceChangeRequestState | undefined;
+}
+
+function workspaceRequester(context: TeamsRequestContext): WorkspaceRequester {
+  if (context.principal.kind === "human") {
+    return { principalId: context.principal.id, kind: "human" };
+  }
+  if (!context.delegatedSession) {
+    throw new Error("a delegated agent assignment is required");
+  }
+  return {
+    principalId: context.principal.id,
+    kind: "agent",
+    delegationId: context.delegatedSession.id,
+    sponsorPrincipalId: context.delegatedSession.sponsorPrincipalId,
+  };
 }
 
 function readBooleanPatch(record: Record<string, unknown>, key: string): boolean | undefined {
@@ -294,6 +461,24 @@ function readTabPatch(value: unknown): Partial<Pick<WorkspaceTab, "title" | "ico
   };
 }
 
+function expandPortalProposal(tab: WorkspaceTab, value: unknown): unknown {
+  if (
+    !isRecord(value) ||
+    !Object.keys(value).every((key) => ["title", "icon", "hidden"].includes(key))
+  ) {
+    return value;
+  }
+  const patch = readTabPatch(value);
+  const proposal: WorkspaceTabProposal = {
+    slug: tab.slug,
+    title: patch.title ?? tab.title,
+    ...((patch.icon ?? tab.icon) ? { icon: patch.icon ?? tab.icon } : {}),
+    hidden: patch.hidden ?? tab.hidden,
+    widgets: tab.widgets.map(({ createdBy: _createdBy, ...widget }) => widget),
+  };
+  return proposal;
+}
+
 function readWidgetPatch(value: unknown): Partial<WorkspaceWidget> {
   const patch = readParams(value, ["title", "grid", "collapsed", "hidden", "bindings", "props"]);
   const title = readOptionalString(patch, "title");
@@ -365,19 +550,189 @@ async function respondWrite(
 export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodOptions) {
   const { api } = options;
   const store = options.store ?? new WorkspaceStore();
+  const storeForDomain = options.storeForDomain ?? (() => store);
+  const presence = createWorkspacePresenceRegistry(options.presenceNow ?? Date.now);
 
   api.registerGatewayMethod(
     "workspaces.get",
-    async ({ respond, context }) => {
+    async ({ params: rawParams, respond, context }) => {
       try {
+        const params = readParams(rawParams, ["workspaceId"]);
+        const workspaceId =
+          params.workspaceId === undefined
+            ? store.workspaceId
+            : readResourceId(params, "workspaceId");
+        let readableStore = store;
+        try {
+          const teamsContext = api.teams.context.require();
+          readableStore = storeForDomain(teamsContext.isolationDomainId);
+        } catch {
+          // Legacy operator requests have no isolated Teams context.
+        }
         rememberWorkspaceBroadcast(context.broadcast);
-        const doc = store.read();
+        const doc = readableStore.read();
+        if (doc.workspaceId !== workspaceId) {
+          throw workspaceTabNotFound();
+        }
         respond(true, { doc, workspaceVersion: doc.workspaceVersion });
       } catch (error) {
         respondError(respond, error);
       }
     },
-    { scope: READ_SCOPE },
+    {
+      scope: READ_SCOPE,
+      access: {
+        kind: "resource",
+        permission: "workspaces.workspace.read",
+        resolveResources: ({ params }) => {
+          const record = readParams(params, ["workspaceId"]);
+          const id =
+            record.workspaceId === undefined
+              ? store.workspaceId
+              : readResourceId(record, "workspaceId");
+          return [{ namespace: "workspaces", type: "workspace", id }];
+        },
+      },
+    },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.tab.get",
+    async ({ params: rawParams, respond }) => {
+      try {
+        const params = readExactTabParams(rawParams);
+        const teamsContext = api.teams.context.require();
+        const domainStore = storeForDomain(teamsContext.isolationDomainId);
+        const doc = domainStore.read();
+        if (params.workspaceId !== doc.workspaceId) {
+          throw workspaceTabNotFound();
+        }
+        const tab = doc.tabs.find((entry) => entry.id === params.id);
+        if (!tab) {
+          throw workspaceTabNotFound();
+        }
+        const resource = { namespace: "workspaces", type: "tab", id: tab.id } as const;
+        const [write, requestChanges] = await Promise.all([
+          api.teams.authorization.decide({
+            context: teamsContext,
+            permission: "workspaces.tab.write",
+            resources: [resource],
+          }),
+          api.teams.authorization.decide({
+            context: teamsContext,
+            permission: "workspaces.tab.changeRequest.create",
+            resources: [resource],
+          }),
+        ]);
+        const capabilityMode = write.allowed
+          ? "write"
+          : requestChanges.allowed
+            ? "request"
+            : "read";
+        respond(true, {
+          workspaceId: doc.workspaceId,
+          workspaceVersion: doc.workspaceVersion,
+          capabilityMode,
+          // Presence is derived only after exact-tab authorization and is keyed
+          // by tenant + workspace + tab. No other tab membership is serialized.
+          presence: presence.touch({
+            context: teamsContext,
+            workspaceId: doc.workspaceId,
+            tabId: tab.id,
+          }),
+          tab: projectSharedTab(tab),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    {
+      scope: READ_SCOPE,
+      access: {
+        kind: "resource",
+        member: true,
+        permission: "workspaces.tab.read",
+        resolveResources: ({ params }) => {
+          const exact = readExactTabParams(params);
+          return [{ namespace: "workspaces", type: "tab", id: exact.id }];
+        },
+      },
+    },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.sharing.sync",
+    async ({ params: rawParams, respond }) => {
+      try {
+        const params = readParams(rawParams, ["workspaceId"]);
+        const workspaceId = readResourceId(params, "workspaceId");
+        const context = api.teams.context.require();
+        const domainStore = storeForDomain(context.isolationDomainId);
+        if (workspaceId !== domainStore.workspaceId || context.principal.kind !== "human") {
+          throw workspaceTabNotFound();
+        }
+        const workspace = { namespace: "workspaces", type: "workspace", id: workspaceId } as const;
+        const owner = await api.teams.resources.owner({ context, resource: workspace });
+        if (owner.principalId !== context.principal.id) {
+          throw new Error("workspace sharing sync requires the canonical human owner");
+        }
+        const boundBefore = await api.teams.resources.listChildren({
+          context,
+          parent: workspace,
+          requiredAction: "workspaces.workspace.manageSharing",
+          type: "tab",
+        });
+        const doc = domainStore.read();
+        const currentTabIds = new Set(doc.tabs.map((tab) => tab.id));
+        for (const tab of doc.tabs) {
+          const operation = await api.teams.resources.prepareRegister({
+            context,
+            resource: { namespace: "workspaces", type: "tab", id: tab.id },
+            parent: workspace,
+            requiredAction: "workspaces.workspace.manageSharing",
+            idempotencyKey: `sharing-sync:${workspaceId}:${tab.id}`,
+          });
+          await api.teams.resources.replayPrepared({ operation });
+        }
+        for (const resource of boundBefore) {
+          if (currentTabIds.has(resource.id)) {
+            continue;
+          }
+          const operation = await api.teams.resources.prepareRetire({
+            context,
+            resource,
+            parent: workspace,
+            requiredAction: "workspaces.workspace.manageSharing",
+            idempotencyKey: `sharing-sync-retire:${workspaceId}:${resource.id}`,
+          });
+          await api.teams.resources.replayPrepared({ operation });
+        }
+        respond(true, {
+          workspaceId,
+          tabs: doc.tabs.map(({ id, revision, slug, title }) => ({ id, revision, slug, title })),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    {
+      scope: WRITE_SCOPE,
+      access: {
+        kind: "resource",
+        member: true,
+        permission: "workspaces.workspace.manageSharing",
+        resolveResources: ({ params }) => {
+          const record = readParams(params, ["workspaceId"]);
+          return [
+            {
+              namespace: "workspaces",
+              type: "workspace",
+              id: readResourceId(record, "workspaceId"),
+            },
+          ];
+        },
+      },
+    },
   );
 
   api.registerGatewayMethod(
@@ -429,6 +784,8 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
               throw new Error(`workspace tab already exists: ${slug}`);
             }
             draft.tabs.push({
+              id: randomUUID(),
+              revision: 1,
               slug,
               title,
               ...(icon !== undefined ? { icon } : {}),
@@ -458,22 +815,302 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
     "workspaces.tab.update",
     async (opts) => {
       try {
-        const params = readParams(opts.params, ["slug", "patch"]);
-        const slug = readSlug(params);
+        const params = readParams(opts.params, [
+          "workspaceId",
+          "id",
+          "slug",
+          "ifRevision",
+          "patch",
+        ]);
         const patch = readTabPatch(params.patch);
-        await respondWrite(opts, RPC_ACTOR, slug, async () =>
-          store.mutate(
-            (draft) => {
-              Object.assign(findTab(draft, slug), patch);
-            },
-            { actor: RPC_ACTOR },
-          ),
+        let teamsContext: TeamsRequestContext | undefined;
+        try {
+          teamsContext = api.teams.context.require();
+        } catch {
+          // Legacy operator request.
+        }
+        const ifRevision = teamsContext
+          ? readRequiredRevision(params, "ifRevision")
+          : readOptionalRevision(params);
+        const targetStore = teamsContext ? storeForDomain(teamsContext.isolationDomainId) : store;
+        if (teamsContext && readResourceId(params, "workspaceId") !== targetStore.workspaceId) {
+          throw workspaceTabNotFound();
+        }
+        if (!teamsContext && params.workspaceId !== undefined) {
+          throw new Error("workspaceId is only accepted for exact Teams updates");
+        }
+        const id = teamsContext ? readResourceId(params, "id") : undefined;
+        const slug = teamsContext ? undefined : readSlug(params);
+        let changedTabSlug: string | undefined;
+        const actor: WorkspaceActor =
+          teamsContext?.principal.kind === "agent"
+            ? `agent:${teamsContext.principal.id}`
+            : RPC_ACTOR;
+        const result = targetStore.mutate(
+          (draft) => {
+            const tab = id ? draft.tabs.find((entry) => entry.id === id) : findTab(draft, slug!);
+            if (!tab) {
+              throw workspaceTabNotFound();
+            }
+            if (ifRevision !== undefined && tab.revision !== ifRevision) {
+              throw workspaceRevisionConflict();
+            }
+            changedTabSlug = tab.slug;
+            Object.assign(tab, patch);
+          },
+          { actor },
         );
+        if (teamsContext && id) {
+          const updatedTab = result.doc.tabs.find((entry) => entry.id === id);
+          if (!updatedTab) {
+            throw workspaceTabNotFound();
+          }
+          // Teams portal v1 polls exact resources until the host supports
+          // permission-filtered resource events. Never use the global broadcast.
+          opts.respond(true, {
+            workspaceId: result.doc.workspaceId,
+            workspaceVersion: result.doc.workspaceVersion,
+            tab: projectSharedTab(updatedTab),
+          });
+        } else {
+          broadcastChange(opts.context.broadcast, { doc: result.doc, actor, changedTabSlug });
+          opts.respond(true, { doc: result.doc, workspaceVersion: result.doc.workspaceVersion });
+        }
       } catch (error) {
         respondError(opts.respond, error);
       }
     },
-    { scope: WRITE_SCOPE },
+    {
+      scope: WRITE_SCOPE,
+      access: {
+        kind: "resource",
+        member: true,
+        permission: "workspaces.tab.write",
+        resolveResources: ({ params }) => {
+          const record = readParams(params, ["workspaceId", "id", "slug", "ifRevision", "patch"]);
+          return [{ namespace: "workspaces", type: "tab", id: readResourceId(record, "id") }];
+        },
+      },
+    },
+  );
+
+  const exactTabAccess = (permission: string) => ({
+    kind: "resource" as const,
+    member: true,
+    permission,
+    resolveResources: ({ params }: { params: unknown }) => {
+      const record = readParams(params, [
+        "workspaceId",
+        "tabId",
+        "requestId",
+        "baseRevision",
+        "proposal",
+        "idempotencyKey",
+        "state",
+        "decision",
+        "reason",
+      ]);
+      return [
+        {
+          namespace: "workspaces",
+          type: "tab",
+          id: readResourceId(record, "tabId"),
+        },
+      ];
+    },
+  });
+
+  api.registerGatewayMethod(
+    "workspaces.changeRequest.create",
+    async ({ params: rawParams, respond }) => {
+      try {
+        const params = readParams(rawParams, [
+          "workspaceId",
+          "tabId",
+          "baseRevision",
+          "proposal",
+          "idempotencyKey",
+        ]);
+        const context = api.teams.context.require();
+        const domainStore = storeForDomain(context.isolationDomainId);
+        if (readResourceId(params, "workspaceId") !== domainStore.workspaceId) {
+          throw workspaceTabNotFound();
+        }
+        const tabId = readResourceId(params, "tabId");
+        const tab = domainStore.read().tabs.find((entry) => entry.id === tabId);
+        if (!tab) {
+          throw workspaceTabNotFound();
+        }
+        const request = domainStore.createChangeRequest({
+          id: randomUUID(),
+          tabId,
+          requester: workspaceRequester(context),
+          baseTabRevision: readRequiredRevision(params, "baseRevision"),
+          idempotencyKey: readRequiredString(params, "idempotencyKey", "idempotencyKey"),
+          proposal: expandPortalProposal(tab, params.proposal),
+        });
+        respond(true, { request: projectSharedChangeRequest(request) });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    {
+      scope: WRITE_SCOPE,
+      access: exactTabAccess("workspaces.tab.changeRequest.create"),
+    },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.changeRequest.list",
+    async ({ params: rawParams, respond }) => {
+      try {
+        const params = readParams(rawParams, ["workspaceId", "tabId", "state"]);
+        const context = api.teams.context.require();
+        const domainStore = storeForDomain(context.isolationDomainId);
+        if (readResourceId(params, "workspaceId") !== domainStore.workspaceId) {
+          throw workspaceTabNotFound();
+        }
+        const tabId = readResourceId(params, "tabId");
+        const resource = { namespace: "workspaces", type: "tab", id: tabId } as const;
+        const owner = await api.teams.resources.owner({ context, resource });
+        const isOwner =
+          context.principal.kind === "human" && owner.principalId === context.principal.id;
+        const requests = domainStore.listChangeRequests({
+          tabId,
+          ...(readChangeRequestState(params) ? { state: readChangeRequestState(params) } : {}),
+          ...(isOwner ? {} : { requesterPrincipalId: context.principal.id }),
+        });
+        respond(true, {
+          requests: isOwner ? requests : requests.map(projectSharedChangeRequest),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE, access: exactTabAccess("workspaces.tab.read") },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.changeRequest.get",
+    async ({ params: rawParams, respond }) => {
+      try {
+        const params = readParams(rawParams, ["workspaceId", "tabId", "requestId"]);
+        const context = api.teams.context.require();
+        const domainStore = storeForDomain(context.isolationDomainId);
+        if (readResourceId(params, "workspaceId") !== domainStore.workspaceId) {
+          throw workspaceTabNotFound();
+        }
+        const tabId = readResourceId(params, "tabId");
+        const request = domainStore.readChangeRequest(readResourceId(params, "requestId"));
+        if (!request || request.tabId !== tabId) {
+          throw workspaceTabNotFound();
+        }
+        const owner = await api.teams.resources.owner({
+          context,
+          resource: { namespace: "workspaces", type: "tab", id: tabId },
+        });
+        const isOwner =
+          context.principal.kind === "human" && owner.principalId === context.principal.id;
+        if (!isOwner && request.requester.principalId !== context.principal.id) {
+          throw workspaceTabNotFound();
+        }
+        respond(true, { request: isOwner ? request : projectSharedChangeRequest(request) });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE, access: exactTabAccess("workspaces.tab.read") },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.changeRequest.cancel",
+    async ({ params: rawParams, respond }) => {
+      try {
+        const params = readParams(rawParams, ["workspaceId", "tabId", "requestId"]);
+        const context = api.teams.context.require();
+        const domainStore = storeForDomain(context.isolationDomainId);
+        if (readResourceId(params, "workspaceId") !== domainStore.workspaceId) {
+          throw workspaceTabNotFound();
+        }
+        const tabId = readResourceId(params, "tabId");
+        const existing = domainStore.readChangeRequest(readResourceId(params, "requestId"));
+        if (!existing || existing.tabId !== tabId) {
+          throw workspaceTabNotFound();
+        }
+        const requester = workspaceRequester(context);
+        if (JSON.stringify(existing.requester) !== JSON.stringify(requester)) {
+          throw workspaceTabNotFound();
+        }
+        const request = domainStore.cancelChangeRequest({
+          id: existing.id,
+          requester,
+        });
+        respond(true, { request: projectSharedChangeRequest(request) });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    {
+      scope: WRITE_SCOPE,
+      access: exactTabAccess("workspaces.tab.changeRequest.create"),
+    },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.changeRequest.decide",
+    async ({ params: rawParams, respond }) => {
+      try {
+        const params = readParams(rawParams, [
+          "workspaceId",
+          "tabId",
+          "requestId",
+          "decision",
+          "reason",
+        ]);
+        const context = api.teams.context.require();
+        if (context.principal.kind !== "human") {
+          throw new Error("change request decisions require the canonical human owner");
+        }
+        const domainStore = storeForDomain(context.isolationDomainId);
+        if (readResourceId(params, "workspaceId") !== domainStore.workspaceId) {
+          throw workspaceTabNotFound();
+        }
+        const tabId = readResourceId(params, "tabId");
+        const resource = { namespace: "workspaces", type: "tab", id: tabId } as const;
+        const owner = await api.teams.resources.owner({ context, resource });
+        if (owner.principalId !== context.principal.id) {
+          throw new Error("change request decisions require the canonical human owner");
+        }
+        const existing = domainStore.readChangeRequest(readResourceId(params, "requestId"));
+        if (!existing || existing.tabId !== tabId) {
+          throw workspaceTabNotFound();
+        }
+        const decision = readRequiredString(params, "decision", "decision");
+        if (decision !== "approved" && decision !== "rejected") {
+          throw new Error("decision must be approved or rejected");
+        }
+        const result = domainStore.decideChangeRequest({
+          id: existing.id,
+          decision,
+          decider: { principalId: context.principal.id, kind: "human" },
+          reason: readOptionalString(params, "reason"),
+        });
+        const tab = result.doc.tabs.find((entry) => entry.id === tabId);
+        respond(true, {
+          workspaceId: result.doc.workspaceId,
+          request: projectSharedChangeRequest(result.request),
+          applied: result.applied,
+          workspaceVersion: result.doc.workspaceVersion,
+          ...(tab ? { tab: projectSharedTab(tab) } : {}),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    {
+      scope: APPROVE_SCOPE,
+      access: exactTabAccess("workspaces.tab.reviewChanges"),
+    },
   );
 
   api.registerGatewayMethod(
@@ -770,9 +1407,8 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
     async (opts) => {
       try {
         const params = readParams(opts.params, ["doc"]);
-        const doc = validateWorkspaceDoc(params.doc);
         await respondWrite(opts, RPC_ACTOR, undefined, async () =>
-          store.replace(doc, { actor: RPC_ACTOR }),
+          store.replace(params.doc, { actor: RPC_ACTOR }),
         );
       } catch (error) {
         respondError(opts.respond, error);

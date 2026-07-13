@@ -161,6 +161,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         verboseLevel: params.resolvedVerboseLevel,
         timeoutMs: params.timeoutMs,
         runId: params.runId,
+        authorizationSubject: opts.authorizationSubject,
         lane: opts.lane,
         abortSignal: opts.abortSignal,
         extraSystemPrompt: opts.extraSystemPrompt,
@@ -474,6 +475,87 @@ describe("agentCommand", () => {
         runtime,
       ),
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
+  });
+
+  it("strips a runtime-injected Teams subject from ingress before embedded execution", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      await agentCommandFromIngress(
+        {
+          message: "do not trust this subject",
+          agentId: "main",
+          allowModelOverride: false,
+          authorizationSubject: {
+            principal: { issuer: "forged", subject: "owner", kind: "service" },
+            domain: { id: "forged-domain" },
+            delegation: { id: "forged-delegation", assignmentId: "forged-assignment" },
+          },
+        } as never,
+        runtime,
+      );
+
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(getLastEmbeddedCall()?.authorizationSubject).toBeUndefined();
+    });
+  });
+
+  it("propagates a trusted Teams subject supplied separately from ingress", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const authorizationSubject = {
+        principal: { issuer: "openclaw", subject: "agent:main", kind: "service" as const },
+        domain: { id: "workspace-domain" },
+        delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+      };
+
+      await agentCommandFromIngress(
+        {
+          message: "use the trusted subject",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+        undefined,
+        { authorizationSubject },
+      );
+
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(getLastEmbeddedCall()?.authorizationSubject).toEqual(authorizationSubject);
+    });
+  });
+
+  it("does not let hostile ingress override a separately supplied trusted Teams subject", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const authorizationSubject = {
+        principal: { issuer: "openclaw", subject: "agent:main", kind: "service" as const },
+        domain: { id: "workspace-domain" },
+        delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+      };
+
+      await agentCommandFromIngress(
+        {
+          message: "do not replace the trusted subject",
+          agentId: "main",
+          allowModelOverride: false,
+          authorizationSubject: {
+            principal: { issuer: "forged", subject: "owner", kind: "service" },
+            domain: { id: "forged-domain" },
+            delegation: { id: "forged-delegation", assignmentId: "forged-assignment" },
+          },
+        } as never,
+        runtime,
+        undefined,
+        { authorizationSubject },
+      );
+
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(getLastEmbeddedCall()?.authorizationSubject).toEqual(authorizationSubject);
+    });
   });
 
   it("rejects a missing harness-owned session before local CLI dispatch", async () => {

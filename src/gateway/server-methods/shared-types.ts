@@ -4,6 +4,7 @@ import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/s
 import type {
   ConnectParams,
   ErrorShape,
+  GatewayPrincipal,
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
@@ -18,6 +19,7 @@ import type {
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { GatewayAuthorizationRuntime } from "../authorization/contracts.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
@@ -47,6 +49,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
+  principal?: GatewayPrincipal;
   connId?: string;
   clientIp?: string;
   pluginSurfaceUrls?: Record<string, string>;
@@ -87,6 +90,7 @@ type GatewayCrestodianSession = {
 
 /** Runtime services and mutable gateway state available to request handlers. */
 export type GatewayRequestContext = {
+  authorization: GatewayAuthorizationRuntime;
   deps: CliDeps;
   cron: GatewayCronServiceContract;
   cronStorePath: string;

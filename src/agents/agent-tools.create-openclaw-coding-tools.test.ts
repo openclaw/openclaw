@@ -780,6 +780,11 @@ describe("createOpenClawCodingTools", () => {
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
       .mockReturnValue([]);
+    const authorizationSubject = {
+      principal: { issuer: "core", subject: "agent:main", kind: "service" as const },
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+    };
 
     try {
       createOpenClawCodingTools({
@@ -789,6 +794,7 @@ describe("createOpenClawCodingTools", () => {
         modelProvider: "openrouter",
         modelId: "openrouter/auto",
         nativeChannelId: "oc_native_chat",
+        authorizationSubject,
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -804,6 +810,7 @@ describe("createOpenClawCodingTools", () => {
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
       expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
+      expect(pluginToolOptions?.authorizationSubject).toBe(authorizationSubject);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }
@@ -904,6 +911,18 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().messageActionTurnCapability).toBe(
       "turn-capability-1",
     );
+  });
+
+  it("forwards the Teams subject through standard tool construction", () => {
+    const authorizationSubject = {
+      principal: { issuer: "core", subject: "agent:main", kind: "service" as const },
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+    };
+
+    createOpenClawCodingTools({ config: testConfig, authorizationSubject });
+
+    expect(latestCreateOpenClawToolsOptions().authorizationSubject).toBe(authorizationSubject);
   });
 
   it("forwards auth profiles to plugin-only tool construction", () => {

@@ -1,10 +1,13 @@
 import type { WorkspaceDoc } from "./schema.js";
 
 export const DEFAULT_WORKSPACE: WorkspaceDoc = {
-  schemaVersion: 1,
+  schemaVersion: 2,
+  workspaceId: "default",
   workspaceVersion: 1,
   tabs: [
     {
+      id: "main",
+      revision: 1,
       slug: "main",
       title: "Overview",
       icon: "layoutWorkspace",

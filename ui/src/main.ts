@@ -1,9 +1,9 @@
 // Control UI module implements main behavior.
 import "./styles.css";
-import "./app/app-host.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 import { installStaleChunkReloadListener } from "./app/stale-chunk-reload.ts";
 import { CONTROL_UI_BUILD_INFO } from "./build-info.ts";
+import { isTeamsPortalPath, mountTeamsPortal } from "./pages/teams/teams-portal.ts";
 
 type ViteImportMeta = ImportMeta & {
   readonly env?: {
@@ -16,6 +16,23 @@ const currentControlUiBuildId = CONTROL_UI_BUILD_INFO.buildId;
 
 syncDocumentPublicAssetLinks();
 installStaleChunkReloadListener();
+
+const teamsRoute = isTeamsPortalPath(window.location.pathname);
+if (teamsRoute) {
+  // Teams runs before the operator app mounts so browser-held gateway tokens
+  // can never open the full-control shell on a member route.
+  const operatorMount = document.querySelector("openclaw-app");
+  operatorMount?.setAttribute("hidden", "");
+  if (!customElements.get("openclaw-app")) {
+    customElements.define("openclaw-app", class extends HTMLElement {});
+  }
+  const host = document.createElement("div");
+  host.dataset.teamsPortal = "true";
+  document.body.append(host);
+  mountTeamsPortal({ host, route: teamsRoute });
+} else {
+  void import("./app/app-host.ts");
+}
 
 if (isProd && "serviceWorker" in navigator) {
   const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);

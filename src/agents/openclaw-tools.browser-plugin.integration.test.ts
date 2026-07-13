@@ -132,6 +132,31 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(details.workspaceOnly).toBe(true);
   });
 
+  it("binds Teams authority without projecting it onto plugin context fields", () => {
+    hoisted.resolvePluginTools.mockReturnValue([]);
+    const authorizationSubject = {
+      principal: { issuer: "core", subject: "agent:main", kind: "service" as const },
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+      agentSession: {
+        id: "binding-1",
+        invokingPrincipal: {
+          issuer: "trusted-proxy",
+          subject: "owner@example.com",
+          kind: "human" as const,
+        },
+      },
+    };
+
+    resolveOpenClawPluginToolsForOptions({
+      options: { authorizationSubject },
+    });
+
+    const context = firstResolvePluginToolsParams().context as Record<string, unknown>;
+    expect(context).not.toHaveProperty("authorizationSubject");
+    expect(JSON.stringify(context)).not.toContain("delegation-1");
+  });
+
   it("forwards gateway subagent binding to plugin resolution", () => {
     hoisted.resolvePluginTools.mockReturnValue([]);
     const config = {

@@ -7,6 +7,7 @@ import type {
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { GatewayAuthorizationSubject } from "./authorization/contracts.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
@@ -14,6 +15,7 @@ export type McpLoopbackRequestContext = {
   agentId?: string;
   sessionId?: string;
   runId?: string;
+  authorizationSubject?: GatewayAuthorizationSubject;
   modelProvider?: string;
   modelId?: string;
   messageProvider?: string;

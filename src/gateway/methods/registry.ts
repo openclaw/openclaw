@@ -1,6 +1,11 @@
 // Gateway method registry normalizes method descriptors, enforces unique names, and exposes dispatch policy metadata.
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
+import type {
+  GatewayMethodAccessPolicy,
+  GatewayResourceRef,
+  GatewayResourceResolutionInput,
+} from "../authorization/contracts.js";
 import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -23,6 +28,57 @@ function normalizeMethodName(name: string): string {
   return name.trim();
 }
 
+function canonicalizePluginAccessPolicy(params: {
+  pluginId: string;
+  method: string;
+  access: GatewayMethodAccessPolicy;
+}): GatewayMethodAccessPolicy {
+  const kind: unknown = params.access.kind;
+  const permission: unknown =
+    kind === "resource" ? (params.access as { permission?: unknown }).permission : undefined;
+  const resolver: unknown =
+    kind === "resource"
+      ? (params.access as { resolveResources?: unknown }).resolveResources
+      : undefined;
+  const member: unknown =
+    kind === "resource" ? (params.access as { member?: unknown }).member : undefined;
+  if (kind !== "resource") {
+    throw new Error(`plugin gateway method access must be resource-scoped: ${params.method}`);
+  }
+  if (typeof permission !== "string" || !permission.trim()) {
+    throw new Error(`gateway method access permission must not be empty: ${params.method}`);
+  }
+  if (typeof resolver !== "function") {
+    throw new Error(`plugin gateway method access resolver must be a function: ${params.method}`);
+  }
+  const resolveResources = resolver as (
+    input: GatewayResourceResolutionInput,
+  ) => Promise<readonly GatewayResourceRef[]> | readonly GatewayResourceRef[];
+  return Object.freeze({
+    kind: "resource" as const,
+    ...(member === true ? { member: true } : {}),
+    permission: permission.trim(),
+    resolveResources: async (input: GatewayResourceResolutionInput) => {
+      const resources = await resolveResources(input);
+      if (!Array.isArray(resources)) {
+        throw new Error("plugin gateway resource resolver must return an array");
+      }
+      return Object.freeze(
+        resources.map((resource) => {
+          if (!resource || resource.namespace !== params.pluginId) {
+            throw new Error("plugin gateway resources must use the loader-bound plugin namespace");
+          }
+          return Object.freeze({
+            namespace: params.pluginId,
+            type: resource.type,
+            id: resource.id,
+          });
+        }),
+      );
+    },
+  });
+}
+
 function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethodDescriptor {
   const name = normalizeMethodName(input.name);
   if (!name) {
@@ -39,10 +95,22 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
   if (!normalizedScope) {
     throw new Error(`gateway method descriptor is missing a scope: ${name}`);
   }
+  const access =
+    input.access && input.owner.kind === "plugin"
+      ? canonicalizePluginAccessPolicy({
+          pluginId: input.owner.pluginId,
+          method: name,
+          access: input.access,
+        })
+      : input.access;
+  if (access?.kind === "resource" && !access.permission.trim()) {
+    throw new Error(`gateway method access permission must not be empty: ${name}`);
+  }
   return {
     ...input,
     name,
     scope: normalizedScope,
+    ...(access ? { access } : {}),
     ...(input.startup === "unavailable-until-sidecars"
       ? { startup: "unavailable-until-sidecars" }
       : {}),
@@ -73,6 +141,8 @@ export function createGatewayMethodRegistry(
         .filter((descriptor) => descriptor.advertise !== false)
         .map((descriptor) => descriptor.name),
     getScope: (name) => byName.get(name)?.scope,
+    getOwner: (name) => byName.get(name)?.owner,
+    getAccessPolicy: (name) => byName.get(name)?.access,
     isStartupUnavailable: (name) => byName.get(name)?.startup === "unavailable-until-sidecars",
     isControlPlaneWrite: (name) => byName.get(name)?.controlPlaneWrite === true,
     descriptors: () => descriptors,
@@ -107,13 +177,22 @@ export function createPluginGatewayMethodDescriptor(params: {
   name: string;
   handler: GatewayMethodHandler;
   scope?: OperatorScope;
+  access?: GatewayMethodAccessPolicy;
 }): GatewayMethodDescriptorInput {
+  const access = params.access
+    ? canonicalizePluginAccessPolicy({
+        pluginId: params.pluginId,
+        method: params.name,
+        access: params.access,
+      })
+    : undefined;
   const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
   return {
     name: params.name,
     handler: params.handler,
     owner: { kind: "plugin", pluginId: params.pluginId },
     scope: normalizedScope ?? ADMIN_SCOPE,
+    ...(access ? { access } : {}),
   };
 }
 

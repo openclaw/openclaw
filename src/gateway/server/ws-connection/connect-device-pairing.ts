@@ -72,6 +72,7 @@ export async function authorizeGatewayConnectDevice(
     authMethod,
     bootstrapTokenCandidate,
     pairingLocality,
+    teamsSession,
     skipLocalBackendSelfPairing,
     skipControlUiPairingForDevice,
   } = state;
@@ -143,6 +144,12 @@ export async function authorizeGatewayConnectDevice(
           isNativeAppUi,
           reason,
         });
+      const allowTeamsMemberSessionPairing =
+        authMethod === "teams-session" &&
+        teamsSession !== undefined &&
+        role === "member" &&
+        scopes.length === 0 &&
+        isControlUi;
       const allowSilentTrustedCidrsNodePairing = shouldAutoApproveNodePairingFromTrustedCidrs({
         existingPairedDevice: Boolean(existingPairedDevice),
         role,
@@ -229,6 +236,7 @@ export async function authorizeGatewayConnectDevice(
           reason === "scope-upgrade"
             ? false
             : allowSilentLocalPairing ||
+              allowTeamsMemberSessionPairing ||
               allowSilentTrustedCidrsNodePairing ||
               allowSetupCodeMobileBootstrapPairing ||
               allowControlUiOperatorBootstrapPairing,
@@ -278,7 +286,11 @@ export async function authorizeGatewayConnectDevice(
               // Same-host local approvals are prune-eligible "silent";
               // trusted-CIDR approvals cross hosts and must never be
               // auto-pruned, so they carry their own provenance.
-              approvedVia: allowSilentLocalPairing ? "silent" : "trusted-cidr",
+              approvedVia: allowTeamsMemberSessionPairing
+                ? "teams-session"
+                : allowSilentLocalPairing
+                  ? "silent"
+                  : "trusted-cidr",
             });
         if (approved?.status === "approved") {
           if (bootstrapApprovalProfile) {

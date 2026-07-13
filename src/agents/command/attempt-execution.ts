@@ -735,6 +735,7 @@ export function runAgentAttempt(params: {
         timeoutMs: params.timeoutMs,
         runTimeoutOverrideMs: params.runTimeoutOverrideMs,
         runId: params.runId,
+        authorizationSubject: params.opts.authorizationSubject,
         lifecycleGeneration: params.lifecycleGeneration,
         lane: params.opts.lane,
         extraSystemPrompt: params.opts.extraSystemPrompt,
@@ -920,6 +921,7 @@ export function runAgentAttempt(params: {
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
+    authorizationSubject: params.opts.authorizationSubject,
     lane: params.opts.lane,
     // Hidden internal runs have no assistant-event consumer. Visible subagent
     // lanes can still feed Control UI, session subscribers, and ACP parent relays.

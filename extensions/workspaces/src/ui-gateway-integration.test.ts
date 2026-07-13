@@ -46,10 +46,13 @@ type RoutingClient = NonNullable<Parameters<typeof loadWorkspace>[1]>;
 
 // One tab + one widget, seeded through the store's real replace() API.
 const SEED_DOC: WorkspaceDoc = {
-  schemaVersion: 1,
+  schemaVersion: 2,
+  workspaceId: "default",
   workspaceVersion: 0,
   tabs: [
     {
+      id: "ops",
+      revision: 1,
       slug: "ops",
       title: "Ops",
       hidden: false,

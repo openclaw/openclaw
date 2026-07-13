@@ -3238,6 +3238,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
   it("binds current turn context into the bundle MCP client grant", async () => {
     const { dir, sessionFile } = createSessionFile();
+    const authorizationSubject = {
+      principal: { issuer: "core", subject: "agent:worker", kind: "service" as const },
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+    };
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
@@ -3302,6 +3307,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-room-event-tools",
+        authorizationSubject,
         config: createCliBackendConfig(),
         sessionEntry: {
           execHost: "node",
@@ -3360,6 +3366,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           agentId: "worker",
           sessionId: "session-test",
           runId: "run-test-room-event-tools",
+          authorizationSubject,
           modelProvider: "anthropic",
           modelId: "test-model",
           messageProvider: "discord",
@@ -3425,6 +3432,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.mcpDeliveryCapture).toBe(true);
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
         expect.objectContaining({
+          authorizationSubject,
           clientCaps: ["tool-events", "inline-widgets"],
           taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
