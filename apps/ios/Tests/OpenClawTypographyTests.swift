@@ -355,6 +355,22 @@ struct OpenClawTypographyTests {
         #expect(offenders.isEmpty, Comment(rawValue: offenders.joined(separator: "\n")))
     }
 
+    @Test func `accessibility metadata text does not require visual typography`() throws {
+        let accessibilityTextSamples = [
+            ".accessibilityLabel(Text(title))",
+            ".accessibilityValue(\n    Text(value))",
+            ".accessibilityHint(\n\n    Text(hint))",
+        ]
+        for source in accessibilityTextSamples {
+            let lines = source.components(separatedBy: .newlines)
+            let idx = try #require(lines.firstIndex { Self.isTextOrLabelCall($0) })
+            #expect(Self.isAccessibilityMetadataTextCall(at: idx, in: lines))
+        }
+
+        #expect(!Self.isAccessibilityMetadataTextCall(at: 0, in: ["Text(title)"]))
+        #expect(!Self.isAccessibilityMetadataTextCall(at: 0, in: [".accessibilityLabel(title)"]))
+    }
+
     @Test func `secure fields do not use platform placeholder text`() throws {
         let offenders = try Self.swiftSourcesForTypographyAudit().flatMap { url -> [String] in
             let source = try String(contentsOf: url, encoding: .utf8)
@@ -454,7 +470,10 @@ struct OpenClawTypographyTests {
                 let hasLocalFont = fontTokens.contains { window.contains($0) }
                     || self.hasAllowedBrandedFontParameter(window, line: rawLine, in: url)
 
-                if self.isTextOrLabelCall(rawLine), !hasLocalFont {
+                if self.isTextOrLabelCall(rawLine),
+                   !self.isAccessibilityMetadataTextCall(at: idx, in: lines),
+                   !hasLocalFont
+                {
                     return "\(self.relativePath(url)):\(idx + 1): \(line)"
                 }
 
@@ -469,6 +488,23 @@ struct OpenClawTypographyTests {
 
     private static func isTextOrLabelCall(_ line: String) -> Bool {
         line.range(of: #"\b(Text|Label)\s*\("#, options: .regularExpression) != nil
+    }
+
+    private static func isAccessibilityMetadataTextCall(at idx: Int, in lines: [String]) -> Bool {
+        let line = lines[idx]
+        guard let textCall = line.range(of: #"\bText\s*\("#, options: .regularExpression) else { return false }
+
+        let contextStart = max(lines.startIndex, idx - 4)
+        let precedingLines = lines[contextStart..<idx].joined(separator: "\n")
+        let currentLinePrefix = line[..<textCall.upperBound]
+        let context = precedingLines.isEmpty
+            ? String(currentLinePrefix)
+            : precedingLines + "\n" + String(currentLinePrefix)
+
+        // Accessibility metadata is announced, not rendered; localized Text overloads need no visual font.
+        return context.range(
+            of: #"\.accessibility(?:Label|Value|Hint)\s*\(\s*Text\s*\($"#,
+            options: .regularExpression) != nil
     }
 
     private static func isShorthandControlCall(_ line: String) -> Bool {
