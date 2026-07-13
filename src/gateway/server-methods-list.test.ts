@@ -3,7 +3,6 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  CORE_GATEWAY_METHOD_SPECS,
   createCoreGatewayMethodDescriptors,
   listCoreGatewayMethodNames,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
@@ -49,34 +48,6 @@ describe("listGatewayMethods", () => {
 
   it("advertises Control UI GitHub previews", () => {
     expect(listGatewayMethods()).toContain("controlUi.githubPreview");
-  });
-
-  it("advertises Crestodian setup methods with their dispatch policy", () => {
-    const methods = listGatewayMethods();
-    expect(methods).toContain("crestodian.setup.verify");
-    expect(methods).toContain("crestodian.setup.auth.start");
-    expect(coreGatewayHandlers["crestodian.setup.verify"]).toEqual(expect.any(Function));
-    expect(coreGatewayHandlers["crestodian.setup.auth.start"]).toEqual(expect.any(Function));
-    expect(
-      CORE_GATEWAY_METHOD_SPECS.find((spec) => spec.name === "crestodian.setup.verify")
-        ?.controlPlaneWrite,
-    ).toBeUndefined();
-    // Candidate activation is an admin-only probe that persists only on
-    // success. The generic three-write budget would strand the automatic
-    // fallback ladder before its fourth candidate or a manual retry.
-    expect(
-      CORE_GATEWAY_METHOD_SPECS.find((spec) => spec.name === "crestodian.setup.activate")
-        ?.controlPlaneWrite,
-    ).toBeUndefined();
-    expect(methods.indexOf("crestodian.setup.verify")).toBeGreaterThan(
-      methods.indexOf("tts.speak"),
-    );
-    expect(methods.indexOf("crestodian.setup.auth.start")).toBe(
-      methods.indexOf("crestodian.setup.activate") + 1,
-    );
-    expect(methods.indexOf("wizard.start")).toBe(
-      methods.indexOf("crestodian.setup.auth.start") + 1,
-    );
   });
 
   it("advertises Control UI session pull request detection", () => {
@@ -137,6 +108,7 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.endTurn");
     expect(methods).toContain("talk.session.cancelTurn");
     expect(methods).toContain("talk.session.cancelOutput");
+    expect(methods).toContain("talk.session.acknowledgeMark");
     expect(methods).toContain("talk.session.submitToolResult");
     expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");

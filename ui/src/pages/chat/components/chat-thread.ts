@@ -91,6 +91,8 @@ type ChatThreadState = {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
+  transcriptRenderDependencies: readonly unknown[];
+  transcriptRenderContext: object;
 };
 
 type ChatThreadProps = {
@@ -171,6 +173,8 @@ function createChatThreadState(): ChatThreadState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
+    transcriptRenderDependencies: [],
+    transcriptRenderContext: {},
   };
 }
 
@@ -716,6 +720,47 @@ function renderLoadingSkeleton() {
   `;
 }
 
+function chatRenderItemGuardDependencies(
+  item: ReturnType<typeof collapseCompletedTurnWork>[number],
+): readonly unknown[] {
+  if (item.kind === "stream-run") {
+    return [item.key, ...item.parts];
+  }
+  if (item.kind === "work-group") {
+    return [item.key, item.durationMs, item.hasError, ...item.groups];
+  }
+  return [item];
+}
+
+function trackTranscriptRenderDependencies(
+  state: ChatThreadState,
+  dependencies: unknown[],
+): unknown[] {
+  const previous = state.transcriptRenderDependencies;
+  const nextLength = dependencies.length - 1;
+  let changed = previous.length !== nextLength;
+  for (let index = 0; !changed && index < nextLength; index += 1) {
+    changed = !Object.is(previous[index], dependencies[index + 1]);
+  }
+  if (changed) {
+    // The first dependency is chatItems. Keep the shared context stable when
+    // only the live row changes, but invalidate every row for presentation changes.
+    state.transcriptRenderDependencies = dependencies.slice(1);
+    state.transcriptRenderContext = {};
+  }
+  return dependencies;
+}
+
+function guardChatRenderItems(
+  state: ChatThreadState,
+  render: (item: ReturnType<typeof collapseCompletedTurnWork>[number]) => unknown,
+) {
+  return (item: ReturnType<typeof collapseCompletedTurnWork>[number]) =>
+    guard([...chatRenderItemGuardDependencies(item), state.transcriptRenderContext], () =>
+      render(item),
+    );
+}
+
 export function renderChatThread(props: ChatThreadProps) {
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
@@ -852,7 +897,7 @@ export function renderChatThread(props: ChatThreadProps) {
           ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
           : nothing}
         ${guard(
-          [
+          trackTranscriptRenderDependencies(state, [
             chatItems,
             locale,
             deletedChatItemsSignature(deleted, chatItems),
@@ -879,7 +924,7 @@ export function renderChatThread(props: ChatThreadProps) {
             props.embedSandboxMode ?? "scripts",
             props.allowExternalEmbedUrls ?? false,
             threadContextWindow,
-          ],
+          ]),
           () => {
             const renderGroupItem = (item: MessageGroup) => {
               if (deleted.has(item.key)) {
@@ -929,7 +974,7 @@ export function renderChatThread(props: ChatThreadProps) {
                 searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
               }),
               (item) => item.key,
-              (item) => {
+              guardChatRenderItems(state, (item) => {
                 if (item.kind === "divider") {
                   return html`
                     <div class="chat-divider" data-ts=${String(item.timestamp)}>
@@ -989,7 +1034,7 @@ export function renderChatThread(props: ChatThreadProps) {
                   return renderGroupItem(item);
                 }
                 return nothing;
-              },
+              }),
             );
           },
         )}

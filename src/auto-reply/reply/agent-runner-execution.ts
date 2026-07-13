@@ -418,7 +418,7 @@ export type RuntimeFallbackAttempt = {
 };
 
 /** Result of running an agent turn through fallback/retry handling. */
-export type AgentRunLoopResult =
+type AgentRunLoopResult =
   | {
       kind: "success";
       runId: string;

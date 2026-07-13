@@ -28,7 +28,6 @@ import {
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
-  type ReplyOptionsWithOperationRunState,
 } from "./reply-operation-run-state.js";
 import {
   createReplyOperation,
@@ -37,6 +36,10 @@ import {
 } from "./reply-run-registry.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { createMockTypingController } from "./test-helpers.js";
+
+type ReplyOptionsWithOperationRunState = {
+  [REPLY_OPERATION_RUN_STATE]?: ReplyOperationRunState;
+};
 
 type AgentRunParams = {
   sessionId?: string;

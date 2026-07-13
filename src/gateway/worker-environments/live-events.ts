@@ -50,7 +50,7 @@ type LiveEventTarget = {
   sessionKey: string;
 };
 
-export type WorkerLiveSessionBinding = Readonly<{
+type WorkerLiveSessionBinding = Readonly<{
   environmentId: string;
   runEpoch: number;
   sessionId: string;
@@ -58,7 +58,7 @@ export type WorkerLiveSessionBinding = Readonly<{
 
 type BoundLiveSession = WorkerLiveSessionBinding & { target: LiveEventTarget };
 
-export type WorkerLiveCredentialRotation = Readonly<{
+type WorkerLiveCredentialRotation = Readonly<{
   credentialHash: string;
   environmentId: string;
   previousCredentialHash: string;
@@ -85,7 +85,7 @@ export type WorkerLiveEventApplicationResult =
 
 type WorkerLiveEventFailure = Extract<WorkerLiveEventApplicationResult, { ok: false }>;
 
-export type WorkerLiveEventReceiverOptions = {
+type WorkerLiveEventReceiverOptions = {
   getConfig: () => OpenClawConfig;
   maxActiveRuns?: number;
   maxPendingBytes?: number;
