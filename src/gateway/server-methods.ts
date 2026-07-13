@@ -30,6 +30,7 @@ import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { NODE_PAIR_GATEWAY_METHODS } from "./server-methods-node-methods.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
+import { SKILLS_GATEWAY_METHOD_NAMES } from "./server-methods/skills-method-names.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
@@ -598,32 +599,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTtsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: [
-      "skills.upload.begin",
-      "skills.upload.chunk",
-      "skills.upload.commit",
-      "skills.status",
-      "skills.bins",
-      "skills.search",
-      "skills.detail",
-      "skills.securityVerdicts",
-      "skills.skillCard",
-      "skills.install",
-      "skills.update",
-      "skills.curator.status",
-      "skills.curator.pin",
-      "skills.curator.unpin",
-      "skills.curator.restore",
-      "skills.proposals.list",
-      "skills.proposals.inspect",
-      "skills.proposals.create",
-      "skills.proposals.update",
-      "skills.proposals.revise",
-      "skills.proposals.requestRevision",
-      "skills.proposals.apply",
-      "skills.proposals.reject",
-      "skills.proposals.quarantine",
-    ],
+    methods: SKILLS_GATEWAY_METHOD_NAMES,
     loadHandlers: loadSkillsHandlers,
   }),
   ...createLazyCoreHandlers({

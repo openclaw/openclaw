@@ -2112,6 +2112,21 @@ export const id: TranslationMap = {
       enabling: "Mengaktifkan…",
       updateError: "Tidak dapat memperbarui pengaturan pembelajaran mandiri.",
     },
+    history: {
+      eyebrow: "Pekerjaan sebelumnya",
+      title: "Temukan alur kerja yang dapat digunakan kembali",
+      body: "Tinjau sesi penting dari yang terbaru hingga terlama. Hanya pola pemulihan yang efektif atau alur kerja yang menghemat pemanggilan alat berulang yang akan menjadi usulan tertunda.",
+      findIdeas: "Temukan ide skill",
+      scanEarlier: "Pindai pekerjaan sebelumnya",
+      scanNew: "Pindai pekerjaan baru",
+      scanning: "Meninjau sesi…",
+      loading: "Memuat riwayat…",
+      pendingOnly: "Hanya usulan tertunda · menggunakan model yang Anda konfigurasikan",
+      reviewed: "{count} sesi ditinjau",
+      found: "{count} ide ditemukan",
+      noSessions: "Tidak ada sesi penting yang ditemukan dalam rentang waktu ini.",
+      today: "hari ini",
+    },
     today: {
       emptyTitle: "Tidak ada yang menunggu hari ini",
       emptyBody:

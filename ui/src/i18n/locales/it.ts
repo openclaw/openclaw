@@ -2139,6 +2139,21 @@ export const it: TranslationMap = {
       enabling: "Abilitazione…",
       updateError: "Impossibile aggiornare l'impostazione di autoapprendimento.",
     },
+    history: {
+      eyebrow: "Lavori precedenti",
+      title: "Trova flussi di lavoro riutilizzabili",
+      body: "Esamina le sessioni significative dalla più recente alla meno recente. Solo i modelli di recupero efficaci o i flussi di lavoro che evitano chiamate ripetute agli strumenti diventano proposte in sospeso.",
+      findIdeas: "Trova idee per le skill",
+      scanEarlier: "Esamina i lavori precedenti",
+      scanNew: "Esamina i nuovi lavori",
+      scanning: "Esame delle sessioni in corso…",
+      loading: "Caricamento della cronologia…",
+      pendingOnly: "Solo proposte in sospeso · usa il modello configurato",
+      reviewed: "{count} sessioni esaminate",
+      found: "{count} idee trovate",
+      noSessions: "Nessuna sessione significativa trovata in questo intervallo.",
+      today: "oggi",
+    },
     today: {
       emptyTitle: "Niente in attesa oggi",
       emptyBody:

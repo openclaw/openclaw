@@ -3,11 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { renderPluginsHubTabs } from "../../components/plugins-hub-tabs.ts";
 import "../../components/tooltip.ts";
@@ -18,6 +14,15 @@ import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts"
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
+import {
+  loadSkillWorkshopPageData,
+  runSkillWorkshopPageHistoryScan,
+} from "./history-scan-page-controller.ts";
+import type {
+  SkillWorkshopProposal,
+  SkillWorkshopRenderContext,
+  SkillWorkshopRevisionRequest,
+} from "./page-types.ts";
 import { selectPluginsHubTab } from "./plugins-hub-navigation.ts";
 import {
   countSkillWorkshopProposals,
@@ -26,46 +31,18 @@ import {
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
-  type SkillWorkshopContext,
   type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
+import { resolveSelfLearning, setSelfLearningEnabled } from "./self-learning.ts";
 import {
-  resolveSelfLearning,
-  setSelfLearningEnabled,
-  type SkillWorkshopSelfLearning,
-} from "./self-learning.ts";
+  captureSkillWorkshopSourceScope,
+  isCurrentSkillWorkshopSourceScope,
+  type SkillWorkshopPageContext,
+  type SkillWorkshopSourceScope,
+} from "./source-scope.ts";
 import { loadSkillWorkshopMode, loadSkillWorkshopUseCurrentChatForRevisions } from "./storage.ts";
 import { renderSkillWorkshop } from "./view.ts";
-
-type SkillWorkshopPageContext = ApplicationContext & SkillWorkshopContext;
-
-type SkillWorkshopRevisionRequest = (
-  instructions: string,
-  proposal: SkillWorkshopState["skillWorkshopProposals"][number],
-  proposalAgentId: string,
-) => Promise<void>;
-
-type SkillWorkshopRenderContext = {
-  context: SkillWorkshopPageContext;
-  workshopAgentName: string;
-  onRevisionRequest?: SkillWorkshopRevisionRequest;
-  selfLearning: SkillWorkshopSelfLearning | null;
-  onSelfLearningToggle: (enabled: boolean) => void;
-};
-
-type SkillWorkshopProposal = SkillWorkshopState["skillWorkshopProposals"][number];
-
-type SkillWorkshopSourceScope = {
-  state: SkillWorkshopState;
-  context: SkillWorkshopPageContext;
-  epoch: number;
-  gateway: SkillWorkshopPageContext["gateway"];
-  agentSelection: SkillWorkshopPageContext["agentSelection"];
-  sessions: SkillWorkshopPageContext["sessions"];
-  revision: SkillWorkshopPageContext["skillWorkshopRevision"];
-  navigate: SkillWorkshopPageContext["navigate"];
-};
 
 function findRevisionSessionRow(
   result: SessionsListResult | null,
@@ -124,8 +101,14 @@ function renderSkillWorkshopPage(
   renderContext: SkillWorkshopRenderContext,
   requestUpdate: () => void,
 ) {
-  const { context, workshopAgentName, onRevisionRequest, selfLearning, onSelfLearningToggle } =
-    renderContext;
+  const {
+    context,
+    workshopAgentName,
+    onRevisionRequest,
+    selfLearning,
+    onSelfLearningToggle,
+    onHistoryScan,
+  } = renderContext;
   const pageClass =
     state.skillWorkshopMode === "today"
       ? "content--skill-workshop content--skill-workshop-today"
@@ -219,6 +202,7 @@ function renderSkillWorkshopPage(
               assistantName: context.config.current.assistantIdentity.name,
               workshopAgentName,
               selfLearning,
+              historyScan: state.skillWorkshopHistoryScan,
               counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
               onRetry: () => {
                 // Force past the loaded/error latch; the loading guard still
@@ -308,6 +292,7 @@ function renderSkillWorkshopPage(
                 requestUpdate();
               },
               onSelfLearningToggle,
+              onHistoryScan,
             })}
           </wa-tab-panel>`;
         })()}
@@ -562,34 +547,19 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   }
 
   private captureSourceScope(): SkillWorkshopSourceScope | null {
-    const state = this.state;
-    const context = this.context;
-    if (!state || !context) {
-      return null;
-    }
-    return {
-      state,
-      context,
+    return captureSkillWorkshopSourceScope({
+      state: this.state,
+      context: this.context,
       epoch: this.sourceEpoch,
-      gateway: context.gateway,
-      agentSelection: context.agentSelection,
-      sessions: context.sessions,
-      revision: context.skillWorkshopRevision,
-      navigate: context.navigate,
-    };
+    });
   }
 
   private isCurrentSourceScope(scope: SkillWorkshopSourceScope): boolean {
-    return (
-      this.state === scope.state &&
-      this.context === scope.context &&
-      this.sourceEpoch === scope.epoch &&
-      this.context.gateway === scope.gateway &&
-      this.context.agentSelection === scope.agentSelection &&
-      this.context.sessions === scope.sessions &&
-      this.context.skillWorkshopRevision === scope.revision &&
-      this.context.navigate === scope.navigate
-    );
+    return isCurrentSkillWorkshopSourceScope(scope, {
+      state: this.state,
+      context: this.context,
+      epoch: this.sourceEpoch,
+    });
   }
 
   private loadProposals(force: boolean) {
@@ -598,8 +568,25 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!state || !context || !context.gateway.snapshot.connected) {
       return;
     }
-    void loadSkillWorkshopProposals(state, context, { force }).finally(this.requestPageUpdate);
+    void loadSkillWorkshopPageData({ state, context, force }).finally(this.requestPageUpdate);
   }
+
+  private readonly handleHistoryScan = () => {
+    const scope = this.captureSourceScope();
+    if (!scope) {
+      return;
+    }
+    void runSkillWorkshopPageHistoryScan({
+      state: scope.state,
+      context: scope.context,
+      current: () => {
+        const state = this.state;
+        const context = this.context;
+        return state && context ? { state, context } : undefined;
+      },
+    }).finally(this.requestPageUpdate);
+    this.requestPageUpdate();
+  };
 
   private readonly handleSelfLearningToggle = (enabled: boolean) => {
     void this.applySelfLearningToggle(enabled);
@@ -651,6 +638,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
               this.selfLearningError,
             ),
             onSelfLearningToggle: this.handleSelfLearningToggle,
+            onHistoryScan: this.handleHistoryScan,
           },
           this.requestPageUpdate,
         )

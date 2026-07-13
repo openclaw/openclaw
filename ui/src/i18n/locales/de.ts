@@ -2138,6 +2138,21 @@ export const de: TranslationMap = {
       enabling: "Wird aktiviert…",
       updateError: "Die Einstellung für das Selbstlernen konnte nicht aktualisiert werden.",
     },
+    history: {
+      eyebrow: "Bisherige Arbeit",
+      title: "Wiederverwendbare Workflows finden",
+      body: "Prüfen Sie umfangreiche Sitzungen von der neuesten bis zur ältesten. Nur zuverlässige Wiederherstellungsmuster oder Workflows, die wiederholte Tool-Aufrufe ersparen, werden zu ausstehenden Vorschlägen.",
+      findIdeas: "Skill-Ideen finden",
+      scanEarlier: "Frühere Arbeit durchsuchen",
+      scanNew: "Neue Arbeit durchsuchen",
+      scanning: "Sitzungen werden geprüft…",
+      loading: "Verlauf wird geladen…",
+      pendingOnly: "Nur ausstehende Vorschläge · verwendet Ihr konfiguriertes Modell",
+      reviewed: "{count} Sitzungen geprüft",
+      found: "{count} Ideen gefunden",
+      noSessions: "In diesem Zeitraum wurden keine umfangreichen Sitzungen gefunden.",
+      today: "heute",
+    },
     today: {
       emptyTitle: "Heute steht nichts an",
       emptyBody:

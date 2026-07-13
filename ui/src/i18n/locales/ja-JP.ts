@@ -2121,6 +2121,21 @@ export const ja_JP: TranslationMap = {
       enabling: "有効化中…",
       updateError: "自己学習の設定を更新できませんでした。",
     },
+    history: {
+      eyebrow: "過去の作業",
+      title: "再利用可能なワークフローを見つける",
+      body: "内容のあるセッションを新しい順に確認します。効果的な復旧パターンや、ツール呼び出しの繰り返しを省けるワークフローのみが保留中の提案になります。",
+      findIdeas: "スキルのアイデアを見つける",
+      scanEarlier: "以前の作業をスキャン",
+      scanNew: "新しい作業をスキャン",
+      scanning: "セッションを確認中…",
+      loading: "履歴を読み込み中…",
+      pendingOnly: "保留中の提案のみ · 設定済みのモデルを使用",
+      reviewed: "{count}件のセッションを確認済み",
+      found: "{count}件のアイデアが見つかりました",
+      noSessions: "この期間には内容のあるセッションが見つかりませんでした。",
+      today: "今日",
+    },
     today: {
       emptyTitle: "今日は待機中のものはありません",
       emptyBody:

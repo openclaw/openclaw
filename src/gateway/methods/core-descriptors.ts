@@ -160,6 +160,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "skills.curator.restore", scope: "operator.admin" },
   { name: "skills.proposals.list", scope: "operator.read" },
   { name: "skills.proposals.inspect", scope: "operator.read" },
+  { name: "skills.proposals.historyStatus", scope: "operator.read" },
+  { name: "skills.proposals.historyScan", scope: "operator.admin" },
   { name: "skills.proposals.create", scope: "operator.admin" },
   { name: "skills.proposals.update", scope: "operator.admin" },
   { name: "skills.proposals.revise", scope: "operator.admin" },
