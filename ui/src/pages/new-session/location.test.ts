@@ -1,29 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { newSessionDataFromSearch, newSessionSearch } from "./location.ts";
+import { newSessionLocationFromSearch, newSessionSearch } from "./location.ts";
 
 describe("new-session location", () => {
   it("round-trips a catalog creation target", () => {
     const search = newSessionSearch("main/agent", {
-      model: "anthropic/claude-opus-4-8",
-      label: "Claude Code",
+      catalogId: "claude",
     });
 
-    expect(search).toBe(
-      "?agent=main%2Fagent&model=anthropic%2Fclaude-opus-4-8&catalog=Claude+Code",
-    );
-    expect(newSessionDataFromSearch(search)).toEqual({
+    expect(search).toBe("?agent=main%2Fagent&catalog=claude");
+    expect(
+      newSessionLocationFromSearch(`${search}&model=openai%2Fgpt-5&label=Claude+Code`),
+    ).toEqual({
       agentId: "main/agent",
-      model: "anthropic/claude-opus-4-8",
-      catalogLabel: "Claude Code",
+      catalogId: "claude",
     });
   });
 
   it("keeps the plain entry point empty", () => {
     expect(newSessionSearch("")).toBe("");
-    expect(newSessionDataFromSearch("")).toEqual({
+    expect(newSessionLocationFromSearch("")).toEqual({
       agentId: "",
-      model: "",
-      catalogLabel: "",
+      catalogId: "",
     });
   });
 });

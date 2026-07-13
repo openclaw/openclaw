@@ -270,7 +270,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (
     agentId: string,
-    target?: { model: string; label: string },
+    target?: { catalogId: string },
   ) => void;
   /** Agent id of the in-flight new-session draft; renders the draft row. */
   @property({ attribute: false }) draftSessionAgentId = "";
@@ -2876,10 +2876,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                   @click=${() =>
                     this.onOpenNewSession?.(
                       this.context?.agents.state.agentsList?.defaultId ?? this.expandedAgentId(),
-                      {
-                        model: catalog.capabilities.createSession?.model ?? "",
-                        label: catalog.label,
-                      },
+                      { catalogId: catalog.id },
                     )}
                 >
                   ${icons.plus}

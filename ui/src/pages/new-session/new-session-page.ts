@@ -389,7 +389,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.agents().length === 0) {
       return false;
     }
-    if (!catalog.allowsSelectedAgent(this.data, this.agentId, this.selectedAgent())) {
+    if (!catalog.allowsSelectedAgent(this.data, this.selectedAgent())) {
       return false;
     }
     if (this.usesCustomFolder() && (!this.isAdmin() || (!this.execNode && !this.worktree))) {
@@ -478,7 +478,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private selectAgentId(agentId: string) {
-    if (this.submitting || catalog.agentId(this.data)) {
+    if (this.submitting || catalog.isTarget(this.data)) {
       return;
     }
     // Re-picking the checked agent must not reset the draft (the native

@@ -574,10 +574,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(button?.getAttribute("aria-label")).toBe("New session — Claude Code");
     button?.click();
 
-    expect(onOpenNewSession).toHaveBeenCalledWith("main", {
-      model: "anthropic/claude-opus-4-8",
-      label: "Claude Code",
-    });
+    expect(onOpenNewSession).toHaveBeenCalledWith("main", { catalogId: "claude" });
   });
 
   it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {

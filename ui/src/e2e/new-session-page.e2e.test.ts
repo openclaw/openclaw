@@ -301,6 +301,20 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
         },
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: {
+                continueSession: true,
+                archive: false,
+                createSession: { model: "anthropic/claude-opus-4-8" },
+              },
+              hosts: [],
+            },
+          ],
+        },
         "sessions.create": { key: "agent:main:claude-draft" },
       },
     });
@@ -308,9 +322,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       const model = "anthropic/claude-opus-4-8";
       await page.goto(
-        `${server.baseUrl}new?agent=main&model=${encodeURIComponent(model)}&catalog=Claude+Code`,
+        `${server.baseUrl}new?agent=research&catalog=claude&model=${encodeURIComponent("openai/gpt-5")}&label=Spoofed`,
       );
 
+      const catalogRequest = await gateway.waitForRequest("sessions.catalog.list");
+      expect(catalogRequest.params).toMatchObject({ catalogId: "claude" });
       const runtime = page.locator(".new-session-page__runtime");
       await expect.poll(() => runtime.textContent()).toContain("Claude Code");
       expect(await runtime.getAttribute("title")).toBe(model);

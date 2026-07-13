@@ -4,11 +4,16 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { NewSessionRouteData } from "./location.ts";
 
 export function routeKey(data?: NewSessionRouteData): string {
-  return JSON.stringify([data?.agentId ?? "", data?.model ?? "", data?.catalogLabel ?? ""]);
+  return JSON.stringify([
+    data?.agentId ?? "",
+    data?.catalogId ?? "",
+    data?.model ?? "",
+    data?.catalogLabel ?? "",
+  ]);
 }
 
-export function agentId(data?: NewSessionRouteData): string {
-  return data?.model && data.catalogLabel ? normalizeAgentId(data.agentId) : "";
+export function isTarget(data?: NewSessionRouteData): boolean {
+  return Boolean(data?.catalogId && data.model && data.catalogLabel);
 }
 
 export function resolveAgentId(
@@ -16,9 +21,8 @@ export function resolveAgentId(
   availableAgents: readonly { id: string }[],
   fallback: string,
 ): string {
-  const catalogAgentId = agentId(data);
-  if (catalogAgentId) {
-    return catalogAgentId;
+  if (isTarget(data)) {
+    return normalizeAgentId(fallback);
   }
   const requested = normalizeAgentId(data?.agentId ?? "");
   return availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
@@ -28,14 +32,9 @@ export function resolveAgentId(
 
 export function allowsSelectedAgent(
   data: NewSessionRouteData | undefined,
-  selectedAgentId: string,
   selectedAgent: unknown,
 ): boolean {
-  const catalogAgentId = agentId(data);
-  return (
-    !catalogAgentId ||
-    (normalizeAgentId(selectedAgentId) === catalogAgentId && Boolean(selectedAgent))
-  );
+  return !isTarget(data) || Boolean(selectedAgent);
 }
 
 export function render(data?: NewSessionRouteData) {
@@ -56,7 +55,7 @@ export function renderBar(params: {
 }) {
   return html`
     <div class="new-session-page__triggers">
-      ${render(params.data)} ${agentId(params.data) ? nothing : params.agentSelect}
+      ${render(params.data)} ${isTarget(params.data) ? nothing : params.agentSelect}
       ${params.folderSelect} ${params.whereSelect}
     </div>
   `;
