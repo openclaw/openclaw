@@ -256,17 +256,6 @@ type BuildSkillStatusContext = {
   managedClawhubLockRead: ClawHubSkillsLockfileStatusRead;
 };
 
-// Returns true when `child` is `parent` or lives somewhere below it. Both
-// paths are resolved first so symlinked config/workspace dirs classify the
-// same as their real paths.
-function isPathInsideDir(child: string, parent: string): boolean {
-  const relative = path.relative(path.resolve(parent), path.resolve(child));
-  return (
-    relative === "" ||
-    (relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 function buildSkillStatus(
   indexed: SkillIndexEntry,
   context: BuildSkillStatusContext,
@@ -308,12 +297,14 @@ function buildSkillStatus(
   const userInvocable = indexed.userInvocable;
 
   const skillDir = entry.skill.baseDir;
-  // ClawHub linkage is resolved against the skill's owning install scope:
-  // a managed/global skill (under managedSkillsDir) is tracked by the managed
-  // ClawHub lockfile at dirname(managedSkillsDir), while a workspace skill is
-  // tracked by the workspace lockfile. Routing each scope to its own lockfile
-  // avoids cross-linking identical slugs between independent install scopes.
-  const isManagedSkill = isPathInsideDir(skillDir, context.managedSkillsDir);
+  // ClawHub linkage is resolved against the skill's owning install scope. A
+  // managed/global skill (canonical source "openclaw-managed", i.e. a `--global`
+  // install under CONFIG_DIR/skills) is tracked by the managed ClawHub lockfile
+  // at dirname(managedSkillsDir); a workspace skill is tracked by the workspace
+  // lockfile. Classifying by the loader-assigned source (not the resolved path)
+  // keeps symlinked managed installs on the managed lockfile, and routing each
+  // scope to its own lockfile avoids cross-linking identical slugs between scopes.
+  const isManagedSkill = skillSource === "openclaw-managed";
   const clawhubScopeDir = isManagedSkill ? path.dirname(context.managedSkillsDir) : workspaceDir;
   const clawhub =
     workspaceDir && !bundled
