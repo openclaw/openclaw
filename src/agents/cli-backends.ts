@@ -226,6 +226,25 @@ export function listCliRuntimeModelBackendBindings(
       });
     }
   }
+  // Surface config-defined custom CLI backends so that compaction, agent runtime
+  // detection, and harness selection treat them the same as plugin-registered
+  // backends. Without this, a backend defined only under
+  // agents.defaults.cliBackends is visible to resolveCliBackendConfig (execution
+  // works) but invisible to listCliRuntimeModelBackendBindings (compaction and
+  // harness precheck fail with MissingAgentHarnessError).
+  if (params.config) {
+    const configured = params.config.agents?.defaults?.cliBackends ?? {};
+    for (const key of Object.keys(configured)) {
+      const backendKey = normalizeBackendKey(key);
+      if (!backendKey) continue;
+      const bindingKey = `${backendKey}:${backendKey}`;
+      if (bindings.has(bindingKey)) continue;
+      const resolved = resolveCliBackendConfig(key, params.config);
+      if (!resolved) continue;
+      const provider = resolved.modelProvider ?? backendKey;
+      bindings.set(bindingKey, { provider, runtime: backendKey });
+    }
+  }
   return [...bindings.values()].toSorted((left, right) =>
     left.provider === right.provider
       ? left.runtime.localeCompare(right.runtime)
@@ -264,9 +283,10 @@ export function resolveCliRuntimeCanonicalProvider(params: {
   if (!runtime) {
     return undefined;
   }
-  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
-    (binding) => binding.runtime === runtime,
-  );
+  const runtimeBinding = listCliRuntimeModelBackendBindings({
+    config: params.config,
+    env: params.env,
+  }).find((binding) => binding.runtime === runtime);
   if (runtimeBinding) {
     return runtimeBinding.provider;
   }
@@ -293,9 +313,10 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   if (!provider || !runtime) {
     return undefined;
   }
-  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
-    (binding) => binding.provider === provider && binding.runtime === runtime,
-  );
+  const runtimeBinding = listCliRuntimeModelBackendBindings({
+    config: params.config,
+    env: params.env,
+  }).find((binding) => binding.provider === provider && binding.runtime === runtime);
   if (runtimeBinding) {
     return runtimeBinding;
   }

@@ -341,7 +341,9 @@ function selectAgentHarnessDecision(
           candidates: listHarnessCandidates(pluginHarnesses),
         });
       }
-      if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
+      if (
+        isCliRuntimeAliasForProvider({ runtime, provider: params.provider, cfg: params.config })
+      ) {
         return buildSelectionDecision({
           harness: openClawHarness,
           policy: {

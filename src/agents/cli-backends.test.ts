@@ -13,9 +13,12 @@ import type {
 } from "../plugins/types.js";
 import {
   testing as cliBackendsTesting,
+  listCliRuntimeModelBackendBindings,
   resolveCliBackendConfig,
   resolveCliBackendLiveTest,
+  resolveCliRuntimeModelBackendBinding,
 } from "./cli-backends.js";
+import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 
 type RuntimeBackendEntry = ReturnType<
   (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
@@ -1191,5 +1194,120 @@ describe("resolveCliBackendConfig alias precedence", () => {
 
     expect(resolved?.config.command).toBe("kimi-canonical");
     expect(resolved?.config.args).toEqual(["--canonical"]);
+  });
+});
+
+describe("listCliRuntimeModelBackendBindings config-defined backends", () => {
+  it("includes a config-only custom CLI backend with a valid command", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli-max": {
+              command: "/usr/local/bin/claude",
+              args: ["-p", "--output-format", "stream-json"],
+              jsonlDialect: "claude-stream-json",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const bindings = listCliRuntimeModelBackendBindings({ config: cfg });
+    const custom = bindings.find((b) => b.runtime === "claude-cli-max");
+    expect(custom).toBeDefined();
+    expect(custom?.provider).toBe("claude-cli-max");
+    expect(custom?.runtime).toBe("claude-cli-max");
+  });
+
+  it("resolves a binding for a config-only backend via resolveCliRuntimeModelBackendBinding", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli-max": {
+              command: "/usr/local/bin/claude",
+              args: ["-p", "--output-format", "stream-json"],
+              jsonlDialect: "claude-stream-json",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const binding = resolveCliRuntimeModelBackendBinding({
+      provider: "claude-cli-max",
+      runtime: "claude-cli-max",
+      config: cfg,
+    });
+    expect(binding).toBeDefined();
+    expect(binding?.provider).toBe("claude-cli-max");
+    expect(binding?.runtime).toBe("claude-cli-max");
+  });
+
+  it("isCliRuntimeAliasForProvider returns true for a config-only backend", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli-max": {
+              command: "/usr/local/bin/claude",
+              args: ["-p", "--output-format", "stream-json"],
+              jsonlDialect: "claude-stream-json",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      isCliRuntimeAliasForProvider({
+        runtime: "claude-cli-max",
+        provider: "claude-cli-max",
+        cfg,
+      }),
+    ).toBe(true);
+  });
+
+  it("omits a config-only backend when no config is passed", () => {
+    const bindings = listCliRuntimeModelBackendBindings();
+    const custom = bindings.find((b) => b.runtime === "claude-cli-max");
+    expect(custom).toBeUndefined();
+  });
+
+  it("omits a config-only backend with no command", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "busted-cli": {
+              args: ["-p"],
+            } as CliBackendConfig,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const bindings = listCliRuntimeModelBackendBindings({ config: cfg });
+    const busted = bindings.find((b) => b.runtime === "busted-cli");
+    expect(busted).toBeUndefined();
+  });
+
+  it("does not duplicate a plugin-registered backend with a config-level override", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "/usr/local/bin/claude",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const bindings = listCliRuntimeModelBackendBindings({ config: cfg });
+    const matches = bindings.filter((b) => b.runtime === "claude-cli");
+    expect(matches.length).toBe(1);
   });
 });
