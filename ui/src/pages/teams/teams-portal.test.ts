@@ -12,7 +12,20 @@ import {
   renderTeamsPortal,
   TeamsPortalStore,
   type TeamsPortalGateway,
+  type TeamsPortalSnapshot,
 } from "./teams-portal.ts";
+
+type TeamsPortalGatewayMock = TeamsPortalGateway & {
+  request: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
+};
+
+type TeamsPortalPresenceParticipant = NonNullable<TeamsPortalSnapshot["presence"]>[number];
+
+const portalPresence: TeamsPortalPresenceParticipant[] = [
+  { id: "ada", kind: "human", self: true },
+  { id: "review-agent", kind: "agent", self: false },
+];
 
 function authenticatedSession(expiresAt = Date.now() + 60_000) {
   return {
@@ -28,10 +41,7 @@ function tabResult(mode: "read" | "request" | "write" = "read") {
     workspaceId: "workspace-1",
     workspaceVersion: 8,
     capabilityMode: mode,
-    presence: [
-      { id: "ada", kind: "human", self: true },
-      { id: "review-agent", kind: "agent", self: false },
-    ],
+    presence: portalPresence,
     tab: {
       id: "tab-1",
       revision: 4,
@@ -43,10 +53,7 @@ function tabResult(mode: "read" | "request" | "write" = "read") {
   };
 }
 
-function createGateway(response = tabResult()): TeamsPortalGateway & {
-  request: ReturnType<typeof vi.fn>;
-  stop: ReturnType<typeof vi.fn>;
-} {
+function createGateway(response = tabResult()): TeamsPortalGatewayMock {
   return {
     request: vi.fn(async () => response),
     stop: vi.fn(),
@@ -247,8 +254,8 @@ describe("Teams portal store", () => {
       const pendingPresence = new Promise<ReturnType<typeof tabResult>>((resolve) => {
         resolvePresence = resolve;
       });
-      const gateway = {
-        request: vi.fn((method: string) => {
+      const gateway: TeamsPortalGatewayMock = {
+        request: vi.fn((method?: string) => {
           if (method === "workspaces.tab.get") {
             tabReads += 1;
             return tabReads === 1 ? Promise.resolve(tabResult()) : pendingPresence;

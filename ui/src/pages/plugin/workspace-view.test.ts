@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -114,8 +115,11 @@ describe("renderWorkspace", () => {
     state.workspace = {
       ...doc,
       tabs: [
-        { ...doc.tabs[0], createdBy: "user" },
-        { ...doc.tabs[2], createdBy: "agent:finance" },
+        { ...expectDefined(doc.tabs[0], "main workspace tab fixture"), createdBy: "user" },
+        {
+          ...expectDefined(doc.tabs[2], "empty workspace tab fixture"),
+          createdBy: "agent:finance",
+        },
       ],
       prefs: { tabOrder: ["main", "empty"] },
     };
