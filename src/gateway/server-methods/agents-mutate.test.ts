@@ -4,6 +4,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import {
+  mintAttachGrant,
+  resetAttachGrantsForTest,
+  resolveAttachGrant,
+} from "../mcp-grant-store.js";
 /* ------------------------------------------------------------------ */
 /* Mocks                                                              */
 /* ------------------------------------------------------------------ */
@@ -207,6 +212,7 @@ const { testing: agentsTesting, agentsHandlers } = await import("./agents.js");
 /* ------------------------------------------------------------------ */
 
 beforeEach(() => {
+  resetAttachGrantsForTest();
   agentsTesting.resetDepsForTests();
   mocks.listAgentEntries.mockImplementation((cfg: unknown) => getAgentList(cfg));
   mocks.findAgentEntryIndex.mockImplementation((list: unknown, agentId?: string) =>
@@ -1127,6 +1133,17 @@ describe("agents.delete", () => {
     expect(mocks.writeConfigFile).toHaveBeenCalled();
     // moveToTrashBestEffort calls fs.access then movePathToTrash for each dir
     expect(mocks.movePathToTrash).toHaveBeenCalled();
+  });
+
+  it("revokes only attach grants owned by the deleted agent", async () => {
+    const deletedAgentGrant = mintAttachGrant({ sessionKey: "agent:test-agent:work" });
+    const unrelatedGrant = mintAttachGrant({ sessionKey: "agent:other:work" });
+
+    const { promise } = makeCall("agents.delete", { agentId: "test-agent", deleteFiles: false });
+    await promise;
+
+    expect(resolveAttachGrant(deletedAgentGrant.token)).toBeUndefined();
+    expect(resolveAttachGrant(unrelatedGrant.token)).toBeDefined();
   });
 
   it("trashes workspace attestations when deleting the last workspace owner", async () => {

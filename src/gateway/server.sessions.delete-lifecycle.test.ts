@@ -1,23 +1,34 @@
-// Session delete lifecycle tests protect transcript deletion, ACP metadata,
-// active-run cleanup, hooks, thread bindings, and browser/MCP cleanup.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, test } from "vitest";
+// Session delete lifecycle tests protect transcript deletion, ACP metadata,
+// active-run cleanup, hooks, thread bindings, and browser/MCP cleanup.
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resetAttachGrantsForTest, resolveAttachGrant } from "./mcp-grant-store.js";
+import { closeMcpLoopbackServer } from "./mcp-http.js";
+import { attachHandlers } from "./server-methods/attach.js";
+import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -41,6 +52,56 @@ const {
   resetConfiguredGlobalAgentSessionStore,
 } = setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
+type SessionLifecycleTestDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "session_entries" | "session_routes" | "sessions"
+>;
+
+function seedRawLegacySessionRow(params: {
+  storePath: string;
+  sessionId: string;
+  sessionKey: string;
+}): void {
+  const databasePath = resolveSqliteTargetFromSessionStorePath(params.storePath, {
+    agentId: "main",
+  }).path;
+  if (!databasePath) {
+    throw new Error("expected SQLite session store path");
+  }
+  const updatedAt = Date.now();
+  runOpenClawAgentWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<SessionLifecycleTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("sessions").values({
+          session_id: params.sessionId,
+          session_key: params.sessionKey,
+          created_at: updatedAt,
+          updated_at: updatedAt,
+        }),
+      );
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("session_routes").values({
+          session_key: params.sessionKey,
+          session_id: params.sessionId,
+          updated_at: updatedAt,
+        }),
+      );
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("session_entries").values({
+          session_id: params.sessionId,
+          session_key: params.sessionKey,
+          entry_json: JSON.stringify({ sessionId: params.sessionId, updatedAt }),
+          updated_at: updatedAt,
+        }),
+      );
+    },
+    { agentId: "main", path: databasePath },
+  );
+}
 
 async function initializeRemoteBackedGitWorkspace(root: string): Promise<string> {
   const workspace = path.join(root, "workspace");
@@ -64,7 +125,9 @@ async function initializeRemoteBackedGitWorkspace(root: string): Promise<string>
   return await fs.realpath(workspace);
 }
 
-afterEach(() => {
+afterEach(async () => {
+  resetAttachGrantsForTest();
+  await closeMcpLoopbackServer();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -232,6 +295,84 @@ test("sessions.delete rejects main and aborts active runs", async () => {
     targetSessionKey: "agent:main:discord:group:dev",
     reason: "session-delete",
   });
+});
+
+test("sessions.delete revokes outstanding MCP attach grants for the deleted session", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "discord:group:attach": sessionStoreEntry("sess-attach"),
+    },
+  });
+  const grantRespond = vi.fn();
+  await expectDefined(
+    attachHandlers["attach.grant"],
+    'attachHandlers["attach.grant"] test invariant',
+  )({
+    params: { sessionKey: "discord:group:attach" },
+    respond: grantRespond,
+    context: { getRuntimeConfig },
+  } as unknown as GatewayRequestHandlerOptions);
+  const grant = grantRespond.mock.calls[0]?.[1] as { sessionKey: string; token: string };
+  const unrelatedRespond = vi.fn();
+  await expectDefined(
+    attachHandlers["attach.grant"],
+    'attachHandlers["attach.grant"] test invariant',
+  )({
+    params: { sessionKey: "unrelated" },
+    respond: unrelatedRespond,
+    context: { getRuntimeConfig },
+  } as unknown as GatewayRequestHandlerOptions);
+  const unrelatedGrant = unrelatedRespond.mock.calls[0]?.[1] as { token: string };
+
+  expect(grant.sessionKey).toBe("agent:main:discord:group:attach");
+  await expectSessionDeleteSucceeds({ key: "discord:group:attach" });
+
+  expect(resolveAttachGrant(grant.token)).toBeUndefined();
+  expect(resolveAttachGrant(unrelatedGrant.token)).toBeDefined();
+});
+
+test("committed deletion revokes canonical grants for raw legacy alias-only rows", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const legacyKey = "discord:group:legacy-attach";
+  const canonicalKey = "agent:main:discord:group:legacy-attach";
+  seedRawLegacySessionRow({
+    storePath,
+    sessionId: "sess-legacy-attach",
+    sessionKey: legacyKey,
+  });
+  const grantRespond = vi.fn();
+  await expectDefined(
+    attachHandlers["attach.grant"],
+    'attachHandlers["attach.grant"] test invariant',
+  )({
+    params: { sessionKey: legacyKey },
+    respond: grantRespond,
+    context: { getRuntimeConfig },
+  } as unknown as GatewayRequestHandlerOptions);
+  const grant = grantRespond.mock.calls[0]?.[1] as { sessionKey: string; token: string };
+  const unrelatedRespond = vi.fn();
+  await expectDefined(
+    attachHandlers["attach.grant"],
+    'attachHandlers["attach.grant"] test invariant',
+  )({
+    params: { sessionKey: "unrelated-legacy-control" },
+    respond: unrelatedRespond,
+    context: { getRuntimeConfig },
+  } as unknown as GatewayRequestHandlerOptions);
+  const unrelatedGrant = unrelatedRespond.mock.calls[0]?.[1] as { token: string };
+
+  expect(grant.sessionKey).toBe(canonicalKey);
+  const deletion = await deleteSessionEntryLifecycle({
+    agentId: "main",
+    archiveTranscript: false,
+    storePath,
+    target: { canonicalKey, storeKeys: [canonicalKey, legacyKey] },
+  });
+  expect(deletion.deleted).toBe(true);
+
+  expect(resolveAttachGrant(grant.token)).toBeUndefined();
+  expect(resolveAttachGrant(unrelatedGrant.token)).toBeDefined();
 });
 
 test("sessions.delete preserves locked archived sessions and deletes ordinary archived sessions", async () => {

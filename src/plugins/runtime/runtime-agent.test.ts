@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import {
+  mintAttachGrant,
+  resetAttachGrantsForTest,
+  resolveAttachGrant,
+} from "../../gateway/mcp-grant-store.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import {
   interruptSessionWorkAdmissions,
@@ -160,9 +165,11 @@ describe("plugin runtime session creation", () => {
 
   it("rolls back the exact created entry and transcript when initialization fails", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-rollback" }, async () => {
+      resetAttachGrantsForTest();
       const runtime = createRuntimeAgent();
       const key = "agent:main:dashboard:codex-binding-failure";
       let sessionFile: string | undefined;
+      let grantToken: string | undefined;
 
       await expect(
         runtime.session.createSessionEntry({
@@ -174,6 +181,7 @@ describe("plugin runtime session creation", () => {
           },
           afterCreate: async (created) => {
             sessionFile = created.entry.sessionFile;
+            grantToken = mintAttachGrant({ sessionKey: key }).token;
             throw new Error("native binding failed");
           },
         }),
@@ -184,14 +192,17 @@ describe("plugin runtime session creation", () => {
       );
       expect(sessionFile).toBeTruthy();
       expect(fs.existsSync(sessionFile ?? "")).toBe(false);
+      expect(resolveAttachGrant(grantToken ?? "")).toBeUndefined();
     });
   });
 
   it("rolls back a plugin-owned locked CLI session when initialization fails", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-cli-session-rollback" }, async () => {
+      resetAttachGrantsForTest();
       const runtime = createRuntimeAgent();
       const key = "agent:main:catalog-adopt:claude:rollback";
       const storePath = runtime.session.resolveStorePath(undefined, { agentId: "main" });
+      let grantToken: string | undefined;
       let sessionId: string | undefined;
       let sessionFile: string | undefined;
 
@@ -213,6 +224,7 @@ describe("plugin runtime session creation", () => {
           afterCreate: async (created) => {
             sessionId = created.sessionId;
             sessionFile = created.entry.sessionFile;
+            grantToken = mintAttachGrant({ sessionKey: key }).token;
             throw new Error("history import failed");
           },
         }),
@@ -231,6 +243,7 @@ describe("plugin runtime session creation", () => {
           storePath,
         }),
       ).resolves.toEqual([]);
+      expect(resolveAttachGrant(grantToken ?? "")).toBeUndefined();
     });
   });
 
