@@ -710,7 +710,7 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
         },
         {
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
-          ...(syntheticScopes ? { syntheticScopes } : {}),
+          ...(syntheticScopes ? { forceSyntheticClient: true, syntheticScopes } : {}),
         },
       );
       return payload;
