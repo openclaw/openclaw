@@ -1978,19 +1978,25 @@ describe("gateway server chat", () => {
     const dispatchRelease = createDeferred();
     const runId = "idem-signal-only-dispatch-reject";
     try {
-      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      const storePath = path.join(sessionDir, "sessions.json");
+      testState.sessionStorePath = storePath;
       await writeSessionStore({
         entries: {
           main: {
             sessionId: "sess-main",
+            status: "running",
+            startedAt: 900,
             updatedAt: Date.now(),
           },
         },
       });
       const broadcast = vi.fn();
+      const broadcastToConnIds = vi.fn();
       const context = {
         ...createDirectChatContext(),
         broadcast,
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-session"]),
       } as GatewayRequestContext;
       dispatchInboundMessageMock.mockImplementationOnce(async () => {
         await dispatchRelease.promise;
@@ -2046,6 +2052,25 @@ describe("gateway server chat", () => {
         "chat",
         expect.objectContaining({ runId, state: "aborted" }),
       );
+      await vi.waitFor(() => {
+        expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+          abortedLastRun: false,
+          sessionId: "sess-main",
+          status: "failed",
+        });
+        expect(broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({
+            reason: "chat.dispatch-error",
+            sessionId: "sess-main",
+            sessionKey: "agent:main:main",
+            status: "failed",
+            hasActiveRun: false,
+          }),
+          new Set(["conn-session"]),
+          { dropIfSlow: true },
+        );
+      }, FAST_WAIT_OPTS);
     } finally {
       dispatchRelease.resolve();
       dispatchInboundMessageMock.mockReset();

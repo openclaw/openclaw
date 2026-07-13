@@ -3790,7 +3790,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                 };
           if (
             !restartSafeDispatchFailureTerminalized &&
-            !abortedAtDispatchReject &&
             abortMarkerAtDispatchReject === undefined
           ) {
             pendingDispatchLifecycleError = {
