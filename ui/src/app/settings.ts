@@ -702,7 +702,10 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,
-    pinnedAgentIds: next.pinnedAgentIds ?? [],
+    // Empty pin list is the default; only real pins persist.
+    ...(next.pinnedAgentIds && next.pinnedAgentIds.length > 0
+      ? { pinnedAgentIds: next.pinnedAgentIds }
+      : {}),
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
