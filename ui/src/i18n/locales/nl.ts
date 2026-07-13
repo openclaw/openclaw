@@ -409,6 +409,7 @@ export const nl: TranslationMap = {
     working: "Bezig…",
     ready: "Klaar om te chatten",
     whatCanAgentDo: "Wat kan {name} doen?",
+    help: "Help",
     getHelp: "Hulp krijgen",
     discord: "Discord-community",
     viewChangelog: "Wijzigingslogboek bekijken",

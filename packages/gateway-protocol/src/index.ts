@@ -1,5 +1,4 @@
-// Public gateway protocol entrypoint. Keep this barrel aligned with schema.ts
-// so clients can import wire types, JSON schemas, and validators from one place.
+// Public gateway protocol entrypoint: wire types, schemas, and validators.
 export {
   buildClawHubTrustErrorDetails,
   ClawHubTrustErrorCodes,
@@ -145,6 +144,8 @@ import {
   TalkConfigResultSchema,
   type TalkSessionAppendAudioParams,
   TalkSessionAppendAudioParamsSchema,
+  type TalkSessionAcknowledgeMarkParams,
+  TalkSessionAcknowledgeMarkParamsSchema,
   type TalkSessionCancelOutputParams,
   TalkSessionCancelOutputParamsSchema,
   type TalkSessionCancelTurnParams,
@@ -902,14 +903,12 @@ import {
 
 /** Runtime validator shape shared by gateway clients and server handlers. */
 export type ProtocolValidator<T = unknown> = ((data: unknown) => data is T) & {
-  /** Last validation errors, matching Ajv-style caller expectations. */
-  errors: ValidationError[] | null;
+  errors: ValidationError[] | null; // Ajv-style last validation errors.
   /** Original schema used by the validator, exposed for diagnostics/tests. */
   schema: unknown;
 };
 
-// Defer TypeBox compilation until the first validation call. Importing this
-// module is common in CLIs/tests, so eager compilation would add startup cost.
+// Defer TypeBox compilation because this module is common on startup paths.
 function lazyCompile<T = unknown>(
   schema: unknown,
   precheck?: (data: unknown) => ValidationError | undefined,
@@ -954,8 +953,7 @@ function lazyCompile<T = unknown>(
   return validate;
 }
 
-// Public per-method validators. Names intentionally mirror the exported schema
-// constants so call sites can pair validation with the wire contract directly.
+// Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile<ConnectParams>(ConnectParamsSchema);
 export const validateWorkerAdmissionHandshake = lazyCompile<WorkerAdmissionHandshake>(
@@ -1343,6 +1341,8 @@ export const validateTalkSessionJoinResult = lazyCompile<TalkSessionJoinResult>(
 export const validateTalkSessionAppendAudioParams = lazyCompile<TalkSessionAppendAudioParams>(
   TalkSessionAppendAudioParamsSchema,
 );
+export const validateTalkSessionAcknowledgeMarkParams =
+  lazyCompile<TalkSessionAcknowledgeMarkParams>(TalkSessionAcknowledgeMarkParamsSchema);
 export const validateTalkSessionTurnParams = lazyCompile<TalkSessionTurnParams>(
   TalkSessionTurnParamsSchema,
 );
@@ -1608,8 +1608,7 @@ export const validateWebLoginStartParams =
   lazyCompile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = lazyCompile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
 
-// Schema exports stay explicit to make additions/removals reviewable as public
-// protocol surface changes.
+// Explicit schema exports keep public protocol changes reviewable.
 export {
   ConnectParamsSchema,
   GatewaySuspendTaskBlockerSchema,
@@ -1850,6 +1849,7 @@ export {
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
   TalkSessionAppendAudioParamsSchema,
+  TalkSessionAcknowledgeMarkParamsSchema,
   TalkSessionCancelOutputParamsSchema,
   TalkSessionCancelTurnParamsSchema,
   TalkSessionCreateParamsSchema,
@@ -2133,6 +2133,7 @@ export type {
   TalkConfigParams,
   TalkConfigResult,
   TalkSessionAppendAudioParams,
+  TalkSessionAcknowledgeMarkParams,
   TalkSessionCancelOutputParams,
   TalkSessionCancelTurnParams,
   TalkSessionCreateParams,
@@ -2425,8 +2426,7 @@ export type {
   SessionsGroupsMutationResult,
 };
 
-// The protocol package cannot import core session types. This local structural
-// result mirrors the wire contract and keeps the package independent of src/.
+// Local structural result keeps this package independent of core session types.
 type SessionsPatchResult = {
   ok: true;
   path: string;
