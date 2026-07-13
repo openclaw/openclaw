@@ -3689,22 +3689,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!pending) {
       return;
     }
-    // Clear the wait timeout when the pending update settles first. Without this,
-    // each memory_search during a reindex leaks a ref'd 500ms timer until it fires,
-    // so sustained search-during-update traffic stacks pending timers.
+    // Release the losing timer when the pending update settles first.
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        pending.catch(() => undefined),
-        new Promise<void>((resolve) => {
-          timeout = setTimeout(resolve, SEARCH_PENDING_UPDATE_WAIT_MS);
-        }),
-      ]);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
+    const wait = new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, SEARCH_PENDING_UPDATE_WAIT_MS);
+    });
+    await Promise.race([pending.catch(() => undefined), wait]).finally(() => clearTimeout(timeout));
   }
 
   private async resolveCollectionSearchGroups(
