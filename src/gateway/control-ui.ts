@@ -4,6 +4,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import {
   asDateTimestampMs,
@@ -82,6 +83,19 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
+const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
+  ".css",
+  ".html",
+  ".js",
+  ".json",
+  ".map",
+  ".svg",
+  ".txt",
+  ".webmanifest",
+]);
+
+type ControlUiContentEncoding = "br" | "gzip";
 
 function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
   // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
@@ -257,12 +271,17 @@ function respondControlUiAssetsUnavailable(
   respondPlainText(res, 503, CONTROL_UI_ASSETS_MISSING_MESSAGE);
 }
 
-function respondHeadForFile(req: IncomingMessage, res: ServerResponse, filePath: string): boolean {
+function respondHeadForControlUiFile(
+  req: IncomingMessage,
+  res: ServerResponse,
+  filePath: string,
+  options?: { immutable?: boolean },
+): boolean {
   if (req.method !== "HEAD") {
     return false;
   }
   res.statusCode = 200;
-  setStaticFileHeaders(res, filePath);
+  setControlUiFileHeaders(req, res, filePath, options);
   res.end();
   return true;
 }
@@ -794,20 +813,101 @@ export async function handleControlUiAvatarRequest(
   }
 }
 
-function setStaticFileHeaders(res: ServerResponse, filePath: string) {
+function normalizedAcceptEncoding(req: IncomingMessage): string {
+  const value = req.headers?.["accept-encoding"];
+  return Array.isArray(value) ? value.join(",") : (value ?? "");
+}
+
+function resolveControlUiContentEncoding(req: IncomingMessage): ControlUiContentEncoding | null {
+  const qualities = new Map<string, number>();
+  for (const entry of normalizedAcceptEncoding(req).split(",")) {
+    const [rawName, ...rawParams] = entry.split(";");
+    const name = rawName?.trim().toLowerCase();
+    if (!name) {
+      continue;
+    }
+    const qualityParam = rawParams.find((param) => param.trim().toLowerCase().startsWith("q="));
+    const parsedQuality = qualityParam ? Number.parseFloat(qualityParam.trim().slice(2)) : 1;
+    const quality =
+      Number.isFinite(parsedQuality) && parsedQuality >= 0 && parsedQuality <= 1
+        ? parsedQuality
+        : 0;
+    qualities.set(name, Math.max(qualities.get(name) ?? 0, quality));
+  }
+
+  const wildcardQuality = qualities.get("*") ?? 0;
+  const qualityFor = (name: ControlUiContentEncoding) =>
+    qualities.has(name) ? (qualities.get(name) ?? 0) : wildcardQuality;
+  const brotliQuality = qualityFor("br");
+  const gzipQuality = qualityFor("gzip");
+  if (brotliQuality <= 0 && gzipQuality <= 0) {
+    return null;
+  }
+  return brotliQuality >= gzipQuality ? "br" : "gzip";
+}
+
+function setControlUiFileHeaders(
+  req: IncomingMessage,
+  res: ServerResponse,
+  filePath: string,
+  options?: { immutable?: boolean },
+) {
   const ext = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExt(ext));
-  // Static UI should never be cached aggressively while iterating; allow the
-  // browser to revalidate.
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader(
+    "Cache-Control",
+    options?.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
+  );
+  if (CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(ext)) {
+    res.setHeader("Vary", "Accept-Encoding");
+    const encoding = resolveControlUiContentEncoding(req);
+    if (encoding) {
+      res.setHeader("Content-Encoding", encoding);
+    }
+  }
 }
 
-function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) {
-  setStaticFileHeaders(res, filePath);
-  res.end(body);
+function compressControlUiBody(body: Buffer, encoding: ControlUiContentEncoding): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const callback = (error: Error | null, compressed: Buffer) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(compressed);
+    };
+    if (encoding === "br") {
+      brotliCompress(
+        body,
+        {
+          params: {
+            [zlibConstants.BROTLI_PARAM_QUALITY]: 4,
+          },
+        },
+        callback,
+      );
+      return;
+    }
+    gzip(body, { level: 6 }, callback);
+  });
 }
 
-function serveResolvedIndexHtml(
+async function serveControlUiAsset(
+  req: IncomingMessage,
+  res: ServerResponse,
+  filePath: string,
+  body: Buffer,
+  options?: { immutable?: boolean },
+) {
+  setControlUiFileHeaders(req, res, filePath, options);
+  const encoding = CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+    ? resolveControlUiContentEncoding(req)
+    : null;
+  res.end(encoding ? await compressControlUiBody(body, encoding) : body);
+}
+
+async function serveResolvedIndexHtml(
+  req: IncomingMessage,
   res: ServerResponse,
   body: string,
   basePath?: string,
@@ -833,7 +933,12 @@ function serveResolvedIndexHtml(
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(prepared);
+  res.setHeader("Vary", "Accept-Encoding");
+  const encoding = resolveControlUiContentEncoding(req);
+  if (encoding) {
+    res.setHeader("Content-Encoding", encoding);
+  }
+  res.end(encoding ? await compressControlUiBody(Buffer.from(prepared), encoding) : prepared);
 }
 
 function readOpenedFile(fd: number): Promise<Buffer> {
@@ -1132,14 +1237,18 @@ export async function handleControlUiHttpRequest(
         cwd: process.cwd(),
       }));
   const rejectHardlinks = !isBundledRoot;
+  // Vite fingerprints every file emitted under the bundled assets directory.
+  // Configured roots remain revalidated because their naming is not our contract.
+  const immutableAsset = isBundledRoot && fileRel.startsWith("assets/");
   const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
   if (safeFile) {
     try {
-      if (respondHeadForFile(req, res, safeFile.path)) {
+      if (respondHeadForControlUiFile(req, res, safeFile.path, { immutable: immutableAsset })) {
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(
+        await serveResolvedIndexHtml(
+          req,
           res,
           await readOpenedFileText(safeFile.fd),
           basePath,
@@ -1147,7 +1256,9 @@ export async function handleControlUiHttpRequest(
         );
         return true;
       }
-      serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
+      await serveControlUiAsset(req, res, safeFile.path, await readOpenedFile(safeFile.fd), {
+        immutable: immutableAsset,
+      });
       return true;
     } finally {
       fs.closeSync(safeFile.fd);
@@ -1169,10 +1280,11 @@ export async function handleControlUiHttpRequest(
   const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
   if (safeIndex) {
     try {
-      if (respondHeadForFile(req, res, safeIndex.path)) {
+      if (respondHeadForControlUiFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(
+      await serveResolvedIndexHtml(
+        req,
         res,
         await readOpenedFileText(safeIndex.fd),
         basePath,

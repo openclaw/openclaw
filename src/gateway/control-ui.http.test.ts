@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeAssistantIdentity } from "../../ui/src/lib/assistant-identity.ts";
@@ -121,17 +122,18 @@ describe("handleControlUiHttpRequest", () => {
     rootPath: string;
     basePath?: string;
     rootKind?: "resolved" | "bundled";
+    headers?: IncomingMessage["headers"];
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiHttpRequest(
-      { url: params.url, method: params.method } as IncomingMessage,
+      { url: params.url, method: params.method, headers: params.headers ?? {} } as IncomingMessage,
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
         root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   async function runBootstrapConfigRequest(params: {
@@ -1834,6 +1836,80 @@ describe("handleControlUiHttpRequest", () => {
         } finally {
           readFileSync.mockRestore();
         }
+      },
+    });
+  });
+
+  it("compresses bundled assets and caches them immutably", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('compressed');\n".repeat(200);
+        await writeAssetFile(tmp, "app-AbCd1234.js", source);
+
+        const { res, end, setHeader, handled } = await runControlUiRequest({
+          url: "/assets/app-AbCd1234.js",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "accept-encoding": "gzip;q=0.5, br" },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith(
+          "Cache-Control",
+          "public, max-age=31536000, immutable",
+        );
+        expect(setHeader).toHaveBeenCalledWith("Vary", "Accept-Encoding");
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
+        const compressed = end.mock.calls[0]?.[0];
+        expect(Buffer.isBuffer(compressed)).toBe(true);
+        expect(brotliDecompressSync(compressed as Buffer).toString()).toBe(source);
+      },
+    });
+  });
+
+  it("negotiates gzip and keeps configured-root assets revalidated", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('configured');\n".repeat(100);
+        await writeAssetFile(tmp, "app-settings.js", source);
+
+        const { end, setHeader } = await runControlUiRequest({
+          url: "/assets/app-settings.js",
+          method: "GET",
+          rootPath: tmp,
+          headers: { "accept-encoding": "br;q=0, gzip;q=0.8" },
+        });
+
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+      },
+    });
+  });
+
+  it("compresses index.html without making it immutable", async () => {
+    const html = `<html><body>${"hello ".repeat(200)}</body></html>\n`;
+    await withControlUiRoot({
+      indexHtml: html,
+      fn: async (tmp) => {
+        const { res, end, setHeader } = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          {
+            url: "/",
+            method: "GET",
+            headers: { "accept-encoding": "gzip" },
+          } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
+
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
+          '<html data-openclaw-terminal-enabled="false">',
+        );
       },
     });
   });
