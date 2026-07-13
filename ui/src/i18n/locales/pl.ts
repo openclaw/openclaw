@@ -1730,6 +1730,9 @@ export const pl: TranslationMap = {
     importedWithIssues:
       "Zaimportowano: {migrated} · niepowodzenia: {errors} · konflikty: {conflicts}",
     reportSaved: "raport zapisany",
+    recoveryFile: "Plik odzyskiwania",
+    recoveryJournal: "Dziennik odzyskiwania",
+    itemBackup: "Kopia zapasowa elementu",
     codexDescription: "Skonsolidowane pliki pamięci Codex.",
     claudeDescription: "Pliki automatycznej pamięci Claude Code dla poszczególnych projektów.",
     providerFallback: "Zaimportuj pamięć asystenta do obszaru roboczego tego agenta.",
