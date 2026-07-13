@@ -226,6 +226,7 @@ function createLineWebhookTestContext(params: {
   groupAllowFrom?: LineAccountConfig["groupAllowFrom"];
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
+  conversationAcceptanceTails?: Map<string, Promise<void>>;
   onEventAccepted?: (event: webhook.Event) => void | Promise<void>;
   replayCache?: ReturnType<typeof createLineWebhookReplayCache>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
@@ -260,6 +261,9 @@ function createLineWebhookTestContext(params: {
     processMessage: params.processMessage,
     ...(params.onEventAccepted ? { onEventAccepted: params.onEventAccepted } : {}),
     ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
+    ...(params.conversationAcceptanceTails
+      ? { conversationAcceptanceTails: params.conversationAcceptanceTails }
+      : {}),
     ...(params.replayCache ? { replayCache: params.replayCache } : {}),
   };
 }
@@ -407,7 +411,7 @@ describe("handleLineWebhookEvents", () => {
     await task;
   });
 
-  it("serializes same-group events until earlier processing settles", async () => {
+  it("admits same-group events before earlier processing settles", async () => {
     let releaseFirstProcessing: (() => void) | undefined;
     const firstProcessing = new Promise<void>((resolve) => {
       releaseFirstProcessing = resolve;
@@ -439,8 +443,8 @@ describe("handleLineWebhookEvents", () => {
       }),
     );
 
-    await vi.waitFor(() => expect(onEventAccepted).toHaveBeenCalledOnce());
-    expect(processMessage).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(onEventAccepted).toHaveBeenCalledTimes(2));
+    expect(processMessage).toHaveBeenCalledTimes(2);
     if (!releaseFirstProcessing) {
       throw new Error("Expected first LINE processing release callback");
     }
@@ -450,47 +454,118 @@ describe("handleLineWebhookEvents", () => {
     expect(onEventAccepted.mock.calls.map(([event]) => event)).toEqual([firstEvent, secondEvent]);
   });
 
-  it("preserves callback order until each event reaches reply-lane admission", async () => {
-    let releaseFirstAdmission: (() => void) | undefined;
-    const firstAdmission = new Promise<void>((resolve) => {
-      releaseFirstAdmission = resolve;
+  it("preserves later group history after an earlier turn is durably adopted", async () => {
+    let releaseFirstProcessing: (() => void) | undefined;
+    const firstProcessing = new Promise<void>((resolve) => {
+      releaseFirstProcessing = resolve;
     });
-    const onEventAccepted = vi.fn();
+    const groupHistories = new Map<string, HistoryEntry[]>([
+      ["group-history-ordered", [{ sender: "user:earlier", body: "earlier", timestamp: 1 }]],
+    ]);
     const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
-      if (processMessage.mock.calls.length === 1) {
-        await firstAdmission;
-      }
       await message.onEventAccepted?.();
+      await firstProcessing;
     });
     const firstEvent = createTestMessageEvent({
-      message: { id: "m-ordered-first", type: "text", text: "first" },
-      source: { type: "group", groupId: "group-ordered", userId: "user-ordered" },
-      webhookEventId: "evt-ordered-first",
+      message: {
+        id: "m-history-first",
+        type: "text",
+        text: "first",
+        mention: { mentionees: [{ isSelf: true }] },
+      } as MessageEvent["message"],
+      source: { type: "group", groupId: "group-history-ordered", userId: "user-history" },
+      webhookEventId: "evt-history-first",
     });
     const secondEvent = createTestMessageEvent({
-      message: { id: "m-ordered-second", type: "text", text: "second" },
-      source: { type: "group", groupId: "group-ordered", userId: "user-ordered" },
-      webhookEventId: "evt-ordered-second",
+      message: { id: "m-history-second", type: "text", text: "second" },
+      source: { type: "group", groupId: "group-history-ordered", userId: "user-history" },
+      webhookEventId: "evt-history-second",
     });
     const task = handleLineWebhookEvents(
       [firstEvent, secondEvent],
       createLineWebhookTestContext({
         processMessage,
         groupPolicy: "open",
-        requireMention: false,
-        onEventAccepted,
+        requireMention: true,
+        groupHistories,
       }),
     );
 
-    await vi.waitFor(() => expect(processMessage).toHaveBeenCalledOnce());
-    expect(onEventAccepted).not.toHaveBeenCalled();
-    if (!releaseFirstAdmission) {
-      throw new Error("Expected first LINE event admission release callback");
+    await vi.waitFor(() => {
+      expect(groupHistories.get("group-history-ordered")).toEqual([
+        expect.objectContaining({ sender: "user:user-history", body: "second" }),
+      ]);
+    });
+    if (!releaseFirstProcessing) {
+      throw new Error("Expected first LINE processing release callback");
     }
-    releaseFirstAdmission();
+    releaseFirstProcessing();
     await task;
+  });
 
-    expect(onEventAccepted.mock.calls.map(([event]) => event)).toEqual([firstEvent, secondEvent]);
+  it("orders group-history mutations across concurrent webhook requests", async () => {
+    let allowFirstAdmission: (() => void) | undefined;
+    const firstAdmission = new Promise<void>((resolve) => {
+      allowFirstAdmission = resolve;
+    });
+    let releaseFirstProcessing: (() => void) | undefined;
+    const firstProcessing = new Promise<void>((resolve) => {
+      releaseFirstProcessing = resolve;
+    });
+    const groupHistories = new Map<string, HistoryEntry[]>([
+      ["group-history-requests", [{ sender: "user:earlier", body: "earlier", timestamp: 1 }]],
+    ]);
+    const conversationAcceptanceTails = new Map<string, Promise<void>>();
+    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+      await firstAdmission;
+      await message.onEventAccepted?.();
+      await firstProcessing;
+    });
+    const firstEvent = createTestMessageEvent({
+      message: {
+        id: "m-request-history-first",
+        type: "text",
+        text: "first",
+        mention: { mentionees: [{ isSelf: true }] },
+      } as MessageEvent["message"],
+      source: { type: "group", groupId: "group-history-requests", userId: "user-history" },
+      webhookEventId: "evt-request-history-first",
+    });
+    const secondEvent = createTestMessageEvent({
+      message: { id: "m-request-history-second", type: "text", text: "second" },
+      source: { type: "group", groupId: "group-history-requests", userId: "user-history" },
+      webhookEventId: "evt-request-history-second",
+    });
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      groupHistories,
+      conversationAcceptanceTails,
+    });
+
+    const firstRequest = handleLineWebhookEvents([firstEvent], context);
+    await vi.waitFor(() => expect(processMessage).toHaveBeenCalledOnce());
+    const secondRequest = handleLineWebhookEvents([secondEvent], context);
+    await Promise.resolve();
+    expect(groupHistories.get("group-history-requests")).toEqual([
+      expect.objectContaining({ sender: "user:earlier", body: "earlier" }),
+    ]);
+
+    if (!allowFirstAdmission) {
+      throw new Error("Expected first LINE admission release callback");
+    }
+    allowFirstAdmission();
+    await secondRequest;
+    expect(groupHistories.get("group-history-requests")).toEqual([
+      expect.objectContaining({ sender: "user:user-history", body: "second" }),
+    ]);
+
+    if (!releaseFirstProcessing) {
+      throw new Error("Expected first LINE processing release callback");
+    }
+    releaseFirstProcessing();
+    await firstRequest;
   });
 
   beforeEach(() => {

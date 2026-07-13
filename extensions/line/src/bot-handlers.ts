@@ -80,6 +80,7 @@ interface LineHandlerContext {
   onEventAccepted?: (event: WebhookEvent) => void | Promise<void>;
   replayCache?: LineWebhookReplayCache;
   groupHistories?: Map<string, HistoryEntry[]>;
+  conversationAcceptanceTails?: Map<string, Promise<void>>;
   historyLimit?: number;
 }
 
@@ -506,12 +507,11 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  await processMessage({
-    ...messageContext,
-    onEventAccepted: () => context.onEventAccepted?.(event),
-  });
-
-  if (isGroup && context.groupHistories) {
+  let groupHistoryCleared = false;
+  const clearGroupHistory = () => {
+    if (groupHistoryCleared || !isGroup || !context.groupHistories) {
+      return;
+    }
     const historyKey = groupId ?? roomId;
     if (historyKey && context.groupHistories.has(historyKey)) {
       createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
@@ -519,7 +519,22 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
       });
     }
-  }
+    groupHistoryCleared = true;
+  };
+
+  await processMessage({
+    ...messageContext,
+    onEventAccepted: async () => {
+      // Same-group webhook events start after this durable adoption. Clear
+      // their pending history here so a later event cannot be erased when
+      // this Agent turn eventually completes.
+      clearGroupHistory();
+      await context.onEventAccepted?.(event);
+    },
+  });
+  // Legacy/test handlers that do not call onEventAccepted still need the
+  // original post-processing history cleanup before their event settles.
+  clearGroupHistory();
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {
@@ -693,25 +708,27 @@ export async function handleLineWebhookEvents(
 ): Promise<void> {
   const acceptances: Promise<void>[] = [];
   const completions: Promise<void>[] = [];
-  const conversationCompletions = new Map<string, Promise<void>>();
+  const conversationAcceptances =
+    context.conversationAcceptanceTails ?? new Map<string, Promise<void>>();
   for (const event of events) {
     const conversationKey = resolveLineWebhookConversationKey(event);
-    const previousCompletion = conversationKey
-      ? conversationCompletions.get(conversationKey)
+    const previousAcceptance = conversationKey
+      ? conversationAcceptances.get(conversationKey)
       : undefined;
     const task = (async () => {
-      await previousCompletion;
+      await previousAcceptance;
       return startLineWebhookEvent(event, context);
     })();
     const acceptance = task.then(async (started) => await started.acceptance);
     const completion = task.then(async (started) => await started.completion);
-    // Keep shared group-history state in event order, but let independent
-    // conversations reach durable reply-lane admission concurrently.
     if (conversationKey) {
-      conversationCompletions.set(
-        conversationKey,
-        completion.catch(() => undefined),
-      );
+      const acceptanceTail = acceptance.catch(() => undefined);
+      conversationAcceptances.set(conversationKey, acceptanceTail);
+      void acceptanceTail.finally(() => {
+        if (conversationAcceptances.get(conversationKey) === acceptanceTail) {
+          conversationAcceptances.delete(conversationKey);
+        }
+      });
     }
     void completion.catch(() => {});
     acceptances.push(acceptance);

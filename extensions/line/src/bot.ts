@@ -50,6 +50,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
     });
   const replayCache = createLineWebhookReplayCache();
   const groupHistories = new Map<string, HistoryEntry[]>();
+  const conversationAcceptanceTails = new Map<string, Promise<void>>();
 
   const handleWebhook = async (
     body: webhook.CallbackRequest,
@@ -67,6 +68,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       processMessage,
       replayCache,
       groupHistories,
+      conversationAcceptanceTails,
       historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
       onEventAccepted: callbacks?.onEventAccepted,
     });
