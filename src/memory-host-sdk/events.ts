@@ -21,12 +21,16 @@ export type MemoryHostRecallRecordedEvent = {
   }>;
 };
 
+export type MemoryHostRecallSkippedReason =
+  | "non-short-term-memory-path"
+  | "unpromotable-short-term-snippet";
+
 /** Event emitted when recall hits are visible but excluded from short-term promotion. */
 export type MemoryHostRecallSkippedEvent = {
   type: "memory.recall.skipped";
   timestamp: string;
   query: string;
-  reason: "non-short-term-memory-path";
+  reason: MemoryHostRecallSkippedReason;
   eligibleResultCount: number;
   skippedResultCount: number;
   results: Array<{
@@ -34,7 +38,7 @@ export type MemoryHostRecallSkippedEvent = {
     startLine: number;
     endLine: number;
     score: number;
-    reason: "non-short-term-memory-path";
+    reason: MemoryHostRecallSkippedReason;
   }>;
 };
 
