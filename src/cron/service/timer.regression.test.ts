@@ -26,6 +26,7 @@ import {
   markCronJobActive,
 } from "../active-jobs.js";
 import * as schedule from "../schedule.js";
+import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type {
   CronAgentExecutionPhase,
@@ -2235,6 +2236,168 @@ describe("cron service timer regressions", () => {
     releaseActive.resolve({ status: "ok", summary: "manual" });
     await Promise.all([activeRun, catchupRun]);
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("rechecks startup catch-up eligibility after an admission wait", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.437Z");
+    const activeManualJob = createDueIsolatedJob({
+      id: "manual-before-rescheduled-startup-catchup",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    const catchupJob = createDueIsolatedJob({
+      id: "rescheduled-startup-catchup",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [activeManualJob, catchupJob] });
+
+    const activeStarted = createDeferred<void>();
+    const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
+    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
+      if (job.id === activeManualJob.id) {
+        activeStarted.resolve();
+        return await releaseActive.promise;
+      }
+      return { status: "ok" as const, summary: "should not run" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const activeRun = runManualCronJob(state, activeManualJob.id, "force");
+    await activeStarted.promise;
+    const catchupRun = runMissedJobs(state);
+    await vi.waitFor(() => {
+      expect(state.store?.jobs.find((job) => job.id === catchupJob.id)?.state.runningAtMs).toBe(
+        dueAt,
+      );
+    });
+
+    const rescheduledStore = await loadCronStore(store.storePath);
+    const rescheduledJob = rescheduledStore.jobs.find((job) => job.id === catchupJob.id);
+    if (!rescheduledJob) {
+      throw new Error("Expected startup catch-up job");
+    }
+    rescheduledJob.state.nextRunAtMs = dueAt + 3_600_000;
+    await saveCronStore(store.storePath, rescheduledStore);
+
+    releaseActive.resolve({ status: "ok", summary: "manual" });
+    await Promise.all([activeRun, catchupRun]);
+
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(
+      state.store?.jobs.find((job) => job.id === catchupJob.id)?.state.runningAtMs,
+    ).toBeUndefined();
+    expect(
+      (await loadCronStore(store.storePath)).jobs.find((job) => job.id === catchupJob.id)?.state
+        .runningAtMs,
+    ).toBeUndefined();
+  });
+
+  it("finalizes completed startup catch-up work before a later activation reload failure", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.469Z");
+    const first = createDueIsolatedJob({
+      id: "failed-startup-catchup-first",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const second = createDueIsolatedJob({
+      id: "failed-startup-catchup-second",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [first, second] });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const realLoad = cronStoreModule.loadCronJobsStoreWithConfigJobs;
+    let loadCount = 0;
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockImplementation(async (storePath) => {
+        loadCount += 1;
+        if (loadCount === 3) {
+          throw new Error("startup activation reload failed");
+        }
+        return await realLoad(storePath);
+      });
+
+    try {
+      await expect(runMissedJobs(state)).rejects.toThrow("startup activation reload failed");
+    } finally {
+      loadSpy.mockRestore();
+    }
+
+    expect(state.store?.jobs.find((entry) => entry.id === first.id)?.state.lastStatus).toBe("ok");
+    expect(
+      (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === first.id)?.state
+        .lastStatus,
+    ).toBe("ok");
+    for (const job of [first, second]) {
+      expect(
+        state.store?.jobs.find((entry) => entry.id === job.id)?.state.runningAtMs,
+      ).toBeUndefined();
+      expect(state.queuedRunReservationAtByJobId.has(job.id)).toBe(false);
+      expect(
+        (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
+          .runningAtMs,
+      ).toBeUndefined();
+    }
+  });
+
+  it("propagates falsy startup catch-up activation failures", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.484Z");
+    const job = createDueIsolatedJob({
+      id: "falsy-startup-catchup-failure",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const realLoad = cronStoreModule.loadCronJobsStoreWithConfigJobs;
+    let loadCount = 0;
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockImplementation(async (storePath) => {
+        loadCount += 1;
+        if (loadCount === 2) {
+          throw undefined;
+        }
+        return await realLoad(storePath);
+      });
+
+    try {
+      await expect(runMissedJobs(state)).rejects.toBeUndefined();
+    } finally {
+      loadSpy.mockRestore();
+    }
   });
 
   it("does not start an admitted due job after stop wins its service-lock wait", async () => {

@@ -22,6 +22,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
+import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { enqueueRun, remove, run, start, stop, update } from "./ops.js";
@@ -1041,6 +1042,98 @@ describe("cron service ops regressions", () => {
     const completedWaitingJob = state.store?.jobs.find((job) => job.id === waitingJob.id);
     expect(completedWaitingJob?.state.lastRunAtMs).toBe(dueAt + 2 * 60 * 60 * 1000 + 1);
     expect(completedWaitingJob?.state.lastDurationMs).toBe(100);
+  });
+
+  it("releases a manual reservation when activation reload fails", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.875Z");
+    const job = createDueIsolatedJob({
+      id: "manual-activation-reload-failure",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const realLoad = cronStoreModule.loadCronJobsStoreWithConfigJobs;
+    let loadCount = 0;
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockImplementation(async (storePath) => {
+        loadCount += 1;
+        if (loadCount === 2) {
+          throw new Error("activation reload failed");
+        }
+        return await realLoad(storePath);
+      });
+
+    try {
+      await expect(run(state, job.id, "force")).rejects.toThrow("activation reload failed");
+    } finally {
+      loadSpy.mockRestore();
+    }
+
+    expect(
+      state.store?.jobs.find((entry) => entry.id === job.id)?.state.runningAtMs,
+    ).toBeUndefined();
+    expect(state.queuedRunReservationAtByJobId.has(job.id)).toBe(false);
+    expect(
+      (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
+        .runningAtMs,
+    ).toBeUndefined();
+  });
+
+  it("keeps an activated same-millisecond marker when finalization reload fails", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.937Z");
+    const job = createDueIsolatedJob({
+      id: "manual-finalization-reload-failure",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const realSave = cronStoreModule.saveCronJobsStore;
+    let saveCount = 0;
+    const saveSpy = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockImplementation(async (storePath, store, opts) => {
+        saveCount += 1;
+        if (saveCount === 3) {
+          throw new Error("finalization persist failed");
+        }
+        await realSave(storePath, store, opts);
+      });
+
+    try {
+      await expect(run(state, job.id, "force")).rejects.toThrow("finalization persist failed");
+    } finally {
+      saveSpy.mockRestore();
+    }
+
+    expect(state.store?.jobs.find((entry) => entry.id === job.id)?.state.runningAtMs).toBe(dueAt);
+    expect(state.queuedRunReservationAtByJobId.has(job.id)).toBe(false);
+    expect(
+      (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
+        .runningAtMs,
+    ).toBe(dueAt);
   });
 
   it("releases a direct manual reservation when stop wins its admission wait", async () => {

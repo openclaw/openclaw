@@ -184,6 +184,10 @@ type StartupCatchupPlan = {
   deferredJobs: StartupDeferredJob[];
 };
 
+type StartupCatchupExecution =
+  | { ok: true; outcomes: TimedCronRunOutcome[] }
+  | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
+
 type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
@@ -1806,6 +1810,26 @@ function deferPendingBackoffMissedCronSlots(
   return changed;
 }
 
+async function releaseStartupCatchupReservationsAfterFailure(
+  state: CronServiceState,
+  plan: StartupCatchupPlan,
+  outcomes: readonly TimedCronRunOutcome[],
+): Promise<void> {
+  // Process-local reservations must not outlive a failed catch-up pass.
+  for (const candidate of plan.candidates) {
+    releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
+  }
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const released = releaseUnstartedStartupCatchupReservations(state, plan, outcomes);
+    if (!released) {
+      return;
+    }
+    recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
+    await persist(state);
+  });
+}
+
 /** Runs or defers missed startup jobs using restart catch-up limits. */
 export async function runMissedJobs(
   state: CronServiceState,
@@ -1819,10 +1843,29 @@ export async function runMissedJobs(
     return;
   }
 
-  const outcomes = await executeStartupCatchupPlan(state, plan);
-  const finalizedOutcomes = await applyStartupCatchupOutcomes(state, plan, outcomes);
+  const execution = await executeStartupCatchupPlan(state, plan);
+  let finalizedOutcomes: TimedCronRunOutcome[];
+  try {
+    finalizedOutcomes = await applyStartupCatchupOutcomes(state, plan, execution.outcomes);
+  } catch (finalizationError) {
+    if (execution.ok) {
+      throw finalizationError;
+    }
+    try {
+      await releaseStartupCatchupReservationsAfterFailure(state, plan, execution.outcomes);
+    } catch (cleanupError) {
+      state.deps.log.warn(
+        { err: String(cleanupError) },
+        "cron: failed to release startup catch-up reservations after execution error",
+      );
+    }
+    throw execution.error;
+  }
   for (const outcome of finalizedOutcomes) {
     maybeNotifyIsolatedAgentSetupTimeout(state, outcome);
+  }
+  if (!execution.ok) {
+    throw execution.error;
   }
 }
 
@@ -1926,67 +1969,71 @@ async function planStartupCatchup(
 async function executeStartupCatchupPlan(
   state: CronServiceState,
   plan: StartupCatchupPlan,
-): Promise<TimedCronRunOutcome[]> {
+): Promise<StartupCatchupExecution> {
   const outcomes: TimedCronRunOutcome[] = [];
-  for (const candidate of plan.candidates) {
-    if (state.stopped) {
-      break;
-    }
-    const admission = await runWithCronAdmission(state, async () => {
-      const startedCandidate = await locked(state, async () => {
-        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-        const job = state.store?.jobs.find((entry) => entry.id === candidate.jobId);
-        if (
-          state.stopped ||
-          state.restartRecoveryPending ||
-          !job ||
-          job.state.runningAtMs !== candidate.reservedAtMs
-        ) {
+  try {
+    for (const candidate of plan.candidates) {
+      if (state.stopped) {
+        break;
+      }
+      const admission = await runWithCronAdmission(state, async () => {
+        const startedCandidate = await locked(state, async () => {
+          await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+          const job = state.store?.jobs.find((entry) => entry.id === candidate.jobId);
+          if (
+            state.stopped ||
+            state.restartRecoveryPending ||
+            !job ||
+            job.state.runningAtMs !== candidate.reservedAtMs
+          ) {
+            releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
+            return undefined;
+          }
+          const dueProbe = structuredClone(job);
+          delete dueProbe.state.runningAtMs;
+          if (
+            !isRunnableJob({
+              state,
+              job: dueProbe,
+              nowMs: state.deps.nowMs(),
+              skipAtIfAlreadyRan: true,
+              allowCronMissedRunByLastRun: true,
+            })
+          ) {
+            delete job.state.runningAtMs;
+            releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
+            recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
+            await persist(state);
+            return undefined;
+          }
+          const startedAt = state.deps.nowMs();
+          job.state.runningAtMs = startedAt;
+          job.state.lastError = undefined;
+          try {
+            await persist(state);
+          } catch (error) {
+            job.state.runningAtMs = candidate.reservedAtMs;
+            releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
+            throw error;
+          }
           releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
-          return undefined;
-        }
-        const dueProbe = structuredClone(job);
-        delete dueProbe.state.runningAtMs;
-        if (
-          !isRunnableJob({
-            state,
-            job: dueProbe,
-            nowMs: state.deps.nowMs(),
-            skipAtIfAlreadyRan: true,
-            allowCronMissedRunByLastRun: true,
-          })
-        ) {
-          delete job.state.runningAtMs;
-          releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
-          recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-          await persist(state);
-          return undefined;
-        }
-        const startedAt = state.deps.nowMs();
-        job.state.runningAtMs = startedAt;
-        job.state.lastError = undefined;
-        try {
-          await persist(state);
-        } catch (error) {
-          job.state.runningAtMs = candidate.reservedAtMs;
-          releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
-          throw error;
-        }
-        releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
-        return { ...candidate, job, startedAt };
+          return { ...candidate, job, startedAt };
+        });
+        return startedCandidate
+          ? await runStartupCatchupCandidate(state, startedCandidate)
+          : undefined;
       });
-      return startedCandidate
-        ? await runStartupCatchupCandidate(state, startedCandidate)
-        : undefined;
-    });
-    if (admission.kind === "stopped") {
-      break;
+      if (admission.kind === "stopped") {
+        break;
+      }
+      if (admission.value) {
+        outcomes.push(admission.value);
+      }
     }
-    if (admission.value) {
-      outcomes.push(admission.value);
-    }
+  } catch (error) {
+    return { ok: false, outcomes, error };
   }
-  return outcomes;
+  return { ok: true, outcomes };
 }
 
 async function runStartupCatchupCandidate(

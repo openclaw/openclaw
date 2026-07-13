@@ -1277,7 +1277,25 @@ export async function run(
     return prepared;
   }
   const admission = await runWithCronAdmission(state, async () => {
-    const activeRun = await activatePreparedManualRun(state, prepared, mode);
+    let activeRun: Awaited<ReturnType<typeof activatePreparedManualRun>>;
+    try {
+      activeRun = await activatePreparedManualRun(state, prepared, mode);
+    } catch (error) {
+      // Only activation failures still own the original durable reservation.
+      // Once activation succeeds, a same-millisecond started marker is valid
+      // recovery state and must survive any later execution/finalization error.
+      try {
+        await locked(state, async () => {
+          await releasePreparedManualReservation(state, prepared);
+        });
+      } catch (cleanupError) {
+        state.deps.log.warn(
+          { jobId: prepared.jobId, err: String(cleanupError) },
+          "cron: failed to release manual run reservation after activation error",
+        );
+      }
+      throw error;
+    }
     if (!activeRun.ran) {
       return activeRun;
     }
