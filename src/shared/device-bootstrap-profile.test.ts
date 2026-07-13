@@ -7,7 +7,6 @@ import {
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   isMobilePairingSetupBootstrapProfile,
   isNodePairingSetupBootstrapProfile,
-  isPairingSetupBootstrapProfile,
   normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
@@ -120,8 +119,6 @@ describe("device bootstrap profile", () => {
       roles: ["node", "operator"],
       scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
-    expect(isPairingSetupBootstrapProfile(PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
-    expect(isPairingSetupBootstrapProfile(FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(false);
   });
 
   test("node setup profile carries no operator access", () => {
