@@ -315,8 +315,11 @@ struct OpenClawTypographyTests {
 
         #expect(!privacyAccess.contains("DisclosureGroup(\"Privacy & Access\")"))
         #expect(privacyAccess.contains("Text(\"Privacy & Access\")"))
-        #expect(privacyAccess.contains("Text(actionTitle)"))
-        #expect(privacyAccess.contains(".font(OpenClawType.footnoteSemiBold)"))
+        let permissionRow = try String(
+            contentsOf: Self.sourceURL("Permissions/DevicePermissionRow.swift"),
+            encoding: .utf8)
+        #expect(permissionRow.contains("Text(actionTitle)"))
+        #expect(permissionRow.contains(".font(OpenClawType.footnoteSemiBold)"))
 
         #expect(!skillWorkshop.contains("Button(\"Done\")"))
         #expect(skillWorkshop.contains("Label(\"Refresh\", systemImage: \"arrow.clockwise\")"))

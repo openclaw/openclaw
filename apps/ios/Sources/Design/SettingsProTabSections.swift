@@ -885,7 +885,7 @@ extension SettingsProTab {
             }
             .contentShape(Rectangle())
         }
-        .accessibilityLabel(Text(title))
+        .accessibilityLabel(title)
     }
 
     func toggleCard(title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
@@ -1411,7 +1411,7 @@ extension SettingsProTab {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text(title))
+        .accessibilityLabel(title)
         .accessibilityValue(isOn.wrappedValue
             ? String(localized: "On")
             : String(localized: "Off"))

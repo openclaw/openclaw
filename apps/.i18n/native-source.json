@@ -21306,6 +21306,54 @@
       "id": "native.apple.1a8232361f3d72fb"
     },
     {
+      "kind": "ui-named-argument",
+      "line": 14,
+      "path": "apps/ios/Sources/Onboarding/OnboardingPermissionsStep.swift",
+      "source": "Allow access",
+      "surface": "apple",
+      "id": "native.apple.9dcd64ab340a6c15"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 15,
+      "path": "apps/ios/Sources/Onboarding/OnboardingPermissionsStep.swift",
+      "source": "Choose what your agent can use on this iPhone. Nothing is on until you allow it.",
+      "surface": "apple",
+      "id": "native.apple.933a2ac28d1d2aec"
+    },
+    {
+      "kind": "ui-call",
+      "line": 31,
+      "path": "apps/ios/Sources/Onboarding/OnboardingPermissionsStep.swift",
+      "source": "You can change any of these later in Settings.",
+      "surface": "apple",
+      "id": "native.apple.47114a39f7a71c3b"
+    },
+    {
+      "kind": "ui-call",
+      "line": 43,
+      "path": "apps/ios/Sources/Onboarding/OnboardingPermissionsStep.swift",
+      "source": "Continue",
+      "surface": "apple",
+      "id": "native.apple.eabf54e2b640a4a1"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 77,
+      "path": "apps/ios/Sources/Onboarding/OnboardingPermissionsStep.swift",
+      "source": "Allow",
+      "surface": "apple",
+      "id": "native.apple.c5db9e6eae115f7a"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 79,
+      "path": "apps/ios/Sources/Onboarding/OnboardingPermissionsStep.swift",
+      "source": "Open Settings",
+      "surface": "apple",
+      "id": "native.apple.f591e16105268e99"
+    },
+    {
       "kind": "conditional-branch",
       "line": 11,
       "path": "apps/ios/Sources/Onboarding/OnboardingStateStore.swift",
@@ -21597,33 +21645,33 @@
       "kind": "ui-named-argument",
       "line": 245,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
-      "source": "Securely connect this iPhone to your gateway.",
+      "source": "Your agent, in your pocket. Pair this iPhone with your gateway to get started.",
       "surface": "apple",
-      "id": "native.apple.c9419426ba8c2a2e"
+      "id": "native.apple.9b414850baa618da"
     },
     {
       "kind": "ui-named-argument",
       "line": 252,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
-      "source": "Connect to your gateway",
+      "source": "Your agent runs on your own computer",
       "surface": "apple",
-      "id": "native.apple.3e233ba3ed3181d4"
+      "id": "native.apple.7248e67848beebd9"
     },
     {
       "kind": "ui-named-argument",
       "line": 255,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
-      "source": "Choose device permissions",
+      "source": "Pair this iPhone by scanning a setup code",
       "surface": "apple",
-      "id": "native.apple.b6978424ac0a4d14"
+      "id": "native.apple.acbdc9332988fa64"
     },
     {
       "kind": "ui-named-argument",
       "line": 258,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
-      "source": "Use OpenClaw from your phone",
+      "source": "Chat, talk, and approve actions from anywhere",
       "surface": "apple",
-      "id": "native.apple.4109460a5b8927d8"
+      "id": "native.apple.feb3e155748c2f05"
     },
     {
       "kind": "ui-call",
@@ -21787,7 +21835,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 446,
+||||||| parent of 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
+      "line": 444,
+=======
+      "line": 450,
+>>>>>>> 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Mode",
       "surface": "apple",
@@ -21795,7 +21849,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 447,
+||||||| parent of 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
+      "line": 445,
+=======
+      "line": 451,
+>>>>>>> 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Discovery",
       "surface": "apple",
@@ -21803,7 +21863,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 449,
+||||||| parent of 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
+      "line": 447,
+=======
+      "line": 453,
+>>>>>>> 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Status",
       "surface": "apple",
@@ -21811,7 +21877,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 467,
+||||||| parent of 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
+      "line": 465,
+=======
+      "line": 471,
+>>>>>>> 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Choose a mode first.",
       "surface": "apple",
@@ -21819,7 +21891,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 472,
+||||||| parent of 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
+      "line": 470,
+=======
+      "line": 476,
+>>>>>>> 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Back to Mode Selection",
       "surface": "apple",
@@ -21827,7 +21905,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 516,
+||||||| parent of 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
+      "line": 514,
+=======
+      "line": 520,
+>>>>>>> 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Manual Fallback",
       "surface": "apple",
@@ -21835,7 +21919,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 520,
+||||||| parent of 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
+      "line": 518,
+=======
+      "line": 524,
+>>>>>>> 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Domain Settings",
       "surface": "apple",
@@ -21843,7 +21933,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 531,
+||||||| parent of 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
+      "line": 529,
+=======
+      "line": 535,
+>>>>>>> 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Developer Local",
       "surface": "apple",
@@ -21851,7 +21947,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 534,
+||||||| parent of 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
+      "line": 532,
+=======
+      "line": 538,
+>>>>>>> 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Default host is localhost. Use your Mac LAN IP if simulator networking requires it.",
       "surface": "apple",
@@ -21859,7 +21961,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 562,
+||||||| parent of 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
+      "line": 560,
+=======
+      "line": 566,
+>>>>>>> 57a10efd9a1 (feat(ios): guide first launch through pairing explainer and permissions)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Gateway rejected credentials. Scan a fresh setup code or update token/password.",
       "surface": "apple",
@@ -22048,6 +22156,158 @@
       "source": "OpenClaw",
       "surface": "apple",
       "id": "native.apple.5b46de1ccb06852b"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 111,
+      "path": "apps/ios/Sources/Permissions/DevicePermissionRow.swift",
+      "source": "Allowed",
+      "surface": "apple",
+      "id": "native.apple.0e07e7044608f954"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 131,
+      "path": "apps/ios/Sources/Permissions/DevicePermissionRow.swift",
+      "source": "Limited",
+      "surface": "apple",
+      "id": "native.apple.86796a6df9d0ff63"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 133,
+      "path": "apps/ios/Sources/Permissions/DevicePermissionRow.swift",
+      "source": "Off in Settings",
+      "surface": "apple",
+      "id": "native.apple.4c7f5404e9c42402"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 60,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Notifications",
+      "surface": "apple",
+      "id": "native.apple.96d65a5563690719"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 61,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Camera",
+      "surface": "apple",
+      "id": "native.apple.d290a46515add091"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 62,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Microphone",
+      "surface": "apple",
+      "id": "native.apple.0eeedbc8aaafcd2c"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 63,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Photos",
+      "surface": "apple",
+      "id": "native.apple.14fadad23dd36e44"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 64,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Contacts",
+      "surface": "apple",
+      "id": "native.apple.f0cfa9dcc57133b7"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 65,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Calendar",
+      "surface": "apple",
+      "id": "native.apple.5ec2597d0b4a06fb"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 66,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Reminders",
+      "surface": "apple",
+      "id": "native.apple.9ed5c19cf1e84490"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 67,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Location",
+      "surface": "apple",
+      "id": "native.apple.866b9df8afcadf07"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 73,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Pairing approvals and replies from your agent.",
+      "surface": "apple",
+      "id": "native.apple.f205ac6778705a7d"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 74,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Scan setup codes and take photos on request.",
+      "surface": "apple",
+      "id": "native.apple.061a17077ee3be94"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 75,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Talk with your agent using voice.",
+      "surface": "apple",
+      "id": "native.apple.c735ac6b282765f9"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 76,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Share recent photos when you ask.",
+      "surface": "apple",
+      "id": "native.apple.ebe8aadcf512ecdb"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 77,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Look up and add people you mention.",
+      "surface": "apple",
+      "id": "native.apple.4c4bc12c0787383c"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 78,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Check and add calendar events.",
+      "surface": "apple",
+      "id": "native.apple.5a4006fbb9b23db1"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 79,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "List, add, and complete reminders.",
+      "surface": "apple",
+      "id": "native.apple.2b2a4f1aab6a12ec"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 80,
+      "path": "apps/ios/Sources/Permissions/DevicePermissions.swift",
+      "source": "Answer location and nearby questions.",
+      "surface": "apple",
+      "id": "native.apple.3854ae1f0606bafe"
     },
     {
       "kind": "conditional-branch",
@@ -22474,144 +22734,8 @@
       "id": "native.apple.19fba912c31023b5"
     },
     {
-      "kind": "ui-localized-call",
-      "line": 18,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Add-Only",
-      "surface": "apple",
-      "id": "native.apple.e5a601c8fe47e9ed"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 19,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Allowed",
-      "surface": "apple",
-      "id": "native.apple.32aabe66f916a809"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 20,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Enabled",
-      "surface": "apple",
-      "id": "native.apple.7b551f40d1a6148c"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 21,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Limited",
-      "surface": "apple",
-      "id": "native.apple.94208c3068dae5b9"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 22,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Not Allowed",
-      "surface": "apple",
-      "id": "native.apple.92223852c90e286d"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 23,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Not Set",
-      "surface": "apple",
-      "id": "native.apple.aa6ff8becab99fdc"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 24,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Unknown",
-      "surface": "apple",
-      "id": "native.apple.03e2f7265119d263"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 78,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Contacts",
-      "surface": "apple",
-      "id": "native.apple.4dac301c7e0c921c"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 81,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Search and add contacts from the assistant.",
-      "surface": "apple",
-      "id": "native.apple.01f362d70f6ddb4e"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 87,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Photos",
-      "surface": "apple",
-      "id": "native.apple.eda8d96e40bcc36a"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 96,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Calendar (Add Events)",
-      "surface": "apple",
-      "id": "native.apple.df0159ff34744870"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 99,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Add events with least privilege.",
-      "surface": "apple",
-      "id": "native.apple.c6db4240083c0435"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 105,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Calendar (View Events)",
-      "surface": "apple",
-      "id": "native.apple.dc62e22f0b2726c5"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 108,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "List and read calendar events.",
-      "surface": "apple",
-      "id": "native.apple.650091bc632b3120"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 114,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Reminders",
-      "surface": "apple",
-      "id": "native.apple.7a81d1f17d9d90c0"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 117,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "List, add, and complete reminders.",
-      "surface": "apple",
-      "id": "native.apple.d6fd5e9f85b0e298"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 123,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Health Summaries",
-      "surface": "apple",
-      "id": "native.apple.33df187e4402065a"
-    },
-    {
       "kind": "ui-call",
-      "line": 136,
+      "line": 57,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Privacy & Access",
       "surface": "apple",
@@ -22619,7 +22743,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 227,
+      "line": 74,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Search and add contacts from the assistant.",
+      "surface": "apple",
+      "id": "native.apple.01f362d70f6ddb4e"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 89,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read photos you select for the assistant.",
       "surface": "apple",
@@ -22627,7 +22759,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 228,
+      "line": 90,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read recent photos for the assistant.",
       "surface": "apple",
@@ -22635,39 +22767,71 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 236,
+      "line": 92,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Manage Access",
+      "source": "Limited",
       "surface": "apple",
-      "id": "native.apple.ac3ff8e4c6df7a2a"
+      "id": "native.apple.94208c3068dae5b9"
     },
     {
       "kind": "ui-localized-call",
-      "line": 343,
+      "line": 105,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Request Full Access",
+      "source": "Calendar (Add Events)",
       "surface": "apple",
-      "id": "native.apple.c557c95fa2789089"
+      "id": "native.apple.df0159ff34744870"
     },
     {
       "kind": "ui-localized-call",
-      "line": 390,
+      "line": 106,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Request Access",
+      "source": "Add events with least privilege.",
       "surface": "apple",
-      "id": "native.apple.4e50e2ab4c869464"
+      "id": "native.apple.c6db4240083c0435"
     },
     {
       "kind": "ui-localized-call",
-      "line": 392,
+      "line": 120,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Upgrade to Full Access",
+      "source": "List and read calendar events.",
       "surface": "apple",
-      "id": "native.apple.a9f30d4e86060dca"
+      "id": "native.apple.650091bc632b3120"
     },
     {
       "kind": "ui-localized-call",
-      "line": 394,
+      "line": 135,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "List, add, and complete reminders.",
+      "surface": "apple",
+      "id": "native.apple.d6fd5e9f85b0e298"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 137,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Add-Only",
+      "surface": "apple",
+      "id": "native.apple.e5a601c8fe47e9ed"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 152,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Health Summaries",
+      "surface": "apple",
+      "id": "native.apple.33df187e4402065a"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 191,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Allow",
+      "surface": "apple",
+      "id": "native.apple.0b10201d7e452dc4"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 193,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Open Settings",
       "surface": "apple",
@@ -22675,7 +22839,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 427,
+      "line": 255,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Health data is unavailable on this device.",
       "surface": "apple",
@@ -22683,7 +22847,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 431,
+      "line": 259,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
       "surface": "apple",
@@ -22691,7 +22855,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 437,
+      "line": 265,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
       "surface": "apple",
@@ -22699,7 +22863,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 446,
+      "line": 274,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Disable",
       "surface": "apple",
@@ -22707,7 +22871,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 447,
+      "line": 275,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Enable & Share Summaries",
       "surface": "apple",
