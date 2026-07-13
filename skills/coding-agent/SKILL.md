@@ -144,7 +144,7 @@ bash pty:true background:true workdir:/path/isolated-worktree command:"opencode 
 
 ## Scratch Codex
 
-Codex needs a trusted git repo:
+Codex needs a trusted git repo. This throwaway scaffold is not project work and has no canonical remote, so the Git preparation block does not apply:
 
 ```bash
 SCRATCH=$(mktemp -d)
@@ -152,7 +152,6 @@ git -C "$SCRATCH" init
 PROMPT=$(mktemp -t openclaw-worker-prompt.XXXXXX)
 cat >"$PROMPT" <<'EOF'
 Build X.
-<mandatory Git preparation block>
 <notification block>
 EOF
 printf 'prompt file: %s\n' "$PROMPT"
