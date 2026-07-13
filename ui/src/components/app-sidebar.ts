@@ -2099,7 +2099,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         .canOpenChat=${true}
         .work=${batchRows ? null : this.sessionMenuWork}
         .workboard=${null}
-        .onClose=${() => this.closeSessionMenu()}
+        .onClose=${() => {
+          // A removed Web Awesome menu can finish hiding after its replacement
+          // opens. Ignore that stale close or the new menu disappears too.
+          if (this.sessionMenu === menu) {
+            this.closeSessionMenu();
+          }
+        }}
         .onAction=${(action: SessionMenuAction) => {
           if (batchRows) {
             this.runBatchSessionAction(action, batchRows, allUnread);
