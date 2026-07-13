@@ -38,6 +38,18 @@
   grid-template-columns: auto minmax(0, 1fr);
 }
 
+/* Mirror the shared narrow-container list-item collapse; this later rule
+   would otherwise override it and overflow phone-width rows. */
+@container (max-width: 560px) {
+  .nodes-entry {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .nodes-entry .list-meta {
+    grid-column: 1 / -1;
+  }
+}
+
 .nodes-entry__tile {
   position: relative;
   width: 38px;
@@ -74,6 +86,11 @@
   flex: none;
   border: 2px solid var(--card);
   box-sizing: content-box;
+}
+
+/* Pending rows show the raw device id; break it instead of overflowing. */
+.nodes-entry--pending .list-sub {
+  word-break: break-all;
 }
 
 .nodes-entry__head {

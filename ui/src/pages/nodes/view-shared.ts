@@ -95,6 +95,11 @@ const TERMINAL_CLIENT_MODES: ReadonlySet<string> = new Set([
   GATEWAY_CLIENT_MODES.PROBE,
   GATEWAY_CLIENT_MODES.TEST,
 ]);
+// The TUI connects with mode "ui"; only its client id marks it as a terminal.
+const TERMINAL_CLIENT_IDS: ReadonlySet<string> = new Set([
+  GATEWAY_CLIENT_IDS.CLI,
+  GATEWAY_CLIENT_IDS.TUI,
+]);
 
 /** Rough form-factor icon: phone, browser, terminal, or desktop machine. */
 export function deviceIcon(source: DeviceIconSource): TemplateResult {
@@ -107,7 +112,7 @@ export function deviceIcon(source: DeviceIconSource): TemplateResult {
   if (BROWSER_CLIENT_IDS.has(clientId) || mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
     return icons.globe;
   }
-  if (TERMINAL_CLIENT_MODES.has(mode) || clientId === GATEWAY_CLIENT_IDS.CLI) {
+  if (TERMINAL_CLIENT_MODES.has(mode) || TERMINAL_CLIENT_IDS.has(clientId)) {
     return icons.terminal;
   }
   return icons.monitor;
