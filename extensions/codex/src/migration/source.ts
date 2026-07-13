@@ -25,7 +25,7 @@ import {
   type CodexSkillSource,
 } from "./source-files.js";
 
-export type { CodexMemorySource, CodexPluginSource, CodexSkillSource } from "./source-files.js";
+export type { CodexPluginSource } from "./source-files.js";
 
 type CodexArchiveSource = {
   id: string;
