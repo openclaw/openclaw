@@ -46,9 +46,14 @@ type TranscriptEventCountResult =
   | { status: "missing" }
   | { status: "malformed"; message: string };
 
+type LegacyTranscriptEventCountResult =
+  | { status: "ok"; events: number; hasTranscript: boolean }
+  | { status: "missing" }
+  | { status: "malformed"; message: string };
+
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
 
-export function countTranscriptEventsForPath(
+function countTranscriptEventsForPath(
   transcriptPath: string | undefined,
 ): TranscriptEventCountResult {
   if (!transcriptPath) {
@@ -69,6 +74,34 @@ export function countTranscriptEventsForPath(
   } catch (err) {
     return { status: "malformed", message: String(err) };
   }
+}
+
+export function countLegacyTranscriptEvents(params: {
+  entry: SessionEntry;
+  transcriptPath?: string;
+}): LegacyTranscriptEventCountResult {
+  const result = countTranscriptEventsForPath(params.transcriptPath);
+  // File-backed resets historically published the fresh session entry before
+  // the first append created its transcript. That reset-shaped entry is a
+  // valid empty session, not evidence that transcript events were lost.
+  if (result.status === "missing" && isUnstartedLegacySession(params.entry)) {
+    return { status: "ok", events: 0, hasTranscript: false };
+  }
+  if (result.status === "ok") {
+    return { ...result, hasTranscript: true };
+  }
+  return result;
+}
+
+function isUnstartedLegacySession(entry: SessionEntry): boolean {
+  const startedAt = entry.sessionStartedAt;
+  return (
+    entry.systemSent === false &&
+    typeof startedAt === "number" &&
+    entry.updatedAt >= startedAt &&
+    (entry.lastInteractionAt === undefined || entry.lastInteractionAt === startedAt) &&
+    (entry.compactionCount === undefined || entry.compactionCount === 0)
+  );
 }
 
 export function createTranscriptEventReader(

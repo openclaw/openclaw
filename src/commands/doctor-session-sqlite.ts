@@ -43,7 +43,7 @@ import {
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
 import {
-  countTranscriptEventsForPath,
+  countLegacyTranscriptEvents,
   createTranscriptEventReader,
   createTranscriptEventPrefixReader,
   readOnlySqliteDbStats,
@@ -429,22 +429,11 @@ function resolveLegacyTranscriptPath(
   return entry.sessionFile?.trim() ? defaultPath : undefined;
 }
 
-function isUnstartedLegacySession(entry: SessionEntry): boolean {
-  const startedAt = entry.sessionStartedAt;
-  return (
-    entry.systemSent === false &&
-    typeof startedAt === "number" &&
-    entry.updatedAt >= startedAt &&
-    (entry.lastInteractionAt === undefined || entry.lastInteractionAt === startedAt) &&
-    (entry.compactionCount === undefined || entry.compactionCount === 0)
-  );
-}
-
 function countLegacyTranscript(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
 ): void {
-  const result = countTranscriptEvents(record);
+  const result = countLegacyTranscriptEvents(record);
   if (result.status === "missing") {
     report.issues.push({
       code: "transcript_missing",
@@ -474,7 +463,7 @@ async function importLegacySessionRecord(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
 ): Promise<void> {
-  const result = countTranscriptEvents(record);
+  const result = countLegacyTranscriptEvents(record);
   const transcriptMtimeMs = readLegacyTranscriptMtimeMs(record);
   if (result.status === "missing") {
     if (markAlreadyMigratedTranscript(target, record, report)) {
@@ -581,7 +570,7 @@ function validateImportedRecordBeforeArchive(
     });
     return;
   }
-  const result = countTranscriptEvents(record);
+  const result = countLegacyTranscriptEvents(record);
   if (result.status === "missing") {
     return;
   }
@@ -831,7 +820,7 @@ function validateTranscriptEventCount(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
 ): void {
-  const result = countTranscriptEvents(record);
+  const result = countLegacyTranscriptEvents(record);
   if (result.status === "missing") {
     const migratedEvents = countAlreadyMigratedTranscriptEventsForValidate(target, record);
     if (migratedEvents !== undefined) {
@@ -905,25 +894,6 @@ function countAlreadyMigratedTranscriptEventsForValidate(
   }
   const eventCount = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
   return eventCount.ok ? eventCount.events : undefined;
-}
-
-function countTranscriptEvents(
-  record: LegacySessionRecord,
-):
-  | { status: "ok"; events: number; hasTranscript: boolean }
-  | { status: "missing" }
-  | { status: "malformed"; message: string } {
-  const result = countTranscriptEventsForPath(record.transcriptPath);
-  // File-backed resets historically published the fresh session entry before
-  // the first append created its transcript. That reset-shaped entry is a
-  // valid empty session, not evidence that transcript events were lost.
-  if (result.status === "missing" && isUnstartedLegacySession(record.entry)) {
-    return { status: "ok", events: 0, hasTranscript: false };
-  }
-  if (result.status === "ok") {
-    return { ...result, hasTranscript: true };
-  }
-  return result;
 }
 
 function readLegacyTranscriptMtimeMs(record: LegacySessionRecord): number | undefined {
