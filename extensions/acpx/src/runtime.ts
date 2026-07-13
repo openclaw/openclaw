@@ -182,6 +182,67 @@ function readRecordResetOnNextEnsure(record: unknown): boolean {
   return (acpx as { reset_on_next_ensure?: unknown }).reset_on_next_ensure === true;
 }
 
+function readRecordCurrentModelId(record: unknown): string | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { acpx } = record as { acpx?: unknown };
+  if (typeof acpx !== "object" || acpx === null) {
+    return undefined;
+  }
+  const { current_model_id } = acpx as { current_model_id?: unknown };
+  return typeof current_model_id === "string" ? current_model_id.trim() || undefined : undefined;
+}
+
+/**
+ * Known provider model ID prefixes and patterns. A model ID that matches none
+ * of these is likely a stale binding (e.g., an agent name like "hermes" that
+ * was incorrectly stored as the model). This is a heuristic — new providers
+ * should be added here as they emerge.
+ */
+const KNOWN_PROVIDER_MODEL_PREFIXES = [
+  "claude-",
+  "gpt-",
+  "o1-",
+  "o3-",
+  "o4-",
+  "gemini-",
+  "deepseek-",
+  "qwen",
+  "llama-",
+  "mistral-",
+  "command-",
+  "dbrx-",
+  "grok-",
+  "phi-",
+];
+
+/**
+ * Checks whether a stored model ID looks like a valid provider model.
+ * Returns `true` if the model ID appears valid, `false` if it is likely
+ * a stale or non-existent model binding (e.g., an agent name like "hermes").
+ *
+ * A model ID is considered valid if it:
+ * - Contains a "/" (provider prefix like "openai/", "anthropic/")
+ * - Starts with a known provider model prefix
+ * - Is empty/undefined (no model override — the default is fine)
+ */
+function isValidProviderModelId(modelId: string | undefined): boolean {
+  if (!modelId) {
+    return true;
+  }
+  if (modelId.includes("/")) {
+    return true;
+  }
+  const lower = modelId.toLowerCase();
+  for (const prefix of KNOWN_PROVIDER_MODEL_PREFIXES) {
+    if (lower.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function readRecordAgentPid(record: unknown): number | undefined {
   if (typeof record !== "object" || record === null) {
     return undefined;
@@ -896,6 +957,13 @@ export class AcpxRuntime implements AcpRuntime {
     if (readRecordAgentCommand(existing) !== params.command) {
       return false;
     }
+    const currentModelId = readRecordCurrentModelId(existing);
+    if (!isValidProviderModelId(currentModelId)) {
+      process.stderr.write(
+        `[acpx] rejecting resume of persistent session ${params.sessionKey}: stored model "${currentModelId}" is not a valid provider model id; starting a fresh session instead\n`,
+      );
+      return false;
+    }
     const existingSessionId =
       typeof existing === "object" && existing !== null
         ? (existing as { acpSessionId?: unknown }).acpSessionId
@@ -1394,8 +1462,10 @@ export const testing = {
   codexAcpSessionModelId,
   isClaudeAcpCommand,
   isCodexAcpCommand,
+  isValidProviderModelId,
   normalizeClaudeAcpModelOverride,
   normalizeCodexAcpModelOverride,
+  readRecordCurrentModelId,
 };
 
 export type { AcpAgentRegistry, AcpRuntimeOptions, AcpSessionRecord, AcpSessionStore };

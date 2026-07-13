@@ -2231,4 +2231,245 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(bridgeProbe).toHaveBeenCalledOnce();
     expect(defaultProbe).not.toHaveBeenCalled();
   });
+
+  describe("isValidProviderModelId", () => {
+    it("accepts undefined model id (no override)", () => {
+      expect(testing.isValidProviderModelId(undefined)).toBe(true);
+    });
+
+    it("accepts empty string model id", () => {
+      expect(testing.isValidProviderModelId("")).toBe(true);
+    });
+
+    it("accepts model ids with provider slash prefix", () => {
+      expect(testing.isValidProviderModelId("openai/gpt-4o")).toBe(true);
+      expect(testing.isValidProviderModelId("anthropic/claude-sonnet-4")).toBe(true);
+      expect(testing.isValidProviderModelId("google/gemini-2.0")).toBe(true);
+    });
+
+    it("accepts known provider model prefixes", () => {
+      expect(testing.isValidProviderModelId("claude-sonnet-4-20250514")).toBe(true);
+      expect(testing.isValidProviderModelId("gpt-4o")).toBe(true);
+      expect(testing.isValidProviderModelId("o1-pro")).toBe(true);
+      expect(testing.isValidProviderModelId("o3-mini")).toBe(true);
+      expect(testing.isValidProviderModelId("gemini-2.5-pro")).toBe(true);
+      expect(testing.isValidProviderModelId("deepseek-r1")).toBe(true);
+      expect(testing.isValidProviderModelId("llama-3.1-405b")).toBe(true);
+      expect(testing.isValidProviderModelId("mistral-large")).toBe(true);
+    });
+
+    it("rejects bare agent names that are not provider models", () => {
+      expect(testing.isValidProviderModelId("hermes")).toBe(false);
+      expect(testing.isValidProviderModelId("jess-hermes")).toBe(false);
+      expect(testing.isValidProviderModelId("codex")).toBe(false);
+      expect(testing.isValidProviderModelId("claude")).toBe(false);
+    });
+
+    it("is case-insensitive for prefix matching", () => {
+      expect(testing.isValidProviderModelId("Claude-sonnet-4")).toBe(true);
+      expect(testing.isValidProviderModelId("GPT-4o")).toBe(true);
+    });
+  });
+
+  describe("readRecordCurrentModelId", () => {
+    it("returns undefined for records without acpx state", () => {
+      expect(testing.readRecordCurrentModelId(null)).toBeUndefined();
+      expect(testing.readRecordCurrentModelId(undefined)).toBeUndefined();
+      expect(testing.readRecordCurrentModelId({})).toBeUndefined();
+      expect(testing.readRecordCurrentModelId({ acpx: null })).toBeUndefined();
+    });
+
+    it("returns the current_model_id from acpx state", () => {
+      expect(
+        testing.readRecordCurrentModelId({ acpx: { current_model_id: "claude-sonnet-4" } }),
+      ).toBe("claude-sonnet-4");
+      expect(testing.readRecordCurrentModelId({ acpx: { current_model_id: "hermes" } })).toBe(
+        "hermes",
+      );
+    });
+
+    it("returns undefined when current_model_id is not set", () => {
+      expect(testing.readRecordCurrentModelId({ acpx: {} })).toBeUndefined();
+    });
+
+    it("trims whitespace from model id", () => {
+      expect(
+        testing.readRecordCurrentModelId({ acpx: { current_model_id: "  claude-sonnet-4  " } }),
+      ).toBe("claude-sonnet-4");
+    });
+  });
+
+  describe("stale model binding rejection on session resume", () => {
+    it("rejects resume when stored model is not a valid provider model id", async () => {
+      const baseStore: TestSessionStore = {
+        load: vi.fn(async () => ({
+          name: "agent:codex:acp:binding:test",
+          acpxRecordId: "record-1",
+          acpSessionId: "session-1",
+          agentCommand: CODEX_ACP_COMMAND,
+          cwd: "/tmp",
+          closed: false,
+          acpx: { current_model_id: "hermes" },
+        })),
+        save: vi.fn(async () => {}),
+      };
+      const { runtime, delegate } = makeRuntime(baseStore, {
+        agentRegistry: {
+          resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+          list: () => ["codex"],
+        },
+      });
+      vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      });
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:binding:test",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      // The delegate should have been called (fresh session, not resume)
+      expect(delegate.ensureSession).toHaveBeenCalled();
+    });
+
+    it("allows resume when stored model is a valid provider model with slash prefix", async () => {
+      const baseStore: TestSessionStore = {
+        load: vi.fn(async () => ({
+          name: "agent:codex:acp:binding:test",
+          acpxRecordId: "record-1",
+          acpSessionId: "session-1",
+          agentCommand: CODEX_ACP_COMMAND,
+          cwd: "/tmp",
+          closed: false,
+          acpx: { current_model_id: "openai/gpt-4o" },
+        })),
+        save: vi.fn(async () => {}),
+      };
+      const { runtime, delegate } = makeRuntime(baseStore, {
+        agentRegistry: {
+          resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+          list: () => ["codex"],
+        },
+      });
+      vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      });
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:binding:test",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      // The delegate should have been called (resume allowed)
+      expect(delegate.ensureSession).toHaveBeenCalled();
+    });
+
+    it("allows resume when stored model is a known provider model prefix", async () => {
+      const baseStore: TestSessionStore = {
+        load: vi.fn(async () => ({
+          name: "agent:codex:acp:binding:test",
+          acpxRecordId: "record-1",
+          acpSessionId: "session-1",
+          agentCommand: CODEX_ACP_COMMAND,
+          cwd: "/tmp",
+          closed: false,
+          acpx: { current_model_id: "claude-sonnet-4-20250514" },
+        })),
+        save: vi.fn(async () => {}),
+      };
+      const { runtime, delegate } = makeRuntime(baseStore, {
+        agentRegistry: {
+          resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+          list: () => ["codex"],
+        },
+      });
+      vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      });
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:binding:test",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(delegate.ensureSession).toHaveBeenCalled();
+    });
+
+    it("allows resume when no model is stored in the session record", async () => {
+      const baseStore: TestSessionStore = {
+        load: vi.fn(async () => ({
+          name: "agent:codex:acp:binding:test",
+          acpxRecordId: "record-1",
+          acpSessionId: "session-1",
+          agentCommand: CODEX_ACP_COMMAND,
+          cwd: "/tmp",
+          closed: false,
+          acpx: {},
+        })),
+        save: vi.fn(async () => {}),
+      };
+      const { runtime, delegate } = makeRuntime(baseStore, {
+        agentRegistry: {
+          resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+          list: () => ["codex"],
+        },
+      });
+      vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      });
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:binding:test",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(delegate.ensureSession).toHaveBeenCalled();
+    });
+
+    it("rejects resume when stored model is a bare agent name", async () => {
+      const baseStore: TestSessionStore = {
+        load: vi.fn(async () => ({
+          name: "agent:codex:acp:binding:test",
+          acpxRecordId: "record-1",
+          acpSessionId: "session-1",
+          agentCommand: CODEX_ACP_COMMAND,
+          cwd: "/tmp",
+          closed: false,
+          acpx: { current_model_id: "jess-hermes" },
+        })),
+        save: vi.fn(async () => {}),
+      };
+      const { runtime, delegate } = makeRuntime(baseStore, {
+        agentRegistry: {
+          resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+          list: () => ["codex"],
+        },
+      });
+      vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      });
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:binding:test",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(delegate.ensureSession).toHaveBeenCalled();
+    });
+  });
 });
