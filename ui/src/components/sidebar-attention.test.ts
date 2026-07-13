@@ -84,7 +84,7 @@ describe("buildSidebarAttentionItems", () => {
         icon: "clock",
         label: "1 cron job(s) overdue",
         routeId: "cron",
-        signature: "late",
+        signature: `late@${NOW - 400_000}`,
       },
     ]);
   });

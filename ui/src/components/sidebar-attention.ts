@@ -42,9 +42,15 @@ export type SidebarAttentionItem = {
   icon: IconName;
   label: string;
   routeId: NavigationRouteId;
-  // Sorted ids of the entities behind the chip. A dismissal stores this
-  // signature so the chip stays hidden only while the same set is affected;
-  // any change (new job/provider) resurfaces it.
+  // Sorted identities of the entities behind the chip. A dismissal stores
+  // this signature so the chip stays hidden only while the same incident set
+  // is affected; any change (new job/provider, new overdue run) resurfaces
+  // it. Failed-cron and auth chips key on entity ids alone on purpose: a
+  // persistently failing job gets a new lastRunAtMs every schedule tick, and
+  // short-lived OAuth tokens (e.g. Copilot) roll expiry continuously — either
+  // in the signature would resurface a dismissed chip within minutes. The
+  // cost is that a recover-then-recur cycle nobody observed stays snoozed;
+  // pruneAfterRefresh re-arms as soon as any tab sees the cleared state.
   signature: string;
 };
 
@@ -80,7 +86,10 @@ export function buildSidebarAttentionItems(params: {
       icon: "clock",
       label: t("attention.cronOverdue", { count: String(overdueCron.length) }),
       routeId: "cron",
-      signature: signatureOf(overdueCron.map((job) => job.id)),
+      // nextRunAtMs is the incident identity: stable while a job stays stuck,
+      // new once it runs again and later goes overdue anew — so a fresh
+      // overdue episode resurfaces even if no tab observed the recovery.
+      signature: signatureOf(overdueCron.map((job) => `${job.id}@${job.state?.nextRunAtMs}`)),
     });
   }
 
@@ -225,19 +234,20 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     ]);
     if (isCurrent()) {
       this.loadedAtMs = Date.now();
+      this.pruneAfterRefresh();
     }
   }
 
-  // Re-arm stale snoozes after each data refresh. Runs against loaded data
-  // only: the empty pre-load snapshot must not wipe dismissals for chips that
-  // are still true on the gateway. A failed auth-status fetch (null) prunes
-  // auth snoozes, which fails safe — the chip re-nags instead of staying
-  // hidden.
-  override updated() {
-    if (this.loadedAtMs === 0 || !this.dismissedScope) {
-      return;
-    }
-    if (!this.context?.gateway.snapshot.connected) {
+  // Re-arm stale snoozes only right after this tab's own data refresh: fresh
+  // data is the only safe basis for deciding a chip is gone. Pruning from
+  // render/update hooks would let a hidden tab with stale data clobber a
+  // dismissal another tab just wrote (its storage event triggers an update
+  // here). Against the persisted map, not the in-memory snapshot, for the
+  // same lost-update reason as addDismissal. A failed fetch (empty cron list,
+  // null auth status) prunes those kinds, which fails safe — re-nag, never
+  // stay hidden.
+  private pruneAfterRefresh() {
+    if (!this.dismissedScope) {
       return;
     }
     const items = buildSidebarAttentionItems({
@@ -245,16 +255,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       modelAuthStatus: this.modelAuthStatus,
       now: Date.now(),
     });
-    // Prune against the persisted map, not the in-memory snapshot, so a
-    // concurrent dismissal from another tab is not dropped by this write.
     const stored = loadDismissals(this.dismissedScope);
     const pruned = pruneDismissals(stored, items);
     if (pruned !== stored) {
       saveDismissals(this.dismissedScope, pruned);
     }
-    if (JSON.stringify(pruned) !== JSON.stringify(this.dismissed)) {
-      this.dismissed = pruned;
-    }
+    this.dismissed = pruned;
   }
 
   private dismiss(item: SidebarAttentionItem) {
