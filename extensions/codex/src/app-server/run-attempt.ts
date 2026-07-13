@@ -17,6 +17,7 @@ import {
   formatErrorMessage,
   getAgentHarnessHookRunner,
   getBeforeToolCallPolicyDiagnosticState,
+  isHostScopedAgentToolActive,
   isActiveHarnessContextEngine,
   loadCodexBundleMcpThreadConfig,
   resolveAgentHarnessBeforePromptBuildResult,
@@ -34,6 +35,7 @@ import {
   setActiveEmbeddedRun,
   supportsModelTools,
   runAgentCleanupStep,
+  type AgentHarnessRuntimeArtifactBinding,
   type FastModeAutoProgressState,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
@@ -49,7 +51,6 @@ import {
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveCodexAppServerForModelProvider,
@@ -100,7 +101,10 @@ import {
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
-import { startCodexAttemptThread } from "./attempt-startup.js";
+import {
+  isCodexContextRestartSelectionChangedError,
+  startCodexAttemptThread,
+} from "./attempt-startup.js";
 import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
 import {
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
@@ -108,18 +112,19 @@ import {
   resolveCodexTurnAssistantCompletionIdleTimeoutMs,
   resolveCodexTurnCompletionIdleTimeoutMs,
   resolveCodexTurnTerminalIdleTimeoutMs,
-  withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
 import {
   createCodexAttemptTurnWatchController,
   type CodexAttemptTurnWatchTimeoutKind,
 } from "./attempt-turn-watches.js";
+import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerFallbackApiKeyCacheKey,
-  resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerPreparedAuthHandoff,
+  resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-bridge.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
@@ -147,16 +152,10 @@ import {
 import {
   buildDynamicTools,
   createCodexDynamicToolBuildStageTracker,
-  filterCodexDynamicToolsForAllowlist,
   formatCodexDynamicToolBuildStageSummary,
-  includeForcedCodexDynamicToolAllow,
   resolveCodexAppServerHookChannelId,
   resolveCodexMessageToolProvider,
-  resolveOpenClawCodingToolsSessionKeys,
-  resetOpenClawCodingToolsFactoryForTests,
-  setOpenClawCodingToolsFactoryForTests,
   shouldEnableCodexAppServerNativeToolSurface,
-  shouldForceMessageTool,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
 import {
@@ -178,8 +177,7 @@ import {
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import {
-  filterCodexDynamicTools,
-  resolveCodexDynamicToolsLoadingForModel,
+  isCrestodianOnlyCodexDynamicToolAllowlist,
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -191,19 +189,15 @@ import {
 import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
-  buildCodexNativeHookRelayId,
-  clearPendingCodexNativeHookRelayUnregistersForTests,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
   createCodexNativeHookRelay,
   emitCodexNativePreToolUseFailureDiagnostic,
-  flushPendingCodexNativeHookRelayUnregistersForTests,
   resolveCodexNativeHookRelayEvents,
   resolveCodexNativeHookRelayTtlMs,
-  resolveCodexNativeHookRelayUnregisterGraceMs,
   scheduleCodexNativeHookRelayUnregister,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
-import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import {
   assertCodexTurnStartResponse,
@@ -225,7 +219,6 @@ import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
-  isCodexAppServerNativeAuthProfile,
   reclaimCurrentCodexSessionGeneration,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
@@ -234,6 +227,7 @@ import {
 } from "./session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
+  retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
@@ -244,6 +238,7 @@ import {
   buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   resolveCodexAppServerThreadModelSelection,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
@@ -256,15 +251,16 @@ import {
 } from "./tool-progress-normalization.js";
 import {
   createCodexTrajectoryRecorder,
+  type CodexHostTrajectoryRecorder,
   normalizeCodexTrajectoryError,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
 import {
   buildCodexUserPromptMessage,
+  codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
   mirrorPromptAtTurnStartBestEffort,
-  mirrorTranscriptBestEffort,
 } from "./transcript-mirror.js";
 import {
   CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS,
@@ -280,6 +276,7 @@ import {
 } from "./usage-limit-error.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
+import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
@@ -298,8 +295,6 @@ function shouldKeepCodexSharedAbortOpen(params: {
   // freeze after those paths settle.
   return params.trigger === "memory" || !params.attemptSucceeded;
 }
-
-const ensuredCodexWorkspaceDirs = new Set<string>();
 
 function withCodexAppServerFastModeServiceTier(
   appServer: CodexAppServerRuntimeOptions,
@@ -327,7 +322,7 @@ function estimateCodexAppServerProjectedTurnTokens(params: {
 
 async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> {
   const normalized = path.resolve(workspaceDir);
-  if (ensuredCodexWorkspaceDirs.has(normalized)) {
+  if (codexWorkspaceDirCache.has(normalized)) {
     try {
       const stat = await fs.stat(normalized);
       if (stat.isDirectory()) {
@@ -340,13 +335,13 @@ async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> 
         throw error;
       }
     }
-    ensuredCodexWorkspaceDirs.delete(normalized);
+    codexWorkspaceDirCache.delete(normalized);
   }
   // Codex attempts re-enter the same workspace repeatedly; caching successful
   // mkdirs avoids repeated fs work while still recovering if cleanup prunes
   // the directory between attempts.
   await fs.mkdir(normalized, { recursive: true });
-  ensuredCodexWorkspaceDirs.add(normalized);
+  codexWorkspaceDirCache.add(normalized);
 }
 
 async function emitCodexAppServerEvent(
@@ -500,6 +495,12 @@ export async function runCodexAppServerAttempt(
     enabled: profilerEnabled,
   });
   const attemptClientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
+  const runtimeArtifactRequest =
+    params.captureRuntimeArtifact || params.expectedRuntimeArtifact
+      ? params.expectedRuntimeArtifact
+        ? { expected: params.expectedRuntimeArtifact }
+        : {}
+      : undefined;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const { sessionAgentId } = resolveSessionAgentIds({
@@ -581,36 +582,55 @@ export async function runCodexAppServerAttempt(
       agentDir,
       openClawSandboxActive: sandbox?.enabled === true,
     }).appServer;
-  const startupBindingAuthProfileId = startupBinding?.authProfileId;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
+  const preparedAuthRoute = usesSupervisionConnection
+    ? undefined
+    : params.runtimePlan?.auth.modelRoute;
   const startupAuthProfileCandidate = usesSupervisionConnection
     ? undefined
-    : (params.runtimePlan?.auth.forwardedAuthProfileId ??
-      params.authProfileId ??
-      startupBinding?.authProfileId ??
-      startupBindingAuthProfileId);
-  const startupAuthProfileId = usesSupervisionConnection
+    : preparedAuthRoute
+      ? params.runtimePlan?.auth.forwardedAuthProfileId
+      : (params.runtimePlan?.auth.forwardedAuthProfileId ??
+        params.authProfileId ??
+        startupBinding?.authProfileId);
+  const resolvedStartupAuthProfileId = usesSupervisionConnection
     ? undefined
-    : params.authProfileStore
-      ? resolveCodexAppServerAuthProfileId({
-          authProfileId: startupAuthProfileCandidate,
-          store: params.authProfileStore,
-          config: params.config,
-        })
-      : resolveCodexAppServerAuthProfileIdForAgent({
-          authProfileId: startupAuthProfileCandidate,
-          agentDir,
-          config: params.config,
-        });
-  const startupClientAuthProfileId = usesSupervisionConnection ? null : startupAuthProfileId;
-  const nativeAuthProfile =
-    isCodexAppServerNativeAuthProfile({
-      authProfileId: startupClientAuthProfileId ?? undefined,
-      authProfileStore: params.authProfileStore,
-      agentDir,
-      config: params.config,
-    }) || usesSupervisionConnection;
+    : preparedAuthRoute
+      ? startupAuthProfileCandidate
+      : params.authProfileStore
+        ? resolveCodexAppServerAuthProfileId({
+            authProfileId: startupAuthProfileCandidate,
+            store: params.authProfileStore,
+            config: params.config,
+          })
+        : resolveCodexAppServerAuthProfileIdForAgent({
+            authProfileId: startupAuthProfileCandidate,
+            agentDir,
+            config: params.config,
+          });
+  const authHandoff = usesSupervisionConnection
+    ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
+    : await resolveCodexAppServerPreparedAuthHandoff({
+        authRequirement: preparedAuthRoute?.authRequirement,
+        resolvedApiKey: params.resolvedApiKey,
+        authProfileId: resolvedStartupAuthProfileId,
+        authProfileStore: params.authProfileStore,
+        agentDir,
+        config: params.config,
+        subscriptionProfileRequiredError:
+          "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
+        subscriptionProfileUnusableError: "Prepared Codex subscription auth profile is unusable.",
+      });
+  const {
+    authProfileId: startupAuthProfileId,
+    nativeAuthProfile,
+    preparedAuth: startupPreparedAuth,
+  } = authHandoff;
+  const startupClientAuthProfileId =
+    usesSupervisionConnection || startupPreparedAuth?.kind === "api-key"
+      ? null
+      : startupAuthProfileId;
   const resolveReviewerPolicyContext = (binding: CodexAppServerThreadBinding | undefined) => {
     const nativeModelOwned = binding?.preserveNativeModel === true;
     // A supervised Codex branch owns its model. The outer OpenClaw default may
@@ -758,6 +778,16 @@ export async function runCodexAppServerAttempt(
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
   });
+  const preparedAuthBinding =
+    !usesSupervisionConnection && appServer.start.homeScope !== "user" && startupAuthProfileId
+      ? await prepareCodexAppServerAuthBinding({
+          authProfileId: startupAuthProfileId,
+          authProfileStore: params.authProfileStore,
+          agentDir,
+          config: params.config,
+        })
+      : undefined;
+  const attemptAuthProfileStore = preparedAuthBinding?.authProfileStore ?? params.authProfileStore;
   const effectiveContextWindowInfo = usesSupervisionConnection
     ? undefined
     : params.contextWindowInfo;
@@ -809,6 +839,7 @@ export async function runCodexAppServerAttempt(
       }
     : {
         ...params,
+        authProfileStore: attemptAuthProfileStore,
         sessionKey: contextSessionKey,
         ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
       };
@@ -821,15 +852,19 @@ export async function runCodexAppServerAttempt(
   });
   const startupAuthAccountCacheKey = usesSupervisionConnection
     ? undefined
-    : await resolveCodexAppServerAuthAccountCacheKey({
-        authProfileId: startupAuthProfileId,
-        authProfileStore: params.authProfileStore,
-        agentDir,
-        config: params.config,
-      });
+    : startupPreparedAuth?.kind === "api-key"
+      ? resolveCodexAppServerPreparedApiKeyCacheKey(startupPreparedAuth.apiKey)
+      : startupPreparedAuth?.kind === "profile"
+        ? startupPreparedAuth.snapshot?.secretFreeCacheKey
+        : await resolveCodexAppServerAuthAccountCacheKey({
+            authProfileId: startupAuthProfileId,
+            authProfileStore: attemptAuthProfileStore,
+            agentDir,
+            config: params.config,
+          });
   const startupEnvApiKeyCacheKey = usesSupervisionConnection
     ? undefined
-    : startupAuthProfileId
+    : startupPreparedAuth || startupAuthProfileId
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({
           startOptions: appServer.start,
@@ -864,6 +899,7 @@ export async function runCodexAppServerAttempt(
           clientFactory: attemptClientFactory,
           appServer,
           authProfileId: startupClientAuthProfileId,
+          preparedAuth: startupPreparedAuth,
           agentDir,
           config: params.config,
           modelProviderOverride: usesSupervisionConnection
@@ -873,7 +909,7 @@ export async function runCodexAppServerAttempt(
                 model: params.modelId,
                 binding: startupBinding,
                 authProfileId: startupAuthProfileId,
-                authProfileStore: params.authProfileStore,
+                authProfileStore: attemptAuthProfileStore,
                 agentDir,
                 config: params.config,
               }).modelProvider,
@@ -1015,7 +1051,10 @@ export async function runCodexAppServerAttempt(
     loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
       connectionClass: appServer.connectionClass,
     }),
-    directToolNames: resolveCodexDynamicToolDirectNames(params),
+    directToolNames: resolveCodexDynamicToolDirectNames(
+      params,
+      isHostScopedAgentToolActive("crestodian"),
+    ),
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
@@ -1036,7 +1075,6 @@ export async function runCodexAppServerAttempt(
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
-  const hadSessionFile = await pathExists(activeSessionFile);
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
     sessionFile: activeSessionFile,
@@ -1047,6 +1085,7 @@ export async function runCodexAppServerAttempt(
     !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
       ? []
       : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []);
+  const hadSessionTranscriptState = historyMessages.length > 0;
   const hookContextWindowFields = {
     ...(effectiveContextWindowInfo?.tokens
       ? { contextTokenBudget: effectiveContextWindowInfo.tokens }
@@ -1087,11 +1126,12 @@ export async function runCodexAppServerAttempt(
     });
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
-      hadSessionFile,
+      hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
       sessionKey: contextSessionKey,
       sessionFile: activeSessionFile,
+      sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
       providerId: effectiveRuntimeProviderId,
@@ -1204,6 +1244,7 @@ export async function runCodexAppServerAttempt(
           ),
           projection: contextEngineProjection,
           dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+          legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
         })
       : { project: true, reason: "per-turn-projection" };
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
@@ -1555,15 +1596,24 @@ export async function runCodexAppServerAttempt(
     skillsPrompt: skillsCollaborationInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
     tools: toolBridge.availableSpecs,
   });
+  const hostTrajectoryRecorder = (
+    params as EmbeddedRunAttemptParams & {
+      trajectoryRecorder?: CodexHostTrajectoryRecorder | null;
+    }
+  ).trajectoryRecorder;
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveCwd,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
+    trajectoryRecorder: hostTrajectoryRecorder,
+    trajectorySessionFile: params.trajectorySessionFile,
     tools: toolBridge.availableSpecs,
+    warn: (message, fields) => embeddedAgentLog.warn(message, fields),
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadLifecycleBinding;
+  let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
   let turnRouter: CodexAppServerTurnRouter;
   let turnRoute: CodexThreadRouteReservation | undefined;
   let routeActivated = false;
@@ -1573,9 +1623,9 @@ export async function runCodexAppServerAttempt(
     trajectoryEndRecorded = true;
   };
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
-  const nativeSubagentMonitorRef: {
-    current?: ReturnType<typeof registerCodexNativeSubagentMonitor>;
-  } = {};
+  let nativeSubagentMonitor:
+    | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
+    | undefined;
   const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
   const projectorRef: { current?: CodexAppServerEventProjector } = {};
   let nativePreToolUseFailureFallbackActive = false;
@@ -1653,12 +1703,28 @@ export async function runCodexAppServerAttempt(
       await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   };
+  const unregisterNativeSubagentMonitor = () => {
+    nativeSubagentMonitor?.unregister();
+    nativeSubagentMonitor = undefined;
+  };
+  const registerNativeSubagentMonitor = (parentThreadId: string) => {
+    unregisterNativeSubagentMonitor();
+    nativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register({
+      client,
+      parentThreadId,
+      requesterSessionKey: params.sessionKey,
+      taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+      agentId: sessionAgentId,
+      retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
+    });
+  };
   const releaseCurrentRoute = () => {
     detachRouteAbort();
     detachRouteAbort = () => undefined;
     turnRoute?.release();
     turnRoute = undefined;
     routeActivated = false;
+    unregisterNativeSubagentMonitor();
   };
   let codexEnvironmentSelection: CodexTurnEnvironmentParams[] | undefined;
   let codexExecutionCwd = effectiveCwd;
@@ -1731,6 +1797,9 @@ export async function runCodexAppServerAttempt(
       pluginConfig,
       computerUseConfig,
       startupAuthProfileId: startupClientAuthProfileId,
+      startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
+      ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
+      startupPreparedAuth,
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,
       agentDir,
@@ -1759,6 +1828,7 @@ export async function runCodexAppServerAttempt(
     });
     client = startupResult.client;
     thread = startupResult.thread;
+    runtimeArtifact = startupResult.runtimeArtifact;
     turnRouter = startupResult.turnRouter;
     turnRoute = startupResult.turnRoute;
     pluginAppServer = startupResult.pluginAppServer;
@@ -2427,18 +2497,7 @@ export async function runCodexAppServerAttempt(
     await turnRoute?.drain();
   };
 
-  const nativeSubagentCodexHome =
-    appServer.start.transport === "stdio"
-      ? (appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir))
-      : undefined;
-  nativeSubagentMonitorRef.current = registerCodexNativeSubagentMonitor({
-    client,
-    parentThreadId: thread.threadId,
-    requesterSessionKey: params.sessionKey,
-    taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
-    agentId: params.agentId,
-    codexHome: nativeSubagentCodexHome,
-  });
+  registerNativeSubagentMonitor(thread.threadId);
   const handleServerRequest = async (
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
@@ -2786,6 +2845,9 @@ export async function runCodexAppServerAttempt(
       throw new Error("codex app-server turn route was not reserved");
     }
     if (!routeActivated) {
+      if (!nativeSubagentMonitor) {
+        registerNativeSubagentMonitor(thread.threadId);
+      }
       detachRouteAbort = attachRouteAbort(turnRoute);
       await turnRoute.activate({
         onNotificationReceived: noteNotificationReceived,
@@ -3187,6 +3249,22 @@ export async function runCodexAppServerAttempt(
           }),
         };
       }
+      if (isCodexContextRestartSelectionChangedError(turnStartError)) {
+        return {
+          ...buildCodexTurnStartFailureResult({
+            params,
+            message: turnStartErrorMessage,
+            messagesSnapshot: turnStartFailureMessages,
+            systemPromptReport,
+          }),
+          codexAppServerFailure: {
+            kind: "client_closed_before_turn_completed",
+            transport: appServer.start.transport,
+            threadId: thread.threadId,
+            replaySafe: true,
+          },
+        };
+      }
       throw turnStartError;
     }
   }
@@ -3557,7 +3635,7 @@ export async function runCodexAppServerAttempt(
     } else {
       codexModelCallDiagnostics.emitCompleted(result);
     }
-    const assistantTranscriptOwned = await mirrorTranscriptBestEffort({
+    const assistantTranscriptOwned = await codexTranscriptMirrorRuntime.mirrorBestEffort({
       params,
       agentId: sessionAgentId,
       notifyUserMessagePersisted,
@@ -3586,6 +3664,7 @@ export async function runCodexAppServerAttempt(
         sessionIdUsed: activeSessionId,
         sessionKey: contextSessionKey,
         sessionFile: activeSessionFile,
+        sessionTarget: params.sessionTarget,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,
         tokenBudget: effectiveContextTokenBudget,
@@ -3739,6 +3818,10 @@ export async function runCodexAppServerAttempt(
       ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
       ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
       ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
+      ...(runtimeArtifact ? { runtimeArtifact } : {}),
+      ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
+        ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
+        : {}),
       systemPromptReport,
     };
   } finally {
@@ -3780,20 +3863,7 @@ export async function runCodexAppServerAttempt(
     if (!timedOut && !runAbortController.signal.aborted) {
       await steeringQueueRef.current?.flushPending();
     }
-    const yieldedOneShotCleanupDeferred =
-      !timedOut &&
-      params.cleanupBundleMcpOnRunEnd === true &&
-      yieldDetected &&
-      nativeSubagentMonitorRef.current?.deferUntilParentSettles(thread.threadId, async () => {
-        // Keep the parent subscription alive until native child delivery;
-        // unsubscribing first drops the completion signal that settles cleanup.
-        await unsubscribeCodexThreadBestEffort(client, {
-          threadId: thread.threadId,
-          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-        });
-        await releaseSharedClientLeaseAndRetireOneShotClient();
-      });
-    if (!timedOut && !yieldedOneShotCleanupDeferred) {
+    if (!timedOut) {
       await unsubscribeCodexThreadBestEffort(client, {
         threadId: thread.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -3802,9 +3872,7 @@ export async function runCodexAppServerAttempt(
     userInputBridgeRef.current?.cancelPending();
     turnWatches.clearAllTimers();
     releaseCurrentRoute();
-    if (!yieldedOneShotCleanupDeferred) {
-      await releaseSharedClientLeaseAndRetireOneShotClient();
-    }
+    await releaseSharedClientLeaseAndRetireOneShotClient();
     if (nativeHookRelay) {
       if (shouldDelayNativeHookRelayUnregister) {
         // Codex hook subprocesses can outlive a completed app-server turn by a
@@ -4050,15 +4118,16 @@ function handleApprovalRequest(params: {
   });
 }
 
-function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
+function resolveCodexDynamicToolDirectNames(
+  params: EmbeddedRunAttemptParams,
+  hostCrestodianActive = false,
+): string[] {
   // Tools with catalogMode=direct-only use the model-only namespace. This list
   // remains for control tools that intentionally live at the dynamic-tool root.
   const names: string[] = [];
-  // The ring-zero crestodian tool is the run's entire tool surface; register it
-  // directly instead of deferring it behind Codex tool_search discovery. This is
-  // structural: per-run configs cannot flip codexDynamicToolsLoading because the
-  // harness resolves plugin config from the live global config, not params.config.
-  if (params.crestodianTool) {
+  // Crestodian is the run's only tool and must stay callable when Codex tool
+  // search is unavailable. Exact toolsAllow is the public harness contract.
+  if (hostCrestodianActive && isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     names.push("crestodian");
   }
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
@@ -4066,35 +4135,3 @@ function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): s
   }
   return names;
 }
-
-export const testing = {
-  buildCodexNativeHookRelayId,
-  buildDeveloperInstructions,
-  filterCodexDynamicTools,
-  buildDynamicTools,
-  filterCodexDynamicToolsForAllowlist,
-  includeForcedCodexDynamicToolAllow,
-  resolveCodexDynamicToolsLoadingForModel,
-  resolveCodexAppServerHookChannelId,
-  buildCodexAppServerPromptTimeoutOutcome,
-  resolveOpenClawCodingToolsSessionKeys,
-  shouldEnableCodexAppServerNativeToolSurface,
-  shouldForceMessageTool,
-  resolveCodexDynamicToolDirectNames,
-  createCodexDynamicToolExecutionRegistry,
-  hasPendingDynamicToolTerminalDiagnostic,
-  toTranscriptToolResultForTests: toTranscriptToolResult,
-  withCodexStartupTimeout,
-  setOpenClawCodingToolsFactoryForTests,
-  resetOpenClawCodingToolsFactoryForTests,
-  async ensureCodexWorkspaceDirOnceForTests(workspaceDir: string): Promise<void> {
-    await ensureCodexWorkspaceDirOnce(workspaceDir);
-  },
-  resetEnsuredCodexWorkspaceDirsForTests(): void {
-    ensuredCodexWorkspaceDirs.clear();
-  },
-  flushPendingCodexNativeHookRelayUnregistersForTests,
-  clearPendingCodexNativeHookRelayUnregistersForTests,
-  resolveCodexNativeHookRelayUnregisterGraceMs,
-} as const;
-export { testing as __testing };

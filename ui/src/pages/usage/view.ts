@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import "../../styles/usage.css";
 import { getUsageCacheRefreshTitle } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
@@ -269,10 +270,6 @@ export function renderUsage(props: UsageProps) {
     }
     return Array.from(set);
   };
-  const agentOptions = unique([...data.agents, ...sortedSessions.map((s) => s.agentId)]).slice(
-    0,
-    12,
-  );
   const channelOptions = unique(agentScopedSessions.map((s) => s.channel)).slice(0, 12);
   const providerOptions = unique([
     ...agentScopedSessions.map((s) => s.modelProvider),
@@ -345,7 +342,7 @@ export function renderUsage(props: UsageProps) {
         ? filteredSessions
         : filters.selectedDays.length > 0
           ? dayFilteredSessions
-          : sortedSessions;
+          : agentScopedSessions;
   const hasAggregateFilters =
     filters.selectedSessions.length > 0 ||
     hasQuery ||
@@ -353,7 +350,7 @@ export function renderUsage(props: UsageProps) {
     filters.selectedDays.length > 0 ||
     Boolean(filters.agentId);
   const activeAggregates = hasAggregateFilters
-    ? buildAggregatesFromSessions(aggregateSessions, data.aggregates)
+    ? buildAggregatesFromSessions(aggregateSessions)
     : buildAggregatesFromSessions([], data.aggregates);
   const insightsUseVisiblePage = data.sessionsLimitReached && !hasAggregateFilters;
   const insightTotals = insightsUseVisiblePage
@@ -479,35 +476,6 @@ export function renderUsage(props: UsageProps) {
                     }}
                   />
                   <span>${value}</span>
-                </label>
-              `;
-            })}
-          </div>
-        </div>
-      </details>
-    `;
-  };
-  const renderAgentScopeSelect = () => {
-    const selected = filters.agentId ?? "";
-    return html`
-      <details class="usage-filter-select">
-        <summary>
-          <span>${t("usage.filters.agent")}</span>
-          <span class="usage-filter-badge">${selected || t("usage.filters.all")}</span>
-        </summary>
-        <div class="usage-filter-popover">
-          <div class="usage-filter-options">
-            ${["", ...agentOptions].map((value) => {
-              const checked = selected === value;
-              return html`
-                <label class="usage-filter-option">
-                  <input
-                    type="radio"
-                    name="usage-agent-scope"
-                    .checked=${checked}
-                    @change=${() => filterActions.onAgentChange(value || null)}
-                  />
-                  <span>${value || t("usage.filters.all")}</span>
                 </label>
               `;
             })}
@@ -751,7 +719,6 @@ export function renderUsage(props: UsageProps) {
             </div>
           </div>
           <div class="usage-filter-row">
-            ${renderAgentScopeSelect()}
             ${renderFilterSelect("channel", t("usage.filters.channel"), channelOptions)}
             ${renderFilterSelect("provider", t("usage.filters.provider"), providerOptions)}
             ${renderFilterSelect("model", t("usage.filters.model"), modelOptions)}

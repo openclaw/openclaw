@@ -81,7 +81,7 @@ type PageDiagnostics = {
 };
 
 function jobTitle(page: Page, name: string) {
-  return page.locator(".cron-job .list-title", { hasText: new RegExp(`^${name}$`, "u") });
+  return page.locator(".cron-table__name-text", { hasText: new RegExp(`^${name}$`, "u") });
 }
 
 async function waitForJobTitle(
@@ -204,7 +204,7 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
         sortDir: "asc",
       });
 
-      await page.locator("details.cron-filter-panel").first().locator("summary").click();
+      await page.locator("details.cron-filter-popover > summary").click();
       await page.locator('[data-test-id="cron-jobs-schedule-filter"]').selectOption("cron");
       await page.locator('[data-test-id="cron-jobs-last-status-filter"]').selectOption("unknown");
 
@@ -255,43 +255,85 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}cron`);
       await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
-      const existingCard = page.locator(".cron-job", { hasText: existingJob.name });
-      expect(await existingCard.locator(".cron-job-meta-line").textContent()).toContain(
-        `Model: ${configuredModel}`,
-      );
-      const details = await existingCard
-        .locator(".cron-job-detail-section")
-        .evaluateAll((sections) =>
-          sections.map((section) => ({
-            label: section.querySelector(".cron-job-detail-label")?.textContent?.trim(),
-            value: section.querySelector(".cron-job-detail-value")?.textContent?.trim(),
-          })),
-        );
-      expect(details).toContainEqual({ label: "Model", value: configuredModel });
 
-      await page.getByRole("button", { name: "New Job" }).click();
-      await page.locator(".cqc-textarea").fill("Run with a selected model");
-      await page.locator(".cqc-actions .btn.primary").click();
-      await page.locator(".cqc-actions .btn.primary").click();
+      // Selecting the task opens the detail view with its stored model override.
+      await jobTitle(page, existingJob.name).click();
+      await expect
+        .poll(async () => page.locator("#cron-payload-model").inputValue())
+        .toBe(configuredModel);
 
-      const modelInput = page.locator("#cron-quick-create-model");
+      // The create button lives on the list view; navigate back first.
+      await page.locator('[data-test-id="cron-back"]').click();
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator("#cron-payload-text").fill("Run with a selected model");
+      await page.locator("#cron-name").fill("Model override task");
+
+      const modelInput = page.locator("#cron-payload-model");
       await modelInput.fill("openai/gpt-5.5");
-      expect(await modelInput.getAttribute("list")).toBe("cron-quick-create-model-suggestions");
+      expect(await modelInput.getAttribute("list")).toBe("cron-model-suggestions");
       expect(
         await page
-          .locator("#cron-quick-create-model-suggestions option")
+          .locator("#cron-model-suggestions option")
           .evaluateAll((options) => options.map((option) => option.getAttribute("value"))),
       ).toContain(configuredModel);
 
-      await page.locator(".cqc-actions .btn.primary").click();
+      await page.locator('[data-test-id="cron-submit"]').click();
       const addRequest = await gateway.waitForRequest("cron.add");
       expect(requestParams(addRequest)).toMatchObject({
+        name: "Model override task",
         payload: {
           kind: "agentTurn",
           message: "Run with a selected model",
           model: "openai/gpt-5.5",
         },
       });
+      expect(requireRecord(requestParams(addRequest).delivery).accountId).toBeUndefined();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows why a requested run was not started", async () => {
+    const existingJob = cronJob(
+      "already-running-job",
+      "Long-running automation",
+      { kind: "every", everyMs: 60_000 },
+      { runningAtMs: Date.parse("2026-05-29T08:10:00.000Z") },
+    );
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([existingJob]),
+        "cron.run": { ok: true, ran: false, reason: "already-running" },
+        "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+      await jobTitle(page, existingJob.name).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("cron.runs")).length)
+        .toBeGreaterThan(0);
+      const historyRequestsBeforeRun = (await gateway.getRequests("cron.runs")).length;
+
+      await page.locator('[data-test-id="cron-run-now"]').click();
+      await gateway.waitForRequest("cron.run");
+
+      await expect
+        .poll(() => page.locator(".cron-error-banner").textContent())
+        .toContain("This automation is already running.");
+      expect(await gateway.getRequests("cron.runs")).toHaveLength(historyRequestsBeforeRun);
+      expect(pageErrors).toEqual([]);
     } finally {
       await context.close();
     }

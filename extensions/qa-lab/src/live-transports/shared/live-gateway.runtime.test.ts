@@ -18,6 +18,7 @@ vi.mock("../../providers/server-runtime.js", () => ({
 import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
 
 type GatewayOptions = {
+  forcedRuntime?: string;
   providerBaseUrl?: string;
   providerMode?: string;
   transportBaseUrl?: string;
@@ -88,12 +89,14 @@ describe("startQaLiveLaneGateway", () => {
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
       controlUiEnabled: false,
     });
 
-    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
+    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai", {
+      modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"],
+    });
     const gatewayOptions = firstGatewayOptions();
     expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
     expect(gatewayOptions?.providerBaseUrl).toBe("http://127.0.0.1:44080/v1");
@@ -102,6 +105,20 @@ describe("startQaLiveLaneGateway", () => {
     await harness.stop();
     expect(gatewayStop).toHaveBeenCalledTimes(1);
     expect(mockStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards a scenario-selected agent runtime to the gateway child", async () => {
+    await startQaLiveLaneGateway({
+      repoRoot: "/tmp/openclaw-repo",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.4",
+      forcedRuntime: "codex",
+    });
+
+    expect(firstGatewayOptions()?.forcedRuntime).toBe("codex");
   });
 
   it("disables memory search for transport-only live lanes", async () => {
@@ -183,7 +200,9 @@ describe("startQaLiveLaneGateway", () => {
       controlUiEnabled: false,
     });
 
-    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");
+    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier", {
+      modelRefs: ["openai/gpt-5.6-luna", "openai/gpt-5.6-luna"],
+    });
     const gatewayOptions = firstGatewayOptions();
     expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
     expect(gatewayOptions?.providerBaseUrl).toBeUndefined();

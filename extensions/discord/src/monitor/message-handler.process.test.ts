@@ -464,7 +464,7 @@ function createNoQueuedDispatchResult() {
 }
 
 async function processStreamOffDiscordMessage() {
-  const ctx = await createBaseContext({ discordConfig: { streamMode: "off" } });
+  const ctx = await createBaseContext({ discordConfig: { streaming: { mode: "off" } } });
   await runProcessDiscordMessage(ctx);
 }
 
@@ -594,7 +594,7 @@ async function runProcessDiscordMessage(ctx: DiscordMessagePreflightContext): Pr
 
 async function runInPartialStreamMode(): Promise<void> {
   const ctx = await createBaseContext({
-    discordConfig: { streamMode: "partial" },
+    discordConfig: { streaming: { mode: "partial" } },
   });
   await runProcessDiscordMessage(ctx);
 }
@@ -1593,7 +1593,7 @@ describe("processDiscordMessage session routing", () => {
     const ctx = await createBaseContext({
       shouldRequireMention: false,
       effectiveWasMentioned: false,
-      discordConfig: { streaming: "partial", blockStreaming: true },
+      discordConfig: { streaming: { mode: "partial", block: { enabled: true } } },
       cfg: {
         messages: {
           groupChat: { visibleReplies: "message_tool" },
@@ -2073,7 +2073,7 @@ describe("processDiscordMessage draft streaming", () => {
   }
 
   async function createBlockModeContext(
-    discordConfig: Record<string, unknown> = { streamMode: "block" },
+    discordConfig: Record<string, unknown> = { streaming: { mode: "block" } },
   ) {
     return await createAutomaticSourceDeliveryContext({
       cfg: {
@@ -2081,7 +2081,9 @@ describe("processDiscordMessage draft streaming", () => {
         session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
         channels: {
           discord: {
-            draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
+            streaming: {
+              preview: { chunk: { minChars: 1, maxChars: 5, breakPreference: "newline" } },
+            },
           },
         },
       },
@@ -2090,9 +2092,24 @@ describe("processDiscordMessage draft streaming", () => {
   }
 
   it("sends a fresh final message when final fits one chunk", async () => {
-    await runSingleChunkFinalScenario({ streamMode: "partial", maxLinesPerMessage: 5 });
+    await runSingleChunkFinalScenario({ streaming: { mode: "partial" }, maxLinesPerMessage: 5 });
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expectFreshFinalText("Hello\nWorld");
+  });
+
+  it("retries stale preview cleanup at teardown after fresh final delivery", async () => {
+    const draftStream = createMockDraftStream();
+    draftStream.clear.mockImplementationOnce(async () => {});
+    createDiscordDraftStream.mockReturnValueOnce(draftStream);
+
+    await runSingleChunkFinalScenario({
+      streaming: { mode: "partial" },
+      maxLinesPerMessage: 5,
+    });
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(2);
+    expect(draftStream.messageId()).toBeUndefined();
   });
 
   it("delivers a fresh message instead of a preview edit when the final reply resolves a mention alias", async () => {
@@ -2102,7 +2119,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
       cfg: {
         channels: { discord: { mentionAliases: { Sentinel: "1485891428809707651" } } },
       },
@@ -2121,7 +2138,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2137,7 +2154,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2154,7 +2171,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2173,7 +2190,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
       cfg: {
         channels: { discord: { mentionAliases: { Sentinel: "1485891428809707651" } } },
       },
@@ -2185,12 +2202,6 @@ describe("processDiscordMessage draft streaming", () => {
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
       allowedMentions: { parse: ["users", "roles"] },
     });
-  });
-
-  it("accepts streaming=true alias for partial preview mode", async () => {
-    await runSingleChunkFinalScenario({ streaming: true, maxLinesPerMessage: 5 });
-    expect(editMessageDiscord).not.toHaveBeenCalled();
-    expectFreshFinalText("Hello\nWorld");
   });
 
   it("defaults unset Discord preview streaming to progress mode without drafting text-only turns", async () => {
@@ -2227,6 +2238,7 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("renders narration updates into the Discord progress draft", async () => {
+    vi.useFakeTimers();
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -2234,6 +2246,8 @@ describe("processDiscordMessage draft streaming", () => {
       await params?.replyOptions?.onNarrationUpdate?.({
         text: "Reading the gateway config and restarting agents.",
       });
+      expect(draftStream.update).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
       await params?.dispatcher.sendFinalReply({ text: "done" });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
@@ -2245,7 +2259,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toContain("Pinching\n\nReading the gateway config and restarting agents.");
+    expect(updates).toContain("Reading the gateway config and restarting agents.");
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
   });
 
@@ -2520,7 +2534,7 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("falls back to standard send when final needs multiple chunks", async () => {
-    await runSingleChunkFinalScenario({ streamMode: "partial", maxLinesPerMessage: 1 });
+    await runSingleChunkFinalScenario({ streaming: { mode: "partial" }, maxLinesPerMessage: 1 });
 
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
@@ -2575,7 +2589,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 1 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 1 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2605,7 +2619,7 @@ describe("processDiscordMessage draft streaming", () => {
           },
         },
       },
-      discordConfig: { streamMode: "partial" },
+      discordConfig: { streaming: { mode: "partial" } },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2628,7 +2642,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2648,7 +2662,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2673,7 +2687,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
       replyToMode: "first",
     });
 
@@ -2711,7 +2725,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2750,7 +2764,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2782,7 +2796,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2804,7 +2818,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2826,7 +2840,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2846,7 +2860,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2870,7 +2884,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "off" },
+      discordConfig: { streaming: { mode: "off" } },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2893,7 +2907,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2925,7 +2939,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "off" },
+      discordConfig: { streaming: { mode: "off" } },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -4126,7 +4140,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { streamMode: "partial" },
+      discordConfig: { streaming: { mode: "partial" } },
     });
 
     await runProcessDiscordMessage(ctx);

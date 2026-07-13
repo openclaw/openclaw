@@ -1,7 +1,11 @@
 /**
  * Node invoke plugin-policy regression tests.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
   type PluginApprovalRequestPayload,
@@ -14,14 +18,17 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import type { NodeSession } from "./node-registry.js";
+import { listPendingOperatorApprovals } from "./operator-approval-store.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
 const DEMO_PLUGIN_ID = "demo";
 const DEMO_COMMAND = "demo.read";
 const DEMO_PARAMS = { path: "/tmp/x" };
+const tempDirs: string[] = [];
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() =>
   vi.fn(
@@ -42,6 +49,9 @@ function createNodeSession(): NodeSession {
     caps: [],
     declaredCommands: ["demo.read"],
     commands: ["demo.read"],
+    declaredNodePluginTools: [],
+    nodePluginTools: [],
+    nodeSkills: [],
     connectedAtMs: 0,
   };
 }
@@ -207,6 +217,8 @@ async function expectApprovalResolution(
     ok: true,
     payload: { id: record.id, decision: "allow-once" },
   });
+  expect(manager.getSnapshot(record.id)?.consumedDecision).toBe("allow-once");
+  expect(manager.consumeAllowOnce(record.id)).toBe(false);
 }
 
 describe("applyPluginNodeInvokePolicy", () => {
@@ -217,6 +229,10 @@ describe("applyPluginNodeInvokePolicy", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
+    closeOpenClawStateDatabaseForTest();
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { force: true, recursive: true });
+    }
   });
 
   it("fails closed for dangerous plugin node commands without a policy", async () => {
@@ -510,6 +526,64 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(record.expiresAtMs - record.createdAtMs).toBe(MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
 
     await expectApprovalResolution(resultPromise, manager, record);
+  });
+
+  it("fails closed when the allow-once claim cannot be consumed", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    vi.spyOn(manager, "consumeAllowOnce").mockReturnValue(false);
+    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([
+        createApprovalClient({
+          connId: "conn-owner-approval",
+          clientId: "client-owner",
+          deviceId: "device-owner",
+        }),
+      ]),
+    });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+
+    await expect(resultPromise).resolves.toStrictEqual({
+      ok: true,
+      payload: { id: record.id, decision: null },
+    });
+  });
+
+  it("fails closed before routing an unrenderable persistent policy approval", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-policy-approval-"));
+    tempDirs.push(stateDir);
+    const databaseOptions = { path: path.join(stateDir, "state.sqlite") };
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      approvalKind: "plugin",
+      persistence: { runtimeEpoch: "node-policy-test", databaseOptions },
+      resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
+    });
+    setDangerousDemoCommandRegistry([
+      createApprovalRequestPolicy({ title: " \t ", description: "Needs approval" }),
+    ]);
+    const { context, invoke } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([
+        createApprovalClient({
+          connId: "conn-owner-approval",
+          clientId: "client-owner",
+          deviceId: "device-owner",
+        }),
+      ]),
+    });
+
+    await expect(invokeDemoPolicy(context, createOperatorClient())).rejects.toThrow(
+      "approval cannot be persisted without a valid reviewer presentation",
+    );
+    expect(manager.listPendingRecords()).toEqual([]);
+    expect(listPendingOperatorApprovals({ databaseOptions })).toEqual([]);
+    expect(context.broadcast).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("leaves commands without a dangerous plugin registration to normal allowlist handling", async () => {

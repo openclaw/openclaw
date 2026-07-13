@@ -62,6 +62,7 @@ import type {
 } from "../../lib/workspace/types.ts";
 import type { BuiltinWidgetContext } from "../../lib/workspace/widgets/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import "../../styles/workspace.css";
 import { pluginTabRefFromSearch } from "./route.ts";
 
 export type WorkspaceProps = {
@@ -230,11 +231,6 @@ function getViewState(host: object): WorkspaceViewState {
     workspaceViewStates.set(host, state);
   }
   return state;
-}
-
-/** Read the current data-refresh counter for a host (used by the poll timer). */
-export function workspaceDataVersion(host: object): number {
-  return getViewState(host).dataVersion;
 }
 
 /** Advance the data-refresh counter so the next render re-resolves bindings. */

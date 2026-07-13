@@ -5,7 +5,8 @@ import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
@@ -381,7 +382,7 @@ beforeEach(() => {
   pluginRuntimeLoaderLogger.error.mockClear();
   pluginRuntimeLoaderLogger.debug.mockClear();
   handleGatewayRequest.mockReset();
-  runtimeModule.clearGatewaySubagentRuntime();
+  clearGatewaySubagentRuntime();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
       case "agent":
@@ -404,7 +405,7 @@ beforeEach(() => {
 
 afterEach(() => {
   serverPluginsModule.clearFallbackGatewayContext();
-  runtimeModule.clearGatewaySubagentRuntime();
+  clearGatewaySubagentRuntime();
   runtimeRegistryModule.resetPluginRuntimeStateForTest();
 });
 
@@ -996,6 +997,26 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
+  test("lets trusted official plugins request explicit Gateway scopes", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-admin"));
+    const runtime = runtimeModule.createPluginRuntime();
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "google-meet", pluginOrigin: "bundled" },
+      () =>
+        runtime.gateway.request(
+          "browser.request",
+          { method: "GET", path: "/tabs" },
+          { scopes: ["operator.admin"] },
+        ),
+    );
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+  });
+
   test("reports whether trusted in-process Gateway dispatch is available", async () => {
     const runtime = runtimeModule.createPluginRuntime();
 
@@ -1066,7 +1087,12 @@ describe("loadGatewayPlugins", () => {
     await expect(
       gatewayRequestScopeModule.withPluginRuntimePluginScope(
         { pluginId: "third-party", pluginOrigin: "global" },
-        () => runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
+        () =>
+          runtime.gateway.request(
+            "voicecall.start",
+            { to: "+15550001234" },
+            { scopes: ["operator.admin"] },
+          ),
       ),
     ).rejects.toThrow("bundled or trusted official plugins");
     expect(handleGatewayRequest).not.toHaveBeenCalled();

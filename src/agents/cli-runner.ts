@@ -19,6 +19,10 @@ import {
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
+import {
+  resolveCliRuntimeArtifactFingerprint,
+  resolveCliRuntimeOwnerFingerprint,
+} from "./cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import type { CliOutput } from "./cli-output.js";
 import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
@@ -170,8 +174,45 @@ export async function isCliBindingFlushed(
   return false;
 }
 
-function flushSessionManagerFile(sessionManager: SessionManager): void {
-  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
+function flushSessionManagerTranscript(sessionManager: SessionManager): void {
+  (
+    sessionManager as unknown as {
+      replacePersistedTranscript?: () => void;
+    }
+  ).replacePersistedTranscript?.();
+}
+
+async function assertSuccessfulCliRuntimeBindingCurrent(
+  context: PreparedCliRunContext,
+): Promise<void> {
+  if (!context.runtimeArtifactFingerprint) {
+    return;
+  }
+  const currentArtifact = await resolveCliRuntimeArtifactFingerprint({
+    provider: context.params.provider,
+    config: context.params.config ?? context.contextEngineConfig,
+    agentId: context.params.agentId,
+    runtimeArtifactId: context.backendResolved.id,
+  });
+  if (currentArtifact !== context.runtimeArtifactFingerprint) {
+    throw new Error("CLI executable/package artifact changed during successful inference");
+  }
+  if (!context.runtimeOwnerFingerprint) {
+    return;
+  }
+  const currentOwner = await resolveCliRuntimeOwnerFingerprint({
+    provider: context.params.provider,
+    config: context.params.config ?? context.contextEngineConfig,
+    ...(context.agentDir ? { agentDir: context.agentDir } : {}),
+    agentId: context.params.agentId,
+    runtimeOwnerId: context.backendResolved.id,
+    ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
+    ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
+    runtimeArtifactFingerprint: currentArtifact,
+  });
+  if (currentOwner !== context.runtimeOwnerFingerprint) {
+    throw new Error("CLI runtime owner changed during successful inference");
+  }
 }
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
@@ -272,15 +313,9 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
     return recorder?.isBlocked() === true;
   }
 
-  const target = {
-    transcriptPath: params.sessionFile,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  const persisted = await recorder.persistApproved({
     cwd: params.cwd ?? params.workspaceDir,
-    ...(params.config ? { config: params.config } : {}),
-  };
-  const persisted = await recorder.persistApproved({ target });
+  });
   if (!persisted && !recorder.hasPersisted() && (await recorder.resolveMessage())) {
     // A prepared user row can be rejected by before_message_write. Preserve
     // that terminal decision so outer transcript mirrors do not retry it.
@@ -354,6 +389,18 @@ async function persistCliAssistantTranscript(params: {
   } catch (error) {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
     return false;
+  }
+}
+
+async function notifyCliUserMessagePersisted(
+  params: RunCliAgentParams,
+  message: Extract<AgentMessage, { role: "user" }>,
+  context: string,
+): Promise<void> {
+  try {
+    await Promise.resolve(params.onUserMessagePersisted?.(message));
+  } catch (err) {
+    log.warn(`${context} notification failed: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -548,6 +595,10 @@ export async function runPreparedCliAgent(
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
   const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
+  const preparedContextAgentMeta =
+    isClaudeCliProvider(params.provider) && context.contextWindowInfo
+      ? { contextTokens: context.contextWindowInfo.tokens }
+      : {};
   const hookRunner = getGlobalHookRunner();
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
@@ -669,6 +720,7 @@ export async function runPreparedCliAgent(
         sessionId: params.sessionId ?? "",
         provider: params.provider,
         model: context.modelId,
+        ...preparedContextAgentMeta,
         ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
       },
     },
@@ -762,6 +814,7 @@ export async function runPreparedCliAgent(
           sessionId: "",
           provider: params.provider,
           model: context.modelId,
+          ...preparedContextAgentMeta,
           ...(sessionBindingDisabled || resolveReusableCliSessionId(context.reusableCliSession)
             ? { clearCliSessionBinding: true }
             : {}),
@@ -790,23 +843,44 @@ export async function runPreparedCliAgent(
     message: string;
     pluginId: string;
   }): Promise<void> => {
-    params.userTurnTranscriptRecorder?.markBlocked();
-    try {
-      const nowMs = Date.now();
-      const sessionManager = SessionManager.open(params.sessionFile);
-      sessionManager.appendMessage({
-        role: "user",
-        content: [{ type: "text", text: block.message }],
-        timestamp: nowMs,
-        idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
-        __openclaw: {
-          beforeAgentRunBlocked: {
-            blockedBy: block.pluginId,
-            blockedAt: nowMs,
-          },
+    const nowMs = Date.now();
+    const redactedUserMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: block.message }],
+      timestamp: nowMs,
+      idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
+      __openclaw: {
+        beforeAgentRunBlocked: {
+          blockedBy: block.pluginId,
+          blockedAt: nowMs,
         },
-      } as Parameters<typeof sessionManager.appendMessage>[0]);
-      flushSessionManagerFile(sessionManager);
+      },
+    };
+    try {
+      const persisted =
+        await params.userTurnTranscriptRecorder?.persistBlocked(redactedUserMessage);
+      if (persisted) {
+        await notifyCliUserMessagePersisted(
+          params,
+          persisted.message,
+          "before_agent_run block user-turn persistence",
+        );
+        return;
+      }
+    } catch (err) {
+      log.warn(
+        `before_agent_run block: failed to persist canonical CLI user message: ${formatErrorMessage(
+          err,
+        )}`,
+      );
+    }
+
+    try {
+      const sessionManager = SessionManager.open(params.sessionFile);
+      sessionManager.appendMessage(
+        redactedUserMessage as Parameters<typeof sessionManager.appendMessage>[0],
+      );
+      flushSessionManagerTranscript(sessionManager);
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(
@@ -987,6 +1061,27 @@ export async function runPreparedCliAgent(
     const yielded = resultParams.output.yielded === true;
     const stopReason = yielded ? "end_turn" : "completed";
 
+    params.onSuccessfulAuthBinding?.({
+      ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
+      ...(context.authBindingFingerprint
+        ? { authFingerprint: context.authBindingFingerprint }
+        : {}),
+      ...(!context.authBindingFingerprint && context.runtimeOwnerFingerprint
+        ? {
+            runtimeOwnerFingerprint: context.runtimeOwnerFingerprint,
+            runtimeOwnerKind: "cli-runtime" as const,
+            runtimeOwnerId: context.backendResolved.id,
+          }
+        : {}),
+      ...(context.runtimeArtifactFingerprint
+        ? {
+            runtimeArtifactFingerprint: context.runtimeArtifactFingerprint,
+            runtimeArtifactId: context.backendResolved.id,
+          }
+        : {}),
+      ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
+    });
+
     return {
       payloads,
       meta: {
@@ -1028,6 +1123,7 @@ export async function runPreparedCliAgent(
           sessionId: agentSessionId,
           provider: params.provider,
           model: context.modelId,
+          ...preparedContextAgentMeta,
           usage: resultParams.output.usage,
           ...(resultParams.output.usage ? { lastCallUsage: resultParams.output.usage } : {}),
           ...(persistedCliSessionId
@@ -1114,6 +1210,7 @@ export async function runPreparedCliAgent(
       const { output, assistantText, lastAssistant, sourceReplyWasDelivered, usedHistoryPrompt } =
         result;
       try {
+        await assertSuccessfulCliRuntimeBindingCurrent(context);
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
         await finalizeCliContextEngineTurn({
           context,

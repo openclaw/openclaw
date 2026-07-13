@@ -8,7 +8,8 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDateMs, formatDateTimeMs } from "../../lib/format.ts";
+import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
+import "../../styles/workboard.css";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -45,18 +46,17 @@ import {
   type WorkboardTemplateId,
   type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
+import {
+  agentDisplayName,
+  buildAgentFilterOptions,
+  buildAssignableAgentOptions,
+  cardAgentLabel,
+  findCardAgent,
+  matchesAgentFilter,
+  matchesAgentScope,
+  normalizeActiveAgentFilter,
+} from "./agent-filter.ts";
 
-type WorkboardAgentRow = AgentsListResult["agents"][number];
-type WorkboardConfiguredAgentOption = {
-  id: string;
-  label: string;
-  isDefault: boolean;
-};
-type WorkboardAgentFilterOption = {
-  id: WorkboardUiState["agentFilter"];
-  label: string;
-  description?: string;
-};
 type WorkboardSelectOption<Value extends string = string> = {
   value: Value;
   label: string;
@@ -74,6 +74,8 @@ type WorkboardProps = {
   pluginEnablementError?: string | null;
   agentsList: AgentsListResult | null;
   sessions: GatewaySessionRow[];
+  scopeAgentId?: string | null;
+  showAgentFilter?: boolean;
   onOpenSession: (sessionKey: string) => void;
   onReloadConfig?: () => void;
   onRequestUpdate?: () => void;
@@ -101,43 +103,43 @@ let workboardReturnFocusTarget: Element | null = null;
 
 const WORKBOARD_TEMPLATES: Array<{
   id: WorkboardTemplateId;
-  title: string;
-  notes: string;
+  titleKey: string;
+  notesKey: string;
   labels: string;
   priority: WorkboardPriority;
 }> = [
   {
     id: "bugfix",
-    title: "Fix: ",
-    notes: "Symptom:\nCause:\nAcceptance:\nProof:",
+    titleKey: "workboard.templateDraft.bugfixTitle",
+    notesKey: "workboard.templateDraft.bugfixNotes",
     labels: "fix, test",
     priority: "high",
   },
   {
     id: "docs",
-    title: "Docs: ",
-    notes: "Page:\nChange:\nSource proof:",
+    titleKey: "workboard.templateDraft.docsTitle",
+    notesKey: "workboard.templateDraft.docsNotes",
     labels: "docs",
     priority: "normal",
   },
   {
     id: "release",
-    title: "Release: ",
-    notes: "Scope:\nVerification:\nCloseout:",
+    titleKey: "workboard.templateDraft.releaseTitle",
+    notesKey: "workboard.templateDraft.releaseNotes",
     labels: "release",
     priority: "urgent",
   },
   {
     id: "pr_review",
-    title: "Review PR ",
-    notes: "Surface:\nRisks:\nProof:",
+    titleKey: "workboard.templateDraft.prReviewTitle",
+    notesKey: "workboard.templateDraft.prReviewNotes",
     labels: "review",
     priority: "normal",
   },
   {
     id: "plugin",
-    title: "Plugin: ",
-    notes: "Boundary:\nConfig/docs:\nTests:",
+    titleKey: "workboard.templateDraft.pluginTitle",
+    notesKey: "workboard.templateDraft.pluginNotes",
     labels: "plugin",
     priority: "normal",
   },
@@ -193,17 +195,7 @@ function formatAge(value: number | undefined): string {
     return "";
   }
   const elapsedMs = Math.max(0, Date.now() - value);
-  const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 1) {
-    return t("activity.duration.seconds", { count: String(Math.floor(elapsedMs / 1000)) });
-  }
-  if (minutes < 60) {
-    return t("activity.duration.minutes", {
-      minutes: String(minutes),
-      seconds: "0",
-    });
-  }
-  return t("workboard.ageHours", { count: String(Math.floor(minutes / 60)) });
+  return formatDurationCompact(elapsedMs, { spaced: true }) ?? "0ms";
 }
 
 function truncateBadgeText(value: string, maxLength = 64): string {
@@ -282,7 +274,7 @@ function focusWorkboardDialog(root: HTMLElement, initialFocusSelector?: string) 
       preferred && isFocusableWorkboardElement(preferred)
         ? preferred
         : initialFocusSelector
-          ? getFocusableWorkboardElements(root)[0]
+          ? (getFocusableWorkboardElements(root)[0] ?? root)
           : root;
     focusElement(target);
   });
@@ -323,6 +315,9 @@ function trapWorkboardDialogFocus(event: KeyboardEvent, root: HTMLElement) {
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
+  if (!first || !last) {
+    return;
+  }
   const focusInside = active ? root.contains(active) : false;
 
   if (event.shiftKey && (!focusInside || active === first || active === root)) {
@@ -339,13 +334,14 @@ function trapWorkboardDialogFocus(event: KeyboardEvent, root: HTMLElement) {
 function handleWorkboardDialogKeydown(
   event: KeyboardEvent,
   props: WorkboardProps,
-  close: () => void,
+  close: () => boolean | void,
 ) {
   if (event.key === "Escape") {
     event.preventDefault();
     event.stopPropagation();
-    close();
-    props.onRequestUpdate?.();
+    if (close() !== false) {
+      props.onRequestUpdate?.();
+    }
     return;
   }
   if (event.key === "Tab") {
@@ -596,148 +592,6 @@ function isCardActionTarget(event: Event): boolean {
     : false;
 }
 
-function agentDisplayName(agent: WorkboardAgentRow | undefined, fallback: string): string {
-  return agent?.name ?? agent?.identity?.name ?? agent?.id ?? fallback;
-}
-
-function cardAgentId(card: WorkboardCard, agentsList: AgentsListResult | null): string {
-  return card.agentId?.trim() || agentsList?.defaultId || "";
-}
-
-function findCardAgent(
-  card: WorkboardCard,
-  agentsList: AgentsListResult | null,
-): WorkboardAgentRow | undefined {
-  const id = cardAgentId(card, agentsList);
-  return id ? agentsList?.agents.find((agent) => agent.id === id) : undefined;
-}
-
-function cardAgentLabel(card: WorkboardCard, agentsList: AgentsListResult | null): string {
-  const fallback = card.agentId?.trim() || t("workboard.defaultAgent");
-  return agentDisplayName(findCardAgent(card, agentsList), fallback);
-}
-
-function matchesAgentFilter(
-  card: WorkboardCard,
-  agentsList: AgentsListResult | null,
-  filter: WorkboardUiState["agentFilter"],
-): boolean {
-  if (filter === "all") {
-    return true;
-  }
-  const explicitAgentId = card.agentId?.trim();
-  if (filter === "default") {
-    return !explicitAgentId;
-  }
-  void agentsList;
-  return explicitAgentId === filter;
-}
-
-function buildConfiguredAgentOptions(
-  agentsList: AgentsListResult | null,
-): WorkboardConfiguredAgentOption[] {
-  const seen = new Set<string>();
-  const defaultAgentId = normalizeAgentOptionId(agentsList?.defaultId);
-  const options: WorkboardConfiguredAgentOption[] = [];
-  for (const agent of agentsList?.agents ?? []) {
-    const id = normalizeAgentOptionId(agent.id);
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    options.push({
-      id,
-      label: agentDisplayName(agent, id),
-      isDefault: Boolean(defaultAgentId && id === defaultAgentId),
-    });
-  }
-  return options;
-}
-
-function normalizeAgentOptionId(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function defaultAgentFilterLabel(configuredAgents: readonly WorkboardConfiguredAgentOption[]) {
-  return configuredAgents.find((agent) => agent.isDefault)?.label ?? t("workboard.defaultAgent");
-}
-
-function buildAgentFilterOptions(
-  agentsList: AgentsListResult | null,
-  cards: readonly WorkboardCard[],
-) {
-  const configuredAgents = buildConfiguredAgentOptions(agentsList);
-  const configuredIds = new Set(configuredAgents.map((agent) => agent.id));
-  const cardAgentIds = [
-    ...new Set(
-      cards
-        .map((card) => normalizeAgentOptionId(card.agentId))
-        .filter((id) => id && !configuredIds.has(id)),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
-  const options: WorkboardAgentFilterOption[] = [
-    { id: "all", label: t("workboard.allAgents") },
-    {
-      id: "default",
-      label: t("workboard.agentFilterUnassigned", {
-        agent: defaultAgentFilterLabel(configuredAgents),
-      }),
-      description: t("workboard.agentFilterUnassignedHelp"),
-    },
-  ];
-  for (const agent of configuredAgents) {
-    options.push({
-      id: agent.id,
-      label: agent.isDefault
-        ? t("workboard.agentFilterConfiguredDefault", { agent: agent.label })
-        : agent.label,
-      ...(agent.isDefault ? { description: t("workboard.agentFilterConfiguredDefaultHelp") } : {}),
-    });
-  }
-  for (const id of cardAgentIds) {
-    options.push({
-      id,
-      label: t("workboard.agentCurrentUnconfigured", { agent: id }),
-    });
-  }
-  return options;
-}
-
-function buildAssignableAgentOptions(agentsList: AgentsListResult | null, currentAgentId: string) {
-  const configuredAgents = buildConfiguredAgentOptions(agentsList);
-  const currentId = normalizeAgentOptionId(currentAgentId);
-  const hasCurrent = currentId ? configuredAgents.some((agent) => agent.id === currentId) : true;
-  return [
-    {
-      id: "",
-      label: t("workboard.agentFilterUnassigned", {
-        agent: defaultAgentFilterLabel(configuredAgents),
-      }),
-    },
-    ...configuredAgents.map((agent) => ({
-      id: agent.id,
-      label: agent.isDefault
-        ? t("workboard.agentFilterConfiguredDefault", { agent: agent.label })
-        : agent.label,
-    })),
-    ...(hasCurrent
-      ? []
-      : [
-          {
-            id: currentId,
-            label: t("workboard.agentCurrentUnconfigured", { agent: currentId }),
-          },
-        ]),
-  ];
-}
-
-function normalizeActiveAgentFilter(
-  options: readonly WorkboardAgentFilterOption[],
-  filter: WorkboardUiState["agentFilter"],
-): WorkboardUiState["agentFilter"] {
-  return options.some((option) => option.id === filter) ? filter : "all";
-}
-
 let workboardSelectDocumentCloserInstalled = false;
 const workboardSelectTypeahead = new WeakMap<
   HTMLDetailsElement,
@@ -907,7 +761,10 @@ function focusRelativeWorkboardSelectOption(
         ? (activeIndex + 1) % options.length
         : (activeIndex - 1 + options.length) % options.length;
   }
-  focusWorkboardSelectOption(details, options[nextIndex] ?? options[0]);
+  const option = options[nextIndex] ?? options[0];
+  if (option) {
+    focusWorkboardSelectOption(details, option);
+  }
 }
 
 function focusWorkboardSelectTypeaheadOption(details: HTMLDetailsElement, key: string) {
@@ -991,19 +848,33 @@ function renderWorkboardSelect<Value extends string>(params: {
   requestUpdate?: () => void;
   className?: string;
   showLabel?: boolean;
+  disabled?: boolean;
 }) {
   const selected = params.options.find((option) => option.value === params.value);
   const selectedLabel = selected?.label ?? params.value;
   const select = html`
     <details
-      class="workboard-select ${params.className ?? ""}"
+      class="workboard-select ${params.disabled
+        ? "workboard-select--disabled"
+        : ""} ${params.className ?? ""}"
       @toggle=${(event: Event) => {
         const details = event.currentTarget as HTMLDetailsElement;
+        if (params.disabled) {
+          details.open = false;
+          return;
+        }
         closeOtherWorkboardSelectMenus(details);
         positionWorkboardSelectMenu(details);
         syncWorkboardSelectDocumentCloser();
       }}
-      @keydown=${handleWorkboardSelectKeydown}
+      @keydown=${(event: KeyboardEvent) => {
+        if (params.disabled) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        handleWorkboardSelectKeydown(event);
+      }}
       @focusout=${(event: FocusEvent) => {
         const details = event.currentTarget as HTMLDetailsElement;
         if (!(event.relatedTarget instanceof Node) || !details.contains(event.relatedTarget)) {
@@ -1015,6 +886,14 @@ function renderWorkboardSelect<Value extends string>(params: {
         class="input workboard-select__trigger"
         aria-label=${`${params.label}: ${selectedLabel}`}
         aria-haspopup="listbox"
+        aria-disabled=${params.disabled ? "true" : "false"}
+        tabindex=${params.disabled ? "-1" : "0"}
+        @click=${(event: MouseEvent) => {
+          if (params.disabled) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
       >
         <span class="workboard-select__value">${selectedLabel}</span>
         <span class="workboard-select__chevron" aria-hidden="true">${icons.chevronDown}</span>
@@ -1030,7 +909,7 @@ function renderWorkboardSelect<Value extends string>(params: {
               tabindex="-1"
               aria-selected=${optionSelected}
               aria-disabled=${option.disabled === true}
-              ?disabled=${option.disabled}
+              ?disabled=${params.disabled || option.disabled}
               @click=${(event: Event) => {
                 if (option.disabled) {
                   return;
@@ -1434,8 +1313,8 @@ function applyTemplate(state: WorkboardUiState, templateId: WorkboardTemplateId)
     return;
   }
   state.draftTemplateId = template.id;
-  state.draftTitle = template.title;
-  state.draftNotes = template.notes;
+  state.draftTitle = t(template.titleKey);
+  state.draftNotes = t(template.notesKey);
   state.draftLabels = template.labels;
   state.draftPriority = template.priority;
 }
@@ -1473,13 +1352,22 @@ function renderCardModal(props: WorkboardProps) {
   const draftCommentBusy = editing && state.busyCardIds.has(state.editingCardId ?? "");
   const draftActionsBusy =
     !canMutate(props) || state.loading || state.dispatching || draftCommentBusy;
+  // Save completion resets this shared draft. Lock every edit and dismissal path
+  // only for that write so stale drafts can still use Cancel to recover readiness.
+  const draftDismissalBusy = state.draftSaving;
+  const dismissDraft = () => {
+    if (draftDismissalBusy) {
+      return false;
+    }
+    resetDraft(state);
+    return true;
+  };
   return html`
     <div
       class="workboard-modal"
       role="presentation"
       @click=${(event: MouseEvent) => {
-        if (event.target === event.currentTarget) {
-          resetDraft(state);
+        if (event.target === event.currentTarget && dismissDraft()) {
           props.onRequestUpdate?.();
         }
       }}
@@ -1491,10 +1379,11 @@ function renderCardModal(props: WorkboardProps) {
         aria-modal="true"
         aria-labelledby=${workboardCardModalTitleId}
         aria-describedby=${workboardCardModalDescriptionId}
+        aria-busy=${draftActionsBusy ? "true" : "false"}
         tabindex="-1"
         ${ref((element) => syncWorkboardDialog(element, "[data-workboard-autofocus='true']"))}
         @keydown=${(event: KeyboardEvent) =>
-          handleWorkboardDialogKeydown(event, props, () => resetDraft(state))}
+          handleWorkboardDialogKeydown(event, props, dismissDraft)}
         @submit=${(event: SubmitEvent) => {
           event.preventDefault();
           if (draftActionsBusy) {
@@ -1521,9 +1410,11 @@ function renderCardModal(props: WorkboardProps) {
               class="btn btn--icon workboard-card__icon"
               type="button"
               aria-label=${t("common.cancel")}
+              ?disabled=${draftDismissalBusy}
               @click=${() => {
-                resetDraft(state);
-                props.onRequestUpdate?.();
+                if (dismissDraft()) {
+                  props.onRequestUpdate?.();
+                }
               }}
             >
               ${icons.x}
@@ -1541,6 +1432,7 @@ function renderCardModal(props: WorkboardProps) {
                           ? "workboard-template-strip__button--active"
                           : ""}"
                         type="button"
+                        ?disabled=${draftActionsBusy}
                         @click=${() => {
                           applyTemplate(state, template.id);
                           props.onRequestUpdate?.();
@@ -1560,6 +1452,7 @@ function renderCardModal(props: WorkboardProps) {
                 class="input workboard-draft__title"
                 data-workboard-autofocus="true"
                 placeholder=${t("workboard.titlePlaceholder")}
+                ?disabled=${draftActionsBusy}
                 .value=${state.draftTitle}
                 @input=${(event: InputEvent) => {
                   state.draftTitle = (event.currentTarget as HTMLInputElement).value;
@@ -1572,6 +1465,7 @@ function renderCardModal(props: WorkboardProps) {
               <textarea
                 class="input workboard-draft__notes"
                 placeholder=${t("workboard.notesPlaceholder")}
+                ?disabled=${draftActionsBusy}
                 .value=${state.draftNotes}
                 @input=${(event: InputEvent) => {
                   state.draftNotes = (event.currentTarget as HTMLTextAreaElement).value;
@@ -1589,6 +1483,7 @@ function renderCardModal(props: WorkboardProps) {
                 state.draftStatus = value;
               },
               requestUpdate: props.onRequestUpdate,
+              disabled: draftActionsBusy,
             })}
             ${renderWorkboardSelect({
               value: state.draftPriority,
@@ -1598,6 +1493,7 @@ function renderCardModal(props: WorkboardProps) {
                 state.draftPriority = value;
               },
               requestUpdate: props.onRequestUpdate,
+              disabled: draftActionsBusy,
             })}
             ${renderWorkboardSelect({
               value: state.draftAgentId,
@@ -1607,6 +1503,7 @@ function renderCardModal(props: WorkboardProps) {
                 state.draftAgentId = value;
               },
               requestUpdate: props.onRequestUpdate,
+              disabled: draftActionsBusy,
             })}
             ${renderWorkboardSelect({
               value: state.draftSessionKey,
@@ -1616,12 +1513,14 @@ function renderCardModal(props: WorkboardProps) {
                 state.draftSessionKey = value;
               },
               requestUpdate: props.onRequestUpdate,
+              disabled: draftActionsBusy,
             })}
             <label class="workboard-field workboard-field--wide">
               <span>${t("workboard.fieldLabels")}</span>
               <input
                 class="input"
                 placeholder=${t("workboard.labelsPlaceholder")}
+                ?disabled=${draftActionsBusy}
                 .value=${state.draftLabels}
                 @input=${(event: InputEvent) => {
                   state.draftLabels = (event.currentTarget as HTMLInputElement).value;
@@ -1650,6 +1549,7 @@ function renderCardModal(props: WorkboardProps) {
                     class="input workboard-comments__input"
                     aria-labelledby="workboard-card-comments-title"
                     maxlength="2000"
+                    ?disabled=${draftActionsBusy}
                     .value=${state.draftCommentBody}
                     @input=${(event: InputEvent) => {
                       state.draftCommentBody = (event.currentTarget as HTMLTextAreaElement).value;
@@ -1683,9 +1583,11 @@ function renderCardModal(props: WorkboardProps) {
           <button
             class="btn"
             type="button"
+            ?disabled=${draftDismissalBusy}
             @click=${() => {
-              resetDraft(state);
-              props.onRequestUpdate?.();
+              if (dismissDraft()) {
+                props.onRequestUpdate?.();
+              }
             }}
           >
             ${t("common.cancel")}
@@ -2614,6 +2516,7 @@ export function renderWorkboard(props: WorkboardProps) {
   const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
+      .filter((card) => matchesAgentScope(card, props.agentsList, props.scopeAgentId))
       .filter((card) => matchesAgentFilter(card, props.agentsList, state.agentFilter))
       .filter((card) =>
         matchesFilter(card, { query: state.query, priority: state.priorityFilter }),
@@ -2727,17 +2630,19 @@ export function renderWorkboard(props: WorkboardProps) {
               className: "workboard-select--toolbar",
               showLabel: false,
             })}
-            ${renderWorkboardSelect({
-              value: state.agentFilter,
-              options: agentSelectOptions,
-              label: t("workboard.agentFilter"),
-              onChange: (value) => {
-                state.agentFilter = value;
-              },
-              requestUpdate: props.onRequestUpdate,
-              className: "workboard-select--toolbar workboard-select--toolbar-agent",
-              showLabel: false,
-            })}
+            ${props.showAgentFilter !== false
+              ? renderWorkboardSelect({
+                  value: state.agentFilter,
+                  options: agentSelectOptions,
+                  label: t("workboard.agentFilter"),
+                  onChange: (value) => {
+                    state.agentFilter = value;
+                  },
+                  requestUpdate: props.onRequestUpdate,
+                  className: "workboard-select--toolbar workboard-select--toolbar-agent",
+                  showLabel: false,
+                })
+              : nothing}
             <button
               class="btn workboard-archive-toggle ${state.showArchived ? "active" : ""}"
               type="button"

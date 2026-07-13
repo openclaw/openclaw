@@ -49,6 +49,7 @@ describeLive("OpenAI-compatible Anthropic tool payload wrapper live", () => {
           },
         ],
         tool_choice: { type: "custom", custom: { name: "live_probe" } },
+        reasoning_effort: "low",
         max_completion_tokens: 128,
       };
       options?.onPayload?.(payload, model);
@@ -67,6 +68,7 @@ describeLive("OpenAI-compatible Anthropic tool payload wrapper live", () => {
     if (!projectedPayload) {
       throw new Error("wrapper did not produce a payload");
     }
+    expect(projectedPayload.reasoning_effort).toBe("none");
 
     const client = new OpenAI({ apiKey: OPENAI_KEY });
     const response = await client.chat.completions.create(

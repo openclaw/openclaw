@@ -92,11 +92,6 @@ import {
 } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 
-export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
-export { normalizeCronRunErrorText } from "./execution-errors.js";
-export { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-export { wake } from "./wake.js";
-
 const MAX_TIMER_DELAY_MS = 60_000;
 const HEARTBEAT_SKIP_DISABLED = "disabled";
 
@@ -120,6 +115,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     taskRunId?: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
+    deliveryError?: string;
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
     activeJobMarker?: CronActiveJobMarker;
     startedAt: number;
@@ -127,7 +123,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     triggerEval?: CronTriggerEvalOutcome;
   };
 
-export type CronTriggerEvalOutcome = {
+type CronTriggerEvalOutcome = {
   fired: boolean;
   stateChanged: boolean;
   state?: unknown;
@@ -705,6 +701,7 @@ export function applyJobResult(
   result: {
     status: CronRunStatus;
     error?: string;
+    deliveryError?: string;
     diagnostics?: CronRunOutcome["diagnostics"];
     delivered?: boolean;
     provider?: string;
@@ -753,7 +750,11 @@ export function applyJobResult(
     job,
     runStatus: result.status,
     delivered: result.delivered,
-    error: result.error,
+    // A successful run keeps `error` empty but may carry a dedicated
+    // `deliveryError` when post-run delivery failed (#94058/#95419); prefer it
+    // so `lastDeliveryError` is populated without conflating it with a
+    // run-level failure. Error runs fall back to the run error as before.
+    error: result.deliveryError ?? result.error,
     globalFailureDestination: state.deps.cronConfig?.failureDestination,
   });
   job.state.lastDelivered = deliveryState.delivered;
@@ -803,8 +804,10 @@ export function applyJobResult(
     job.state.lastFailureAlertAtMs = undefined;
   }
 
-  const shouldDelete =
-    job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
+  // The gateway watcher disables on-exit jobs before firing; successful removal here
+  // completes the same deleteAfterRun contract as a one-shot at schedule.
+  const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
+  const shouldDelete = isOneShotSchedule && job.deleteAfterRun === true && result.status === "ok";
   const retryDisabledHeartbeatOneShot = shouldRetryDisabledHeartbeatOneShot(job, result);
 
   if (!shouldDelete) {
@@ -1118,6 +1121,7 @@ function applyOutcomeToStoredJob(
       applyJobResult(state, result.job, {
         status: result.status,
         error: result.error,
+        deliveryError: result.deliveryError,
         diagnostics: result.diagnostics,
         delivered: result.delivered,
         provider: result.provider,
@@ -1153,6 +1157,7 @@ function applyOutcomeToStoredJob(
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
+    deliveryError: result.deliveryError,
     diagnostics: result.diagnostics,
     delivered: result.delivered,
     provider: result.provider,
@@ -1944,6 +1949,7 @@ async function runStartupCatchupCandidate(
       summary: result.summary,
       diagnostics: result.diagnostics,
       delivered: result.delivered,
+      deliveryError: result.deliveryError,
       sessionId: result.sessionId,
       sessionKey: result.sessionKey,
       model: result.model,
@@ -2076,6 +2082,7 @@ export async function executeJobCore(
     CronRunTelemetry & {
       delivered?: boolean;
       deliveryAttempted?: boolean;
+      deliveryError?: string;
       delivery?: CronDeliveryTrace;
       triggerEval?: CronTriggerEvalOutcome;
     }
@@ -2182,6 +2189,7 @@ async function executeMainSessionCronJob(
     CronRunTelemetry & {
       delivered?: boolean;
       deliveryAttempted?: boolean;
+      deliveryError?: string;
       delivery?: CronDeliveryTrace;
     }
 > {
@@ -2321,6 +2329,7 @@ async function executeDetachedCronJob(
     CronRunTelemetry & {
       delivered?: boolean;
       deliveryAttempted?: boolean;
+      deliveryError?: string;
       delivery?: CronDeliveryTrace;
     }
 > {
@@ -2353,6 +2362,7 @@ async function executeDetachedCronJob(
     return {
       status: res.status,
       error: res.error,
+      deliveryError: res.deliveryError,
       summary: res.summary,
       delivered: res.delivered,
       deliveryAttempted: res.deliveryAttempted,
@@ -2405,6 +2415,10 @@ async function executeDetachedCronJob(
   return {
     status: res.status,
     error: res.error,
+    // Forward the post-run delivery failure recorded on an otherwise
+    // successful run so the service can persist it as `lastDeliveryError` and
+    // emit it on the finished event for CLI/UI/API run logs (#95419).
+    deliveryError: res.deliveryError,
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,

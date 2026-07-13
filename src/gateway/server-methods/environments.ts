@@ -77,6 +77,7 @@ export function summarizeWorkerEnvironment(
         ? { idleMs: Math.max(0, Math.trunc(now - record.idleSinceAtMs)) }
         : {}),
       attachedSessionIds: uniqueSortedStrings(record.attachedSessionIds),
+      tunnelStatus: record.tunnelStatus,
     },
   };
 }

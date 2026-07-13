@@ -124,6 +124,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
   projection: CodexContextEngineThreadBootstrapProjection;
   dynamicToolsFingerprint: string;
+  legacyDynamicToolsFingerprint?: string;
 }): { project: boolean; reason: string } {
   const bindingProjection = params.startupBinding?.contextEngine?.projection;
   if (!params.startupBinding?.threadId || !bindingProjection) {
@@ -144,6 +145,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
     !areCodexDynamicToolFingerprintsCompatible({
       previous: params.startupBinding.dynamicToolsFingerprint,
       next: params.dynamicToolsFingerprint,
+      nextLegacy: params.legacyDynamicToolsFingerprint,
     })
   ) {
     return { project: true, reason: "dynamic-tools-mismatch" };
@@ -833,7 +835,7 @@ function selectCodexWorkspaceMemoryReferenceFiles(params: {
  * Renders a memory-file reference that points Codex at memory tools instead of
  * embedding MEMORY.md contents.
  */
-export function renderCodexWorkspaceMemoryReference(params: {
+function renderCodexWorkspaceMemoryReference(params: {
   files: EmbeddedContextFile[];
   toolNames?: readonly string[];
 }): string | undefined {
@@ -990,7 +992,7 @@ function isSameCodexWorkspacePath(left: string, right: string): boolean {
  * Remaps bootstrap file paths from the resolved workspace to the effective Codex
  * workspace while preserving platform path separators.
  */
-export function remapCodexContextFilePath(params: {
+function remapCodexContextFilePath(params: {
   file: EmbeddedContextFile;
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;

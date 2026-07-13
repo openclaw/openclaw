@@ -7,7 +7,6 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
-  height: calc(100vh - 160px);
   margin: 12px 0 0;
   border-radius: var(--radius-xl);
   border: 1px solid var(--border);
@@ -538,6 +537,41 @@
   font-size: 12.5px;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.settings-chat-prefs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.settings-chat-prefs__field {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.settings-chat-prefs__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.settings-chat-prefs__control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.settings-chat-prefs__note {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.settings-chat-prefs__note--error {
+  color: var(--danger);
 }
 
 .settings-theme-grid {
@@ -2200,8 +2234,6 @@
 
 @media (max-width: 768px) {
   .config-layout {
-    height: calc(100vh - 100px);
-    height: calc(100dvh - 100px);
     margin: 8px 0 0;
     border-radius: var(--radius-md);
   }

@@ -6,6 +6,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { listNodePairing } from "../../infra/node-pairing.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
+import type { WorkerTunnelStatus } from "../worker-environments/tunnel-contract.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
 
 vi.mock("../../infra/device-pairing.js", () => ({
@@ -18,7 +19,7 @@ vi.mock("../../infra/node-pairing.js", () => ({
 
 const NOW = 10_000;
 
-type TestWorkerRecord = WorkerEnvironmentRecord;
+type TestWorkerRecord = WorkerEnvironmentRecord & { tunnelStatus: WorkerTunnelStatus };
 
 type TestWorkerService = {
   list: () => TestWorkerRecord[];
@@ -58,6 +59,7 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
       host: "worker.example.test",
       port: 22,
       user: "openclaw",
+      hostKey: ["ssh-ed25519", "AAAA"].join(" "),
       keyRef: { source: "file", provider: "default", id: "/worker/private-key" },
     },
     state: "ready",
@@ -67,6 +69,7 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
     stateChangedAtMs: 1_000,
     idleSinceAtMs: null,
     lastError: null,
+    tunnelStatus: "stopped",
     ...overrides,
   } as TestWorkerRecord;
 }
@@ -190,6 +193,7 @@ describe("environment gateway methods", () => {
             ageMs: 9_000,
             idleMs: 4_000,
             attachedSessionIds: ["session-a", "session-z"],
+            tunnelStatus: "stopped",
           },
         },
       ],

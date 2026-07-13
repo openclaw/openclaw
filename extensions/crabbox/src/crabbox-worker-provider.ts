@@ -10,14 +10,20 @@ import {
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
-export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
+const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
+const CRABBOX_KEY_REF_PROVIDER = "crabbox";
 
 const WARMUP_TIMEOUT_MS = 240_000;
 const LIFECYCLE_TIMEOUT_MS = 60_000;
 const PROVISION_TIMEOUT_MS = 290_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_ERROR_DETAIL_CHARS = 512;
+const MAX_HOST_KEY_LENGTH = 16_384;
+const OPENSSH_HOST_KEY_TYPE_PATTERN =
+  /^(?:ssh|ecdsa-sha2|sk-(?:ssh|ecdsa-sha2))-[A-Za-z0-9@._+-]+$/u;
+const OPENSSH_HOST_KEY_DATA_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/u;
 // Only states that prove the resource is gone or stopped map to `destroyed`. Crabbox also
 // treats `deleting` and `failed` as unable to become ready, but those can retain resources
 // that still need an explicit stop during teardown.
@@ -65,6 +71,7 @@ type CrabboxInspect = {
   id?: unknown;
   ready?: unknown;
   sshHost?: unknown;
+  sshHostKey?: unknown;
   sshKey?: unknown;
   sshPort?: unknown;
   sshUser?: unknown;
@@ -75,6 +82,7 @@ type ParsedInspect = {
   host?: string;
   id: string;
   ready?: boolean;
+  sshHostKey?: string;
   sshKey?: string;
   sshPort?: number;
   sshUser?: string;
@@ -91,7 +99,7 @@ type InspectCommandResult = { status: "found"; inspect: ParsedInspect } | { stat
 
 type IsExecutable = (candidate: string) => boolean;
 
-export type CrabboxWorkerProviderDependencies = {
+type CrabboxWorkerProviderDependencies = {
   isExecutable?: IsExecutable;
   openclawRoot?: string;
   pathEnv?: string;
@@ -248,12 +256,17 @@ function operationSlug(operationId: string): string {
   return `openclaw-${createHash("sha256").update(operationId).digest("hex").slice(0, 32)}`;
 }
 
+function identityRefId(leaseId: string): string {
+  return `/leases/${leaseId}/identity`;
+}
+
 function commandDetail(result: SpawnResult): string {
   const raw = (result.stderr || result.stdout).trim();
   if (!raw) {
     return "";
   }
-  const redacted = redactSensitiveText(raw).replace(/\s+/gu, " ").slice(0, MAX_ERROR_DETAIL_CHARS);
+  const compressed = redactSensitiveText(raw).replace(/\s+/gu, " ");
+  const redacted = truncateUtf16Safe(compressed, MAX_ERROR_DETAIL_CHARS);
   return redacted ? `: ${redacted}` : "";
 }
 
@@ -375,6 +388,7 @@ function parseInspectJson(stdout: string): ParsedInspect {
   const fallbackHost = inspectString(value.host, "host");
   const host = sshHost ?? fallbackHost;
   const sshUser = inspectString(value.sshUser, "sshUser");
+  const sshHostKey = inspectString(value.sshHostKey, "sshHostKey");
   const sshKey = inspectString(value.sshKey, "sshKey");
   const sshPort = inspectPort(value.sshPort);
   return {
@@ -382,6 +396,7 @@ function parseInspectJson(stdout: string): ParsedInspect {
     state,
     ...(host ? { host } : {}),
     ...(sshUser ? { sshUser } : {}),
+    ...(sshHostKey ? { sshHostKey } : {}),
     ...(sshKey ? { sshKey } : {}),
     ...(sshPort ? { sshPort } : {}),
     ...(typeof value.ready === "boolean" ? { ready: value.ready } : {}),
@@ -410,6 +425,23 @@ function inspectPort(value: unknown): number | undefined {
     throw new Error("Crabbox inspect returned an invalid sshPort");
   }
   return port;
+}
+
+function requireHostKey(value: string): string {
+  if (value.length > MAX_HOST_KEY_LENGTH || /[\r\n]/u.test(value)) {
+    throw new WorkerProviderError("Crabbox inspect returned an invalid SSH host key");
+  }
+  const tokens = value.trim().split(/[ \t]+/u);
+  const [keyType, keyData] = tokens;
+  if (
+    tokens.length !== 2 ||
+    !OPENSSH_HOST_KEY_TYPE_PATTERN.test(keyType ?? "") ||
+    !OPENSSH_HOST_KEY_DATA_PATTERN.test(keyData ?? "") ||
+    (keyData?.length ?? 0) % 4 !== 0
+  ) {
+    throw new WorkerProviderError("Crabbox inspect returned an invalid SSH host key");
+  }
+  return `${keyType} ${keyData}`;
 }
 
 async function inspectWithContext(params: {
@@ -496,13 +528,6 @@ function statusFromInspect(inspect: ParsedInspect): WorkerLeaseStatus {
   return { status: "active" };
 }
 
-function toSecretRefId(filePath: string): string {
-  if (!path.isAbsolute(filePath) && !path.win32.isAbsolute(filePath)) {
-    throw new Error("Crabbox inspect returned a non-absolute SSH key path");
-  }
-  return `/${filePath.replace(/~/gu, "~0").replace(/\//gu, "~1")}`;
-}
-
 function leaseFromInspect(inspect: ParsedInspect): WorkerLease {
   if (isTerminalState(inspect.state)) {
     throw new Error("Crabbox operation lease is no longer active");
@@ -515,20 +540,22 @@ function leaseFromInspect(inspect: ParsedInspect): WorkerLease {
       "Crabbox profile provider does not expose a complete SSH worker endpoint",
     );
   }
-
+  if (!inspect.sshHostKey) {
+    throw new WorkerProviderError(
+      "Crabbox inspect does not expose the SSH host key required by the worker provider contract",
+    );
+  }
   return {
     leaseId: inspect.id,
     ssh: {
       host: inspect.host,
       port: inspect.sshPort,
       user: inspect.sshUser,
-      // Inspect exposes the private-key path but no host-key material yet; the tunnel
-      // milestone (docs/plan/cloud-workers.md, PR 4) owns dynamic file-key resolution
-      // and host-key pinning for this SecretRef.
+      hostKey: requireHostKey(inspect.sshHostKey),
       keyRef: {
         source: "file",
-        provider: CRABBOX_WORKER_PROVIDER_ID,
-        id: toSecretRefId(inspect.sshKey),
+        provider: CRABBOX_KEY_REF_PROVIDER,
+        id: identityRefId(inspect.id),
       },
     },
   };
@@ -717,6 +744,33 @@ export function createCrabboxWorkerProvider(
         return { status: "unknown" };
       }
       return statusFromInspect(inspected.inspect);
+    },
+    async resolveSshIdentity(request) {
+      const context = resolveLeaseContext(request);
+      if (
+        request.keyRef.source !== "file" ||
+        request.keyRef.provider !== CRABBOX_KEY_REF_PROVIDER ||
+        request.keyRef.id !== identityRefId(context.id)
+      ) {
+        throw new Error("Crabbox worker identity reference does not match its lease");
+      }
+      const inspected = await inspectWithContext({
+        context,
+        expectedLeaseId: context.id,
+        id: context.id,
+        runCommand,
+      });
+      if (
+        inspected.status === "unknown" ||
+        isTerminalState(inspected.inspect.state) ||
+        !inspected.inspect.sshKey
+      ) {
+        throw new Error("Crabbox inspect did not return the worker identity path");
+      }
+      if (!path.isAbsolute(inspected.inspect.sshKey)) {
+        throw new Error("Crabbox inspect returned a non-absolute worker identity path");
+      }
+      return { kind: "path", path: inspected.inspect.sshKey };
     },
     async destroy(lease): Promise<void> {
       const context = resolveLeaseContext(lease);

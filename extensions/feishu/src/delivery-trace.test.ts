@@ -339,7 +339,9 @@ function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAc
     appId: `app-${scenario}-${traceState.setupCount}`,
     appSecret: "test-secret",
     domain: "feishu",
-    config: FeishuConfigSchema.parse({ renderMode: "auto", streaming: true }),
+    // Nested streaming.mode "partial" matches the retired `streaming: true`
+    // boolean, so the recorded wire goldens stay byte-identical.
+    config: FeishuConfigSchema.parse({ renderMode: "auto", streaming: { mode: "partial" } }),
   };
 }
 
@@ -398,6 +400,9 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         options.onCleanup?.();
         break;
       case "wire-fault":
+        if (step.fault !== "rate-limit") {
+          throw new Error("feishu trace scenarios script only rate-limit wire faults");
+        }
         traceState.wireFaults.push({ fault: step.fault, retryAfterMs: step.retryAfterMs });
         break;
     }

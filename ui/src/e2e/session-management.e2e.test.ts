@@ -145,6 +145,44 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     await server?.close();
   });
 
+  it("recovers an empty group catalog after a transient load failure", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.groups.list"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+      },
+      sessionGroups: ["Recovered group"],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("sessions.groups.list");
+      await gateway.rejectDeferred("sessions.groups.list", {
+        code: "UNAVAILABLE",
+        message: "temporary catalog failure",
+        retryable: true,
+      });
+
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.groups.list")).length, {
+          timeout: 10_000,
+        })
+        .toBe(2);
+      await page.locator('[data-session-section="category:Recovered group"]').waitFor({
+        state: "visible",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("manages sessions through the sidebar groups and command palette", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await browser.newContext({
@@ -154,6 +192,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.clock.install();
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": {
@@ -263,12 +302,13 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const sidebarReleasePin = sidebarRows
         .filter({ hasText: "Release planning" })
         .getByRole("button", { name: "Unpin session" });
-      // Pinned badge stays visible without hover.
-      await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("1");
+      await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("0");
       await sidebarResearch.hover();
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
       await captureUiProof(page, "sidebar-sessions.png");
 
+      await sidebarRows.filter({ hasText: "Release planning" }).hover();
+      await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("1");
       await sidebarReleasePin.click();
       const pinPatch = await waitForPatch(
         gateway,
@@ -332,7 +372,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             .length;
         })
         .toBe(4);
-      await page.waitForTimeout(400);
+      await page.clock.runFor(400);
       const boundedSearchRequests = await gateway.getRequests("sessions.list");
       expect(
         boundedSearchRequests.filter(
@@ -549,6 +589,43 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps a session row when the Gateway reports no deletion", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const key = "agent:main:research";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: false },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+    page.on("dialog", (dialog) => void dialog.accept());
+
+    try {
+      await page.goto(`${server.baseUrl}sessions`);
+      const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      const menu = page.getByRole("menu", { name: "Actions for Research notes" });
+      await menu.getByRole("menuitem", { name: "Delete…" }).click();
+
+      const request = await gateway.waitForRequest("sessions.delete");
+      expect(requireRecord(request.params)).toMatchObject({ key });
+      await row.waitFor({ state: "visible" });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps sidebar sessions visible through a same-client Gateway reconnect", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -557,7 +634,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     const sessionKey = "agent:main:disconnect-proof";
-    const otherSessionKeys = ["agent:main:other-a", "agent:main:other-b"];
+    const otherSessionKeys = ["agent:main:other-a", "agent:main:other-b"] as const;
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([
@@ -658,6 +735,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         },
         "sessions.patch": {},
       },
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
       sessionKey: "agent:main:main",
       sessionGroups: ["Apps", "Research"],
     });
@@ -745,7 +823,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
-  it("shows every sidebar session and supports complete drag-managed groups", async () => {
+  it("pages sidebar sessions and supports complete drag-managed groups", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await browser.newContext({
       locale: "en-US",
@@ -764,6 +842,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         "sessions.list": sessionsListResponse(sessions),
         "sessions.patch": {},
       },
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
       sessionKey: "agent:main:session-0",
       sessionGroups: ["Alpha", "Beta"],
     });
@@ -771,6 +850,8 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       const sidebarRows = page.locator(".sidebar-recent-session");
+      await expect.poll(() => sidebarRows.count()).toBe(10);
+      await page.getByRole("button", { name: "Load more" }).click();
       await expect.poll(() => sidebarRows.count()).toBe(12);
       await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(page, "sidebar-all-sessions.png");
@@ -867,6 +948,8 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             .getAttribute("aria-expanded"),
         )
         .toBe("false");
+      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(9);
+      await page.getByRole("button", { name: "Load more" }).click();
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
@@ -894,6 +977,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
       sessionKey: "agent:main:main",
       // Stored-but-empty catalog groups stay visible as sections/move targets.
       sessionGroups: ["First group"],
@@ -1071,10 +1155,12 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
           .filter((rect) => rect.bottom > rect.top)
           .toSorted((a, b) => a.top - b.top);
         let bad = 0;
-        for (let index = 1; index < rects.length; index += 1) {
-          if (rects[index].top < rects[index - 1].bottom - 2) {
+        let previousBottom: number | undefined;
+        for (const rect of rects) {
+          if (previousBottom !== undefined && rect.top < previousBottom - 2) {
             bad += 1;
           }
+          previousBottom = rect.bottom;
         }
         return bad;
       });
@@ -1110,6 +1196,13 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
     try {
       await page.goto(`${server.baseUrl}chat`);
+      const seeMore = page.getByRole("button", { name: "Load more" });
+      for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
+        await seeMore.click();
+      }
+      await page.locator(".sidebar-recent-sessions").evaluate((element) => {
+        element.scrollTop = 0;
+      });
       await expect
         .poll(() => page.locator(".sidebar-recent-session").count(), { timeout: 15_000 })
         .toBeGreaterThanOrEqual(rows.length);
@@ -1127,10 +1220,12 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
           .filter((rect) => rect.bottom > rect.top)
           .toSorted((a, b) => a.top - b.top);
         let bad = 0;
-        for (let index = 1; index < rects.length; index += 1) {
-          if (rects[index].top < rects[index - 1].bottom - 2) {
+        let previousBottom: number | undefined;
+        for (const rect of rects) {
+          if (previousBottom !== undefined && rect.top < previousBottom - 2) {
             bad += 1;
           }
+          previousBottom = rect.bottom;
         }
         return bad;
       });

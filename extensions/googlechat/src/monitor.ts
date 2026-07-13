@@ -266,8 +266,8 @@ async function processMessageWithPipeline(params: {
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
-  if (attachments.length > 0) {
-    const first = attachments[0];
+  const first = attachments.at(0);
+  if (first) {
     const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
     if (attachmentData) {
       mediaPath = attachmentData.path;
@@ -534,4 +534,3 @@ export function resolveGoogleChatWebhookPath(params: {
     }) ?? "/googlechat"
   );
 }
-export { testing as __testing };

@@ -14,6 +14,7 @@ import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -108,6 +109,7 @@ async function waitForHealthyGatewayChild(
 export async function runGatewayLoop(params: {
   start: (params?: {
     startupStartedAt?: number;
+    requestHotReloadRecovery?: GatewayRestartEmitter;
   }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
   lockPort?: number;
@@ -516,6 +518,7 @@ export async function runGatewayLoop(params: {
                 listActiveEmbeddedRunSessionIds,
                 listActiveEmbeddedRunSessionKeys,
                 markRestartAbortedMainSessions,
+                waitForActiveGatewayRootWork,
                 waitForActiveEmbeddedRuns,
                 waitForActiveTasks,
               } = await loadGatewayLifecycleRuntimeModule();
@@ -571,6 +574,13 @@ export async function runGatewayLoop(params: {
               // Reject new enqueues immediately during the drain window so
               // sessions get an explicit restart error instead of silent task loss.
               markRestartDraining();
+              const rootDrainTimeoutMs =
+                restartDrainDeadlineAt === undefined
+                  ? undefined
+                  : Math.max(0, restartDrainDeadlineAt - Date.now());
+              const rootDrainPromise = restartIntent?.force
+                ? Promise.resolve({ drained: true, active: 0 })
+                : waitForActiveGatewayRootWork(rootDrainTimeoutMs);
               const activeTasks = getActiveTaskCount();
               const activeRuns = getActiveEmbeddedRunCount();
               activeTasksAtDrainStart = activeTasks;
@@ -639,6 +649,13 @@ export async function runGatewayLoop(params: {
                     }
                   }
                 }
+              }
+              const rootDrain = await rootDrainPromise;
+              if (!rootDrain.drained) {
+                drainTimedOut = true;
+                gatewayLog.warn(
+                  `gateway root transaction drain timeout reached with ${rootDrain.active} root(s) still active; proceeding with restart`,
+                );
               }
             },
             () => [
@@ -885,7 +902,7 @@ export async function runGatewayLoop(params: {
       const {
         abortActiveCronTaskRuns,
         advanceCronActiveJobGeneration,
-        reloadTaskRegistryFromStore,
+        reloadTaskRuntimeStateFromStore,
         retireActiveCronTaskRunTracking,
         resetCronActiveJobs,
         resetAllLanes,
@@ -910,7 +927,7 @@ export async function runGatewayLoop(params: {
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
-      reloadTaskRegistryFromStore();
+      reloadTaskRuntimeStateFromStore();
       markGatewayRestartTrace("restart.next-start");
     });
 
@@ -918,13 +935,18 @@ export async function runGatewayLoop(params: {
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstStart = true;
     for (;;) {
-      await onIteration();
+      // The restart hook reopens admission before reloading durable state. Clear
+      // its local mirror first so a failed reload cannot skip the next drain.
       restartDrainingMarked = false;
-      startupStartedAt = Date.now();
       let startupFailedBeforeServerHandle = false;
       try {
+        await onIteration();
+        startupStartedAt = Date.now();
         await params.beginBoot?.(startupStartedAt);
-        server = await params.start({ startupStartedAt });
+        server = await params.start({
+          startupStartedAt,
+          requestHotReloadRecovery: eagerLifecycleRuntime.requestGatewayRestartWithSignalAdmission,
+        });
         startupFailedWithoutServerHandle = false;
         isFirstStart = false;
       } catch (err) {

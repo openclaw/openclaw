@@ -1,5 +1,7 @@
 // Cron validation tests cover channel target validation against plugin
 // prefixes/aliases and runtime config for cron delivery destinations.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -176,7 +178,10 @@ async function invokeCron(
 ) {
   const context = options.context ?? createCronContext(options.currentJob);
   const respond = vi.fn();
-  await cronHandlers[method]({
+  await expectDefined(
+    cronHandlers[method],
+    "cronHandlers[method] test invariant",
+  )({
     req: {} as never,
     params: params as never,
     respond: respond as never,
@@ -524,6 +529,32 @@ describe("cron method validation", () => {
     });
   });
 
+  it("hides operator command cron jobs from caller-scoped cron.remove", async () => {
+    const context = createCronContext(
+      createCronJob({
+        id: "cron-1",
+        agentId: "ops",
+        payload: {
+          kind: "command",
+          argv: ["deploy"],
+          env: { MARKER_ENV: "fixture-marker" },
+        },
+      }),
+    );
+
+    const { respond } = await invokeCron(
+      "cron.remove",
+      { id: "cron-1" },
+      { context, client: callerClient("ops") },
+    );
+
+    expect(context.cron.remove).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.remove params: id not found",
+    });
+  });
+
   it("returns a single cron job for cron.get", async () => {
     const job = createCronJob({ id: "cron-42", name: "single job" });
 
@@ -573,6 +604,46 @@ describe("cron method validation", () => {
     });
   });
 
+  it("hides same-agent command cron payloads from caller-scoped cron.get", async () => {
+    const job = createCronJob({
+      id: "cron-42",
+      agentId: "ops",
+      payload: {
+        kind: "command",
+        argv: ["deploy"],
+        env: { MARKER_ENV: "fixture-marker" },
+      },
+    });
+
+    const { respond } = await invokeCronGet({ id: "cron-42" }, job, {
+      client: callerClient("ops"),
+    });
+
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "cron job not found: cron-42",
+    });
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
+  });
+
+  it("hides same-agent on-exit cron jobs from caller-scoped cron.get", async () => {
+    const job = createCronJob({
+      id: "cron-42",
+      agentId: "ops",
+      schedule: { kind: "on-exit", command: "deploy" },
+    });
+
+    const { respond } = await invokeCronGet({ id: "cron-42" }, job, {
+      client: callerClient("ops"),
+    });
+
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "cron job not found: cron-42",
+    });
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("deploy");
+  });
+
   it("returns INVALID_REQUEST when cron.get cannot find the job", async () => {
     const { respond } = await invokeCronGet({ jobId: "missing" });
 
@@ -599,6 +670,37 @@ describe("cron method validation", () => {
       expect.objectContaining({ total: 1, jobs: expect.any(Array) }),
       undefined,
     );
+  });
+
+  it("filters operator command cron jobs from caller-scoped cron.list", async () => {
+    const context = createCronContext([
+      createCronJob({
+        id: "command-job",
+        agentId: "ops",
+        payload: {
+          kind: "command",
+          argv: ["deploy"],
+          env: { MARKER_ENV: "fixture-marker" },
+        },
+      }),
+      createCronJob({ id: "agent-job", agentId: "ops", name: "agent job" }),
+    ]);
+
+    const { respond } = await invokeCron(
+      "cron.list",
+      { includeDisabled: true, compact: true },
+      { context, client: callerClient("ops") },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        total: 1,
+        jobs: [expect.objectContaining({ id: "agent-job" })],
+      }),
+      undefined,
+    );
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
   });
 
   it("rejects caller-scoped cron.list for a foreign explicit agentId", async () => {
@@ -1774,7 +1876,10 @@ describe("cron method validation", () => {
     const context = createCronContext(createCronJob());
     context.cron.getJob.mockReturnValue(undefined);
     const respond = vi.fn();
-    await cronHandlers["cron.update"]({
+    await expectDefined(
+      cronHandlers["cron.update"],
+      'cronHandlers["cron.update"] test invariant',
+    )({
       req: {} as never,
       params: {
         id: "cron-1",
@@ -1949,6 +2054,32 @@ describe("cron method validation", () => {
     });
   });
 
+  it("hides operator command cron jobs from caller-scoped cron.update", async () => {
+    const context = createCronContext(
+      createCronJob({
+        id: "cron-1",
+        agentId: "ops",
+        payload: {
+          kind: "command",
+          argv: ["deploy"],
+          env: { MARKER_ENV: "fixture-marker" },
+        },
+      }),
+    );
+
+    const { respond } = await invokeCron(
+      "cron.update",
+      { id: "cron-1", patch: { enabled: false } },
+      { context, client: callerClient("ops") },
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.update params: id not found",
+    });
+  });
+
   it("returns INVALID_REQUEST when cron.run cannot find the job", async () => {
     const context = createCronContext();
     context.cron.enqueueRun.mockRejectedValueOnce(new Error("unknown cron job id: missing"));
@@ -1994,6 +2125,33 @@ describe("cron method validation", () => {
     });
   });
 
+  it("does not enqueue same-agent command cron jobs from caller-scoped cron.run", async () => {
+    const context = createCronContext(
+      createCronJob({
+        id: "cron-1",
+        agentId: "ops",
+        enabled: false,
+        payload: {
+          kind: "command",
+          argv: ["deploy"],
+          env: { MARKER_ENV: "fixture-marker" },
+        },
+      }),
+    );
+
+    const { respond } = await invokeCron(
+      "cron.run",
+      { id: "cron-1", mode: "force" },
+      { context, client: callerClient("ops") },
+    );
+
+    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.run params: id not found",
+    });
+  });
+
   it("rejects caller-scoped cron.runs all-scope history", async () => {
     const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
 
@@ -2025,12 +2183,40 @@ describe("cron method validation", () => {
     });
   });
 
+  it("hides operator command cron history from caller-scoped cron.runs", async () => {
+    const context = createCronContext(
+      createCronJob({
+        id: "cron-1",
+        agentId: "ops",
+        payload: {
+          kind: "command",
+          argv: ["deploy"],
+          env: { MARKER_ENV: "fixture-marker" },
+        },
+      }),
+    );
+
+    const { respond } = await invokeCron(
+      "cron.runs",
+      { id: "cron-1" },
+      { context, client: callerClient("ops") },
+    );
+
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.runs params: id not found",
+    });
+  });
+
   it("re-throws non-parse errors from cron.add instead of masking as INVALID_REQUEST", async () => {
     const context = createCronContext();
     context.cron.add.mockRejectedValueOnce(new Error("DB write failed"));
     const respond = vi.fn();
     await expect(
-      cronHandlers["cron.add"]({
+      expectDefined(
+        cronHandlers["cron.add"],
+        'cronHandlers["cron.add"] test invariant',
+      )({
         req: {} as never,
         params: agentTurnCronParams({
           name: "db-fail",

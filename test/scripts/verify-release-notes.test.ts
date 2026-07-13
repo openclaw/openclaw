@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalMainCommitMatches,
   canonicalPullRequests,
+  collectReleaseProvenanceOverrides,
   contaminatingPullRequestReferences,
   countTopLevelSectionBullets,
   createGithubSnapshotState,
@@ -15,8 +16,12 @@ import {
   highlightCountError,
   persistGithubSnapshot,
   releaseNoteReferences,
+  releaseProvenanceMarkers,
+  renderedContributionRecordReferences,
+  resolvedReleasePullRequests,
   standardRevertedHash,
   subtractShippedPullRequests,
+  validateReleaseProvenanceOverrides,
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 
@@ -50,13 +55,113 @@ describe("release-note verification", () => {
     );
   });
 
+  it("accepts only exact release provenance markers for active commits", () => {
+    const releaseCommit = "a".repeat(40);
+    const markerCommit = "b".repeat(40);
+    const body = [
+      `Release provenance: ${releaseCommit} -> #104905, #102980, #104956`,
+      `Release provenance for ${"c".repeat(40)} -> #123`,
+    ].join("\n");
+
+    expect(releaseProvenanceMarkers(body)).toEqual([
+      {
+        commit: releaseCommit,
+        pullRequests: [104905, 102980, 104956],
+      },
+    ]);
+    expect(
+      collectReleaseProvenanceOverrides([
+        { body: "", hash: releaseCommit },
+        { body, hash: markerCommit },
+      ]),
+    ).toEqual(new Map([[releaseCommit, [104905, 102980, 104956]]]));
+    expect(resolvedReleasePullRequests([104939], [], false, [104905, 102980, 104956])).toEqual([
+      104905, 102980, 104956,
+    ]);
+  });
+
+  it("rejects malformed, out-of-range, or conflicting release provenance markers", () => {
+    const releaseCommit = "a".repeat(40);
+    const firstMarkerCommit = "b".repeat(40);
+    const secondMarkerCommit = "c".repeat(40);
+
+    expect(() => releaseProvenanceMarkers("Release provenance: short -> #123")).toThrow(
+      "invalid release provenance marker",
+    );
+    expect(() =>
+      collectReleaseProvenanceOverrides([
+        {
+          body: `Release provenance: ${"d".repeat(40)} -> #104905`,
+          hash: firstMarkerCommit,
+        },
+      ]),
+    ).toThrow("release provenance marker targets commit outside the active range");
+    expect(() =>
+      collectReleaseProvenanceOverrides([
+        { body: "", hash: releaseCommit },
+        {
+          body: `Release provenance: ${releaseCommit} -> #104905`,
+          hash: firstMarkerCommit,
+        },
+        {
+          body: `Release provenance: ${releaseCommit} -> #104956`,
+          hash: secondMarkerCommit,
+        },
+      ]),
+    ).toThrow(`conflicting release provenance markers for ${releaseCommit}`);
+  });
+
+  it("requires release provenance PRs to be merged into current main", () => {
+    const releaseCommit = "a".repeat(40);
+    const mainCommit = "b".repeat(40);
+    const mergeCommit = "c".repeat(40);
+    const overrides = new Map([[releaseCommit, [104905]]]);
+    const validNode = {
+      __typename: "PullRequest",
+      baseRefName: "main",
+      mergeCommit: { oid: mergeCommit },
+      mergedAt: "2026-07-12T00:00:00Z",
+    };
+
+    expect(() =>
+      validateReleaseProvenanceOverrides(
+        overrides,
+        new Map([[104905, validNode]]),
+        mainCommit,
+        () => true,
+      ),
+    ).not.toThrow();
+    for (const node of [
+      { ...validNode, baseRefName: "release/2026.7.1" },
+      { ...validNode, mergedAt: null },
+    ]) {
+      expect(() =>
+        validateReleaseProvenanceOverrides(
+          overrides,
+          new Map([[104905, node]]),
+          mainCommit,
+          () => true,
+        ),
+      ).toThrow("references non-main PR #104905");
+    }
+    expect(() =>
+      validateReleaseProvenanceOverrides(
+        overrides,
+        new Map([[104905, validNode]]),
+        mainCommit,
+        () => false,
+      ),
+    ).toThrow("references non-main PR #104905");
+  });
+
   it("uses the original main PR for explicit and uniquely matched backports", () => {
     const mainCommit = {
       authorEmail: "maintainer@example.com",
       authorName: "Maintainer",
       changedPaths: new Set(["src/channel.ts"]),
       hash: "a".repeat(40),
-      subject: "fix(channel): preserve durable replies (#123)",
+      pullRequests: [123],
+      subject: "fix(channel): preserve durable replies",
     };
     const explicitBackport = {
       authorEmail: "other@example.com",
@@ -74,9 +179,71 @@ describe("release-note verification", () => {
       hash: "c".repeat(40),
       subject: "fix(channel): preserve durable replies",
     };
+    const pullRequestBackport = {
+      authorEmail: mainCommit.authorEmail,
+      authorName: mainCommit.authorName,
+      body: "Backport of #123 to release/2026.7.1.",
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "d".repeat(40),
+      subject: "fix(channel): keep replies after renewal",
+    };
 
     expect(canonicalMainCommitMatches(explicitBackport, [mainCommit])).toEqual([mainCommit.hash]);
     expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    expect(canonicalMainCommitMatches(pullRequestBackport, [mainCommit])).toEqual([
+      mainCommit.hash,
+    ]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        {
+          ...mainCommit,
+          pullRequests: [],
+          body: "Original main PR #123.",
+          subject: "fix(channel): preserve durable replies",
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        {
+          ...mainCommit,
+          pullRequests: [999],
+          subject: "fix(channel): keep replies after renewal",
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(
+        { ...pullRequestBackport, authorEmail: "other@example.com", authorName: "Other" },
+        [mainCommit],
+      ),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(
+        { ...pullRequestBackport, changedPaths: new Set(["src/other.ts"]) },
+        [mainCommit],
+      ),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches({ ...pullRequestBackport, body: "Related #123." }, [mainCommit]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        mainCommit,
+        { ...mainCommit, hash: "e".repeat(40), pullRequests: [123] },
+      ]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        mainCommit,
+        {
+          ...mainCommit,
+          body: "Original main PR #123.",
+          hash: "f".repeat(40),
+          pullRequests: [],
+        },
+      ]),
+    ).toEqual([mainCommit.hash]);
     expect(canonicalPullRequests([456], [123])).toEqual([123]);
   });
 
@@ -334,6 +501,16 @@ describe("release-note verification", () => {
         seededPullRequests: new Set([97118]),
       }),
     ).toEqual([]);
+  });
+
+  it("ignores the stale generated record while rewriting it", () => {
+    const record = {
+      pullRequests: new Map([[104732, { references: [102289], thanks: ["fuller-stack-dev"] }]]),
+      legacyIssues: new Map(),
+    };
+
+    expect(renderedContributionRecordReferences(record, true)).toEqual([]);
+    expect(renderedContributionRecordReferences(record, false)).toEqual([104732, 102289]);
   });
 
   it("excludes Unreleased records from a cumulative shipped tag boundary", () => {

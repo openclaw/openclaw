@@ -1,6 +1,7 @@
 export type ChangedLane =
   | "core"
   | "coreTests"
+  | "ui"
   | "extensions"
   | "extensionTests"
   | "scripts"
@@ -26,7 +27,6 @@ export type DetectChangedLanesOptions = {
   packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null;
 };
 
-export function normalizeChangedPath(inputPath: unknown): string;
 export function createEmptyChangedLanes(): ChangedLanes;
 export function isChangedLaneTestPath(changedPath: string): boolean;
 export function detectChangedLanes(

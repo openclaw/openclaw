@@ -10,16 +10,11 @@ import type {
 } from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
-export type { HeartbeatRunResult };
-
-export type RuntimeRequestHeartbeatOptions = Parameters<
+type RuntimeRequestHeartbeatOptions = Parameters<
   typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
 >[0];
 
-export type RuntimeRequestHeartbeatNowOptions = Omit<
-  RuntimeRequestHeartbeatOptions,
-  "source" | "intent"
-> &
+type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "source" | "intent"> &
   Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
@@ -28,7 +23,7 @@ type RuntimeWriteConfigOptions = {
   unsetPaths?: string[][];
 };
 
-export type DeepReadonly<T> = T extends (...args: never[]) => unknown
+type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
   : T extends readonly (infer U)[]
     ? ReadonlyArray<DeepReadonly<U>>
@@ -88,11 +83,21 @@ type RuntimeCreateSessionEntryBaseParams = {
   agentId?: string;
   label?: string;
   spawnedCwd?: string;
-  initialEntry: {
-    agentHarnessId: string;
-    modelSelectionLocked?: true;
-    pluginExtensions?: RuntimeSessionEntry["pluginExtensions"];
-  };
+  initialEntry:
+    | {
+        agentHarnessId: string;
+        modelSelectionLocked?: true;
+        pluginExtensions?: RuntimeSessionEntry["pluginExtensions"];
+      }
+    | {
+        cliBackendId: string;
+        model: string;
+        cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
+        modelSelectionLocked: true;
+        pluginExtensions?: RuntimeSessionEntry["pluginExtensions"];
+        /** Registry-injected owner; plugin callers cannot select another owner. */
+        pluginOwnerId?: string;
+      };
 };
 type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
   (
@@ -300,37 +305,9 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
-      /**
-       * @deprecated Use getSessionEntry/listSessionEntries for reads and
-       * patchSessionEntry/upsertSessionEntry for writes. This whole-store
-       * helper is kept only during the transition before SQLite migration.
-       * Callers must migrate away from reading sessions.json directly.
-       */
-      loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
-      /**
-       * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-       * whole-store helper is kept only during the transition before SQLite
-       * migration. Callers must migrate away from writing sessions.json
-       * directly.
-       */
-      saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
-      /**
-       * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-       * whole-store helper is kept only during the transition before SQLite
-       * migration. Callers must migrate away from updating sessions.json
-       * directly.
-       */
-      updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
-      /**
-       * @deprecated Use getSessionEntry to read session metadata by
-       * agent/session identity. This file-path helper is kept only during the
-       * transition before SQLite migration. Callers must migrate away from
-       * resolving transcript file paths directly.
-       */
-      resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
   system: {

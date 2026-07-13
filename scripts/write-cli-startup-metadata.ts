@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import pMap from "p-map";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
@@ -345,30 +346,6 @@ function createIsolatedRootHelpRenderContext(
     },
   };
   return { config, env };
-}
-
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  limit: number,
-  run: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = values.length;
-  let nextIndex = 0;
-  const workerCount = Math.min(Math.max(1, limit), values.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      for (;;) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= values.length) {
-          return;
-        }
-        results[index] = await run(values[index]);
-      }
-    }),
-  );
-  return results;
 }
 
 async function spawnText(
@@ -754,10 +731,13 @@ async function renderSourceCommandHelpTextRecord(
   commands: readonly SourceCommandHelpCommand[],
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
 ): Promise<SourceCommandHelpText> {
-  const helpTexts = await mapWithConcurrency(
+  const helpTexts = await pMap(
     commands,
-    COMMAND_HELP_RENDER_CONCURRENCY,
     async (commandName) => await renderSourceCommandHelpText(commandName, renderContext),
+    {
+      concurrency: COMMAND_HELP_RENDER_CONCURRENCY,
+      stopOnError: true,
+    },
   );
   return Object.fromEntries(
     commands.map((commandName, index) => [commandName, helpTexts[index]]),
@@ -938,7 +918,6 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
 }
 
 export const testing = {
-  mapWithConcurrency,
   signalCliStartupMetadataProcessTree,
   spawnText,
 };

@@ -1,7 +1,9 @@
 /** Auth probe planning and execution helpers for model diagnostics. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import pMap from "p-map";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -15,8 +17,8 @@ import {
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileEligibility,
-  resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -194,7 +196,7 @@ function selectProbeModel(params: {
   const { provider, candidates, catalog } = params;
   const direct = candidates.get(provider);
   if (direct && direct.length > 0) {
-    return { provider, model: direct[0] };
+    return { provider, model: expectDefined(direct[0], "direct entry at 0") };
   }
   const fromCatalog = catalog
     .map((entry, index) => ({ entry, index }))
@@ -341,10 +343,15 @@ export async function buildProbeTargets(params: {
         findNormalizedProviderValue(cfg?.auth?.order, providerKey)
       );
     })();
-    const allowedProfiles =
-      explicitOrder && explicitOrder.length > 0
-        ? new Set(resolveAuthProfileOrder({ cfg, store, provider: providerKey }))
-        : null;
+    const orderResolution = resolveAuthProfileOrderWithMetadata({
+      cfg,
+      store,
+      provider: providerKey,
+      forModel: model?.model,
+    });
+    const allowedProfiles = orderResolution.hasExplicitOrder
+      ? new Set(orderResolution.profileIds)
+      : null;
     // Explicit auth.order both selects and documents profile eligibility; report
     // excluded profiles instead of silently skipping them.
     const filteredProfiles = profileFilter.size
@@ -439,12 +446,17 @@ export async function buildProbeTargets(params: {
     if (profileFilter.size > 0) {
       continue;
     }
-
-    const envKey = resolveEnvApiKey(providerKey, process.env, {
-      config: cfg,
-      workspaceDir,
-    });
     const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
+    if (orderResolution.hasExplicitOrder && !hasUsableModelsJsonKey) {
+      continue;
+    }
+
+    const envKey = orderResolution.hasExplicitOrder
+      ? null
+      : resolveEnvApiKey(providerKey, process.env, {
+          config: cfg,
+          workspaceDir,
+        });
     if (!envKey && !hasUsableModelsJsonKey) {
       continue;
     }
@@ -581,17 +593,9 @@ async function runTargetsWithConcurrency(params: {
   await fs.mkdir(workspaceDir, { recursive: true });
 
   let completed = 0;
-  const results: Array<AuthProbeResult | undefined> = Array.from({ length: targets.length });
-  let cursor = 0;
-
-  const worker = async () => {
-    while (true) {
-      const index = cursor;
-      cursor += 1;
-      if (index >= targets.length) {
-        return;
-      }
-      const target = targets[index];
+  return await pMap(
+    targets,
+    async (target) => {
       onProgress?.({
         completed,
         total: targets.length,
@@ -607,15 +611,12 @@ async function runTargetsWithConcurrency(params: {
         timeoutMs,
         maxTokens,
       });
-      results[index] = result;
       completed += 1;
       onProgress?.({ completed, total: targets.length });
-    }
-  };
-
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
-
-  return results.filter((entry): entry is AuthProbeResult => Boolean(entry));
+      return result;
+    },
+    { concurrency, stopOnError: true },
+  );
 }
 
 /** Runs all auth probes with bounded concurrency and returns a summary. */

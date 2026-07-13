@@ -13,7 +13,7 @@ const PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS = 1_000;
 export const QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
 export const QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX = "retain-credential-lease-";
 
-export type QaGatewayLinuxProcessBoundary = {
+type QaGatewayLinuxProcessBoundary = {
   kind: "linux-proc-v1";
   evidenceDir: string;
   expectedGid: number;
@@ -85,7 +85,7 @@ export type QaGatewayVerifiedProcessIdentity = {
   preEntryCmdlineSha256: string;
 };
 
-export type QaGatewayProcessBoundaryPreparedSpawn = {
+type QaGatewayProcessBoundaryPreparedSpawn = {
   command: QaGatewayProcessCommand;
   commandBytes: Buffer;
   commandFilePath: string;
@@ -253,13 +253,18 @@ export function parseQaGatewayProcStat(raw: string): QaGatewayProcStat {
   if (fields.length < 20) {
     throw new Error("invalid /proc stat field count");
   }
-  const pgrp = Number(fields[2]);
+  const state = fields[0];
+  const pgrpText = fields[2];
   const startTicks = fields[19];
+  if (!state || !pgrpText || !startTicks) {
+    throw new Error("invalid /proc stat process identity");
+  }
+  const pgrp = Number(pgrpText);
   if (!Number.isSafeInteger(pgrp) || pgrp <= 1 || !/^[0-9]+$/.test(startTicks)) {
     throw new Error("invalid /proc stat process identity");
   }
   return {
-    state: fields[0],
+    state,
     pgrp,
     startTicks,
   };

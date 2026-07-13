@@ -64,7 +64,7 @@ type QaTransportFailureAssertionOptions = {
   cursorSpace?: QaTransportFailureCursorSpace;
 };
 
-export type QaTransportOutboundMatch = {
+type QaTransportOutboundMatch = {
   conversation?: QaBusInboundMessageInput["conversation"];
   senderId?: string;
   sinceIndex?: number;
@@ -73,7 +73,7 @@ export type QaTransportOutboundMatch = {
   timeoutMs?: number;
 };
 
-export type QaTransportWaitForNoOutboundInput = {
+type QaTransportWaitForNoOutboundInput = {
   quietMs?: number;
   sinceIndex?: number;
 };
@@ -94,7 +94,7 @@ export type QaTransportOutboundSequenceMatch = {
   timeoutMs?: number;
 };
 
-export type QaTransportOutboundSequence = {
+type QaTransportOutboundSequence = {
   events: QaTransportOutboundEvent[];
   final: QaBusMessage;
 };
@@ -415,6 +415,9 @@ export async function waitForQaTransportOutboundSequence(params: {
       return undefined;
     }
     const candidate = events[finalIndex];
+    if (!candidate) {
+      return undefined;
+    }
     const sequenceEvents = events.filter(({ message }) => message.id === candidate.message.id);
     const latest = sequenceEvents.at(-1);
     if (
