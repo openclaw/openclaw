@@ -117,6 +117,10 @@ export type {
   ResolvedLineAccount,
 } from "./src/types.js";
 export { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./src/webhook-node.js";
+export type {
+  LineWebhookDispatchCallbacks,
+  LineWebhookDispatchHandler,
+} from "./src/webhook-ack.js";
 export {
   createLineWebhookMiddleware,
   type LineWebhookOptions,

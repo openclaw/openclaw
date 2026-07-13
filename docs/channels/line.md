@@ -42,9 +42,13 @@ openclaw plugins install ./path/to/local/line-plugin
 https://gateway-host/line/webhook
 ```
 
-The Gateway answers LINE's webhook verification (GET) and acknowledges signed
-inbound events (POST) immediately after signature and payload validation; agent
-processing continues asynchronously.
+The Gateway answers LINE's webhook verification (GET) immediately. For signed
+inbound events (POST), it returns success only after every event is either
+accepted by the durable reply lane or completes without an agent dispatch;
+agent processing then continues asynchronously. Enable
+[Webhook redelivery](https://developers.line.biz/en/docs/messaging-api/receiving-messages/#redelivery)
+in the LINE Developers Console so LINE retries a non-success response caused by
+an early validation, media, routing, or reply-lane admission failure.
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 

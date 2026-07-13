@@ -446,7 +446,7 @@ export const lineMessageAdapter = defineChannelMessageAdapter({
     },
   },
   receive: {
-    defaultAckPolicy: "after_receive_record",
-    supportedAckPolicies: ["after_receive_record"],
+    defaultAckPolicy: "after_agent_dispatch",
+    supportedAckPolicies: ["after_agent_dispatch"],
   },
 });

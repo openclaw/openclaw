@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
@@ -14,6 +15,7 @@ type LineHandleWebhook = (...args: unknown[]) => Promise<void>;
 const {
   createLineBotMock,
   createLineNodeWebhookHandlerMock,
+  getLineRuntimeMock,
   registerWebhookTargetWithPluginRouteMock,
   unregisterHttpMock,
 } = vi.hoisted(() => ({
@@ -24,6 +26,7 @@ const {
   createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
     vi.fn<LineNodeWebhookHandler>(async () => {}),
   ),
+  getLineRuntimeMock: vi.fn(),
   registerWebhookTargetWithPluginRouteMock: vi.fn(),
   unregisterHttpMock: vi.fn(),
 }));
@@ -116,6 +119,10 @@ vi.mock("./markdown-to-line.js", () => ({
   processLineMessage: vi.fn(),
 }));
 
+vi.mock("./runtime.js", () => ({
+  getLineRuntime: getLineRuntimeMock,
+}));
+
 vi.mock("./reply-chunks.js", () => ({
   sendLineReplyChunks: vi.fn(),
 }));
@@ -151,6 +158,7 @@ describe("monitorLineProvider lifecycle", () => {
     vi.doUnmock("./webhook-node.js");
     vi.doUnmock("./auto-reply-delivery.js");
     vi.doUnmock("./markdown-to-line.js");
+    vi.doUnmock("./runtime.js");
     vi.doUnmock("./reply-chunks.js");
     vi.doUnmock("./send.js");
     vi.doUnmock("./template-messages.js");
@@ -167,6 +175,7 @@ describe("monitorLineProvider lifecycle", () => {
     createLineNodeWebhookHandlerMock
       .mockReset()
       .mockImplementation(() => innerLineWebhookHandlerMock);
+    getLineRuntimeMock.mockReset();
     unregisterHttpMock.mockReset();
     registerWebhookTargetWithPluginRouteMock.mockReset().mockImplementation((params) => {
       const withLeadingSlash = params.target.path.startsWith("/")
@@ -400,7 +409,7 @@ describe("monitorLineProvider lifecycle", () => {
     monitor.stop();
   });
 
-  it("acknowledges shared-path POST requests before matched event processing completes", async () => {
+  it("acknowledges shared-path POST requests after reply-lane acceptance", async () => {
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
       channelSecret: "secret", // pragma: allowlist secret
@@ -413,12 +422,20 @@ describe("monitorLineProvider lifecycle", () => {
     const bot = createLineBotMock.mock.results[0]?.value as {
       handleWebhook: ReturnType<typeof vi.fn<LineHandleWebhook>>;
     };
-    bot.handleWebhook.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseWebhook = resolve;
-        }),
-    );
+    bot.handleWebhook.mockImplementation(async (body, callbacks) => {
+      const onEventAccepted = (
+        callbacks as {
+          onEventAccepted?: (event: webhook.Event) => void | Promise<void>;
+        }
+      )?.onEventAccepted;
+      const event = (body as webhook.CallbackRequest).events?.[0];
+      if (event) {
+        await onEventAccepted?.(event);
+      }
+      await new Promise<void>((resolve) => {
+        releaseWebhook = resolve;
+      });
+    });
 
     const route = requireRegisteredRoute();
     const payload = JSON.stringify({ events: [{ type: "message" }] });
@@ -482,6 +499,105 @@ describe("monitorLineProvider lifecycle", () => {
 
     firstMonitor.stop();
     secondMonitor.stop();
+  });
+
+  it("does not consume a reply token before requesting webhook redelivery", async () => {
+    const { replyMessageLine } = await import("./send.js");
+    const inboundRun = vi.fn(async () => {
+      throw new Error("reply lane unavailable");
+    });
+    getLineRuntimeMock.mockReturnValue({
+      channel: {
+        inbound: { run: inboundRun },
+        session: { recordInboundSession: vi.fn() },
+        reply: { dispatchReplyWithBufferedBlockDispatcher: vi.fn() },
+      },
+    });
+    const runtime = { error: vi.fn() } as unknown as RuntimeEnv;
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      accountId: "default",
+      config: {} as OpenClawConfig,
+      runtime,
+    });
+    const botOptions = createLineBotMock.mock.calls[0]?.[0] as
+      | {
+          onMessage?: (context: unknown) => Promise<void>;
+        }
+      | undefined;
+    if (!botOptions?.onMessage) {
+      throw new Error("Expected LINE bot message handler");
+    }
+
+    await expect(
+      botOptions.onMessage({
+        accountId: "default",
+        ctxPayload: {
+          From: "line:group:retry",
+          MessageSid: "retry-message",
+          BodyForAgent: "hello",
+        },
+        isGroup: true,
+        replyToken: "test",
+        route: { accountId: "default", agentId: "default", sessionKey: "agent:default:line:retry" },
+        turn: { storePath: "/tmp/line-retry.json" },
+      }),
+    ).rejects.toThrow("line event failed before reply-lane adoption");
+
+    expect(inboundRun).toHaveBeenCalledOnce();
+    expect(replyMessageLine).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("keeps shared in-flight slots until reply-lane acceptance", async () => {
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      accountId: "default",
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+    let releaseAcceptance: (() => void) | undefined;
+    const acceptance = new Promise<void>((resolve) => {
+      releaseAcceptance = resolve;
+    });
+    const bot = createLineBotMock.mock.results[0]?.value as {
+      handleWebhook: ReturnType<typeof vi.fn<LineHandleWebhook>>;
+    };
+    bot.handleWebhook.mockImplementation(async (body, callbacks) => {
+      await acceptance;
+      const event = (body as webhook.CallbackRequest).events?.[0];
+      await (
+        callbacks as { onEventAccepted?: (event: webhook.Event) => void | Promise<void> }
+      )?.onEventAccepted?.(event as webhook.Event);
+    });
+
+    const route = requireRegisteredRoute();
+    const payload = JSON.stringify({ events: [{ type: "message" }] });
+    const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
+    const createSignedRequest = () =>
+      Object.assign(createMockIncomingRequest([payload]), {
+        method: "POST",
+        headers: { "x-line-signature": signature },
+      }) as unknown as IncomingMessage;
+    const heldRequests = Array.from({ length: WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey }, () =>
+      route.handler(createSignedRequest(), createRouteResponse()),
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const overflowResponse = createRouteResponse();
+    await route.handler(createSignedRequest(), overflowResponse);
+
+    expect(overflowResponse.statusCode).toBe(429);
+    if (!releaseAcceptance) {
+      throw new Error("Expected reply-lane acceptance release callback");
+    }
+    releaseAcceptance();
+    await Promise.all(heldRequests);
+    monitor.stop();
   });
 
   it("rejects webhook requests above the shared in-flight limit before body handling", async () => {

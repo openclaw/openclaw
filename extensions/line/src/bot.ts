@@ -12,6 +12,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { createLineWebhookReplayCache, handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
+import type { LineWebhookDispatchCallbacks } from "./webhook-ack.js";
 
 interface LineBotOptions {
   channelAccessToken: string;
@@ -24,7 +25,10 @@ interface LineBotOptions {
 }
 
 interface LineBot {
-  handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
+  handleWebhook: (
+    body: webhook.CallbackRequest,
+    callbacks?: LineWebhookDispatchCallbacks,
+  ) => Promise<void>;
   account: ResolvedLineAccount;
 }
 
@@ -47,7 +51,10 @@ export function createLineBot(opts: LineBotOptions): LineBot {
   const replayCache = createLineWebhookReplayCache();
   const groupHistories = new Map<string, HistoryEntry[]>();
 
-  const handleWebhook = async (body: webhook.CallbackRequest): Promise<void> => {
+  const handleWebhook = async (
+    body: webhook.CallbackRequest,
+    callbacks?: LineWebhookDispatchCallbacks,
+  ): Promise<void> => {
     if (!body.events || body.events.length === 0) {
       return;
     }
@@ -61,6 +68,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       replayCache,
       groupHistories,
       historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+      onEventAccepted: callbacks?.onEventAccepted,
     });
   };
 

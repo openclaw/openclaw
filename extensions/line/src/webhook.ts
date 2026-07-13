@@ -6,13 +6,17 @@ import {
   type MessageReceiveContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  type LineWebhookDispatchHandler,
+  waitForLineWebhookDispatchAcceptance,
+} from "./webhook-ack.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_RAW_BODY_BYTES = 64 * 1024;
 
 export interface LineWebhookOptions {
   channelSecret: string;
-  onEvents: (body: webhook.CallbackRequest) => Promise<void>;
+  onEvents: LineWebhookDispatchHandler;
   runtime?: RuntimeEnv;
 }
 
@@ -31,10 +35,6 @@ function parseWebhookBody(rawBody?: string | null): webhook.CallbackRequest | nu
     return null;
   }
   return parseLineWebhookBody(rawBody);
-}
-
-function logLineWebhookDispatchError(runtime: RuntimeEnv | undefined, err: unknown): void {
-  runtime?.error?.(danger(`line webhook dispatch failed: ${String(err)}`));
 }
 
 export function createLineWebhookMiddleware(
@@ -80,22 +80,24 @@ export function createLineWebhookMiddleware(
         id: `${Date.now()}:line:webhook`,
         channel: "line",
         message: body,
-        ackPolicy: "after_receive_record",
+        ackPolicy: "after_agent_dispatch",
         onAck: () => {
           res.status(200).json({ status: "ok" });
         },
       });
 
-      if (receiveContext.shouldAckAfter("receive_record")) {
+      if (!body.events || body.events.length === 0) {
         await receiveContext.ack();
+        return;
       }
 
-      if (body.events && body.events.length > 0) {
-        logVerbose(`line: received ${body.events.length} webhook events`);
-        void Promise.resolve()
-          .then(() => onEvents(body))
-          .catch((err: unknown) => logLineWebhookDispatchError(runtime, err));
-      }
+      logVerbose(`line: received ${body.events.length} webhook events`);
+      await waitForLineWebhookDispatchAcceptance({
+        body,
+        dispatch: onEvents,
+        runtime,
+      });
+      await receiveContext.ack();
     } catch (err) {
       await receiveContext?.nack(err);
       runtime?.error?.(danger(`line webhook error: ${String(err)}`));
@@ -108,7 +110,7 @@ export function createLineWebhookMiddleware(
 
 export interface StartLineWebhookOptions {
   channelSecret: string;
-  onEvents: (body: webhook.CallbackRequest) => Promise<void>;
+  onEvents: LineWebhookDispatchHandler;
   runtime?: RuntimeEnv;
   path?: string;
 }

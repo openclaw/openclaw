@@ -66,12 +66,18 @@ function isDownloadableLineMessageType(
   return LINE_DOWNLOADABLE_MESSAGE_TYPES.has(messageType);
 }
 
+function isLineMediaSizeLimitError(err: unknown): boolean {
+  const message = String(err).toLowerCase();
+  return message.includes("exceeds") && message.includes("limit");
+}
+
 interface LineHandlerContext {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   runtime: RuntimeEnv;
   mediaMaxBytes: number;
   processMessage: (ctx: LineInboundContext) => Promise<void>;
+  onEventAccepted?: (event: WebhookEvent) => void | Promise<void>;
   replayCache?: LineWebhookReplayCache;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
@@ -429,7 +435,7 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
 }
 
 async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {
-  const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
+  const { cfg, account, mediaMaxBytes, processMessage } = context;
   const message = event.message;
 
   const decision = await shouldProcessLineEvent(event, context);
@@ -473,12 +479,13 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         contentType: media.contentType,
       });
     } catch (err) {
-      mediaUnavailable = true;
-      const errMsg = String(err);
-      if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
+      if (isLineMediaSizeLimitError(err)) {
+        mediaUnavailable = true;
         logVerbose(`line: media exceeds size limit for message ${message.id}`);
       } else {
-        runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
+        throw new LineRetryableWebhookError(`failed to download media for ${message.id}`, {
+          cause: err,
+        });
       }
     }
   }
@@ -499,7 +506,10 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  await processMessage(messageContext);
+  await processMessage({
+    ...messageContext,
+    onEventAccepted: () => context.onEventAccepted?.(event),
+  });
 
   if (isGroup && context.groupHistories) {
     const historyKey = groupId ?? roomId;
@@ -557,77 +567,156 @@ async function handlePostbackEvent(
     return;
   }
 
-  await context.processMessage(postbackContext);
+  await context.processMessage({
+    ...postbackContext,
+    onEventAccepted: () => context.onEventAccepted?.(event),
+  });
+}
+
+type LineWebhookEventTask = {
+  acceptance: Promise<void>;
+  completion: Promise<void>;
+};
+
+function resolveLineWebhookConversationKey(event: WebhookEvent): string | undefined {
+  const { groupId, roomId } = getLineSourceInfo(event.source);
+  if (groupId) {
+    return `group:${groupId}`;
+  }
+  if (roomId) {
+    return `room:${roomId}`;
+  }
+  return undefined;
+}
+
+function startLineWebhookEvent(
+  event: WebhookEvent,
+  context: LineHandlerContext,
+): LineWebhookEventTask {
+  let eventAccepted = false;
+  let acceptanceSettled = false;
+  let resolveAcceptance!: () => void;
+  let rejectAcceptance!: (error: unknown) => void;
+  const acceptance = new Promise<void>((resolve, reject) => {
+    resolveAcceptance = resolve;
+    rejectAcceptance = reject;
+  });
+  const resolveEventAcceptance = () => {
+    if (acceptanceSettled) {
+      return;
+    }
+    acceptanceSettled = true;
+    resolveAcceptance();
+  };
+  const rejectEventAcceptance = (error: unknown) => {
+    if (acceptanceSettled) {
+      return;
+    }
+    acceptanceSettled = true;
+    rejectAcceptance(error);
+  };
+  const replayCandidate = getLineReplayCandidate(event, context);
+  const acceptEvent = async () => {
+    if (eventAccepted) {
+      return;
+    }
+    eventAccepted = true;
+    await context.onEventAccepted?.(event);
+    // The reply lane now owns this event durably. Resolve replay claims here,
+    // rather than after the full turn, so a redelivered batch can retry its
+    // other events without waiting for this turn to settle.
+    if (replayCandidate) {
+      await replayCandidate.cache.commit(replayCandidate.key);
+    }
+    resolveEventAcceptance();
+  };
+  const eventContext = { ...context, onEventAccepted: acceptEvent };
+  const completion = (async () => {
+    const replaySkip = replayCandidate ? await claimLineReplayEvent(replayCandidate) : null;
+    if (replaySkip?.skip) {
+      if (replaySkip.inFlightResult) {
+        try {
+          await replaySkip.inFlightResult;
+          await acceptEvent();
+        } catch (err) {
+          context.runtime.error?.(danger(`line: replayed in-flight event failed: ${String(err)}`));
+          throw err;
+        }
+      } else {
+        await acceptEvent();
+      }
+      return;
+    }
+    try {
+      switch (event.type) {
+        case "message":
+          await handleMessageEvent(event, eventContext);
+          break;
+        case "follow":
+          await handleFollowEvent(event, eventContext);
+          break;
+        case "unfollow":
+          await handleUnfollowEvent(event, eventContext);
+          break;
+        case "join":
+          await handleJoinEvent(event, eventContext);
+          break;
+        case "leave":
+          await handleLeaveEvent(event, eventContext);
+          break;
+        case "postback":
+          await handlePostbackEvent(event, eventContext);
+          break;
+        default:
+          logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
+      }
+      await acceptEvent();
+    } catch (err) {
+      if (replayCandidate) {
+        if (!eventAccepted && err instanceof LineRetryableWebhookError) {
+          replayCandidate.cache.release(replayCandidate.key, { error: err });
+        } else if (!eventAccepted) {
+          await replayCandidate.cache.commit(replayCandidate.key);
+        }
+      }
+      context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
+      throw err;
+    }
+  })();
+  void completion.then(resolveEventAcceptance, rejectEventAcceptance);
+  return { acceptance, completion };
 }
 
 export async function handleLineWebhookEvents(
   events: WebhookEvent[],
   context: LineHandlerContext,
 ): Promise<void> {
-  let firstError: unknown;
+  const acceptances: Promise<void>[] = [];
+  const completions: Promise<void>[] = [];
+  const conversationCompletions = new Map<string, Promise<void>>();
   for (const event of events) {
-    const replayCandidate = getLineReplayCandidate(event, context);
-    const replaySkip = replayCandidate ? await claimLineReplayEvent(replayCandidate) : null;
-    if (replaySkip?.skip) {
-      if (replaySkip.inFlightResult) {
-        try {
-          await replaySkip.inFlightResult;
-        } catch (err) {
-          context.runtime.error?.(danger(`line: replayed in-flight event failed: ${String(err)}`));
-          firstError ??= err;
-        }
-      }
-      continue;
+    const conversationKey = resolveLineWebhookConversationKey(event);
+    const previousCompletion = conversationKey
+      ? conversationCompletions.get(conversationKey)
+      : undefined;
+    const task = (async () => {
+      await previousCompletion;
+      return startLineWebhookEvent(event, context);
+    })();
+    const acceptance = task.then(async (started) => await started.acceptance);
+    const completion = task.then(async (started) => await started.completion);
+    // Keep shared group-history state in event order, but let independent
+    // conversations reach durable reply-lane admission concurrently.
+    if (conversationKey) {
+      conversationCompletions.set(
+        conversationKey,
+        completion.catch(() => undefined),
+      );
     }
-    try {
-      switch (event.type) {
-        case "message":
-          await handleMessageEvent(event, context);
-          break;
-        case "follow":
-          await handleFollowEvent(event, context);
-          break;
-        case "unfollow":
-          await handleUnfollowEvent(event, context);
-          break;
-        case "join":
-          await handleJoinEvent(event, context);
-          break;
-        case "leave":
-          await handleLeaveEvent(event, context);
-          break;
-        case "postback":
-          await handlePostbackEvent(event, context);
-          break;
-        default:
-          logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
-      }
-      if (replayCandidate) {
-        await replayCandidate.cache.commit(replayCandidate.key);
-      }
-    } catch (err) {
-      if (replayCandidate) {
-        await replayCandidate.cache.commit(replayCandidate.key);
-      }
-      context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
-      firstError ??= err;
-    }
+    void completion.catch(() => {});
+    acceptances.push(acceptance);
+    completions.push(completion);
   }
-  if (firstError) {
-    throw toLintErrorObject(firstError, "Non-Error thrown");
-  }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
+  await Promise.all(acceptances);
+  await Promise.all(completions);
 }

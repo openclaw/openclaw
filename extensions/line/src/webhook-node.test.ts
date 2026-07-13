@@ -313,7 +313,7 @@ describe("LINE webhook shared POST contract", () => {
   );
 
   it.each(sharedWebhookPostContractCases)(
-    "$name acknowledges signed events before failed background processing is logged",
+    "$name returns a retryable failure when dispatch rejects before acceptance",
     async ({ invoke }) => {
       const result = await invoke({
         failWith: new Error("transient failure"),
@@ -321,12 +321,10 @@ describe("LINE webhook shared POST contract", () => {
         signed: true,
       });
 
-      expect(result.status).toBe(200);
-      expect(result.body).toEqual({ status: "ok" });
+      expect(result.status).toBe(500);
+      expect(result.body).toEqual({ error: "Internal server error" });
       expect(result.dispatched).toHaveBeenCalledTimes(1);
-      await vi.waitFor(() => {
-        expect(result.runtimeError).toHaveBeenCalledTimes(1);
-      });
+      expect(result.runtimeError).toHaveBeenCalledTimes(1);
     },
   );
 });
@@ -453,10 +451,18 @@ describe("createLineNodeWebhookHandler", () => {
     let releaseAuthenticated: (() => void) | undefined;
     const bot = {
       handleWebhook: vi.fn(
-        async () =>
+        async (
+          body,
+          callbacks?: { onEventAccepted?: (event: webhook.Event) => void | Promise<void> },
+        ) => {
+          const event = body.events?.[0];
+          if (event) {
+            await callbacks?.onEventAccepted?.(event);
+          }
           await new Promise<void>((resolve) => {
             releaseAuthenticated = resolve;
-          }),
+          });
+        },
       ),
     };
     const onRequestAuthenticated = vi.fn();
@@ -485,6 +491,81 @@ describe("createLineNodeWebhookHandler", () => {
       throw new Error("Expected LINE authenticated request release callback to be initialized");
     }
     releaseAuthenticated();
+  });
+
+  it("does not acknowledge a delayed pre-dispatch rejection", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const bot = {
+      handleWebhook: vi.fn(async () => {
+        await Promise.resolve();
+        throw new Error("routing failed");
+      }),
+    };
+    const runtime = createRuntimeMock();
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: SECRET,
+      bot,
+      runtime,
+      readBody: async () => rawBody,
+    });
+
+    const { res } = createRes();
+    await runSignedPost({ handler, rawBody, secret: SECRET, res });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toBe(JSON.stringify({ error: "Internal server error" }));
+    expect(runtime.error).toHaveBeenCalled();
+  });
+
+  it("waits for every event in a multi-event callback to be accepted", async () => {
+    const rawBody = JSON.stringify({
+      events: [{ type: "message" }, { type: "follow" }],
+    });
+    let acceptSecondEvent: (() => void) | undefined;
+    let releaseProcessing: (() => void) | undefined;
+    const bot = {
+      handleWebhook: vi.fn(
+        async (
+          body,
+          callbacks?: { onEventAccepted?: (event: webhook.Event) => void | Promise<void> },
+        ) => {
+          const [firstEvent, secondEvent] = body.events ?? [];
+          if (!firstEvent || !secondEvent) {
+            throw new Error("Expected two LINE webhook events");
+          }
+          await callbacks?.onEventAccepted?.(firstEvent);
+          await new Promise<void>((resolve) => {
+            acceptSecondEvent = resolve;
+          });
+          await callbacks?.onEventAccepted?.(secondEvent);
+          await new Promise<void>((resolve) => {
+            releaseProcessing = resolve;
+          });
+        },
+      ),
+    };
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: SECRET,
+      bot,
+      runtime: createRuntimeMock(),
+      readBody: async () => rawBody,
+    });
+
+    const { res } = createRes();
+    const request = runSignedPost({ handler, rawBody, secret: SECRET, res });
+    await vi.waitFor(() => expect(bot.handleWebhook).toHaveBeenCalledTimes(1));
+    expect(res.headersSent).toBe(false);
+    if (!acceptSecondEvent) {
+      throw new Error("Expected second LINE event acceptance callback");
+    }
+    acceptSecondEvent();
+    await request;
+
+    expect(res.statusCode).toBe(200);
+    if (!releaseProcessing) {
+      throw new Error("Expected LINE handler to continue after acknowledgement");
+    }
+    releaseProcessing();
   });
 
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {

@@ -11,6 +11,10 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  type LineWebhookDispatchHandler,
+  waitForLineWebhookDispatchAcceptance,
+} from "./webhook-ack.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -30,13 +34,9 @@ export async function readLineWebhookRequestBody(
 
 type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) => Promise<string>;
 
-function logLineWebhookDispatchError(runtime: RuntimeEnv | undefined, err: unknown): void {
-  runtime?.error?.(danger(`line webhook dispatch failed: ${String(err)}`));
-}
-
 export function createLineNodeWebhookHandler(params: {
   channelSecret: string;
-  bot: { handleWebhook: (body: webhook.CallbackRequest) => Promise<void> };
+  bot: { handleWebhook: LineWebhookDispatchHandler };
   runtime: RuntimeEnv;
   readBody?: ReadBodyFn;
   maxBodyBytes?: number;
@@ -113,7 +113,7 @@ export function createLineNodeWebhookHandler(params: {
         id: `${Date.now()}:line:webhook`,
         channel: "line",
         message: body,
-        ackPolicy: "after_receive_record",
+        ackPolicy: "after_agent_dispatch",
         onAck: () => {
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
@@ -121,16 +121,18 @@ export function createLineNodeWebhookHandler(params: {
         },
       });
 
-      if (receiveContext.shouldAckAfter("receive_record")) {
+      if (!body.events || body.events.length === 0) {
         await receiveContext.ack();
+        return;
       }
 
-      if (body.events && body.events.length > 0) {
-        logVerbose(`line: received ${body.events.length} webhook events`);
-        void Promise.resolve()
-          .then(() => params.bot.handleWebhook(body))
-          .catch((err: unknown) => logLineWebhookDispatchError(params.runtime, err));
-      }
+      logVerbose(`line: received ${body.events.length} webhook events`);
+      await waitForLineWebhookDispatchAcceptance({
+        body,
+        dispatch: params.bot.handleWebhook,
+        runtime: params.runtime,
+      });
+      await receiveContext.ack();
     } catch (err) {
       await receiveContext?.nack(err);
       if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {

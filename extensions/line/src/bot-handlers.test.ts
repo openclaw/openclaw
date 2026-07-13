@@ -226,6 +226,7 @@ function createLineWebhookTestContext(params: {
   groupAllowFrom?: LineAccountConfig["groupAllowFrom"];
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
+  onEventAccepted?: (event: webhook.Event) => void | Promise<void>;
   replayCache?: ReturnType<typeof createLineWebhookReplayCache>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
 }): Parameters<typeof handleLineWebhookEvents>[1] {
@@ -257,6 +258,7 @@ function createLineWebhookTestContext(params: {
     runtime: createRuntime(),
     mediaMaxBytes: 1,
     processMessage: params.processMessage,
+    ...(params.onEventAccepted ? { onEventAccepted: params.onEventAccepted } : {}),
     ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
     ...(params.replayCache ? { replayCache: params.replayCache } : {}),
   };
@@ -330,6 +332,165 @@ describe("handleLineWebhookEvents", () => {
     vi.doUnmock("./send.js");
     vi.doUnmock("./bot-message-context.js");
     vi.resetModules();
+  });
+
+  it("signals reply-lane acceptance before message processing settles", async () => {
+    let releaseProcessing: (() => void) | undefined;
+    const processing = new Promise<void>((resolve) => {
+      releaseProcessing = resolve;
+    });
+    const onEventAccepted = vi.fn();
+    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+      await message.onEventAccepted?.();
+      await processing;
+    });
+    const event = createTestMessageEvent({
+      message: { id: "m-accepted-before-settle", type: "text", text: "hello" },
+      source: { type: "group", groupId: "group-accepted", userId: "user-accepted" },
+      webhookEventId: "evt-accepted-before-settle",
+    });
+    const task = handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: false,
+        onEventAccepted,
+      }),
+    );
+
+    await vi.waitFor(() => expect(onEventAccepted).toHaveBeenCalledOnce());
+    if (!releaseProcessing) {
+      throw new Error("Expected LINE message processing release callback");
+    }
+    releaseProcessing();
+    await task;
+  });
+
+  it("admits independent callback events before earlier processing settles", async () => {
+    let releaseFirstProcessing: (() => void) | undefined;
+    const firstProcessing = new Promise<void>((resolve) => {
+      releaseFirstProcessing = resolve;
+    });
+    const onEventAccepted = vi.fn();
+    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+      await message.onEventAccepted?.();
+      if (processMessage.mock.calls.length === 1) {
+        await firstProcessing;
+      }
+    });
+    const firstEvent = createTestMessageEvent({
+      message: { id: "m-batch-first", type: "text", text: "first" },
+      source: { type: "group", groupId: "group-batch", userId: "user-batch" },
+      webhookEventId: "evt-batch-first",
+    });
+    const secondEvent = createTestMessageEvent({
+      message: { id: "m-batch-second", type: "text", text: "second" },
+      source: { type: "group", groupId: "group-batch-other", userId: "user-batch" },
+      webhookEventId: "evt-batch-second",
+    });
+    const task = handleLineWebhookEvents(
+      [firstEvent, secondEvent],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: false,
+        onEventAccepted,
+      }),
+    );
+
+    await vi.waitFor(() => expect(onEventAccepted).toHaveBeenCalledTimes(2));
+    if (!releaseFirstProcessing) {
+      throw new Error("Expected first LINE message processing release callback");
+    }
+    releaseFirstProcessing();
+    await task;
+  });
+
+  it("serializes same-group events until earlier processing settles", async () => {
+    let releaseFirstProcessing: (() => void) | undefined;
+    const firstProcessing = new Promise<void>((resolve) => {
+      releaseFirstProcessing = resolve;
+    });
+    const onEventAccepted = vi.fn();
+    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+      await message.onEventAccepted?.();
+      if (processMessage.mock.calls.length === 1) {
+        await firstProcessing;
+      }
+    });
+    const firstEvent = createTestMessageEvent({
+      message: { id: "m-group-first", type: "text", text: "first" },
+      source: { type: "group", groupId: "group-serial", userId: "user-serial" },
+      webhookEventId: "evt-group-first",
+    });
+    const secondEvent = createTestMessageEvent({
+      message: { id: "m-group-second", type: "text", text: "second" },
+      source: { type: "group", groupId: "group-serial", userId: "user-serial" },
+      webhookEventId: "evt-group-second",
+    });
+    const task = handleLineWebhookEvents(
+      [firstEvent, secondEvent],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: false,
+        onEventAccepted,
+      }),
+    );
+
+    await vi.waitFor(() => expect(onEventAccepted).toHaveBeenCalledOnce());
+    expect(processMessage).toHaveBeenCalledOnce();
+    if (!releaseFirstProcessing) {
+      throw new Error("Expected first LINE processing release callback");
+    }
+    releaseFirstProcessing();
+    await task;
+
+    expect(onEventAccepted.mock.calls.map(([event]) => event)).toEqual([firstEvent, secondEvent]);
+  });
+
+  it("preserves callback order until each event reaches reply-lane admission", async () => {
+    let releaseFirstAdmission: (() => void) | undefined;
+    const firstAdmission = new Promise<void>((resolve) => {
+      releaseFirstAdmission = resolve;
+    });
+    const onEventAccepted = vi.fn();
+    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+      if (processMessage.mock.calls.length === 1) {
+        await firstAdmission;
+      }
+      await message.onEventAccepted?.();
+    });
+    const firstEvent = createTestMessageEvent({
+      message: { id: "m-ordered-first", type: "text", text: "first" },
+      source: { type: "group", groupId: "group-ordered", userId: "user-ordered" },
+      webhookEventId: "evt-ordered-first",
+    });
+    const secondEvent = createTestMessageEvent({
+      message: { id: "m-ordered-second", type: "text", text: "second" },
+      source: { type: "group", groupId: "group-ordered", userId: "user-ordered" },
+      webhookEventId: "evt-ordered-second",
+    });
+    const task = handleLineWebhookEvents(
+      [firstEvent, secondEvent],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: false,
+        onEventAccepted,
+      }),
+    );
+
+    await vi.waitFor(() => expect(processMessage).toHaveBeenCalledOnce());
+    expect(onEventAccepted).not.toHaveBeenCalled();
+    if (!releaseFirstAdmission) {
+      throw new Error("Expected first LINE event admission release callback");
+    }
+    releaseFirstAdmission();
+    await task;
+
+    expect(onEventAccepted.mock.calls.map(([event]) => event)).toEqual([firstEvent, secondEvent]);
   });
 
   beforeEach(() => {
@@ -791,6 +952,68 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("acknowledges an in-flight redelivery after durable adoption", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const onEventAccepted = vi.fn();
+    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+      await message.onEventAccepted?.();
+      await firstDone;
+    });
+    const event = createReplayMessageEvent({
+      messageId: "m-inflight-adopted",
+      groupId: "group-inflight",
+      userId: "user-inflight",
+      webhookEventId: "evt-inflight-adopted",
+      isRedelivery: true,
+    });
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: false,
+      onEventAccepted,
+      replayCache: createLineWebhookReplayCache(),
+    });
+
+    const firstRun = handleLineWebhookEvents([event], context);
+    await vi.waitFor(() => expect(onEventAccepted).toHaveBeenCalledOnce());
+    await handleLineWebhookEvents([event], context);
+
+    expect(onEventAccepted).toHaveBeenCalledTimes(2);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    if (!releaseFirst) {
+      throw new Error("Expected first LINE replay processing release callback");
+    }
+    releaseFirst();
+    await firstRun;
+  });
+
+  it("mirrors in-flight retryable replay failures so concurrent duplicates also fail", async () => {
+    let rejectFirst: ((err: Error) => void) | undefined;
+    const firstDone = new Promise<void>((_, reject) => {
+      rejectFirst = reject;
+    });
+    const processMessage = vi.fn(async () => {
+      await firstDone;
+    });
+    const event = createReplayMessageEvent({
+      messageId: "m-inflight-fail",
+      groupId: "group-inflight",
+      userId: "user-inflight",
+      webhookEventId: "evt-inflight-fail-1",
+      isRedelivery: true,
+    });
+    const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
+    const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
+    const secondFailure = expect(secondRun).rejects.toThrow("transient inflight failure");
+    rejectFirst?.(new LineRetryableWebhookError("transient inflight failure"));
+
+    await Promise.all([firstFailure, secondFailure]);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("deduplicates redeliveries by LINE message id when webhookEventId changes", async () => {
     const processMessage = vi.fn();
     const event = {
@@ -1071,9 +1294,10 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("reports failed media materialization to the message-context owner", async () => {
+  it("retries media materialization failures before reply-lane acceptance", async () => {
     downloadLineMediaMock.mockRejectedValueOnce(new Error("expired content"));
     const processMessage = vi.fn();
+    const onEventAccepted = vi.fn();
     const event = createTestMessageEvent({
       message: {
         id: "image-failed-1",
@@ -1083,6 +1307,47 @@ describe("handleLineWebhookEvents", () => {
       },
       source: { type: "user", userId: "user-image-failed" },
       webhookEventId: "evt-image-failed",
+    });
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+      onEventAccepted,
+      replayCache: createLineWebhookReplayCache(),
+    });
+
+    await expect(handleLineWebhookEvents([event], context)).rejects.toBeInstanceOf(
+      LineRetryableWebhookError,
+    );
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(onEventAccepted).not.toHaveBeenCalled();
+
+    downloadLineMediaMock.mockResolvedValueOnce({
+      path: "/tmp/line-media/retried-image.jpg",
+      contentType: "image/jpeg",
+      size: 1234,
+    });
+    await handleLineWebhookEvents([event], context);
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allMedia: [{ path: "/tmp/line-media/retried-image.jpg", contentType: "image/jpeg" }],
+      }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(onEventAccepted).toHaveBeenCalledWith(event);
+  });
+
+  it("keeps configured media-size-limit events processable as attachment unavailable", async () => {
+    downloadLineMediaMock.mockRejectedValueOnce(new Error("Media exceeds configured limit"));
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-too-large-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+      source: { type: "user", userId: "user-image-too-large" },
+      webhookEventId: "evt-image-too-large",
     });
 
     await handleLineWebhookEvents(
@@ -1098,6 +1363,11 @@ describe("handleLineWebhookEvents", () => {
 
   it("allows non-text group messages through when requireMention is set (cannot detect mention)", async () => {
     // Image message -- LINE only carries mention metadata on text messages.
+    downloadLineMediaMock.mockResolvedValueOnce({
+      path: "/tmp/line-media/mentioned-image.jpg",
+      contentType: "image/jpeg",
+      size: 1234,
+    });
     const event = createTestMessageEvent({
       message: {
         id: "m-mention-img",

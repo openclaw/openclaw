@@ -606,4 +606,7 @@ export async function buildLinePostbackContext(params: {
 
 type LineMessageContext = NonNullable<Awaited<ReturnType<typeof buildLineMessageContext>>>;
 type LinePostbackContext = NonNullable<Awaited<ReturnType<typeof buildLinePostbackContext>>>;
-export type LineInboundContext = LineMessageContext | LinePostbackContext;
+export type LineInboundContext = (LineMessageContext | LinePostbackContext) & {
+  /** Signals that this event is durably owned by the reply lane. */
+  onEventAccepted?: () => void | Promise<void>;
+};

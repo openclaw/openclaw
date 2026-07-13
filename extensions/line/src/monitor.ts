@@ -1,6 +1,10 @@
 // Line plugin module implements monitor behavior.
 import type { webhook } from "@line/bot-sdk";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createMessageReceiveContext,
+  type MessageReceiveContext,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -23,6 +27,7 @@ import {
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
+import { LineRetryableWebhookError } from "./bot-handlers.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
@@ -43,6 +48,7 @@ import {
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
+import { waitForLineWebhookDispatchAcceptance } from "./webhook-ack.js";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -146,6 +152,14 @@ export async function monitorLineProvider(
       }
 
       const { ctxPayload, replyToken, route } = ctx;
+      let eventAccepted = false;
+      const acceptEvent = async () => {
+        if (eventAccepted) {
+          return;
+        }
+        eventAccepted = true;
+        await ctx.onEventAccepted?.();
+      };
 
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
 
@@ -161,10 +175,9 @@ export async function monitorLineProvider(
           })
         : null;
 
-      const displayName = await displayNamePromise;
-      logVerbose(`line: received message from ${displayName} (${ctxPayload.From})`);
-
       try {
+        const displayName = await displayNamePromise;
+        logVerbose(`line: received message from ${displayName} (${ctxPayload.From})`);
         const textLimit = 5000;
         let replyTokenUsed = false;
         const core = getLineRuntime();
@@ -172,6 +185,7 @@ export async function monitorLineProvider(
           channel: "line",
           accountId: route.accountId,
           raw: ctx,
+          onTurnAdopted: acceptEvent,
           adapter: {
             ingest: () => ({
               id: ctxPayload.MessageSid ?? `${ctxPayload.From}:${Date.now()}`,
@@ -258,6 +272,9 @@ export async function monitorLineProvider(
             }),
           },
         });
+        if (!turnResult.dispatched) {
+          await acceptEvent();
+        }
         const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
         if (!hasFinalInboundReplyDispatch(dispatchResult)) {
           logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
@@ -265,6 +282,13 @@ export async function monitorLineProvider(
       } catch (err) {
         runtime.error?.(danger(`line: auto-reply failed: ${String(err)}`));
 
+        if (!eventAccepted) {
+          // Returning a non-2xx response asks LINE to redeliver this event.
+          // Its reply token is one-use, so do not consume it before the retry.
+          throw new LineRetryableWebhookError("line event failed before reply-lane adoption", {
+            cause: err,
+          });
+        }
         if (replyToken) {
           try {
             await replyMessageLine(
@@ -328,6 +352,7 @@ export async function monitorLineProvider(
           return;
         }
 
+        let receiveContext: MessageReceiveContext<webhook.CallbackRequest> | undefined;
         try {
           const signatureHeader = req.headers["x-line-signature"];
           const signature =
@@ -376,22 +401,33 @@ export async function monitorLineProvider(
             return;
           }
 
-          requestLifecycle.release();
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ status: "ok" }));
+          receiveContext = createMessageReceiveContext({
+            id: `${Date.now()}:line:webhook`,
+            channel: "line",
+            accountId: match.target.accountId,
+            message: body,
+            ackPolicy: "after_agent_dispatch",
+            onAck: () => {
+              res.statusCode = 200;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ status: "ok" }));
+            },
+          });
 
-          if (body.events && body.events.length > 0) {
-            logVerbose(`line: received ${body.events.length} webhook events`);
-            void Promise.resolve()
-              .then(() => match.target.bot.handleWebhook(body))
-              .catch((err: unknown) => {
-                match.target.runtime.error?.(
-                  danger(`line webhook dispatch failed: ${String(err)}`),
-                );
-              });
+          if (!body.events || body.events.length === 0) {
+            await receiveContext.ack();
+            return;
           }
+
+          logVerbose(`line: received ${body.events.length} webhook events`);
+          await waitForLineWebhookDispatchAcceptance({
+            body,
+            dispatch: match.target.bot.handleWebhook,
+            runtime: match.target.runtime,
+          });
+          await receiveContext.ack();
         } catch (err) {
+          await receiveContext?.nack(err);
           if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
             res.statusCode = 413;
             res.setHeader("Content-Type", "application/json");
