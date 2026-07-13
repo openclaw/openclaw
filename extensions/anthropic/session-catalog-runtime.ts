@@ -1,4 +1,9 @@
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  listAgentIds,
+  resolveAllowedModelRef,
+  resolveDefaultAgentId,
+  resolveDefaultModelForAgent,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveModelRuntimePolicy } from "openclaw/plugin-sdk/model-session-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -56,13 +61,23 @@ export function resolveClaudeCatalogCreateSession(
   api: OpenClawPluginApi,
 ): { model: string } | undefined {
   const config = currentClaudeSessionCatalogConfig(api);
+  const agentId = resolveDefaultAgentId(config);
   const policy = resolveModelRuntimePolicy({
     config,
     provider: "anthropic",
     modelId: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
-    agentId: resolveDefaultAgentId(config),
+    agentId,
   }).policy;
-  return policy?.id?.trim() === CLAUDE_CLI_BACKEND_ID
-    ? { model: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF }
-    : undefined;
+  if (policy?.id?.trim() !== CLAUDE_CLI_BACKEND_ID) {
+    return undefined;
+  }
+  const defaultModel = resolveDefaultModelForAgent({ cfg: config, agentId });
+  const allowed = resolveAllowedModelRef({
+    cfg: config,
+    catalog: [],
+    raw: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+    defaultProvider: defaultModel.provider,
+    defaultModel: defaultModel.model,
+  });
+  return "error" in allowed ? undefined : { model: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF };
 }

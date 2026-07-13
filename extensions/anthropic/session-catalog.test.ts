@@ -204,6 +204,39 @@ describe("Claude session catalog", () => {
     expect(provider?.resolveCreateSession?.()).toBeUndefined();
   });
 
+  it("does not advertise a Claude CLI route excluded by the model allowlist", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-8" },
+          models: { "anthropic/claude-sonnet-4-8": {} },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            agentRuntime: { id: "claude-cli" },
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config,
+      runtime: { config: { current: () => config } },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+
+    registerClaudeSessionCatalog(api);
+
+    expect(provider?.resolveCreateSession?.()).toBeUndefined();
+  });
+
   it.each([
     {
       label: "CLI binding",
