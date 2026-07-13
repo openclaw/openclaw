@@ -16,6 +16,7 @@ import {
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
+import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
 import { buildChannelsStatusMock, buildChannelWizardMocks } from "./control-ui-mock-channels.ts";
 import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
 
@@ -946,27 +947,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "sessions.files.set"],
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      ...buildBackgroundTasksMock(baseTime),
       "sessions.diff": buildSessionDiffMock(),
-      // One live subagent task: exercises the tasks rail, the collapsed-rail
-      // toggle badge, and the post-turn running-tasks status row in the thread.
-      "tasks.list": {
-        tasks: [
-          {
-            id: "task-mock-running",
-            taskId: "task-mock-running",
-            status: "running",
-            runtime: "subagent",
-            agentId: "openclaw-mock",
-            title: "Map run-status indicator code",
-            createdAt: Date.now() - 25_000,
-            startedAt: Date.now() - 25_000,
-            updatedAt: Date.now(),
-            toolUseCount: 7,
-            lastToolName: "read",
-            childSessionKey: "agent:openclaw-mock:subagent:mock-task-1",
-          },
-        ],
-      },
       "plugins.list": buildPluginCatalogMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
       "wizard.start": channelWizard.start,

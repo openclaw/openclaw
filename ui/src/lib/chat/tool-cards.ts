@@ -9,6 +9,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome } from "./chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
@@ -259,6 +260,37 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
     return undefined;
   }
   return truncateUtf16Safe(normalized, 120);
+}
+
+const TOOL_ARGUMENT_PREVIEW_KEYS = [
+  "message",
+  "prompt",
+  "task",
+  "query",
+  "text",
+  "description",
+] as const;
+
+/** First meaningful user-authored line for compact generic tool rows. */
+export function resolveCollapsedToolArgumentPreview(args: unknown): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+  const record = args as Record<string, unknown>;
+  for (const key of TOOL_ARGUMENT_PREVIEW_KEYS) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const firstLine = value.split(/\r\n?|\n/).find((line) => line.trim().length > 0);
+    const preview = formatCollapsedToolPreviewText(
+      firstLine ? redactToolPayloadText(firstLine) : undefined,
+    );
+    if (preview) {
+      return preview;
+    }
+  }
+  return undefined;
 }
 
 function findFirstUnmatchedCard(
