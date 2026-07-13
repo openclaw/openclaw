@@ -40,7 +40,11 @@ import {
 } from "./app-server/session-binding.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
-import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
+import {
+  codexDiagnosticsFeedbackState,
+  type CodexDiagnosticsTarget,
+  type PendingCodexDiagnosticsConfirmation,
+} from "./command-diagnostics-state.js";
 import {
   buildHelp,
   formatAccount,
@@ -197,23 +201,6 @@ type ParsedDiagnosticsArgs =
   | { action: "cancel"; token: string }
   | { action: "usage" };
 
-type CodexDiagnosticsTarget = {
-  threadId: string;
-  identity: CodexAppServerBindingIdentity;
-  agentDir: string;
-  connectionScope?: "supervision";
-  appServerRuntimeFingerprint?: string;
-  pendingSupervisionBranch?: CodexAppServerThreadBinding["pendingSupervisionBranch"];
-  authProfileId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  channel?: string;
-  channelId?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  threadParentId?: string;
-};
-
 type CodexDiagnosticsCandidate = Omit<
   CodexDiagnosticsTarget,
   | "threadId"
@@ -222,22 +209,6 @@ type CodexDiagnosticsCandidate = Omit<
   | "pendingSupervisionBranch"
   | "authProfileId"
 >;
-
-export type PendingCodexDiagnosticsConfirmation = {
-  token: string;
-  targets: CodexDiagnosticsTarget[];
-  note?: string;
-  senderId: string;
-  channel: string;
-  accountId?: string;
-  channelId?: string;
-  messageThreadId?: string;
-  threadParentId?: string;
-  sessionKey?: string;
-  scopeKey: string;
-  privateRouted?: boolean;
-  createdAt: number;
-};
 
 const CODEX_DIAGNOSTICS_SOURCE = "openclaw-diagnostics";
 const CODEX_DIAGNOSTICS_REASON_MAX_CHARS = 2048;
