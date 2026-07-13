@@ -169,7 +169,7 @@ export type OpenClawConfig = {
 };
 
 /** Root memory filename used in agent workspaces. */
-export const CANONICAL_ROOT_MEMORY_FILENAME = "MEMORY.md";
+export const MEMORY_HOST_ROOT_FILENAME = "MEMORY.md";
 
 const DEFAULT_AGENT_ID = "main";
 const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
@@ -289,7 +289,7 @@ function stripNullBytes(value: string): string {
 }
 
 /** Resolve the workspace directory for an agent id and config defaults. */
-export function resolveAgentWorkspaceDir(
+export function resolveMemoryHostAgentWorkspaceDir(
   cfg: OpenClawConfig,
   agentId: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -312,7 +312,7 @@ export function resolveAgentWorkspaceDir(
 }
 
 /** Resolve context limits for an agent with defaults fallback. */
-export function resolveAgentContextLimits(
+export function resolveMemoryHostAgentContextLimits(
   cfg: OpenClawConfig | undefined,
   agentId?: string | null,
 ): AgentContextLimitsConfig | undefined {
@@ -324,7 +324,7 @@ export function resolveAgentContextLimits(
 }
 
 /** Resolve enabled memory search config plus deduplicated extra paths for an agent. */
-export function resolveMemorySearchConfig(
+export function resolveMemoryHostSearchPathConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): { enabled: boolean; extraPaths: string[] } | null {

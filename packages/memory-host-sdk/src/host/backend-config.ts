@@ -7,7 +7,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import {
-  CANONICAL_ROOT_MEMORY_FILENAME,
+  MEMORY_HOST_ROOT_FILENAME,
   type MemoryBackend,
   type MemoryCitationsMode,
   type MemoryQmdConfig,
@@ -16,8 +16,8 @@ import {
   type MemoryQmdSearchMode,
   type MemoryQmdStartupMode,
   type OpenClawConfig,
+  resolveMemoryHostAgentWorkspaceDir,
   normalizeAgentId,
-  resolveAgentWorkspaceDir,
   resolveMemoryHostUserPath,
   type SessionSendPolicyConfig,
   splitShellArgs,
@@ -407,7 +407,7 @@ function resolveDefaultCollections(
     return [];
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    { path: workspaceDir, pattern: CANONICAL_ROOT_MEMORY_FILENAME, base: "memory-root" },
+    { path: workspaceDir, pattern: MEMORY_HOST_ROOT_FILENAME, base: "memory-root" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
@@ -429,7 +429,7 @@ export function resolveMemoryBackendConfig(params: {
     return { backend: "builtin", citations };
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, normalizedAgentId);
+  const workspaceDir = resolveMemoryHostAgentWorkspaceDir(params.cfg, normalizedAgentId);
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
