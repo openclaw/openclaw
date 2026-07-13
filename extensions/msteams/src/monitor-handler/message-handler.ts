@@ -101,10 +101,7 @@ import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 const msteamsSessionTurnChains = new Map<string, Promise<void>>();
 
-function resolveMSTeamsTurnChainKey(params: {
-  storePath?: string;
-  sessionKey: string;
-}): string {
+function resolveMSTeamsTurnChainKey(params: { storePath?: string; sessionKey: string }): string {
   const sessionKey = params.sessionKey.trim();
   const storePath = params.storePath?.trim();
   if (storePath) {

@@ -7,7 +7,8 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createAccountScopedMSTeamsConversationStore,
   createMSTeamsConversationStoreState,
@@ -15,6 +16,8 @@ import {
 import type { StoredConversationReference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function conversationStateKey(conversationId: string): string {
   return crypto.createHash("sha256").update(conversationId).digest("hex");
@@ -143,7 +146,7 @@ describe("msteams conversation store (plugin state)", () => {
   });
 
   it("does not let account ids collide with raw Teams conversation id prefixes", async () => {
-    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const stateDir = tempDirs.make("openclaw-msteams-store-");
     const baseStore = createMSTeamsConversationStoreState({ stateDir });
 
     await baseStore.upsert("19:default@thread.tacv2", {
@@ -209,7 +212,7 @@ describe("msteams conversation store (plugin state)", () => {
   });
 
   it("finds account-scoped personal DMs by AAD object id", async () => {
-    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const stateDir = tempDirs.make("openclaw-msteams-store-");
     const store = createMSTeamsConversationStoreState({ stateDir });
     const defaultStore = createAccountScopedMSTeamsConversationStore(store, "default");
     const secondaryStore = createAccountScopedMSTeamsConversationStore(store, "secondary");

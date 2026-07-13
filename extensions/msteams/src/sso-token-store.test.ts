@@ -4,10 +4,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsSsoTokenStoreFs, makeMSTeamsSsoTokenStoreKey } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("msteams sso token store (plugin state)", () => {
   beforeEach(() => {
@@ -79,7 +82,7 @@ describe("msteams sso token store (plugin state)", () => {
   });
 
   it("keeps default and named account tokens separate", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-account-"));
+    const stateDir = tempDirs.make("openclaw-msteams-sso-account-");
     const defaultStore = createMSTeamsSsoTokenStoreFs({ stateDir });
     const namedStore = createMSTeamsSsoTokenStoreFs({ accountId: "secondary", stateDir });
     const defaultToken = {
