@@ -1482,7 +1482,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
         },
       });
     };
-
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -1537,7 +1536,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
-        ...{ workspaceDir: effectiveWorkspace, pluginMetadataSnapshot },
+        workspaceDir: effectiveWorkspace,
+        pluginMetadataSnapshot,
         provider,
         modelId,
         model: effectiveModel,
