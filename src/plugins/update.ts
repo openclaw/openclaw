@@ -188,7 +188,6 @@ function formatMarketplaceInstallFailure(params: {
     `${params.error} (marketplace plugin ${params.marketplacePlugin} from ${params.marketplaceSource}).`
   );
 }
-
 function formatClawHubInstallFailure(params: {
   pluginId: string;
   spec: string;
