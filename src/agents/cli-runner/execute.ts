@@ -41,7 +41,6 @@ import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
-  formatCliOutputError,
   parseCliOutput,
   type CliOutput,
   type CliStreamingDelta,
@@ -105,6 +104,7 @@ import {
   formatCliBackendOutputDigest,
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
+import { createCliOutputFailoverError } from "./output-error.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
 const executeDeps = {
@@ -262,40 +262,6 @@ function appendCliOutputParseBuffer(
     buffer: Buffer.concat([buffer, chunkBuffer], buffer.byteLength + chunkBuffer.byteLength),
     exceeded: false,
   };
-}
-
-function createParsedCliOutputError(params: {
-  output: CliOutput;
-  provider: string;
-  model: string;
-  runId?: string;
-  sessionId?: string;
-  lane?: string;
-}): FailoverError | undefined {
-  if (!params.output.errorText) {
-    return undefined;
-  }
-  const message = formatCliOutputError(params.output, {
-    runId: params.runId,
-    sessionId: params.sessionId,
-  });
-  const reason = classifyFailoverReason(message, { provider: params.provider }) ?? "unknown";
-  const code =
-    params.output.terminalFailure?.reason === "max_turns"
-      ? "cli_max_turns"
-      : reason === "context_overflow"
-        ? "cli_context_overflow"
-        : undefined;
-  return new FailoverError(message, {
-    reason,
-    provider: params.provider,
-    model: params.model,
-    sessionId: params.sessionId,
-    lane: params.lane,
-    status: resolveFailoverStatus(reason),
-    code,
-    rawError: params.output.errorText,
-  });
 }
 
 /** Overrides process/event dependencies for CLI runner execution tests. */
@@ -1872,7 +1838,7 @@ export async function executePreparedCliRun(
               });
             }
             if (streamedJsonlOutput?.terminalFailure) {
-              const terminalError = createParsedCliOutputError({
+              const terminalError = createCliOutputFailoverError({
                 output: streamedJsonlOutput,
                 provider: params.provider,
                 model: context.modelId,
@@ -1950,7 +1916,7 @@ export async function executePreparedCliRun(
               outputMode,
               fallbackSessionId: resolvedSessionId,
             });
-          const parsedError = createParsedCliOutputError({
+          const parsedError = createCliOutputFailoverError({
             output: parsed,
             provider: params.provider,
             model: context.modelId,

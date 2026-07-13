@@ -28,7 +28,6 @@ import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
-  formatCliOutputError,
   parseCliOutput,
   type CliOutput,
   type CliStreamJsonOutputLimits,
@@ -45,6 +44,7 @@ import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
+import { createCliOutputFailoverError } from "./output-error.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 type ProcessSupervisor = ReturnType<
@@ -841,30 +841,6 @@ function parseClaudeLiveJsonLine(
   return isRecord(parsed) ? parsed : null;
 }
 
-function createParsedOutputError(session: ClaudeLiveSession, output: CliOutput): FailoverError {
-  const turn = session.currentTurn;
-  const message = formatCliOutputError(output, {
-    runId: turn?.diagnosticRefs.runId,
-    sessionId: turn?.diagnosticRefs.sessionId,
-  });
-  const reason = classifyFailoverReason(message, { provider: session.providerId }) ?? "unknown";
-  const code =
-    output.terminalFailure?.reason === "max_turns"
-      ? "cli_max_turns"
-      : reason === "context_overflow"
-        ? "cli_context_overflow"
-        : undefined;
-  return new FailoverError(message, {
-    reason,
-    provider: session.providerId,
-    model: session.modelId,
-    sessionId: turn?.diagnosticRefs.sessionId,
-    status: resolveFailoverStatus(reason),
-    code,
-    rawError: output.errorText,
-  });
-}
-
 function writeClaudeLiveControlResponse(session: ClaudeLiveSession, response: unknown): void {
   const stdin = session.managedRun.stdin;
   if (!stdin) {
@@ -975,7 +951,16 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
       fallbackSessionId: turn.sessionId,
     });
   if (output.errorText) {
-    failTurn(session, createParsedOutputError(session, output));
+    const error = createCliOutputFailoverError({
+      output,
+      provider: session.providerId,
+      model: session.modelId,
+      runId: turn.diagnosticRefs.runId,
+      sessionId: turn.diagnosticRefs.sessionId,
+    });
+    if (error) {
+      failTurn(session, error);
+    }
     scheduleIdleClose(session);
     return;
   }
