@@ -1280,7 +1280,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/cli/cron-cli/register.cron-simple.ts: loadCronJobForShow",
   "src/cli/daemon-cli/launchd-recovery.ts: LAUNCH_AGENT_RECOVERY_MESSAGE",
   "src/cli/daemon-cli/response.ts: buildDaemonHintItems",
-  "src/cli/gateway-cli/call.ts: gatewayCallOpts",
   "src/cli/gateway-cli/qa-parent-watchdog.ts: QA_PARENT_PID_ENV",
   "src/cli/gateway-cli/qa-parent-watchdog.ts: QA_STAGED_RUNTIME_ROOT_ENV",
   "src/cli/gateway-cli/qa-parent-watchdog.ts: QA_TEMP_ROOT_ENV",
