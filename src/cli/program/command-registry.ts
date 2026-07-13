@@ -1,10 +1,8 @@
 // Program command registry facade: exports core descriptors and registers core plus sub-CLIs.
 import type { Command } from "commander";
 import {
-  getCoreCliCommandDescriptors,
   getCoreCliCommandNames,
   getCoreCliCommandsWithSubcommands,
-  type CommandRegistration,
   registerCoreCliByName,
   registerCoreCliCommands,
 } from "./command-registry-core.js";
@@ -12,7 +10,6 @@ import type { ProgramContext } from "./context.js";
 import { registerSubCliCommands } from "./register.subclis.js";
 
 export {
-  getCoreCliCommandDescriptors,
   getCoreCliCommandNames,
   getCoreCliCommandsWithSubcommands,
   registerCoreCliByName,
@@ -20,7 +17,6 @@ export {
 };
 
 /** Core command registration contract re-exported for program builders and tests. */
-export type { CommandRegistration };
 
 /** Register all root-program commands for the current argv shape. */
 export function registerProgramCommands(

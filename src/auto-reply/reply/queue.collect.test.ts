@@ -13,7 +13,6 @@ import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-tra
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
-  clearFollowupQueue,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   FollowupRunDeferredError,
@@ -27,6 +26,7 @@ import {
 } from "./queue.test-helpers.js";
 import { resolveFollowupAuthorizationKey } from "./queue/drain.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 

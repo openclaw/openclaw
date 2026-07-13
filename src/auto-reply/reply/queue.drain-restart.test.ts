@@ -11,7 +11,6 @@ import {
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
-  clearFollowupQueue,
   clearSessionQueues,
   enqueueFollowupRun,
   FollowupRunDeferredError,
@@ -23,6 +22,7 @@ import {
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 

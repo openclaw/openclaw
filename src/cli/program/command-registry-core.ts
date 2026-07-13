@@ -20,17 +20,12 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 
-export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
+export { getCoreCliCommandsWithSubcommands };
 
 type CommandRegisterParams = {
   program: Command;
   ctx: ProgramContext;
   argv: string[];
-};
-
-export type CommandRegistration = {
-  id: string;
-  register: (params: CommandRegisterParams) => void;
 };
 
 function withProgramOnlySpecs(
