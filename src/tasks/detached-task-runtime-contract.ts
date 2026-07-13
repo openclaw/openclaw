@@ -1,6 +1,7 @@
 // Defines the detached task runtime contract and spawn options.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  JsonValue,
   TaskDeliveryState,
   TaskDeliveryStatus,
   TaskNotifyPolicy,
@@ -34,6 +35,7 @@ export type DetachedTaskCreateParams = {
   preferMetadata?: boolean;
   notifyPolicy?: TaskNotifyPolicy;
   deliveryStatus?: TaskDeliveryStatus;
+  detail?: JsonValue;
 };
 
 export type DetachedRunningTaskCreateParams = DetachedTaskCreateParams & {
@@ -65,11 +67,14 @@ type DetachedTaskCompleteParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   endedAt: number;
   lastEventAt?: number;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  preserveTerminalSummary?: boolean;
   terminalOutcome?: TaskTerminalOutcome | null;
+  detail?: JsonValue;
   suppressDelivery?: boolean;
 };
 
@@ -77,12 +82,15 @@ type DetachedTaskFailParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   status?: Extract<TaskStatus, "failed" | "timed_out" | "cancelled">;
   endedAt: number;
   lastEventAt?: number;
   error?: string;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  preserveTerminalSummary?: boolean;
+  detail?: JsonValue;
   suppressDelivery?: boolean;
 };
 
@@ -90,13 +98,17 @@ export type DetachedTaskFinalizeParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
   endedAt: number;
   lastEventAt?: number;
   error?: string;
+  clearError?: boolean;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  preserveTerminalSummary?: boolean;
   terminalOutcome?: TaskTerminalOutcome | null;
+  detail?: JsonValue;
   suppressDelivery?: boolean;
 };
 

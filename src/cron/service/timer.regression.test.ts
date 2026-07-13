@@ -85,6 +85,14 @@ function firstMockArg(mock: unknown): unknown {
   return call[0];
 }
 
+function findCronTaskByBaseRunId(baseRunId: string) {
+  return listTaskRecords().find(
+    (entry) =>
+      entry.runtime === "cron" &&
+      (entry.runId === baseRunId || entry.runId?.startsWith(`${baseRunId}:`)),
+  );
+}
+
 describe("cron service timer regressions", () => {
   it("caps timer delay to 60s for far-future schedules", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -843,9 +851,7 @@ describe("cron service timer regressions", () => {
       await runnerStarted.promise;
 
       const runId = `cron:no-timeout-cancel:${scheduledAt}`;
-      const task = listTaskRecords().find(
-        (entry) => entry.runtime === "cron" && entry.runId === runId,
-      );
+      const task = findCronTaskByBaseRunId(runId);
       if (!task) {
         throw new Error("Expected timeout-disabled cron task row");
       }
@@ -1032,8 +1038,9 @@ describe("cron service timer regressions", () => {
       void timerPromise.then(() => {
         timerSettled = true;
       });
+      const taskRunId = findCronTaskByBaseRunId(runId)?.runId;
       const cancelled = cancelActiveCronTaskRun({
-        runId,
+        runId: taskRunId ?? runId,
         reason: "Cancelled by operator.",
       });
 
@@ -1106,9 +1113,7 @@ describe("cron service timer regressions", () => {
       await cleanupStarted.promise;
 
       const runId = `cron:late-cancel-after-timeout:${scheduledAt}`;
-      const task = listTaskRecords().find(
-        (entry) => entry.runtime === "cron" && entry.runId === runId,
-      );
+      const task = findCronTaskByBaseRunId(runId);
       if (!task) {
         throw new Error("Expected timed-out cron task row");
       }
@@ -1689,9 +1694,7 @@ describe("cron service timer regressions", () => {
       }
       expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
 
-      const task = listTaskRecords().find(
-        (entry) => entry.runtime === "cron" && entry.runId === runId,
-      );
+      const task = findCronTaskByBaseRunId(runId);
       if (!task) {
         throw new Error("Expected main-session cron task row");
       }

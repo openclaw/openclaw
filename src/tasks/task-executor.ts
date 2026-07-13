@@ -36,6 +36,7 @@ import {
 } from "./task-flow-runtime-internal.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
+  JsonValue,
   TaskDeliveryState,
   TaskDeliveryStatus,
   TaskNotifyPolicy,
@@ -175,11 +176,14 @@ export function completeTaskRunByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   endedAt: number;
   lastEventAt?: number;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  preserveTerminalSummary?: boolean;
   terminalOutcome?: TaskTerminalOutcome | null;
+  detail?: JsonValue;
   suppressDelivery?: boolean;
 }) {
   return finalizeTaskRunByRunId({
@@ -196,12 +200,15 @@ export function failTaskRunByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   status?: Extract<TaskStatus, "failed" | "timed_out" | "cancelled">;
   endedAt: number;
   lastEventAt?: number;
   error?: string;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  preserveTerminalSummary?: boolean;
+  detail?: JsonValue;
   suppressDelivery?: boolean;
 }) {
   return finalizeTaskRunByRunId({

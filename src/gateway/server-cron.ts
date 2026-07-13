@@ -31,6 +31,7 @@ import {
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
+import { cronRunLogEntryFromEvent } from "../cron/task-run-detail.js";
 import { createCronTriggerEvaluator } from "../cron/trigger-script.js";
 import type { CronJob, CronPayload } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -784,6 +785,7 @@ export function buildGatewayCronService(params: {
       }
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);
+        const runLogEntry = cronRunLogEntryFromEvent({ ...evt, action: "finished" }, Date.now());
         dispatchGatewayCronFinishedNotifications({
           evt,
           job,
@@ -797,30 +799,7 @@ export function buildGatewayCronService(params: {
         void runWithGatewayIndependentRootWorkAdmission(async () => {
           await appendCronRunLog({
             storePath,
-            entry: {
-              ts: Date.now(),
-              jobId: evt.jobId,
-              action: "finished",
-              status: evt.status,
-              error: evt.error,
-              summary: evt.summary,
-              diagnostics: evt.diagnostics,
-              delivered: evt.delivered,
-              deliveryStatus: evt.deliveryStatus,
-              deliveryError: evt.deliveryError,
-              failureNotificationDelivery: evt.failureNotificationDelivery,
-              delivery: evt.delivery,
-              sessionId: evt.sessionId,
-              sessionKey: evt.sessionKey,
-              runId: evt.runId,
-              runAtMs: evt.runAtMs,
-              durationMs: evt.durationMs,
-              nextRunAtMs: evt.nextRunAtMs,
-              triggerFired: evt.triggerFired,
-              model: evt.model,
-              provider: evt.provider,
-              usage: evt.usage,
-            },
+            entry: runLogEntry,
             opts: { keepLines: runLogPrune.keepLines },
           });
         }).catch((err: unknown) => {

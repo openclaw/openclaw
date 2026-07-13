@@ -55,6 +55,7 @@ import {
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
 import type {
+  JsonValue,
   TaskDeliveryState,
   TaskDeliveryStatus,
   TaskEventKind,
@@ -240,7 +241,10 @@ function ensureTaskCancellationReady(task: TaskRecord): void {
 }
 
 function cloneTaskRecord(record: TaskRecord): TaskRecord {
-  return { ...record };
+  return {
+    ...record,
+    ...(record.detail !== undefined ? { detail: structuredClone(record.detail) } : {}),
+  };
 }
 
 function normalizeTaskTimestamps(task: TaskRecord): TaskRecord {
@@ -961,6 +965,7 @@ function mergeExistingTaskForCreate(
     preferMetadata?: boolean;
     deliveryStatus?: TaskDeliveryStatus;
     notifyPolicy?: TaskNotifyPolicy;
+    detail?: JsonValue;
   },
 ): TaskRecord | null {
   ensureLinkedTaskFlowRegistryReady(existing);
@@ -1023,6 +1028,9 @@ function mergeExistingTaskForCreate(
   });
   if (notifyPolicy !== existing.notifyPolicy && existing.notifyPolicy === "silent") {
     patch.notifyPolicy = notifyPolicy;
+  }
+  if (params.detail !== undefined) {
+    patch.detail = params.detail;
   }
   if (Object.keys(patch).length === 0) {
     return cloneTaskRecord(existing);
@@ -1306,9 +1314,16 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   if (!current) {
     return null;
   }
-  const next = normalizeTaskTimestamps({ ...current, ...patch });
+  const next = normalizeTaskTimestamps({
+    ...current,
+    ...patch,
+    ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
+  });
   if (Object.hasOwn(patch, "error") && patch.error === undefined) {
     delete next.error;
+  }
+  if (Object.hasOwn(patch, "childSessionKey") && patch.childSessionKey === undefined) {
+    delete next.childSessionKey;
   }
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     next.cleanupAfter = resolveTaskCleanupAfter({
@@ -1747,19 +1762,29 @@ export function setTaskCleanupAfterById(params: {
 export function markTaskTerminalById(params: {
   taskId: string;
   status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  childSessionKey?: string | null;
   endedAt: number;
   lastEventAt?: number;
   error?: string;
   terminalSummary?: string | null;
+  preserveTerminalSummary?: boolean;
   terminalOutcome?: TaskTerminalOutcome | null;
+  detail?: JsonValue;
 }): TaskRecord | null {
   ensureTaskRegistryReady();
   const patch: Partial<TaskRecord> = {
     status: params.status,
+    ...(params.childSessionKey !== undefined
+      ? { childSessionKey: params.childSessionKey?.trim() || undefined }
+      : {}),
     endedAt: params.endedAt,
     lastEventAt: params.lastEventAt ?? params.endedAt,
     ...(params.terminalSummary !== undefined
-      ? { terminalSummary: normalizeTaskSummary(params.terminalSummary) }
+      ? {
+          terminalSummary: params.preserveTerminalSummary
+            ? (params.terminalSummary ?? undefined)
+            : normalizeTaskSummary(params.terminalSummary),
+        }
       : {}),
     ...(params.terminalOutcome !== undefined
       ? {
@@ -1769,6 +1794,7 @@ export function markTaskTerminalById(params: {
           }),
         }
       : {}),
+    ...(params.detail !== undefined ? { detail: structuredClone(params.detail) } : {}),
   };
   if (Object.hasOwn(params, "error")) {
     patch.error = params.error;
@@ -1937,6 +1963,7 @@ export function createTaskRecord(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  detail?: JsonValue;
 }): TaskRecord | null {
   ensureTaskRegistryReady();
   const requesterSessionKey = resolveTaskRequesterSessionKey(params);
@@ -2026,6 +2053,7 @@ export function createTaskRecord(params: {
       status,
       terminalOutcome: params.terminalOutcome,
     }),
+    ...(params.detail !== undefined ? { detail: structuredClone(params.detail) } : {}),
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
     record.cleanupAfter = resolveTaskCleanupAfter(record);
@@ -2063,14 +2091,18 @@ function updateTaskStateByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   status?: TaskStatus;
   startedAt?: number;
   endedAt?: number;
   lastEventAt?: number;
   error?: string;
+  clearError?: boolean;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  preserveTerminalSummary?: boolean;
   terminalOutcome?: TaskTerminalOutcome | null;
+  detail?: JsonValue;
   eventSummary?: string | null;
   suppressDelivery?: boolean;
 }) {
@@ -2111,7 +2143,12 @@ function updateTaskStateByRunId(params: {
     if (params.lastEventAt != null) {
       patch.lastEventAt = params.lastEventAt;
     }
-    if (
+    if (params.childSessionKey !== undefined) {
+      patch.childSessionKey = params.childSessionKey?.trim() || undefined;
+    }
+    if (params.clearError) {
+      patch.error = undefined;
+    } else if (
       current.status === "cancelled" &&
       nextStatus !== "cancelled" &&
       params.error === undefined
@@ -2124,13 +2161,18 @@ function updateTaskStateByRunId(params: {
       patch.progressSummary = normalizeTaskSummary(params.progressSummary);
     }
     if (params.terminalSummary !== undefined) {
-      patch.terminalSummary = normalizeTaskSummary(params.terminalSummary);
+      patch.terminalSummary = params.preserveTerminalSummary
+        ? (params.terminalSummary ?? undefined)
+        : normalizeTaskSummary(params.terminalSummary);
     }
     if (params.terminalOutcome !== undefined) {
       patch.terminalOutcome = resolveTaskTerminalOutcome({
         status: nextStatus,
         terminalOutcome: params.terminalOutcome,
       });
+    }
+    if (params.detail !== undefined) {
+      patch.detail = params.detail;
     }
     if (params.suppressDelivery) {
       // Teardown suppression must survive redundant lifecycle finalizers that
@@ -2234,28 +2276,36 @@ export function finalizeTaskRunByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
   startedAt?: number;
   endedAt: number;
   lastEventAt?: number;
   error?: string;
+  clearError?: boolean;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  preserveTerminalSummary?: boolean;
   terminalOutcome?: TaskTerminalOutcome | null;
+  detail?: JsonValue;
   suppressDelivery?: boolean;
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
+    childSessionKey: params.childSessionKey,
     status: params.status,
     startedAt: params.startedAt,
     endedAt: params.endedAt,
     lastEventAt: params.lastEventAt,
     error: params.error,
+    clearError: params.clearError,
     progressSummary: params.progressSummary,
     terminalSummary: params.terminalSummary,
+    preserveTerminalSummary: params.preserveTerminalSummary,
     terminalOutcome: params.terminalOutcome,
+    detail: params.detail,
     suppressDelivery: params.suppressDelivery,
   });
 }

@@ -239,9 +239,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       return next;
     },
     isRuntimeAuthoritative: () => true,
-    resolveCronJobsStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
-    loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
-    readCronRunLogEntriesSync: () => [],
+    listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: () => [],
   });
 }
 
@@ -621,6 +619,35 @@ describe("task-registry", () => {
         error: undefined,
         terminalSummary: "finished",
       });
+    });
+  });
+
+  it("clears a provisional child session when the terminal outcome has none", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskRecord({
+        runtime: "cron",
+        ownerKey: "",
+        scopeKind: "system",
+        childSessionKey: "agent:main:cron:provisional",
+        runId: "cron:provisional:100",
+        task: "Provisional cron run",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      finalizeTaskRunByRunId({
+        runId: "cron:provisional:100",
+        runtime: "cron",
+        childSessionKey: null,
+        status: "failed",
+        endedAt: 200,
+        error: "setup failed",
+      });
+      reloadTaskRegistryFromStore();
+
+      expect(requireTaskByRunId("cron:provisional:100").childSessionKey).toBeUndefined();
     });
   });
 
@@ -3546,9 +3573,7 @@ describe("task-registry", () => {
         resolveTaskForLookupToken: () => undefined,
         setTaskCleanupAfterById: () => null,
         isRuntimeAuthoritative: () => true,
-        resolveCronJobsStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
-        loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
-        readCronRunLogEntriesSync: () => [],
+        listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: () => [],
       });
 
       try {

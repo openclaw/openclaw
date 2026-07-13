@@ -612,6 +612,7 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
     progress_summary: legacyBindValue(row.progress_summary),
     terminal_summary: legacyBindValue(row.terminal_summary),
     terminal_outcome: legacyBindValue(row.terminal_outcome),
+    detail_json: legacyBindValue(row.detail_json),
   };
 }
 
@@ -703,6 +704,7 @@ function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
       pickLegacyColumn(columns, "progress_summary"),
       pickLegacyColumn(columns, "terminal_summary"),
       pickLegacyColumn(columns, "terminal_outcome"),
+      pickLegacyColumn(columns, "detail_json"),
     ];
     return db
       .prepare(
@@ -781,13 +783,14 @@ function insertTaskRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
         task_id, runtime, task_kind, source_id, requester_session_key, owner_key, scope_kind,
         child_session_key, parent_flow_id, parent_task_id, agent_id, requester_agent_id, run_id,
         label, task, status, delivery_status, notify_policy, created_at, started_at, ended_at,
-        last_event_at, cleanup_after, error, progress_summary, terminal_summary, terminal_outcome
+        last_event_at, cleanup_after, error, progress_summary, terminal_summary, terminal_outcome,
+        detail_json
       ) VALUES (
         @task_id, @runtime, @task_kind, @source_id, @requester_session_key, @owner_key,
         @scope_kind, @child_session_key, @parent_flow_id, @parent_task_id, @agent_id,
         @requester_agent_id, @run_id, @label, @task, @status, @delivery_status, @notify_policy,
         @created_at, @started_at, @ended_at, @last_event_at, @cleanup_after, @error,
-        @progress_summary, @terminal_summary, @terminal_outcome
+        @progress_summary, @terminal_summary, @terminal_outcome, @detail_json
       )
     `,
   ).run(row);
@@ -882,6 +885,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
           "progress_summary",
           "terminal_summary",
           "terminal_outcome",
+          "detail_json",
         ];
         for (const row of taskRows) {
           const taskId = legacyKeyValue(expectDefined(row.task_id, "task migration row key"));
