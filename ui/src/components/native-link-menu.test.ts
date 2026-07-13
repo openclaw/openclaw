@@ -97,7 +97,30 @@ describe("native link menu", () => {
     expect(calls).toEqual(["close", "copy"]);
   });
 
-  it("restores its trigger and closes after Web Awesome hides", async () => {
+  it("closes on Escape without leaking the key to an underlying dialog", async () => {
+    const trigger = document.createElement("a");
+    trigger.href = "https://example.com";
+    document.body.append(trigger);
+    containers.push(trigger);
+    const onClose = vi.fn();
+    const menu = await mountMenu({ trigger, onClose });
+    const escaped = vi.fn();
+    menu.addEventListener("keydown", escaped);
+
+    const keydown = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    menu.dispatchEvent(keydown);
+
+    expect(keydown.defaultPrevented).toBe(true);
+    expect(escaped).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("closes after Web Awesome hides without stealing focus", async () => {
     const trigger = document.createElement("a");
     trigger.href = "https://example.com";
     document.body.append(trigger);
@@ -110,6 +133,6 @@ describe("native link menu", () => {
       ?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).toBe(trigger);
+    expect(document.activeElement).not.toBe(trigger);
   });
 });

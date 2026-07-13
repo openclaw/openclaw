@@ -82,15 +82,25 @@ describe("chat composer view menu", () => {
     render(renderChatControls(createProps({ onSettingsChange })), container);
 
     const [reasoning, toolCalls, commentary] = menuItems(container);
-    reasoning?.click();
+    const dropdown = container.querySelector("wa-dropdown");
+    const select = (item: HTMLElement) =>
+      dropdown?.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          detail: { item },
+        }),
+      );
+    select(reasoning!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatShowThinking: false }),
     );
-    toolCalls?.click();
+    select(toolCalls!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatShowToolCalls: false }),
     );
-    commentary?.click();
+    select(commentary!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatPersistCommentary: true }),
     );
@@ -105,7 +115,14 @@ describe("chat composer view menu", () => {
     expect(items.every((item) => item.disabled)).toBe(true);
     // Onboarding forces thinking hidden and tool calls visible.
     expect(items.map((item) => item.checked)).toEqual([false, true, false]);
-    items[0]?.click();
+    container.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        detail: { item: items[0] },
+      }),
+    );
     expect(onSettingsChange).not.toHaveBeenCalled();
   });
 

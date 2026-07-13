@@ -88,6 +88,13 @@ class SessionMenu extends OpenClawLightDomElement {
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.trigger?.focus();
+      this.onClose();
+      return;
+    }
     activateMenuShortcut(this, event);
   };
 
@@ -206,8 +213,8 @@ class SessionMenu extends OpenClawLightDomElement {
         placement="bottom-start"
         .distance=${0}
         aria-label=${menuLabel}
+        @wa-select=${(event: Event) => event.preventDefault()}
         @wa-after-hide=${() => {
-          this.trigger?.focus();
           this.onClose();
         }}
       >

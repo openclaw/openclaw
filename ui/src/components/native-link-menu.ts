@@ -26,6 +26,13 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.trigger?.focus();
+      this.onClose();
+      return;
+    }
     activateMenuShortcut(this, event);
   };
 
@@ -47,7 +54,6 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
         .distance=${0}
         aria-label=${t("nativeLinkMenu.label")}
         @wa-after-hide=${() => {
-          this.trigger?.focus();
           this.onClose();
         }}
       >

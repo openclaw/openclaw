@@ -339,7 +339,25 @@ describe("session menu", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("restores its trigger and closes after Web Awesome hides", async () => {
+  it("closes on Escape without leaking the key past the menu", async () => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    containers.push(trigger);
+    const onClose = vi.fn();
+    const menu = await mountMenu({ trigger, onClose });
+    const escaped = vi.fn();
+    menu.addEventListener("keydown", escaped);
+
+    menu.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+
+    expect(escaped).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("closes after Web Awesome hides without stealing focus", async () => {
     const trigger = document.createElement("button");
     document.body.append(trigger);
     containers.push(trigger);
@@ -351,6 +369,6 @@ describe("session menu", () => {
       ?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).toBe(trigger);
+    expect(document.activeElement).not.toBe(trigger);
   });
 });

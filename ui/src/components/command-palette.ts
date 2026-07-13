@@ -258,6 +258,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
         >
         <input
           ${ref(props.onInputRef)}
+          autofocus
           id=${paletteInputId}
           class="cmd-palette__input"
           role="combobox"

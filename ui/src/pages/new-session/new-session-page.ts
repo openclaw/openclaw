@@ -439,7 +439,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private closeBrowser() {
     this.browserRequestToken += 1;
-    // Reset state before collapsing the <details> so its toggle handler sees
+    // Reset state before collapsing the dropdown so its hide handler sees
     // browserOpen === false and does not re-enter this method.
     this.browserOpen = false;
     this.browserLoading = false;
@@ -447,11 +447,11 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserListing = null;
     this.browserTarget = null;
     this.browserPathDraft = "";
-    const details = this.querySelector<HTMLDetailsElement>(
+    const dropdown = this.querySelector<HTMLElement & { open: boolean }>(
       ".new-session-page__select--folder[open]",
     );
-    if (details) {
-      details.open = false;
+    if (dropdown) {
+      dropdown.open = false;
     }
   }
 

@@ -250,6 +250,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         placement="bottom-start"
         .distance=${0}
         aria-label=${t("nav.customize")}
+        @wa-select=${(event: Event) => event.preventDefault()}
         @wa-after-hide=${params.onClose}
       >
         <button

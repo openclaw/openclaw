@@ -2238,22 +2238,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   height: 6px;
 }
 
-/* The docs row is the menu's only real hyperlink; keep it looking like a row. */
-.sidebar-agent-menu a.sidebar-customize-menu__item {
-  color: inherit;
-  text-decoration: none;
-}
-
-/* The help flyout must escape the menu box, so the root stays
-   overflow-visible; the viewport bound moves to a flex column where only
-   the switcher list shrinks and scrolls (the action rows always fit). */
-.sidebar-agent-menu {
-  display: flex;
-  flex-direction: column;
-  overflow: visible;
-  max-height: calc(100vh - 16px);
-}
-
 /* Large rosters: the switcher list scrolls; the utility rows below stay put. */
 .sidebar-agent-menu__list {
   flex: 0 1 auto;
@@ -2261,71 +2245,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   max-height: 264px;
   overflow-y: auto;
   overscroll-behavior: contain;
-}
-
-.sidebar-customize-menu__submenu-host {
-  position: relative;
-}
-
-/* Bottom-aligned like the parent menu: both grow upward from the footer.
-   Fixed link list, no scrolling: overflow stays visible so the ::before
-   hover bridge below is not clipped away. */
-.sidebar-agent-menu .sidebar-customize-menu__submenu {
-  position: absolute;
-  bottom: -6px;
-  left: calc(100% + 4px);
-  overflow: visible;
-}
-
-.sidebar-agent-menu .sidebar-customize-menu__submenu--left {
-  right: calc(100% + 4px);
-  left: auto;
-}
-
-/* Viewports too narrow for side-by-side menus: cover the parent instead. */
-.sidebar-agent-menu .sidebar-customize-menu__submenu--overlay {
-  right: -6px;
-  left: -6px;
-}
-
-/* Invisible bridge over the 4px visual gap so a slow pointer crossing it
-   never leaves the submenu host (which would close the flyout mid-travel). */
-.sidebar-agent-menu .sidebar-customize-menu__submenu::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -8px;
-  width: 8px;
-}
-
-.sidebar-agent-menu .sidebar-customize-menu__submenu--left::before {
-  right: -8px;
-  left: auto;
-}
-
-.sidebar-agent-menu .sidebar-customize-menu__submenu--overlay::before {
-  content: none;
-}
-
-.sidebar-customize-menu__chevron {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
-}
-
-.sidebar-customize-menu__chevron svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sidebar-agent-menu__filter {

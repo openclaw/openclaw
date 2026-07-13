@@ -58,6 +58,7 @@ export function renderChatControls(props: ChatControlsProps) {
   const open = props.viewMenuOpen;
   const menuTitle = props.onboarding ? t("chat.onboardingDisabled") : t("chat.view.menu");
   const menuId = `chat-view-menu-${encodeURIComponent(props.paneId)}`;
+  const rows = chatViewMenuRows(props);
   return html`
     <div class="chat-view-menu-wrapper">
       <openclaw-tooltip .content=${menuTitle}>
@@ -65,6 +66,15 @@ export function renderChatControls(props: ChatControlsProps) {
           id=${menuId}
           class="chat-view-menu"
           placement="top-start"
+          aria-label=${menuTitle}
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            event.preventDefault();
+            const value = event.detail.item.value;
+            const index = value?.startsWith("view-") ? Number(value.slice(5)) : -1;
+            if (!props.onboarding && Number.isInteger(index)) {
+              rows[index]?.onToggle();
+            }
+          }}
           .open=${open}
           @wa-show=${() => {
             if (!open) {
@@ -82,11 +92,10 @@ export function renderChatControls(props: ChatControlsProps) {
             class="chat-view-menu-trigger ${open ? "chat-view-menu-trigger--open" : ""}"
             type="button"
             aria-label=${menuTitle}
-            @click=${(event: Event) => event.stopPropagation()}
           >
             ${icons.eye}
           </button>
-          ${chatViewMenuRows(props).map(
+          ${rows.map(
             (row, index) => html`
               <wa-dropdown-item
                 class="chat-view-menu__item"
@@ -94,11 +103,6 @@ export function renderChatControls(props: ChatControlsProps) {
                 value=${`view-${index}`}
                 .checked=${row.checked}
                 ?disabled=${props.onboarding}
-                @click=${() => {
-                  if (!props.onboarding) {
-                    row.onToggle();
-                  }
-                }}
               >
                 <span class="chat-view-menu__text">${row.label}</span>
               </wa-dropdown-item>

@@ -93,17 +93,17 @@ async function deferTargetRepositorySelection(
   await gateway.waitForRequest("worktrees.branches");
 
   const whereSelect = page.locator(
-    ".new-session-page__select:not(.new-session-page__select--folder)",
+    "wa-dropdown.new-session-page__select:not(.new-session-page__select--folder)",
   );
-  await whereSelect.locator("summary").click();
-  await page.getByRole("menuitemradio", { name: "Worktree" }).click();
+  await whereSelect.locator(".new-session-page__trigger").click();
+  await page.getByRole("menuitemcheckbox", { name: "Worktree" }).click();
   const baseInput = page.getByLabel("Base branch");
   await expect.poll(() => baseInput.inputValue()).toBe("alpha");
   const requestsBeforeSwitch = (await gateway.getRequests("worktrees.branches")).length;
 
   await gateway.deferNext("worktrees.branches");
   const folderSelect = page.locator(".new-session-page__select--folder");
-  await folderSelect.locator("summary").click();
+  await folderSelect.locator(".new-session-page__trigger").click();
   await page
     .locator(".new-session-page__browser-list")
     .getByRole("button", { name: "Gateway" })
@@ -221,7 +221,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe("openclaw");
 
       // Browse from the workspace, descend one level, then adopt the folder.
-      await folderSelect.locator("summary").click();
+      await folderSelect.locator(".new-session-page__trigger").click();
       await page
         .locator(".new-session-page__browser-list")
         .getByRole("button", { name: "Gateway" })
@@ -243,7 +243,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const whereTrigger = page.locator('.new-session-page__trigger[data-worktree="true"]');
       await whereTrigger.waitFor();
       await whereTrigger.click();
-      const worktreeItem = page.getByRole("menuitemradio", { name: "Worktree" });
+      const worktreeItem = page.getByRole("menuitemcheckbox", { name: "Worktree" });
       await expect.poll(() => worktreeItem.getAttribute("aria-checked")).toBe("true");
       expect(await worktreeItem.isDisabled()).toBe(true);
       await page.keyboard.press("Escape");
@@ -391,10 +391,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const draft = page.locator(".new-session-page__scroll");
       const message = page.locator(".new-session-page__message");
       const whereSelect = page.locator(
-        ".new-session-page__select:not(.new-session-page__select--folder)",
+        "wa-dropdown.new-session-page__select:not(.new-session-page__select--folder)",
       );
-      const whereSummary = whereSelect.locator("summary");
-      const targetSummaries = page.locator(".new-session-page__select > summary");
+      const whereSummary = whereSelect.locator(".new-session-page__trigger");
+      const targetSummaries = page.locator('.new-session-page__select > [slot="trigger"]');
 
       await message.fill(submittedMessage);
       await whereSummary.click();
@@ -409,9 +409,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(await whereSelect.getAttribute("open")).toBeNull();
       expect(
         await targetSummaries.evaluateAll((summaries) =>
-          summaries.map((summary) => summary.getAttribute("aria-disabled")),
+          summaries.map((summary) => (summary as HTMLButtonElement).disabled),
         ),
-      ).toEqual(["true", "true"]);
+      ).toEqual([true, true]);
 
       await expect(
         message.fill("silently discarded late edit", { timeout: 250 }),
@@ -432,9 +432,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(await message.inputValue()).toBe(submittedMessage);
       expect(
         await targetSummaries.evaluateAll((summaries) =>
-          summaries.map((summary) => summary.getAttribute("aria-disabled")),
+          summaries.map((summary) => (summary as HTMLButtonElement).disabled),
         ),
-      ).toEqual(["false", "false"]);
+      ).toEqual([false, false]);
 
       await page.getByRole("button", { name: "Start session" }).click();
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
@@ -489,7 +489,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       const baseInput = await deferTargetRepositorySelection(page, gateway);
       await page
-        .locator(".new-session-page__select:not(.new-session-page__select--folder) summary")
+        .locator(
+          "wa-dropdown.new-session-page__select:not(.new-session-page__select--folder) .new-session-page__trigger",
+        )
         .click();
       await baseInput.fill("feature-choice");
       await gateway.resolveDeferred("worktrees.branches");
@@ -682,23 +684,23 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.locator(".new-session-page__message").waitFor();
       const folderSelect = page.locator(".new-session-page__select--folder");
       const whereSelect = page.locator(
-        ".new-session-page__select:not(.new-session-page__select--folder)",
+        "wa-dropdown.new-session-page__select:not(.new-session-page__select--folder)",
       );
-      const whereTrigger = whereSelect.locator("summary");
+      const whereTrigger = whereSelect.locator(".new-session-page__trigger");
       const whereLabel = whereSelect.locator(".new-session-page__trigger-label");
 
       // Pick the node from the where menu.
       await whereTrigger.click();
-      await page.getByRole("menuitemradio", { name: "MacBook" }).click();
+      await whereSelect.getByRole("menuitemcheckbox", { name: "MacBook" }).click();
       await expect.poll(() => whereLabel.textContent()).toBe("MacBook");
       // Node sessions cannot use managed worktrees, so the menu drops the item.
       await whereTrigger.click();
-      expect(await page.getByRole("menuitemradio", { name: "Worktree" }).count()).toBe(0);
+      expect(await whereSelect.getByRole("menuitemcheckbox", { name: "Worktree" }).count()).toBe(0);
       await page.keyboard.press("Escape");
 
       // Manual path entry in the browser head preserves UNC paths; these
       // cannot be rediscovered by starting at the node home directory.
-      await folderSelect.locator("summary").click();
+      await folderSelect.locator(".new-session-page__trigger").click();
       const roots = page.locator(".new-session-page__browser-list");
       await roots.getByRole("button", { name: "MacBook" }).click();
       const pathInput = page.locator("input.new-session-page__browser-path");
@@ -708,12 +710,16 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => pathInput.inputValue()).toBe(NODE_UNC);
       // Close without applying; the draft keeps the node home default.
       await page.keyboard.press("Escape");
+      await expect.poll(() => folderSelect.evaluate((element) => element.open)).toBe(false);
 
       // Back on the Gateway, the browser super-root lists every node.
-      await whereTrigger.click();
-      await page.getByRole("menuitemradio", { name: "Gateway · local" }).click();
+      await whereSelect.evaluate((element) => {
+        (element as HTMLElement & { open: boolean }).open = true;
+      });
+      await expect.poll(() => whereSelect.evaluate((element) => element.open)).toBe(true);
+      await whereSelect.getByRole("menuitemcheckbox", { name: "Gateway · local" }).click();
       await expect.poll(() => whereLabel.textContent()).toBe("Gateway · local");
-      await folderSelect.locator("summary").click();
+      await folderSelect.locator(".new-session-page__trigger").click();
       await expect
         .poll(() =>
           roots
@@ -748,7 +754,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       // Clearing the path applies the node's default directory (empty folder),
       // the state the replaced clearable folder textbox could express.
-      await folderSelect.locator("summary").click();
+      await folderSelect.locator(".new-session-page__trigger").click();
       await roots.getByRole("button", { name: "MacBook" }).click();
       await expect.poll(() => pathInput.inputValue()).toBe(NODE_PICKED);
       await pathInput.fill("");
@@ -760,7 +766,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       // Browse back to the custom folder, then retarget to the exec-only node
       // with a manual absolute path for the final create assertion.
-      await folderSelect.locator("summary").click();
+      await folderSelect.locator(".new-session-page__trigger").click();
       await roots.getByRole("button", { name: "MacBook" }).click();
       await roots.getByRole("button", { name: "Projects" }).click();
       await page.getByRole("button", { name: "Use this folder" }).click();
@@ -768,7 +774,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
         .toBe("Projects");
 
-      await folderSelect.locator("summary").click();
+      await folderSelect.locator(".new-session-page__trigger").click();
       await roots.getByRole("button", { name: "Old node" }).click();
       await expect.poll(() => pathInput.inputValue()).toBe("");
       await pathInput.fill(EXEC_ONLY_PICKED);

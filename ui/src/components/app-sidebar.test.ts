@@ -466,9 +466,11 @@ describe("AppSidebar agent chip", () => {
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
     // External help links stay folded into Web Awesome's keyboard-navigable submenu.
-    const helpRow = [
-      ...(menu?.querySelectorAll<HTMLElement>("wa-dropdown-item") ?? []),
-    ].find((row) => row.textContent?.includes("Help"));
+    const helpRow = [...(menu?.querySelectorAll<HTMLElement>("wa-dropdown-item") ?? [])].find(
+      (row) => row.textContent?.includes("Help"),
+    );
+    await (helpRow as (HTMLElement & { updateComplete?: Promise<unknown> }) | undefined)
+      ?.updateComplete;
     expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
     helpRow?.click();
     await sidebar.updateComplete;
@@ -545,9 +547,9 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-    expect(sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]')).toHaveLength(
-      10,
-    );
+    expect(
+      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]'),
+    ).toHaveLength(10);
   });
 
   it("shows pinned agents plus filter for large rosters and filters on input", async () => {
@@ -600,9 +602,9 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
-    expect(sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]')).toHaveLength(
-      10,
-    );
+    expect(
+      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]'),
+    ).toHaveLength(10);
   });
 
   it("ignores stale pins when choosing the large-roster fallback", async () => {
@@ -619,9 +621,9 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
-    expect(sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]')).toHaveLength(
-      10,
-    );
+    expect(
+      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]'),
+    ).toHaveLength(10);
   });
 
   it("keeps an active agent outside the first ten reachable when nothing is pinned", async () => {
