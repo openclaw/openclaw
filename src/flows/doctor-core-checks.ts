@@ -1,5 +1,6 @@
 // Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -609,15 +610,28 @@ function collectRuntimePolicySlots(params: { models: unknown; path: string }): R
 
 function runtimePolicyMatchesModelRef(policy: RuntimePolicySlot, modelKeyValue: string): boolean {
   const key = policy.key.trim();
-  if (!key.endsWith("/*")) {
+  const separatorIndex = modelKeyValue.indexOf("/");
+  if (separatorIndex <= 0) {
     return key === modelKeyValue;
   }
-  const provider = key.slice(0, -2).trim();
-  return Boolean(provider) && modelKeyValue.startsWith(`${provider}/`);
+  const provider = normalizeProviderId(modelKeyValue.slice(0, separatorIndex));
+  const modelId = modelKeyValue.slice(separatorIndex + 1);
+  if (key === modelId) {
+    return true;
+  }
+  const policySeparatorIndex = key.indexOf("/");
+  if (policySeparatorIndex <= 0) {
+    return false;
+  }
+  const policyProvider = normalizeProviderId(key.slice(0, policySeparatorIndex));
+  const policyModelId = key.slice(policySeparatorIndex + 1).trim();
+  return policyProvider === provider && (policyModelId === modelId || policyModelId === "*");
 }
 
-function formatAgentPath(path: string): string {
-  return path === "agents.defaults" ? "agents.defaults" : path.replace(/^agents\.list\./, "agent ");
+function formatAgentPath(agentPath: string): string {
+  return agentPath === "agents.defaults"
+    ? "agents.defaults"
+    : agentPath.replace(/^agents\.list\./, "agent ");
 }
 
 async function collectAgentModelRuntimePolicyFindings(

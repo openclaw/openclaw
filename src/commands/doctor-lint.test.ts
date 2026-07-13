@@ -331,6 +331,43 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it("accepts bare model keys used by runtime policy resolution", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            models: {
+              "gpt-5.5": {
+                agentRuntime: { id: "pi" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      path: "/tmp/openclaw.json",
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: ["core/doctor/agent-model-runtime-policies"],
+      });
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        ok: true,
+        checksRun: 1,
+        findings: [],
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("fails informational findings when severity-min is explicit", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
