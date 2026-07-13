@@ -24,8 +24,8 @@ vi.mock("openclaw/plugin-sdk/media-store", () => ({
 }));
 
 let downloadInboundMedia: typeof import("./media.js").downloadInboundMedia;
-let WhatsAppInboundMediaTimeoutError: typeof import("./media.js").WhatsAppInboundMediaTimeoutError;
-let WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS: typeof import("./media.js").WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS;
+
+const WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30_000;
 
 const mockSock = {
   updateMediaMessage: vi.fn(),
@@ -48,11 +48,7 @@ async function expectMimetype(message: Record<string, unknown>, expected: string
 
 describe("downloadInboundMedia", () => {
   beforeAll(async () => {
-    ({
-      downloadInboundMedia,
-      WhatsAppInboundMediaTimeoutError,
-      WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS,
-    } = await import("./media.js"));
+    ({ downloadInboundMedia } = await import("./media.js"));
   });
 
   beforeEach(() => {
@@ -176,7 +172,9 @@ describe("downloadInboundMedia", () => {
               if (yielded) {
                 return { value: undefined as unknown as Buffer, done: true };
               }
-              await new Promise((r) => setTimeout(r, delayMs));
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, delayMs);
+              });
               yielded = true;
               return { value: payload, done: false };
             },
@@ -194,12 +192,12 @@ describe("downloadInboundMedia", () => {
         1024 * 1024,
         { chunkTimeoutMs: 50 },
       );
-      await expect(promise).rejects.toBeInstanceOf(WhatsAppInboundMediaTimeoutError);
+      await expect(promise).rejects.toMatchObject({
+        name: "WhatsAppInboundMediaTimeoutError",
+        chunkTimeoutMs: 50,
+      });
       const elapsedMs = Date.now() - startedAt;
       expect(elapsedMs).toBeLessThan(1_000);
-      await expect(
-        promise.catch((e: WhatsAppInboundMediaTimeoutError) => e.chunkTimeoutMs),
-      ).resolves.toBe(50);
       console.log(
         `[whatsapp media idle proof] timed_out=true elapsed_ms=${elapsedMs} chunkTimeoutMs=50 production_ms=${WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS}`,
       );
@@ -218,8 +216,29 @@ describe("downloadInboundMedia", () => {
       expect(result?.saved.size).toBe(jpeg.byteLength);
     });
 
-    it("exposes WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30s aligned with Telegram", () => {
-      expect(WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS).toBe(30_000);
+    it("defaults to a 30s production idle floor when chunkTimeoutMs is omitted", async () => {
+      vi.useFakeTimers();
+      try {
+        downloadMediaMessage.mockResolvedValueOnce(neverYieldingStream());
+        const promise = downloadInboundMedia(
+          { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
+          mockSock as never,
+          1024 * 1024,
+        );
+        const expectation = expect(promise).rejects.toMatchObject({
+          name: "WhatsAppInboundMediaTimeoutError",
+          chunkTimeoutMs: WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS,
+        });
+        await vi.advanceTimersByTimeAsync(WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS - 1);
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(1);
+        await expectation;
+        console.log(
+          `[whatsapp media idle proof] production_default_ms=${WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS} timed_out=true`,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("calls iterator.return() exactly once on timeout so the upstream Readable is destroyed", async () => {
@@ -242,7 +261,7 @@ describe("downloadInboundMedia", () => {
           1024 * 1024,
           { chunkTimeoutMs: 50 },
         ),
-      ).rejects.toBeInstanceOf(WhatsAppInboundMediaTimeoutError);
+      ).rejects.toMatchObject({ name: "WhatsAppInboundMediaTimeoutError" });
       expect(returnSpy).toHaveBeenCalledTimes(1);
     });
   });

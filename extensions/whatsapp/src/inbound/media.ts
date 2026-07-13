@@ -11,7 +11,7 @@ import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js"
  * Matches Telegram `TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000` so a stalled
  * Baileys media stream cannot block inbound dispatch indefinitely.
  */
-export const WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30_000;
+const WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30_000;
 
 class WhatsAppInboundMediaLimitExceededError extends Error {
   constructor(maxBytes: number) {
@@ -20,7 +20,7 @@ class WhatsAppInboundMediaLimitExceededError extends Error {
   }
 }
 
-export class WhatsAppInboundMediaTimeoutError extends Error {
+class WhatsAppInboundMediaTimeoutError extends Error {
   readonly chunkTimeoutMs: number;
   constructor(chunkTimeoutMs: number) {
     super(`WhatsApp media download stalled: no data received for ${chunkTimeoutMs}ms`);
