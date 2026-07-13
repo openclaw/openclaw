@@ -411,8 +411,10 @@ import {
   installPromptSubmissionLockRelease,
 } from "./attempt.session-lock.js";
 import {
+  isSessionsYieldAbortError,
   persistSessionsYieldContextMessage,
   queueSessionsYieldInterruptMessage,
+  SESSIONS_YIELD_ABORT_REASON,
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
@@ -1518,7 +1520,7 @@ export async function runEmbeddedAttempt(
               yieldDetected = true;
               yieldMessage = message;
               queueYieldInterruptForSession?.();
-              runAbortController.abort("sessions_yield");
+              runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
               abortSessionForYield?.();
             },
           });
@@ -2875,8 +2877,8 @@ export async function runEmbeddedAttempt(
         trackSettlePromise(inFlightPromptSettlePromises, promise);
       const trackAbortSettlePromise = (promise: Promise<void>): Promise<void> =>
         trackSettlePromise(inFlightAbortSettlePromises, promise);
-      const abortActiveSession = (): Promise<void> =>
-        trackAbortSettlePromise(Promise.resolve(activeSession.abort()));
+      const abortActiveSession = (reason?: unknown): Promise<void> =>
+        trackAbortSettlePromise(Promise.resolve(activeSession.abort(reason)));
       abortActiveSessionForExternalSignal = abortActiveSession;
       buildAbortSettlePromise = (): Promise<void> | null => {
         const promises = [...inFlightPromptSettlePromises, ...inFlightAbortSettlePromises];
@@ -2886,7 +2888,7 @@ export async function runEmbeddedAttempt(
         return Promise.allSettled(promises).then(() => undefined);
       };
       abortSessionForYield = () => {
-        yieldAbortSettled = abortActiveSession();
+        yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
       };
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
@@ -4939,11 +4941,7 @@ export async function runEmbeddedAttempt(
           }
         } catch (err) {
           releaseLeasedSteering(err);
-          yieldAborted =
-            yieldDetected &&
-            isRunnerAbortError(err) &&
-            err instanceof Error &&
-            err.cause === "sessions_yield";
+          yieldAborted = yieldDetected && isSessionsYieldAbortError(err);
           cleanupYieldAborted = yieldAborted;
           if (yieldAborted) {
             aborted = false;
