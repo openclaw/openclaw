@@ -192,21 +192,11 @@ async function waitForObservedApprovalEvent(params: {
     if (excludedRoomIds.has(event.roomId)) {
       return false;
     }
-    if (
-      roomIds.some((roomId) =>
-        isExpectedApprovalEvent(event, {
-          ...params,
-          roomId,
-        }),
-      )
-    ) {
-      return true;
-    }
-    return (
-      event.sender === params.context.sutUserId &&
-      event.type === "m.room.message" &&
-      event.approval?.kind === params.expectedKind &&
-      event.approval.id === params.expectedApprovalId
+    return roomIds.some((roomId) =>
+      isExpectedApprovalEvent(event, {
+        ...params,
+        roomId,
+      }),
     );
   };
   const startedAt = Date.now();

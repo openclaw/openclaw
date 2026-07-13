@@ -1350,6 +1350,62 @@ export async function runRoomAutoJoinInviteScenario(context: MatrixQaScenarioCon
   } satisfies MatrixQaScenarioExecution;
 }
 
+async function restoreMembershipLossRoom(params: {
+  context: MatrixQaScenarioContext;
+  driverClient: ReturnType<typeof createMatrixQaDriverScenarioClient>;
+  roomId: string;
+  sutClient: ReturnType<typeof createMatrixQaScenarioClient>;
+}) {
+  await params.driverClient.inviteUserToRoom({
+    roomId: params.roomId,
+    userId: params.context.sutUserId,
+  });
+  await waitForMembershipEvent({
+    accessToken: params.context.driverAccessToken,
+    actorId: "driver",
+    baseUrl: params.context.baseUrl,
+    membership: "invite",
+    observedEvents: params.context.observedEvents,
+    roomId: params.roomId,
+    stateKey: params.context.sutUserId,
+    syncState: params.context.syncState,
+    syncStreams: params.context.syncStreams,
+    timeoutMs: params.context.timeoutMs,
+  });
+  await params.sutClient.joinRoom(params.roomId);
+  return await waitForMembershipEvent({
+    accessToken: params.context.driverAccessToken,
+    actorId: "driver",
+    baseUrl: params.context.baseUrl,
+    membership: "join",
+    observedEvents: params.context.observedEvents,
+    roomId: params.roomId,
+    stateKey: params.context.sutUserId,
+    syncState: params.context.syncState,
+    syncStreams: params.context.syncStreams,
+    timeoutMs: params.context.timeoutMs,
+  });
+}
+
+async function ensureMembershipLossRoomRestored(params: {
+  driverClient: ReturnType<typeof createMatrixQaDriverScenarioClient>;
+  roomId: string;
+  sutClient: ReturnType<typeof createMatrixQaScenarioClient>;
+  sutUserId: string;
+}) {
+  try {
+    await params.sutClient.joinRoom(params.roomId);
+    return;
+  } catch {
+    // A kicked member needs an invite; an already joined member succeeds above.
+  }
+  await params.driverClient.inviteUserToRoom({
+    roomId: params.roomId,
+    userId: params.sutUserId,
+  });
+  await params.sutClient.joinRoom(params.roomId);
+}
+
 export async function runMembershipLossScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEMBERSHIP_ROOM_KEY);
   const driverClient = createMatrixQaDriverScenarioClient(context);
@@ -1357,97 +1413,101 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     accessToken: context.sutAccessToken,
     baseUrl: context.baseUrl,
   });
+  let membershipRestored = false;
+  let scenarioFailure: unknown;
 
-  await driverClient.kickUserFromRoom({
-    reason: "matrix qa membership loss",
-    roomId,
-    userId: context.sutUserId,
-  });
-  const leaveEvent = await waitForMembershipEvent({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    membership: "leave",
-    observedEvents: context.observedEvents,
-    roomId,
-    stateKey: context.sutUserId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
-    timeoutMs: context.timeoutMs,
-  });
+  try {
+    await driverClient.kickUserFromRoom({
+      reason: "matrix qa membership loss",
+      roomId,
+      userId: context.sutUserId,
+    });
+    const leaveEvent = await waitForMembershipEvent({
+      accessToken: context.driverAccessToken,
+      actorId: "driver",
+      baseUrl: context.baseUrl,
+      membership: "leave",
+      observedEvents: context.observedEvents,
+      roomId,
+      stateKey: context.sutUserId,
+      syncState: context.syncState,
+      syncStreams: context.syncStreams,
+      timeoutMs: context.timeoutMs,
+    });
 
-  const noReplyToken = `MATRIX_QA_MEMBERSHIP_LOSS_${randomUUID().slice(0, 8).toUpperCase()}`;
-  await runNoReplyExpectedScenario({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    actorUserId: context.driverUserId,
-    baseUrl: context.baseUrl,
-    body: buildMentionPrompt(context.sutUserId, noReplyToken),
-    mentionUserIds: [context.sutUserId],
-    observedEvents: context.observedEvents,
-    roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
-    sutUserId: context.sutUserId,
-    timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
-    token: noReplyToken,
-  });
+    const noReplyToken = `MATRIX_QA_MEMBERSHIP_LOSS_${randomUUID().slice(0, 8).toUpperCase()}`;
+    await runNoReplyExpectedScenario({
+      accessToken: context.driverAccessToken,
+      actorId: "driver",
+      actorUserId: context.driverUserId,
+      baseUrl: context.baseUrl,
+      body: buildMentionPrompt(context.sutUserId, noReplyToken),
+      mentionUserIds: [context.sutUserId],
+      observedEvents: context.observedEvents,
+      roomId,
+      syncState: context.syncState,
+      syncStreams: context.syncStreams,
+      sutUserId: context.sutUserId,
+      timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
+      token: noReplyToken,
+    });
 
-  await driverClient.inviteUserToRoom({
-    roomId,
-    userId: context.sutUserId,
-  });
-  await waitForMembershipEvent({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    membership: "invite",
-    observedEvents: context.observedEvents,
-    roomId,
-    stateKey: context.sutUserId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
-    timeoutMs: context.timeoutMs,
-  });
-  await sutClient.joinRoom(roomId);
-  const joinEvent = await waitForMembershipEvent({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    membership: "join",
-    observedEvents: context.observedEvents,
-    roomId,
-    stateKey: context.sutUserId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
-    timeoutMs: context.timeoutMs,
-  });
+    const joinEvent = await restoreMembershipLossRoom({
+      context,
+      driverClient,
+      roomId,
+      sutClient,
+    });
+    membershipRestored = true;
+    const recovered = await runTopologyScopedTopLevelScenario({
+      accessToken: context.driverAccessToken,
+      actorId: "driver",
+      actorUserId: context.driverUserId,
+      context,
+      roomKey: MATRIX_QA_MEMBERSHIP_ROOM_KEY,
+      tokenPrefix: "MATRIX_QA_MEMBERSHIP_RETURN",
+    });
 
-  const recovered = await runTopologyScopedTopLevelScenario({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    actorUserId: context.driverUserId,
-    context,
-    roomKey: MATRIX_QA_MEMBERSHIP_ROOM_KEY,
-    tokenPrefix: "MATRIX_QA_MEMBERSHIP_RETURN",
-  });
-
-  return {
-    artifacts: {
-      ...recovered.artifacts,
-      membershipJoinEventId: joinEvent.eventId,
-      membershipLeaveEventId: leaveEvent.eventId,
-      recoveredDriverEventId: recovered.artifacts?.driverEventId,
-      recoveredReply: recovered.artifacts?.reply,
-    },
-    details: [
-      `room key: ${MATRIX_QA_MEMBERSHIP_ROOM_KEY}`,
-      `room id: ${roomId}`,
-      `leave event: ${leaveEvent.eventId}`,
-      `join event: ${joinEvent.eventId}`,
-      recovered.details,
-    ].join("\n"),
-  } satisfies MatrixQaScenarioExecution;
+    return {
+      artifacts: {
+        ...recovered.artifacts,
+        membershipJoinEventId: joinEvent.eventId,
+        membershipLeaveEventId: leaveEvent.eventId,
+        recoveredDriverEventId: recovered.artifacts?.driverEventId,
+        recoveredReply: recovered.artifacts?.reply,
+      },
+      details: [
+        `room key: ${MATRIX_QA_MEMBERSHIP_ROOM_KEY}`,
+        `room id: ${roomId}`,
+        `leave event: ${leaveEvent.eventId}`,
+        `join event: ${joinEvent.eventId}`,
+        recovered.details,
+      ].join("\n"),
+    } satisfies MatrixQaScenarioExecution;
+  } catch (error) {
+    scenarioFailure = error;
+    throw error;
+  } finally {
+    // Arm cleanup before the kick: a lost response can still mean the kick applied.
+    if (!membershipRestored) {
+      try {
+        await ensureMembershipLossRoomRestored({
+          driverClient,
+          roomId,
+          sutClient,
+          sutUserId: context.sutUserId,
+        });
+      } catch (cleanupError) {
+        if (scenarioFailure !== undefined) {
+          throw new AggregateError(
+            [scenarioFailure, cleanupError],
+            "Matrix membership-loss scenario and membership restoration both failed",
+          );
+        }
+        throw cleanupError;
+      }
+    }
+  }
 }
 
 export async function runReactionThreadedScenario(context: MatrixQaScenarioContext) {

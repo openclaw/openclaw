@@ -402,14 +402,9 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
     event.relatesTo === undefined &&
     event.msgtype === "m.image" &&
     event.attachment?.kind === "image";
-  let matched = await client.waitForOptionalRoomEvent({
-    observedEvents: context.observedEvents,
-    predicate: isGeneratedImageEvent,
-    roomId,
-    since: startSince,
-    timeoutMs: 0,
-  });
-  for (let attempt = 1; !matched.matched && attempt <= 2; attempt += 1) {
+  let matched: Awaited<ReturnType<typeof client.waitForOptionalRoomEvent>> | undefined;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const triggerSentAt = Date.now();
     const driverEventId = await client.sendTextMessage({
       body: triggerBody,
       mentionUserIds: [context.sutUserId],
@@ -418,13 +413,20 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
     driverEventIds.push(driverEventId);
     matched = await client.waitForOptionalRoomEvent({
       observedEvents: context.observedEvents,
-      predicate: isGeneratedImageEvent,
+      // The start cursor can still receive delayed images from an earlier run.
+      predicate: (event) =>
+        isGeneratedImageEvent(event) &&
+        typeof event.originServerTs === "number" &&
+        event.originServerTs >= triggerSentAt,
       roomId,
-      since: matched.since ?? startSince,
+      since: matched?.since ?? startSince,
       timeoutMs: context.timeoutMs,
     });
+    if (matched.matched) {
+      break;
+    }
   }
-  if (!matched.matched) {
+  if (!matched?.matched) {
     throw new Error(
       `timed out after ${context.timeoutMs}ms waiting for Matrix generated image after ${driverEventIds.length} attempt(s)`,
     );
