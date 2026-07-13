@@ -1754,7 +1754,6 @@ export const vi: TranslationMap = {
     filterAll: "Tất cả",
     filterIssues: "Sự cố",
     filterLabel: "Lọc plugin đã cài đặt",
-    pulseLabel: "{enabled} đã bật, {disabled} đã tắt, {issues} có sự cố",
     categoryChannels: "Kênh",
     categoryProviders: "Nhà cung cấp mô hình",
     categoryMemory: "Bộ nhớ",

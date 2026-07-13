@@ -1742,7 +1742,6 @@ export const ar: TranslationMap = {
     filterAll: "الكل",
     filterIssues: "المشكلات",
     filterLabel: "تصفية المكونات الإضافية المثبتة",
-    pulseLabel: "{enabled} مفعّل، {disabled} معطّل، {issues} به مشكلات",
     categoryChannels: "القنوات",
     categoryProviders: "موفرو النماذج",
     categoryMemory: "الذاكرة",

@@ -1752,7 +1752,6 @@ export const id: TranslationMap = {
     filterAll: "Semua",
     filterIssues: "Masalah",
     filterLabel: "Filter plugin terinstal",
-    pulseLabel: "{enabled} diaktifkan, {disabled} dinonaktifkan, {issues} bermasalah",
     categoryChannels: "Saluran",
     categoryProviders: "Penyedia model",
     categoryMemory: "Memori",

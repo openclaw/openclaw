@@ -1748,7 +1748,6 @@ export const fa: TranslationMap = {
     filterAll: "همه",
     filterIssues: "مشکلات",
     filterLabel: "فیلتر کردن افزونه‌های نصب‌شده",
-    pulseLabel: "{enabled} فعال، {disabled} غیرفعال، {issues} دارای مشکل",
     categoryChannels: "کانال‌ها",
     categoryProviders: "ارائه‌دهندگان مدل",
     categoryMemory: "حافظه",
