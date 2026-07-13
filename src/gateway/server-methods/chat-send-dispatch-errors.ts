@@ -154,7 +154,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
 
     let restartSafeDispatchFailureTerminalized = false;
-    if (restartSafeAdmission) {
+    if (restartSafeAdmission && !agentTerminalPersistenceOwnedAtDispatchReject) {
       restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
         retryable: true,
         status: "failed",

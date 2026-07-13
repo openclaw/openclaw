@@ -2117,7 +2117,7 @@ describe("gateway server chat", () => {
         entries: {
           main: {
             sessionId: "sess-main",
-            status: "running",
+            status: "done",
             startedAt: 900,
             updatedAt: Date.now(),
           },
@@ -2146,32 +2146,26 @@ describe("gateway server chat", () => {
         throw signal?.reason instanceof Error ? signal.reason : new Error("lifecycle interrupted");
       });
 
-      const params = {
-        sessionKey: "main",
-        message: "preserve an earlier agent terminal",
-        idempotencyKey: runId,
-      };
       const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-      const { chatHandlers } = await import("./server-methods/chat.js");
-      await expectDefined(
-        chatHandlers["chat.send"],
-        'chatHandlers["chat.send"] test invariant',
-      )({
-        req: { type: "req", id: "send", method: "chat.send", params },
-        params,
-        client: null,
-        isWebchatConnect: () => false,
-        respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+      await sendControlUiChat({
         context,
+        idempotencyKey: runId,
+        message: "preserve an earlier restart-safe agent terminal",
+        respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
       });
       await vi.waitFor(() => {
         expect(responses).toEqual([
           {
             ok: true,
-            payload: { runId, status: "started" },
+            payload: expect.objectContaining({ runId, status: "started" }),
           },
         ]);
         expect(context.chatAbortControllers.has(runId)).toBe(true);
+        expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+          restartRecoveryDeliveryRunId: runId,
+          restartRecoveryDeliverySourceRunId: runId,
+          status: "running",
+        });
       }, FAST_WAIT_OPTS);
       await dispatchEntered.promise;
 
@@ -2214,6 +2208,8 @@ describe("gateway server chat", () => {
       }
       expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
         abortedLastRun: true,
+        restartRecoveryDeliveryRunId: runId,
+        restartRecoveryDeliverySourceRunId: runId,
         sessionId: "sess-main",
         status: "killed",
       });
@@ -2230,6 +2226,8 @@ describe("gateway server chat", () => {
         );
         expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
           abortedLastRun: true,
+          restartRecoveryDeliveryRunId: runId,
+          restartRecoveryDeliverySourceRunId: runId,
           sessionId: "sess-main",
           status: "killed",
         });
