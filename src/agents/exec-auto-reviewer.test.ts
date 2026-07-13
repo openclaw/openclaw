@@ -197,7 +197,7 @@ describe("createModelExecAutoReviewer", () => {
       },
     });
 
-    await expect(reviewer({ ...input, host: "node", nodeId: "node-1" })).resolves.toEqual({
+    await expect(reviewer(input)).resolves.toEqual({
       decision: "ask",
       risk: "high",
       rationale: "network side effect",
@@ -224,7 +224,6 @@ describe("createModelExecAutoReviewer", () => {
       }),
     );
     expect(capturedPrompt).toContain('"resolvedPath": "/usr/bin/git"');
-    expect(capturedPrompt).toContain('"nodeId"');
     expect(capturedPrompt).not.toContain("sessionKey");
   });
 
@@ -312,11 +311,41 @@ describe("createModelExecAutoReviewer", () => {
     await reviewer(input);
     await reviewer({ ...input, argv: ["git", "status", "--short"] });
     await reviewer({ ...input, resolvedPath: "/opt/homebrew/bin/git" });
-    await reviewer({ ...input, host: "node", executableIdentity: "/usr/bin/git" });
-    await reviewer({ ...input, host: "node", nodeId: "node-2" });
 
-    expect(prepare).toHaveBeenCalledTimes(5);
-    expect(complete).toHaveBeenCalledTimes(5);
+    expect(prepare).toHaveBeenCalledTimes(3);
+    expect(complete).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not reuse verdicts for node-host requests", async () => {
+    const prepare = vi.fn(async () => ({
+      selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
+      model: { provider: "openrouter", id: "reviewer", api: "openai" },
+      auth: { apiKey: "key", mode: "env" },
+    }));
+    const complete = vi.fn(async () => ({
+      stopReason: "stop" as const,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ decision: "allow", risk: "low", rationale: "safe" }),
+        },
+      ],
+    }));
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      deps: {
+        prepareSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      },
+    });
+    const nodeInput = { ...input, host: "node" as const, resolvedPath: null };
+
+    await reviewer(nodeInput);
+    await reviewer(nodeInput);
+
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it("does not memoize human-review fallback decisions", async () => {

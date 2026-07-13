@@ -55,8 +55,6 @@ function stringifyInput(input: ExecAutoReviewInput): string {
       command: input.command,
       argv: input.argv,
       resolvedPath: input.resolvedPath,
-      executableIdentity: input.executableIdentity,
-      nodeId: input.nodeId,
       cwd: input.cwd,
       envKeys: input.envKeys,
       host: input.host,
@@ -86,8 +84,6 @@ function buildReviewerMemoKey(input: ExecAutoReviewInput): string {
     command: input.command,
     argv: input.argv ?? [],
     resolvedPath: input.resolvedPath ?? null,
-    executableIdentity: input.executableIdentity ?? null,
-    nodeId: input.nodeId ?? null,
     cwd: input.cwd ?? null,
     envKeys: input.envKeys ?? [],
     host: input.host,
@@ -114,8 +110,16 @@ function rememberReviewerDecision(
   memo.set(key, decision);
 }
 
-function shouldMemoizeReviewerDecision(decision: ExecAutoReviewDecision): boolean {
-  return decision.decision === "allow-once" && decision.risk === "low";
+function shouldMemoizeReviewerDecision(
+  input: ExecAutoReviewInput,
+  decision: ExecAutoReviewDecision,
+): boolean {
+  return (
+    input.host === "gateway" &&
+    Boolean(input.resolvedPath) &&
+    decision.decision === "allow-once" &&
+    decision.risk === "low"
+  );
 }
 
 function normalizeRationale(value: unknown, fallback: string): string {
@@ -153,8 +157,6 @@ function hasReviewerDirective(input: ExecAutoReviewInput): boolean {
     input.command,
     ...(input.argv ?? []),
     input.resolvedPath ?? "",
-    input.executableIdentity ?? "",
-    input.nodeId ?? "",
     input.cwd ?? "",
     ...(input.envKeys ?? []),
   ];
@@ -407,7 +409,7 @@ export function createModelExecAutoReviewer(params: {
       return cachedDecision;
     }
     const decision = await runReview(input);
-    if (shouldMemoizeReviewerDecision(decision)) {
+    if (shouldMemoizeReviewerDecision(input, decision)) {
       rememberReviewerDecision(reviewMemo, memoKey, decision);
     }
     return decision;

@@ -1214,8 +1214,6 @@ describe("executeNodeHostCommand", () => {
       expect.objectContaining({
         command: "bun ./script.ts",
         argv: ["bun", "./script.ts"],
-        executableIdentity: "bun",
-        nodeId: "node-1",
         host: "node",
         reason: "allowlist-miss",
       }),

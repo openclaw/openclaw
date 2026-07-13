@@ -22,10 +22,6 @@ export type ExecAutoReviewInput = {
   command: string;
   argv?: readonly string[];
   resolvedPath?: string | null;
-  /** Executable identity pinned by a remote execution plan. */
-  executableIdentity?: string | null;
-  /** Canonical node target when the reviewed command executes remotely. */
-  nodeId?: string | null;
   cwd?: string | null;
   envKeys?: readonly string[];
   host: ExecAutoReviewHost;

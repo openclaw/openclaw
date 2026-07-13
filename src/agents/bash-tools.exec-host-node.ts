@@ -67,7 +67,8 @@ async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
     ask: params.request.ask,
     host: "node",
   });
-  // Human grants bypass ask/allowlist but not later deny; auto-review cannot replace human review.
+  // A human grant may bypass ask/allowlist, but never a later deny. Auto-review
+  // additionally cannot stand in for a newly required human decision.
   if (current.hostSecurity === "deny") {
     throw new Error("exec denied: host=node security=deny");
   }
@@ -268,7 +269,8 @@ export async function executeNodeHostCommand(
     requiresExplicitApproval: boolean;
   }> => {
     try {
-      // Re-read Gateway-owned policy at timeout so a concurrent revoke wins.
+      // A timeout is policy, not a human grant. Re-read the Gateway-owned
+      // host policy at the decision point so a concurrent revoke wins.
       const current = await execHostShared.resolveExecHostApprovalContext({
         agentId: params.agentId,
         security: params.security,
@@ -361,8 +363,6 @@ export async function executeNodeHostCommand(
       const decision = await reviewer({
         command: prepared.rawCommand,
         argv: autoReviewArgv,
-        executableIdentity: prepared.argv[0] ?? null,
-        nodeId: target.nodeId,
         cwd: prepared.cwd,
         envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
         host: "node",
