@@ -68,9 +68,8 @@ import {
   isDashboardSessionTitleCandidate,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
-import { chatAbortMarkerTimestampMs, type ChatRunTiming } from "../server-chat-state.js";
+import type { ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import {
   capArrayByJsonBytes,
   readSessionMessageByIdAsync,
@@ -86,7 +85,6 @@ import {
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { ensureChatQueuedTurns } from "./chat-abort-runtime.js";
 import { scheduleChatHistoryManagedImageCleanup } from "./chat-assistant-content.js";
@@ -115,6 +113,7 @@ import {
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
+import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
 import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
 import {
   respondChatSessionRoutingChanged,
@@ -140,10 +139,7 @@ import {
   loadOptionalServerMethodModelCatalogSnapshot,
   startOptionalServerMethodModelCatalogSnapshotLoad,
 } from "./optional-model-catalog.js";
-import {
-  hasTrackedActiveSessionRun,
-  resolveVisibleActiveSessionRunState,
-} from "./session-active-runs.js";
+import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayRequestContext,
@@ -944,7 +940,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     const {
-      rawSessionKey,
       clientRunId,
       sessionLoadOptions,
       sessionLoadMs,
@@ -1195,15 +1190,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           userTurnRecorder,
         });
       let queuedFollowupEnqueued = false;
-      let pendingDispatchLifecycleError:
-        | {
-            endedAt: number;
-            error: string;
-            sessionId: string;
-            startedAt: number;
-          }
-        | undefined;
-      let persistDispatchErrorUserTurn: (() => Promise<void>) | undefined;
+      const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
+        admission: admitted.value,
+        context,
+        isQueuedFollowupEnqueued: () => queuedFollowupEnqueued,
+        persistUserTurnTranscript: persistGatewayUserTurnTranscript,
+        session: preparedSession.value,
+        terminalizeRestartSafeAdmission,
+        userTurnRecorder,
+      });
       const emitServerTiming = (
         phase: ChatSendServerTimingPhase,
         extra?: Record<string, string | number>,
@@ -1519,219 +1514,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
           }
         })
-        .catch(async (err: unknown) => {
-          const errorMessage = String(err);
-          // Select terminal ownership before any awaited durable-state work. An
-          // explicit abort has both the signal and marker; restart interruption
-          // only aborts the signal and must still follow dispatch-error handling.
-          const abortedAtDispatchReject = activeRunAbort.controller.signal.aborted;
-          const abortMarkerAtDispatchReject = context.chatAbortedRuns.get(clientRunId);
-          const abortStopReasonAtDispatchReject = activeRunAbort.entry?.abortStopReason ?? "rpc";
-          const persistAbortTranscript = async () => {
-            if (userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()) {
-              return;
-            }
-            await persistGatewayUserTurnTranscript().catch((transcriptErr: unknown) => {
-              context.logGateway.warn(
-                `webchat user transcript update failed after abort: ${formatForLog(transcriptErr)}`,
-              );
-            });
-          };
-          if (queuedFollowupEnqueued) {
-            context.logGateway.warn(
-              `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
-            );
-            if (!context.chatAbortedRuns.has(clientRunId)) {
-              setGatewayDedupeEntry({
-                dedupe: context.dedupe,
-                key: `chat:${clientRunId}`,
-                entry: {
-                  ts: Date.now(),
-                  ok: true,
-                  payload: { runId: clientRunId, status: "ok" as const },
-                },
-              });
-              broadcastChatFinal({
-                context,
-                runId: clientRunId,
-                sessionKey,
-                agentId,
-              });
-            }
-            return;
-          }
-          if (abortedAtDispatchReject && abortMarkerAtDispatchReject !== undefined) {
-            if (restartSafeAdmission) {
-              await terminalizeRestartSafeAdmission({
-                retryable: false,
-                status: "killed",
-              }).catch((terminalizeError: unknown) => {
-                context.logGateway.warn(
-                  `failed to terminalize restart-safe chat admission after abort: ${formatForLog(
-                    terminalizeError,
-                  )}`,
-                );
-                return false;
-              });
-            }
-            const endedAt = chatAbortMarkerTimestampMs(abortMarkerAtDispatchReject);
-            const payload = buildAbortedChatSendPayload({
-              runId: clientRunId,
-              stopReason: abortStopReasonAtDispatchReject,
-              endedAt,
-            });
-            context.logGateway.warn(
-              `chat.send post-dispatch threw after abort for runId=${clientRunId}: ${formatForLog(err)}`,
-            );
-            setGatewayDedupeEntry({
-              dedupe: context.dedupe,
-              key: `chat:${clientRunId}`,
-              entry: {
-                ts: endedAt,
-                ok: true,
-                payload,
-              },
-            });
-            cleanupAdmittedRun({ force: true });
-            clearAgentRunContext(clientRunId, lifecycleGeneration);
-            await persistAbortTranscript();
-            return;
-          }
-
-          // Dispatch rejection owns every remaining path. Retire abortability
-          // synchronously before durable terminalization can suspend, so a late
-          // chat.abort cannot publish or cache a contradictory terminal state.
-          context.chatAbortedRuns.delete(clientRunId);
-          activeRunAbort.cleanup({ force: true });
-
-          let restartSafeDispatchFailureTerminalized = false;
-          if (restartSafeAdmission) {
-            restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
-              retryable: true,
-              status: "failed",
-            }).catch((terminalizeError: unknown) => {
-              context.logGateway.warn(
-                `failed to release restart-safe chat admission after dispatch error: ${formatForLog(
-                  terminalizeError,
-                )}`,
-              );
-              return false;
-            });
-            if (restartSafeDispatchFailureTerminalized) {
-              emitSessionsChanged(context, {
-                sessionKey,
-                ...(agentId ? { agentId } : {}),
-                reason: "chat.dispatch-error",
-              });
-            }
-          }
-          persistDispatchErrorUserTurn =
-            userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
-              ? undefined
-              : async () => {
-                  await persistGatewayUserTurnTranscript();
-                };
-          if (
-            !restartSafeDispatchFailureTerminalized &&
-            abortMarkerAtDispatchReject === undefined
-          ) {
-            pendingDispatchLifecycleError = {
-              endedAt: Date.now(),
-              error: errorMessage,
-              sessionId: activeRunAbort.entry?.sessionId ?? backingSessionId ?? clientRunId,
-              startedAt: activeRunAbort.entry?.startedAtMs ?? now,
-            };
-          }
-          const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
-          setGatewayDedupeEntry({
-            dedupe: context.dedupe,
-            key: `chat:${clientRunId}`,
-            entry: {
-              ts: Date.now(),
-              ok: false,
-              payload: {
-                runId: clientRunId,
-                status: "error" as const,
-                summary: errorMessage,
-              },
-              error,
-            },
-          });
-          broadcastChatError({
-            context,
-            runId: clientRunId,
-            sessionKey,
-            agentId,
-            errorMessage,
-          });
-        })
-        .finally(() => {
-          const dispatchError = pendingDispatchLifecycleError;
-          // Reserve error projection before cleanup retires the dispatch root. Restart
-          // drain may already reject fresh roots, but this accepted request must finish.
-          const releaseDispatchErrorRoot = dispatchError
-            ? retainGatewayRootWorkAdmissionContinuation()
-            : null;
-          cleanupAdmittedRun();
-          clearAgentRunContext(clientRunId, lifecycleGeneration);
-          context.removeChatRun(clientRunId, clientRunId, sessionKey);
-          if (!dispatchError) {
-            return;
-          }
-          const persistDispatchLifecycleError = async () => {
-            const hasActiveRun = hasTrackedActiveSessionRun({
-              context,
-              requestedKey: rawSessionKey,
-              canonicalKey: sessionKey,
-              ...(sessionKey === "global" && agentId ? { agentId } : {}),
-              defaultAgentId: resolveDefaultAgentId(cfg),
-            });
-            if (hasActiveRun) {
-              return;
-            }
-            try {
-              await persistGatewaySessionLifecycleEvent({
-                sessionKey,
-                ...(sessionKey === "global" && agentId ? { agentId } : {}),
-                event: {
-                  runId: clientRunId,
-                  sessionId: dispatchError.sessionId,
-                  lifecycleGeneration,
-                  ts: dispatchError.endedAt,
-                  data: {
-                    phase: "error",
-                    startedAt: dispatchError.startedAt,
-                    endedAt: dispatchError.endedAt,
-                    error: dispatchError.error,
-                  },
-                },
-              });
-              emitSessionsChanged(context, {
-                sessionKey,
-                ...(agentId ? { agentId } : {}),
-                reason: "chat.dispatch-error",
-              });
-            } catch (persistErr: unknown) {
-              context.logGateway.warn(
-                `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
-              );
-            }
-          };
-          void (async () => {
-            await persistDispatchLifecycleError();
-            await persistDispatchErrorUserTurn?.().catch((transcriptErr: unknown) => {
-              context.logGateway.warn(
-                `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
-              );
-            });
-          })()
-            .catch((continuationErr: unknown) => {
-              context.logGateway.warn(
-                `webchat session lifecycle continuation failed: ${formatForLog(continuationErr)}`,
-              );
-            })
-            .finally(() => releaseDispatchErrorRoot?.());
-        });
+        .catch(dispatchErrorLifecycle.handleError)
+        .finally(dispatchErrorLifecycle.finalize);
     } catch (err) {
       if (restartSafeAdmission) {
         const terminalized = await terminalizeRestartSafeAdmission({
