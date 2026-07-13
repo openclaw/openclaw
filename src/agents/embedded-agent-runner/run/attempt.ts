@@ -1080,7 +1080,7 @@ export async function runEmbeddedAttempt(
         effectivePromptCacheRetention,
         providerTextTransforms,
         streamStrategy,
-      } = prepareEmbeddedAttemptTransport({
+      } = await prepareEmbeddedAttemptTransport({
         attempt: params,
         session: activeSession,
         settingsManager,
