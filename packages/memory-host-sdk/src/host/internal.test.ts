@@ -81,14 +81,17 @@ describe("memory host SDK package internals", () => {
 
   it("drains in-flight work before propagating a concurrency failure", async () => {
     const failure = new Error("embedding failed");
-    const release = Promise.withResolvers<void>();
+    let releaseTask!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseTask = resolve;
+    });
     const started: number[] = [];
     const completed: number[] = [];
     const run = runWithConcurrency(
       [
         async () => {
           started.push(0);
-          await release.promise;
+          await release;
           completed.push(0);
           return 0;
         },
@@ -110,7 +113,7 @@ describe("memory host SDK package internals", () => {
     await Promise.resolve();
     expect(onSettled).not.toHaveBeenCalled();
 
-    release.resolve();
+    releaseTask();
     await expect(run).rejects.toBe(failure);
     expect(completed).toEqual([0]);
     expect(started).toEqual([0, 1]);
