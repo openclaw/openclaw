@@ -123,7 +123,10 @@ func maskLinkURLs(text string, nextPlaceholder func() string, placeholders *[]st
 
 func unmaskMarkdown(text string, placeholders []string, mapping map[string]string) string {
 	out := text
-	for _, placeholder := range placeholders {
+	// Later masking passes can capture placeholders emitted by earlier passes.
+	// Restore in stack order so nested placeholders are expanded completely.
+	for index := len(placeholders) - 1; index >= 0; index-- {
+		placeholder := placeholders[index]
 		original := mapping[placeholder]
 		out = strings.ReplaceAll(out, placeholder, original)
 	}
