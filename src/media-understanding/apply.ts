@@ -20,6 +20,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
+import { runMediaCapability } from "./apply-capability.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
@@ -33,7 +34,6 @@ import {
   createMediaAttachmentCache,
   normalizeMediaAttachments,
   resolveMediaAttachmentLocalRoots,
-  runCapability,
 } from "./runner.js";
 import type {
   MediaUnderstandingCapability,
@@ -560,35 +560,22 @@ export async function applyMediaUnderstanding(params: {
   });
 
   try {
-    const tasks = CAPABILITY_ORDER.map((capability) => async () => {
-      const config = cfg.tools?.media?.[capability];
-      return await runCapability({
-        capability,
-        cfg,
-        ctx,
-        attachments: cache,
-        media: attachments,
-        agentId: params.agentId,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        providerRegistry,
-        config,
-        activeModel: params.activeModel,
-      });
-    });
-
     const results = await pMap(
-      tasks,
-      async (task) => {
-        try {
-          return await task();
-        } catch (err) {
-          if (shouldLogVerbose()) {
-            logVerbose(`Media understanding task failed: ${String(err)}`);
-          }
-          return undefined;
-        }
-      },
+      CAPABILITY_ORDER,
+      async (capability) =>
+        await runMediaCapability({
+          capability,
+          cfg,
+          ctx,
+          attachments: cache,
+          media: attachments,
+          agentId: params.agentId,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          providerRegistry,
+          config: cfg.tools?.media?.[capability],
+          activeModel: params.activeModel,
+        }),
       { concurrency: resolveConcurrency(cfg), stopOnError: false },
     );
     const outputs: MediaUnderstandingOutput[] = [];
