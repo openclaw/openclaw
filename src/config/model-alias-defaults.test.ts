@@ -504,7 +504,7 @@ describe("applyModelDefaults", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } as OpenClawConfig;
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];
@@ -537,7 +537,7 @@ describe("applyModelDefaults", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } as OpenClawConfig;
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];
@@ -568,7 +568,7 @@ describe("applyModelDefaults", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } as OpenClawConfig;
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];
