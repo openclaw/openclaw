@@ -32,6 +32,7 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     selectedChannel: null,
     wizard: { phase: "idle" },
     wizardMultiselect: [],
+    setupBlockedByDirtyConfig: false,
     onShowDetail: () => {},
     onCloseDetail: () => {},
     onStartSetup: () => {},

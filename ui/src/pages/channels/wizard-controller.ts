@@ -62,6 +62,10 @@ export class ChannelWizardController {
   constructor(
     private readonly getClient: () => WizardGatewayClient | null,
     private readonly onChange: () => void,
+    // Known channel ids from the status snapshot; lets a browse-all session
+    // adopt the channel picked in the wizard's select step so channel-specific
+    // completion (WhatsApp QR linking) still runs.
+    private readonly isKnownChannel: (value: string) => boolean = () => false,
   ) {}
 
   get state(): ChannelWizardState {
@@ -108,6 +112,14 @@ export class ChannelWizardController {
       return;
     }
     const generation = this.generation;
+    if (
+      this.channel === null &&
+      current.step.type === "select" &&
+      typeof value === "string" &&
+      this.isKnownChannel(value)
+    ) {
+      this.channel = value;
+    }
     this.setState({ ...current, busy: true, validationError: null });
     try {
       const result = await client.request<WizardNextResult>(

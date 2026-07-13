@@ -69,6 +69,9 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private wizardMultiselectStepId: string | null = null;
 
+  @state()
+  private setupBlockedByDirtyConfig = false;
+
   private readonly wizardController = new ChannelWizardController(
     () => this.context?.gateway.snapshot.client ?? null,
     () => {
@@ -89,6 +92,10 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.lastWizardPhase = wizard.phase;
       this.requestUpdate();
     },
+    (value) =>
+      this.context?.channels.state.channelsSnapshot?.channelMeta?.some(
+        (entry) => entry.id === value,
+      ) ?? false,
   );
 
   private lastWizardPhase = "idle";
@@ -108,6 +115,13 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private startSetup(channel: string | null) {
+    // Wizard completion resyncs config from disk (discarding local drafts), so
+    // refuse to start while the advanced form holds unsaved edits.
+    if (this.context?.runtimeConfig.state.configFormDirty) {
+      this.setupBlockedByDirtyConfig = true;
+      return;
+    }
+    this.setupBlockedByDirtyConfig = false;
     this.selectedChannel = null;
     void this.wizardController.start(channel);
   }
@@ -563,6 +577,7 @@ class ChannelsPage extends OpenClawLightDomElement {
           selectedChannel: this.selectedChannel,
           wizard: this.wizardController.state,
           wizardMultiselect: this.wizardMultiselect,
+          setupBlockedByDirtyConfig: this.setupBlockedByDirtyConfig,
           onShowDetail: (channelId) => {
             this.selectedChannel = channelId;
           },

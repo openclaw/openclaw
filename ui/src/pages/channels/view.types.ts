@@ -39,6 +39,7 @@ export type ChannelsProps = {
   selectedChannel: string | null;
   wizard: ChannelWizardState;
   wizardMultiselect: readonly unknown[];
+  setupBlockedByDirtyConfig: boolean;
   onShowDetail: (channelId: string) => void;
   onCloseDetail: () => void;
   onStartSetup: (channelId: string | null) => void;

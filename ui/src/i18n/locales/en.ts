@@ -147,6 +147,8 @@ export const en: TranslationMap = {
       browseAllTitle: "More channels…",
       browseAllSubtitle: "Browse every available channel, including installable plugins.",
       runSetup: "Run setup",
+      saveBeforeSetup:
+        "You have unsaved channel config changes. Save or reload them before running guided setup.",
     },
     setup: {
       dialogLabel: "Set up {channel}",

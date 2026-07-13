@@ -4,10 +4,14 @@ import { ChannelWizardController } from "./wizard-controller.ts";
 
 type RequestHandler = (method: string, params?: unknown) => Promise<unknown>;
 
-function createController(handler: RequestHandler) {
+function createController(handler: RequestHandler, isKnownChannel?: (value: string) => boolean) {
   const request = vi.fn(handler);
   const onChange = vi.fn();
-  const controller = new ChannelWizardController(() => ({ request: request as never }), onChange);
+  const controller = new ChannelWizardController(
+    () => ({ request: request as never }),
+    onChange,
+    isKnownChannel,
+  );
   return { controller, request, onChange };
 }
 
@@ -95,6 +99,22 @@ describe("ChannelWizardController", () => {
       channel: null,
       message: "config invalid",
     });
+  });
+
+  it("adopts the channel picked in a browse-all select step", async () => {
+    const { controller } = createController(
+      async (method) => {
+        if (method === "wizard.start") {
+          return { sessionId: "s1", done: false, status: "running", step: selectStep };
+        }
+        return { done: true, status: "done" };
+      },
+      (value) => value === "whatsapp",
+    );
+
+    await controller.start(null);
+    await controller.answer("whatsapp");
+    expect(controller.state).toEqual({ phase: "done", channel: "whatsapp" });
   });
 
   it("cancel clears the session and notifies the gateway", async () => {
