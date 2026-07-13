@@ -12,7 +12,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@openclaw/crabline": "0.1.9",
+    "@openclaw/crabline": "0.1.11",
     "@openclaw/discord": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",

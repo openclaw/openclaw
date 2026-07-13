@@ -1460,6 +1460,8 @@ export const pl: TranslationMap = {
     blockedAgentFilter: "zablokowane przez filtr agenta",
   },
   nav: {
+    back: "Wstecz",
+    forward: "Dalej",
     chat: "Czat",
     settings: "Ustawienia",
     settingsGeneral: "Ogólne",
@@ -3600,6 +3602,14 @@ export const pl: TranslationMap = {
       remove: "Usuń",
       more: "Więcej akcji",
       history: "Historia",
+    },
+    runNotStarted: {
+      notDue: "Termin uruchomienia tej automatyzacji jeszcze nie nadszedł.",
+      alreadyRunning: "Ta automatyzacja jest już uruchomiona.",
+      recoveryPending: "Przywracanie harmonogramu jest nadal w toku.",
+      invalidSpec: "Ta automatyzacja ma nieprawidłowy harmonogram lub ładunek.",
+      stopped: "Harmonogram jest zatrzymany.",
+      unknown: "Nie udało się uruchomić tej automatyzacji.",
     },
     jobs: {
       schedule: "Harmonogram",
