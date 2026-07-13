@@ -78,7 +78,7 @@ describe("openclaw-exec-approval", () => {
       ),
     ).toEqual(["Allow once", "Deny"]);
     expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
-      "Allow Always is unavailable for this command.",
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     );
   });
 
@@ -103,5 +103,23 @@ describe("openclaw-exec-approval", () => {
       ),
     ).toEqual(["Allow once", "Deny"]);
     expect(container.querySelector(".exec-approval-warning")).toBeNull();
+  });
+
+  it("shows non-persistable reason for exec allow-always excluded by unavailableDecisions", async () => {
+    await renderApproval(
+      createExecRequest({
+        request: {
+          command: "openclaw --version 2>&1",
+          ask: "on-miss",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      }),
+    );
+
+    await getRenderedModalDialog(container);
+
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
+    );
   });
 });
