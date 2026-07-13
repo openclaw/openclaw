@@ -72,32 +72,39 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
   });
 }
 
-async function requestRealAdminRpc(port: number, contentLength: number): Promise<CapturedResponse> {
+async function requestRealAdminRpc(
+  port: number,
+  options: { body?: Buffer | string; contentLength?: number },
+): Promise<CapturedResponse> {
   return await new Promise((resolve, reject) => {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (options.contentLength !== undefined) {
+      headers["content-length"] = String(options.contentLength);
+    }
+
     const clientReq = request(
       {
         host: "127.0.0.1",
         port,
         method: "POST",
         path: "/api/v1/admin/rpc",
-        headers: {
-          "content-type": "application/json",
-          "content-length": String(contentLength),
-        },
+        headers,
       },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => {
-          const headers: CapturedResponse["headers"] = {};
+          const responseHeaders: CapturedResponse["headers"] = {};
           for (const [name, value] of Object.entries(res.headers)) {
             if (value !== undefined) {
-              headers[name] = value;
+              responseHeaders[name] = value;
             }
           }
           resolve({
             statusCode: res.statusCode ?? 0,
-            headers,
+            headers: responseHeaders,
             body: Buffer.concat(chunks).toString("utf8"),
           });
         });
@@ -107,7 +114,7 @@ async function requestRealAdminRpc(port: number, contentLength: number): Promise
       clientReq.destroy(new Error("timed out waiting for Admin RPC response"));
     });
     clientReq.on("error", reject);
-    clientReq.end();
+    clientReq.end(options.body);
   });
 }
 
@@ -273,7 +280,37 @@ describe("admin-http-rpc plugin handler", () => {
 
     try {
       const address = server.address() as AddressInfo;
-      const result = await requestRealAdminRpc(address.port, 1024 * 1024 + 1);
+      const result = await requestRealAdminRpc(address.port, {
+        contentLength: 1024 * 1024 + 1,
+      });
+
+      expect(result.statusCode).toBe(413);
+      expect(JSON.parse(result.body) as unknown).toEqual({
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message: "Payload too large",
+        },
+      });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("delivers 413 to a real HTTP client for streamed oversized request bodies", async () => {
+    const server = createServer((req, res) => {
+      void handleAdminHttpRpcRequest(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address() as AddressInfo;
+      const result = await requestRealAdminRpc(address.port, {
+        body: Buffer.alloc(1024 * 1024 + 1, "x"),
+      });
 
       expect(result.statusCode).toBe(413);
       expect(JSON.parse(result.body) as unknown).toEqual({
