@@ -1,4 +1,5 @@
 // Codex tests cover node cli sessions plugin behavior.
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -241,5 +242,88 @@ describe("codex cli node sessions", () => {
     expect(parsed.sessions?.[0]?.lastMessage).toBe(`${"b".repeat(136)}...`);
     expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\ud83e");
     expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\udd16");
+  });
+
+  describe("codex exec resume stream error handling", () => {
+    it("survives stdout stream errors without crashing", async () => {
+      const child = spawn(
+        process.execPath,
+        ["-e", "process.stdout.write('data'); setTimeout(() => process.exit(0), 200)"],
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+
+      const collected: Buffer[] = [];
+      child.stdout
+        .on("data", (chunk: Buffer) => collected.push(chunk))
+        .on("error", () => {
+          /* no-op: the fix under test */
+        });
+      child.stderr.on("data", () => {}).on("error", () => {});
+
+      // Trigger a stream error by destroying the pipe
+      child.stdout.destroy(new Error("simulated pipe break"));
+
+      // The child should still exit normally; the process must not crash
+      const exitCode = await new Promise<number | null>((resolve) => {
+        child.on("exit", resolve);
+      });
+
+      expect(exitCode).not.toBeNull();
+    });
+
+    it("survives stderr stream errors without crashing", async () => {
+      const child = spawn(
+        process.execPath,
+        ["-e", "process.stderr.write('err'); setTimeout(() => process.exit(0), 200)"],
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+
+      const collected: Buffer[] = [];
+      child.stderr
+        .on("data", (chunk: Buffer) => collected.push(chunk))
+        .on("error", () => {
+          /* no-op: the fix under test */
+        });
+      child.stdout.on("data", () => {}).on("error", () => {});
+
+      // Trigger a stream error by destroying the pipe
+      child.stderr.destroy(new Error("simulated pipe break"));
+
+      const exitCode = await new Promise<number | null>((resolve) => {
+        child.on("exit", resolve);
+      });
+
+      expect(exitCode).not.toBeNull();
+    });
+
+    it("survives both stdout and stderr errors simultaneously", async () => {
+      const child = spawn(
+        process.execPath,
+        [
+          "-e",
+          "process.stdout.write('out'); process.stderr.write('err'); setTimeout(() => process.exit(0), 200)",
+        ],
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+
+      child.stdout.on("data", () => {}).on("error", () => {});
+      child.stderr.on("data", () => {}).on("error", () => {});
+
+      // Destroy both pipes
+      child.stdout.destroy(new Error("stdout pipe error"));
+      child.stderr.destroy(new Error("stderr pipe error"));
+
+      const exitCode = await new Promise<number | null>((resolve) => {
+        child.on("exit", resolve);
+      });
+
+      expect(exitCode).not.toBeNull();
+    });
   });
 });
