@@ -30,16 +30,16 @@ class TestCommand {
     return child;
   }
 
-  description(_value: string): TestCommand {
+  description(_value: string): this {
     return this;
   }
 
-  option(_flags: string, _description: string, _defaultValue?: string): TestCommand {
+  option(_flags: string, _description: string, _defaultValue?: string): this {
     return this;
   }
 
-  action<TOptions>(fn: (options: TOptions) => void | Promise<void>): TestCommand {
-    this.handler = fn as CommandAction;
+  action(fn: CommandAction): this {
+    this.handler = fn;
     return this;
   }
 
@@ -63,7 +63,7 @@ function setupCommands(auditStore = new MemoryKeyedStore<AuditRow>()) {
   const program = new TestCommand();
   const write = vi.fn<(message: string) => void>();
   registerOnePasswordCommands({
-    program,
+    program: program as unknown as Parameters<typeof registerOnePasswordCommands>[0]["program"],
     resolveConfig: () => config,
     resolveOpClient: () => ({
       opBin: "/usr/local/bin/op",

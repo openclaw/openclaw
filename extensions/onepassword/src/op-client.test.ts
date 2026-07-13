@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { OnePasswordError } from "./errors.js";
 import { OpClient } from "./op-client.js";
 
 type OpProcessRunner = NonNullable<ConstructorParameters<typeof OpClient>[0]["runner"]>;
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs: string[] = [];
 
 describe("OpClient", () => {
   let root = "";
@@ -17,15 +17,19 @@ describe("OpClient", () => {
   const rightFixture = ["right", "fixture"].join("-");
 
   beforeEach(async () => {
-    root = await fs.realpath(tempDirs.make("openclaw-onepassword-"));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onepassword-"));
+    tempDirs.push(root);
     opBin = path.join(root, "op");
     tokenFile = path.join(root, "service-account-token");
     await fs.writeFile(opBin, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
     await fs.writeFile(tokenFile, `  ${fixtureAuth}\n`, { mode: 0o600 });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await Promise.all(
+      tempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true, force: true })),
+    );
   });
 
   it("constructs one cache-disabled request with minimal environment and trims the token", async () => {
