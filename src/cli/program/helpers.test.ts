@@ -6,7 +6,6 @@ import {
   parsePositiveIntOrUndefined,
   parseStrictPositiveIntOption,
   parseStrictPositiveIntOrUndefined,
-  resolveActionArgs,
   resolveCommandOptionArgs,
 } from "./helpers.js";
 
@@ -61,19 +60,6 @@ describe("program helpers", () => {
     expect(() => parseStrictPositiveIntOption("10ms", "--limit")).toThrow(
       "--limit must be a positive integer.",
     );
-  });
-
-  it("resolveActionArgs returns args when command has arg array", () => {
-    const command = new Command();
-    (command as Command & { args?: string[] }).args = ["one", "two"];
-    expect(resolveActionArgs(command)).toEqual(["one", "two"]);
-  });
-
-  it("resolveActionArgs returns empty array for missing/invalid args", () => {
-    const command = new Command();
-    (command as unknown as { args?: unknown }).args = "not-an-array";
-    expect(resolveActionArgs(command)).toStrictEqual([]);
-    expect(resolveActionArgs(undefined)).toStrictEqual([]);
   });
 
   it("resolveCommandOptionArgs serializes explicit options", () => {
