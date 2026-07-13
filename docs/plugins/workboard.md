@@ -169,11 +169,10 @@ active agent's `tools.fs.workspaceOnly` policy and workspace root. Dispatch
 rechecks the current caller boundary before materializing a persisted worktree,
 so a card created through one surface cannot widen a later dispatch. Workspace-bound
 dispatch accepts a directory or Git checkout only when its repository root is the
-configured workspace root. Git workers run in a protected managed worktree without
-invoking checkout hooks or repository setup scripts. Full-host dispatch may target
-other local checkouts and keeps normal managed-worktree setup. When an allowed
-workspace selects a repository subdirectory, the generated worker keeps that same
-subdirectory as its workspace root.
+configured workspace root. A workspace-bound worktree request runs directly in that
+workspace and is persisted as a directory workspace, so the host does not execute
+repository-controlled checkout or setup code. Full-host dispatch may target other
+local checkouts and keeps normal managed-worktree setup.
 
 ### Worker selection
 

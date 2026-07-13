@@ -103,37 +103,6 @@ describe("ManagedWorktreeService", () => {
     expect(repeated).toEqual(created);
   });
 
-  it("rejects repository path changes after caller authorization", async () => {
-    const resolved = await service.resolveRepositoryPaths(repo);
-    expect(resolved).toMatchObject({ requestedPath: repo, sourceRoot: repo });
-
-    await expect(
-      service.create({
-        repoRoot: repo,
-        name: "pinned-source",
-        expectedSourcePath: path.join(root, "other"),
-        expectedSourceRoot: resolved.sourceRoot,
-      }),
-    ).rejects.toThrow("repository identity changed after authorization");
-    expect(await git(repo, "branch", "--list", "openclaw/pinned-source")).toBe("");
-  });
-
-  it("rejects repository common-dir identity changes after authorization", async () => {
-    const resolved = await service.resolveRepositoryPaths(repo);
-
-    await expect(
-      service.create({
-        repoRoot: repo,
-        name: "pinned-identity",
-        expectedSourcePath: resolved.requestedPath,
-        expectedSourceRoot: resolved.sourceRoot,
-        expectedCommonDir: path.join(root, "other.git"),
-        expectedFingerprint: resolved.fingerprint,
-      }),
-    ).rejects.toThrow("repository identity changed after authorization");
-    expect(await git(repo, "branch", "--list", "openclaw/pinned-identity")).toBe("");
-  });
-
   it("does not remove a worktree owned by another caller", async () => {
     const created = await service.create({
       repoRoot: repo,

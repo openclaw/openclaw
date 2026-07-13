@@ -1,15 +1,11 @@
 // Workboard plugin module implements dispatcher behavior.
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  canonicalPathFromExistingAncestor,
-  isPathInside,
-} from "openclaw/plugin-sdk/path-security-runtime";
+import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/path-security-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import type { WorkboardCard, WorkboardExecution, WorkboardWorkspace } from "./types.js";
 import {
-  assertCanonicalWorkboardPathAccess,
   assertCanonicalWorkboardRootAccess,
   assertWorkboardWorkspaceSourceAccess,
   type WorkboardWorkspaceAccess,
@@ -30,7 +26,6 @@ type WorkboardDispatchStartOptions = {
   boardId?: string;
   now?: number;
   materializeWorktree?: boolean;
-  runWorktreeSetup?: boolean;
   resolveAgentWorkspace?: (agentId?: string) => string;
   workspaceAccess?: WorkboardWorkspaceAccess;
 };
@@ -116,7 +111,6 @@ async function materializeWorkspace(params: {
   card: WorkboardCard;
   worktrees?: WorkboardWorktreeRuntime;
   materializeWorktree: boolean;
-  runWorktreeSetup: boolean;
   workspaceAccess: WorkboardWorkspaceAccess;
 }): Promise<{ workspace?: WorkboardWorkspace; cwd?: string }> {
   const workspace = params.card.metadata?.automation?.workspace;
@@ -137,9 +131,11 @@ async function materializeWorkspace(params: {
   if (!canonicalSourcePath) {
     throw new Error("worktree workspace path is required");
   }
-  if (workspace.kind === "dir") {
+  if (workspace.kind === "dir" || !params.workspaceAccess.unrestricted) {
     await assertCanonicalWorkboardRootAccess(canonicalSourcePath, params.workspaceAccess);
-    return { cwd: canonicalSourcePath };
+    return workspace.kind === "worktree"
+      ? { cwd: canonicalSourcePath, workspace: { kind: "dir", path: canonicalSourcePath } }
+      : { cwd: canonicalSourcePath };
   }
   if (!params.materializeWorktree) {
     throw new Error("managed worktree materialization was not explicitly authorized");
@@ -147,39 +143,16 @@ async function materializeWorkspace(params: {
   if (!params.worktrees) {
     throw new Error("managed worktree runtime is unavailable");
   }
-  const repository = await params.worktrees.resolveRepositoryPaths({
-    repoRoot: canonicalSourcePath,
-  });
-  await assertCanonicalWorkboardPathAccess(repository.requestedPath, params.workspaceAccess);
-  await assertCanonicalWorkboardRootAccess(repository.sourceRoot, params.workspaceAccess);
-  await assertCanonicalWorkboardPathAccess(repository.commonDir, params.workspaceAccess);
-  const relativeWorkspacePath = path.relative(repository.sourceRoot, repository.requestedPath);
-  if (
-    path.isAbsolute(relativeWorkspacePath) ||
-    relativeWorkspacePath === ".." ||
-    relativeWorkspacePath.startsWith(`..${path.sep}`)
-  ) {
-    throw new Error("worktree workspace path is outside its resolved git checkout");
-  }
   const worktree = await params.worktrees.create({
-    repoRoot: repository.requestedPath,
+    repoRoot: canonicalSourcePath,
     name: managedWorktreeName(params.card.id),
     ...(sourceBranch ? { baseRef: sourceBranch } : {}),
     ownerKind: "workboard",
     ownerId: params.card.id,
-    expectedSourcePath: repository.requestedPath,
-    expectedSourceRoot: repository.sourceRoot,
-    expectedCommonDir: repository.commonDir,
-    expectedFingerprint: repository.fingerprint,
-    runSetupScript: params.runWorktreeSetup,
   });
   let cwd: string;
   try {
-    const canonicalWorktreeRoot = await canonicalPathFromExistingAncestor(worktree.path);
-    cwd = await canonicalPathFromExistingAncestor(path.join(worktree.path, relativeWorkspacePath));
-    if (!isPathInside(canonicalWorktreeRoot, cwd)) {
-      throw new Error("materialized workspace path escapes its managed worktree");
-    }
+    cwd = await canonicalPathFromExistingAncestor(worktree.path);
   } catch (error) {
     const removed = await params.worktrees
       .removeIfLossless({
@@ -340,15 +313,7 @@ export async function dispatchAndStartWorkboardCards(params: {
         if (canonicalSourcePath && requestedWorkspace.kind === "dir") {
           await assertCanonicalWorkboardRootAccess(canonicalSourcePath, workspaceAccess);
         } else if (canonicalSourcePath && !workspaceAccess.unrestricted) {
-          if (!params.worktrees) {
-            throw new Error("managed worktree runtime is unavailable");
-          }
-          const repository = await params.worktrees.resolveRepositoryPaths({
-            repoRoot: canonicalSourcePath,
-          });
-          await assertCanonicalWorkboardPathAccess(repository.requestedPath, workspaceAccess);
-          await assertCanonicalWorkboardRootAccess(repository.sourceRoot, workspaceAccess);
-          await assertCanonicalWorkboardPathAccess(repository.commonDir, workspaceAccess);
+          await assertCanonicalWorkboardRootAccess(canonicalSourcePath, workspaceAccess);
         }
       } catch (error) {
         startFailures.push({
@@ -370,7 +335,6 @@ export async function dispatchAndStartWorkboardCards(params: {
         card: claimed.card,
         worktrees: params.worktrees,
         materializeWorktree: params.options?.materializeWorktree === true,
-        runWorktreeSetup: params.options?.runWorktreeSetup === true,
         workspaceAccess: params.options?.workspaceAccess ?? { unrestricted: true },
       });
       materializedWorkspace = materialized.workspace;
@@ -425,7 +389,12 @@ export async function dispatchAndStartWorkboardCards(params: {
         runId: run.runId,
       });
     } catch (error) {
-      if (!runStarted && materializedWorkspace?.path && params.worktrees) {
+      if (
+        !runStarted &&
+        materializedWorkspace?.kind === "worktree" &&
+        materializedWorkspace.path &&
+        params.worktrees
+      ) {
         await params.worktrees
           .removeIfLossless({
             path: materializedWorkspace.path,

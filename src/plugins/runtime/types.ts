@@ -125,24 +125,12 @@ export type PluginRuntime = PluginRuntimeCore & {
     invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
   };
   worktrees: {
-    resolveRepositoryPaths: (params: { repoRoot: string }) => Promise<{
-      canonicalRoot: string;
-      requestedPath: string;
-      sourceRoot: string;
-      commonDir: string;
-      fingerprint: string;
-    }>;
     create: (params: {
       repoRoot: string;
       name: string;
       baseRef?: string;
       ownerKind: "workboard";
       ownerId: string;
-      expectedSourcePath?: string;
-      expectedSourceRoot?: string;
-      expectedCommonDir?: string;
-      expectedFingerprint?: string;
-      runSetupScript?: boolean;
     }) => Promise<PluginManagedWorktree>;
     release: (params: { path: string }) => Promise<void>;
     removeIfLossless: (params: {

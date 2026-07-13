@@ -442,13 +442,6 @@ describe("workboard gateway methods", () => {
         },
         subagent: { run },
         worktrees: {
-          resolveRepositoryPaths: vi.fn(async ({ repoRoot }) => ({
-            canonicalRoot: repoRoot,
-            requestedPath: repoRoot,
-            sourceRoot: repoRoot,
-            commonDir: `${repoRoot}/.git`,
-            fingerprint: "fingerprint",
-          })),
           create: createWorktree,
           release: vi.fn(),
           removeIfLossless: vi.fn(),
@@ -503,17 +496,12 @@ describe("workboard gateway methods", () => {
       respond: vi.fn(),
     } as never);
 
-    expect(createWorktree).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: "/workspace",
-        ownerId: allowed.id,
-        runSetupScript: false,
-      }),
-    );
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: "/state/worktrees/fingerprint/wb-card" }),
-    );
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/workspace" }));
     expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(allowed.id)).resolves.toMatchObject({
+      metadata: { automation: { workspace: { kind: "dir", path: "/workspace" } } },
+    });
   });
 
   it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {

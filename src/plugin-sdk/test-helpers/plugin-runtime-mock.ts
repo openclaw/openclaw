@@ -840,7 +840,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       deleteSession: vi.fn(),
     },
     worktrees: {
-      resolveRepositoryPaths: vi.fn(),
       create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),

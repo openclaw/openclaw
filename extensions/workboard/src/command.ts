@@ -143,7 +143,6 @@ export async function handleWorkboardCommand(params: {
       worktrees: params.api.runtime.worktrees,
       options: {
         materializeWorktree: true,
-        runWorktreeSetup: workspaceAccess.unrestricted,
         resolveAgentWorkspace: params.resolveAgentWorkspace,
         workspaceAccess,
       },

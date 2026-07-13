@@ -31,13 +31,6 @@ function createApi(run = vi.fn().mockResolvedValue({ runId: "run-1" })): {
     runtime: {
       subagent: { run },
       worktrees: {
-        resolveRepositoryPaths: vi.fn(async ({ repoRoot }) => ({
-          canonicalRoot: repoRoot,
-          requestedPath: repoRoot,
-          sourceRoot: repoRoot,
-          commonDir: `${repoRoot}/.git`,
-          fingerprint: "fingerprint",
-        })),
         create: vi.fn(),
         release: vi.fn(),
         removeIfLossless: vi.fn(),
@@ -178,13 +171,13 @@ describe("handleWorkboardCommand", () => {
       senderIsOwner: true,
       workspaceAccess: { unrestricted: false, roots: ["/workspace"] },
     });
-    expect(createWorktree).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: "/workspace",
-        ownerId: restricted.id,
-        runSetupScript: false,
-      }),
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(api.runtime.subagent.run).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/workspace" }),
     );
+    await expect(store.get(restricted.id)).resolves.toMatchObject({
+      metadata: { automation: { workspace: { kind: "dir", path: "/workspace" } } },
+    });
 
     const allowed = await store.create({
       title: "Allowed checkout",
@@ -204,7 +197,6 @@ describe("handleWorkboardCommand", () => {
       expect.objectContaining({
         repoRoot: "/repo-allowed",
         ownerId: allowed.id,
-        runSetupScript: true,
       }),
     );
   });

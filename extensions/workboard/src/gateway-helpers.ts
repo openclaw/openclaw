@@ -108,7 +108,6 @@ export function createWorkboardDispatchHandler(params: {
           boardId: typeof boardId === "string" ? boardId : undefined,
           ...(maxStarts !== undefined ? { maxStarts } : {}),
           materializeWorktree: true,
-          runWorktreeSetup: workspaceAccess.unrestricted,
           resolveAgentWorkspace: (agentId) =>
             resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
           workspaceAccess,

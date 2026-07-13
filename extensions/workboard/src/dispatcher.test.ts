@@ -1,7 +1,4 @@
 // Workboard tests cover dispatcher plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { cleanupWorkboardRunWorktree, dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
@@ -34,13 +31,6 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
     const run = vi.fn().mockResolvedValue({ runId: "run-worktree" });
     const worktrees = {
-      resolveRepositoryPaths: vi.fn(async ({ repoRoot }) => ({
-        canonicalRoot: repoRoot,
-        requestedPath: repoRoot,
-        sourceRoot: repoRoot,
-        commonDir: `${repoRoot}/.git`,
-        fingerprint: "fingerprint",
-      })),
       create: vi.fn().mockResolvedValue({
         id: "managed-id",
         path: "/state/worktrees/fingerprint/wb-card",
@@ -58,7 +48,6 @@ describe("dispatchAndStartWorkboardCards", () => {
         now: 10,
         maxStarts: 1,
         materializeWorktree: true,
-        runWorktreeSetup: true,
       },
     });
 
@@ -68,9 +57,6 @@ describe("dispatchAndStartWorkboardCards", () => {
         baseRef: "main",
         ownerKind: "workboard",
         ownerId: card.id,
-        expectedCommonDir: "/repo/.git",
-        expectedFingerprint: "fingerprint",
-        runSetupScript: true,
       }),
     );
     expect(run).toHaveBeenCalledWith(
@@ -106,7 +92,6 @@ describe("dispatchAndStartWorkboardCards", () => {
       workspace: { kind: "worktree", path: "/repo" },
     });
     const worktrees = {
-      resolveRepositoryPaths: vi.fn(),
       create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),
@@ -241,27 +226,16 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/workspace" }));
   });
 
-  it("preserves an authorized repository subdirectory as the worker cwd", async () => {
+  it("runs an authorized worktree request directly in a workspace-bound caller's root", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    await store.create({
-      title: "Scoped package worker",
+    const card = await store.create({
+      title: "Workspace-bound worker",
       status: "ready",
-      workspace: { kind: "worktree", path: "/repo/packages/app" },
+      workspace: { kind: "worktree", path: "/repo" },
     });
-    const run = vi.fn().mockResolvedValue({ runId: "run-package" });
+    const run = vi.fn().mockResolvedValue({ runId: "run-workspace" });
     const worktrees = {
-      resolveRepositoryPaths: vi.fn().mockResolvedValue({
-        canonicalRoot: "/repo",
-        requestedPath: "/repo/packages/app",
-        sourceRoot: "/repo",
-        commonDir: "/repo/.git",
-        fingerprint: "fingerprint",
-      }),
-      create: vi.fn().mockResolvedValue({
-        id: "managed-id",
-        path: "/state/worktrees/fingerprint/wb-card",
-        branch: "openclaw/wb-card",
-      }),
+      create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),
     };
@@ -277,66 +251,11 @@ describe("dispatchAndStartWorkboardCards", () => {
       },
     });
 
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: "/state/worktrees/fingerprint/wb-card/packages/app" }),
-    );
-    expect(worktrees.create).toHaveBeenCalledWith(
-      expect.objectContaining({ repoRoot: "/repo/packages/app" }),
-    );
-  });
-
-  it("removes a new worktree when its materialized subdirectory escapes", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "workboard-wt-"));
-    try {
-      const worktreeRoot = path.join(tempRoot, "worktree");
-      const outsideRoot = path.join(tempRoot, "outside");
-      await fs.mkdir(worktreeRoot, { recursive: true });
-      await fs.mkdir(outsideRoot, { recursive: true });
-      await fs.symlink(outsideRoot, path.join(worktreeRoot, "packages"));
-
-      const store = new WorkboardStore(createMemoryStore());
-      const card = await store.create({
-        title: "Escaping package worker",
-        status: "ready",
-        workspace: { kind: "worktree", path: "/repo/packages/app" },
-      });
-      const removeIfLossless = vi.fn().mockResolvedValue(true);
-      const result = await dispatchAndStartWorkboardCards({
-        store,
-        subagent: { run: vi.fn() },
-        worktrees: {
-          resolveRepositoryPaths: vi.fn().mockResolvedValue({
-            canonicalRoot: "/repo",
-            requestedPath: "/repo/packages/app",
-            sourceRoot: "/repo",
-            commonDir: "/repo/.git",
-            fingerprint: "fingerprint",
-          }),
-          create: vi.fn().mockResolvedValue({
-            id: "managed-id",
-            path: worktreeRoot,
-            branch: "openclaw/wb-card",
-          }),
-          release: vi.fn(),
-          removeIfLossless,
-        },
-        options: { maxStarts: 1, materializeWorktree: true },
-      });
-
-      expect(result.startFailures).toEqual([
-        expect.objectContaining({
-          cardId: card.id,
-          error: "materialized workspace path escapes its managed worktree",
-        }),
-      ]);
-      expect(removeIfLossless).toHaveBeenCalledWith({
-        path: worktreeRoot,
-        ownerKind: "workboard",
-        ownerId: card.id,
-      });
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/repo" }));
+    expect(worktrees.create).not.toHaveBeenCalled();
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: { automation: { workspace: { kind: "dir", path: "/repo" } } },
+    });
   });
 
   it("does not reuse a generated branch as an omitted source base", async () => {
@@ -361,13 +280,6 @@ describe("dispatchAndStartWorkboardCards", () => {
       store,
       subagent: { run: vi.fn().mockResolvedValue({ runId: "run-retry" }) },
       worktrees: {
-        resolveRepositoryPaths: vi.fn(async ({ repoRoot }) => ({
-          canonicalRoot: repoRoot,
-          requestedPath: repoRoot,
-          sourceRoot: repoRoot,
-          commonDir: `${repoRoot}/.git`,
-          fingerprint: "fingerprint",
-        })),
         create,
         release: vi.fn(),
         removeIfLossless: vi.fn(),

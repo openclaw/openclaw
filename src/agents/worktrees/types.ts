@@ -22,14 +22,8 @@ export type CreateManagedWorktreeParams = {
   baseRef?: string;
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
-  // Callers that pre-authorize a canonical checkout pin both values so path swaps
-  // cannot change the repository between authorization and creation.
-  expectedSourcePath?: string;
-  expectedSourceRoot?: string;
-  expectedCommonDir?: string;
-  expectedFingerprint?: string;
-  // False disables Git checkout hooks and .openclaw/worktree-setup.sh. Callers reachable from
-  // less-privileged surfaces opt out so materialization never executes repository code.
+  // Repository checkout hooks and .openclaw/worktree-setup.sh execute repo-local code, so
+  // callers reachable from less-privileged surfaces opt out; admin paths keep them on.
   runSetupScript?: boolean;
 };
 
