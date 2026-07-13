@@ -30,6 +30,7 @@ import type {
   BeforeToolCallContext,
   BeforeToolCallResult,
   QueueMode,
+  ShouldStopAfterTurnContext,
   StreamFn,
   ToolExecutionMode,
 } from "./types.js";
@@ -129,6 +130,8 @@ export interface AgentOptions {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  /** Hook that may stop the agent loop after a turn completes. */
+  shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
   /** Hook that may update model, reasoning, or context after a turn. */
   prepareNextTurn?: (
     signal?: AbortSignal,
@@ -225,6 +228,7 @@ export class Agent {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  public shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
   public prepareNextTurn?: (
     signal?: AbortSignal,
   ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
@@ -252,6 +256,7 @@ export class Agent {
     this.beforeToolCall = options.beforeToolCall;
     this.resolveDeferredTool = options.resolveDeferredTool;
     this.afterToolCall = options.afterToolCall;
+    this.shouldStopAfterTurn = options.shouldStopAfterTurn;
     this.prepareNextTurn = options.prepareNextTurn;
     this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
     this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
@@ -487,6 +492,7 @@ export class Agent {
       beforeToolCall: this.beforeToolCall,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
+      shouldStopAfterTurn: this.shouldStopAfterTurn,
       prepareNextTurn: this.prepareNextTurn
         ? async () => await this.prepareNextTurn?.(this.signal)
         : undefined,
