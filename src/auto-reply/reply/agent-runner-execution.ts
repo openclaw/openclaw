@@ -103,6 +103,7 @@ import {
   isInternalMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
+import { shouldBridgeCliPreambleEvents } from "../get-reply-options.types.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -143,6 +144,7 @@ import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
   createCompactionHookNoticePayload,
   createCompactionNoticePayload,
+  formatCompactionModelRef,
   readCompactionHookMessages,
   shouldNotifyUserAboutCompaction,
 } from "./compaction-notice.js";
@@ -184,21 +186,6 @@ const agentCompactionLog = createSubsystemLogger("auto-reply/compaction");
 const CODEX_APP_SERVER_COMPACTION_BACKEND = "codex-app-server";
 const AGENT_TURN_TIMING_WARN_TOTAL_MS = 1_000;
 const AGENT_TURN_TIMING_WARN_STAGE_MS = 500;
-
-function formatCompactionModelRef(provider?: string, model?: string): string {
-  const normalizedProvider = normalizeOptionalString(provider);
-  const normalizedModel = normalizeOptionalString(model);
-  if (normalizedProvider && normalizedModel) {
-    return `${sanitizeForLog(normalizedProvider)}/${sanitizeForLog(normalizedModel)}`;
-  }
-  if (normalizedProvider) {
-    return sanitizeForLog(normalizedProvider);
-  }
-  if (normalizedModel) {
-    return sanitizeForLog(normalizedModel);
-  }
-  return "unknown model";
-}
 
 function createAgentTurnTimingTracker(options: { profilerEnabled?: boolean } = {}): {
   measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
@@ -2166,9 +2153,7 @@ async function runAgentTurnWithFallbackInternal(
                         ]);
                       },
                       onCommentaryText:
-                        params.opts?.onItemEvent &&
-                        (params.opts.commentaryProgressEnabled === true ||
-                          params.opts.progressPreambleEnabled === true)
+                        params.opts?.onItemEvent && shouldBridgeCliPreambleEvents(params.opts)
                           ? async (payload) => {
                               await params.opts?.onItemEvent?.({
                                 itemId: payload.itemId,

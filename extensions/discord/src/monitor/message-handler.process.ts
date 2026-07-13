@@ -1163,14 +1163,7 @@ async function processDiscordMessageInner(
             if (shouldYieldDraftProgress()) {
               return undefined;
             }
-            await draftPreview.pushPreambleHeadline(payload.progressText);
-            if (draftPreview.commentaryProgressEnabled && payload.progressText) {
-              // Count only commentary that actually streams to the window draft.
-              noteWindowCommentary(payload.itemId, payload.progressText);
-              await draftPreview.pushCommentaryProgress(payload.progressText, {
-                itemId: payload.itemId,
-              });
-            }
+            await draftPreview.pushPreambleItemEvent(payload, noteWindowCommentary);
             return undefined;
           }
           if (shouldYieldDraftProgress()) {

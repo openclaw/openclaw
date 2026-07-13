@@ -305,3 +305,7 @@ export type GetReplyOptions = {
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
 };
+
+export function shouldBridgeCliPreambleEvents(opts: GetReplyOptions | undefined): boolean {
+  return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;
+}

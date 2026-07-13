@@ -146,6 +146,12 @@ export function createDiscordDraftPreviewController(params: {
     resetProgressState();
   };
 
+  const pushPreambleHeadline = async (text?: string) => {
+    if (discordStreamMode === "progress") {
+      await progressDraft.pushPreambleHeadline(text);
+    }
+  };
+
   return {
     draftStream,
     previewToolProgressEnabled,
@@ -195,10 +201,20 @@ export function createDiscordDraftPreviewController(params: {
     async pushNarrationProgress(text?: string) {
       await progressDraft.pushNarrationProgress(text);
     },
-    async pushPreambleHeadline(text?: string) {
-      if (discordStreamMode === "progress") {
-        await progressDraft.pushPreambleHeadline(text);
+    pushPreambleHeadline,
+    async pushPreambleItemEvent(
+      payload: { itemId?: string; progressText?: string },
+      noteCommentary: (itemId?: string, text?: string) => void,
+    ) {
+      await pushPreambleHeadline(payload.progressText);
+      if (!progressDraft.commentaryProgressEnabled || !payload.progressText) {
+        return;
       }
+      // Count only commentary that actually streams to the window draft.
+      noteCommentary(payload.itemId, payload.progressText);
+      await progressDraft.pushCommentaryProgress(payload.progressText, {
+        itemId: payload.itemId,
+      });
     },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
       await progressDraft.pushCommentaryProgress(text, options);
