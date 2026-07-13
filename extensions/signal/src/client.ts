@@ -25,6 +25,16 @@ type SignalRpcResponse<T> = {
   id?: string | number | null;
 };
 
+export class SignalRpcRequestError extends Error {
+  constructor(
+    readonly code: number | undefined,
+    message: string,
+  ) {
+    super(`Signal RPC ${code ?? "unknown"}: ${message}`);
+    this.name = "SignalRpcRequestError";
+  }
+}
+
 export type SignalSseEvent = {
   event?: string;
   data?: string;
@@ -223,9 +233,8 @@ export async function signalRpcRequest<T = unknown>(
   }
   const parsed = parseSignalRpcResponse<T>(res.text, res.status);
   if (parsed.error) {
-    const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";
-    throw new Error(`Signal RPC ${code}: ${msg}`);
+    throw new SignalRpcRequestError(parsed.error.code, msg);
   }
   return parsed.result as T;
 }
@@ -249,6 +258,35 @@ export async function signalCheck(
       status: null,
       error: formatErrorMessage(err),
     };
+  }
+}
+
+export async function signalReceiveCheck(
+  baseUrl: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  account?: string,
+): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
+  const url = resolveSignalEndpointUrl(baseUrl, "/api/v1/events");
+  if (account) {
+    url.searchParams.set("account", account);
+  }
+  let stream: Awaited<ReturnType<typeof openSignalEventStream>> | undefined;
+  try {
+    stream = await openSignalEventStream(url, undefined, timeoutMs);
+    return {
+      ok: true,
+      status: stream.response.statusCode ?? null,
+      error: null,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: null,
+      error: `Signal native receive endpoint unavailable: ${formatErrorMessage(err)}`,
+    };
+  } finally {
+    stream?.cleanup();
+    stream?.response.destroy();
   }
 }
 

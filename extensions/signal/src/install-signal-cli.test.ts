@@ -537,6 +537,32 @@ describe("installSignalCli", () => {
       await fs.rm(brewPrefix, { recursive: true, force: true });
     }
   });
+
+  it("shows the Homebrew command and stderr when signal-cli install fails", async () => {
+    setProcessPlatform("darwin", "arm64");
+    resolveBrewExecutableMock.mockReturnValue("/opt/homebrew/bin/brew");
+    runPluginCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: [
+        "Warning: The following taps are not trusted:",
+        "  atlassian/tap",
+        "  databricks/tap",
+      ].join("\n"),
+    });
+
+    const result = await installSignalCli({ log: vi.fn() } as unknown as RuntimeEnv);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Signal setup hit an error while installing signal-cli.");
+    expect(result.error).toContain("OpenClaw ran: /opt/homebrew/bin/brew install signal-cli");
+    expect(result.error).toContain("Exit code: 1");
+    expect(result.error).toContain(
+      "Review the Homebrew error below, fix it, then run the command above and try Signal setup again.",
+    );
+    expect(result.error).toContain("Warning: The following taps are not trusted:");
+    expect(result.error).toContain("atlassian/tap");
+  });
 });
 
 describe("extractSignalCliArchive", () => {

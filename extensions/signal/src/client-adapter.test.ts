@@ -12,6 +12,7 @@ import * as containerClientModule from "./client-container.js";
 import * as nativeClientModule from "./client.js";
 
 const mockNativeCheck = vi.fn<typeof nativeClientModule.signalCheck>();
+const mockNativeReceiveCheck = vi.fn<typeof nativeClientModule.signalReceiveCheck>();
 const mockNativeRpcRequest = vi.fn<typeof nativeClientModule.signalRpcRequest>();
 const mockNativeStreamEvents = vi.fn<typeof nativeClientModule.streamSignalEvents>();
 const mockContainerCheck = vi.fn<typeof containerClientModule.containerCheck>();
@@ -21,7 +22,13 @@ const mockStreamContainerEvents = vi.fn<typeof containerClientModule.streamConta
 let currentApiMode: SignalApiMode = "auto";
 
 beforeEach(() => {
+  mockNativeReceiveCheck.mockReset().mockResolvedValue({
+    ok: false,
+    status: null,
+    error: "Signal native receive endpoint unavailable: Signal SSE failed (503 Unavailable)",
+  });
   vi.spyOn(nativeClientModule, "signalCheck").mockImplementation(mockNativeCheck);
+  vi.spyOn(nativeClientModule, "signalReceiveCheck").mockImplementation(mockNativeReceiveCheck);
   vi.spyOn(nativeClientModule, "signalRpcRequest").mockImplementation(mockNativeRpcRequest);
   vi.spyOn(nativeClientModule, "streamSignalEvents").mockImplementation(mockNativeStreamEvents);
   vi.spyOn(containerClientModule, "containerCheck").mockImplementation(mockContainerCheck);
@@ -220,10 +227,33 @@ describe("detectSignalApiMode", () => {
 
     const result = await detectSignalApiMode("http://localhost:8080", 5000, {
       account: "+14259798283",
-      requireContainerReceive: true,
+      requireReceive: true,
     });
 
     expect(result).toBe("container");
+    expect(mockContainerCheck).toHaveBeenCalledWith("http://localhost:8080", 5000, "+14259798283");
+  });
+
+  it("requires native receive readiness before selecting native when requested", async () => {
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockNativeReceiveCheck.mockResolvedValue({
+      ok: false,
+      status: null,
+      error: "Signal native receive endpoint unavailable: Signal SSE failed (503 Unavailable)",
+    });
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 101 });
+
+    const result = await detectSignalApiMode("http://localhost:8080", 5000, {
+      account: "+14259798283",
+      requireReceive: true,
+    });
+
+    expect(result).toBe("container");
+    expect(mockNativeReceiveCheck).toHaveBeenCalledWith(
+      "http://localhost:8080",
+      5000,
+      "+14259798283",
+    );
     expect(mockContainerCheck).toHaveBeenCalledWith("http://localhost:8080", 5000, "+14259798283");
   });
 
@@ -232,7 +262,7 @@ describe("detectSignalApiMode", () => {
 
     await expect(
       detectSignalApiMode("http://localhost:8080", 5000, {
-        requireContainerReceive: true,
+        requireReceive: true,
       }),
     ).rejects.toThrow("Signal API not reachable");
 
@@ -351,6 +381,205 @@ describe("signalCheck", () => {
     expect(mockNativeCheck).not.toHaveBeenCalled();
   });
 
+  it("checks container receive readiness when an account is supplied", async () => {
+    setApiMode("container");
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 101 });
+
+    const result = await signalCheckImpl("http://localhost:8080", 10000, {
+      apiMode: currentApiMode,
+      account: "+14259798283",
+      requireReceive: true,
+    });
+
+    expect(result).toEqual({ ok: true, status: 101 });
+    expect(mockContainerCheck).toHaveBeenCalledWith("http://localhost:8080", 10000, "+14259798283");
+    expect(mockNativeCheck).not.toHaveBeenCalled();
+  });
+
+  it("checks native receive readiness after native reachability succeeds", async () => {
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockNativeReceiveCheck.mockResolvedValue({ ok: true, status: null, error: null });
+
+    const result = await signalCheckImpl("http://localhost:8080", 10000, {
+      apiMode: currentApiMode,
+      account: "+14259798283",
+      requireReceive: true,
+    });
+
+    expect(result).toEqual({ ok: true, status: null, error: null });
+    expect(mockNativeCheck).toHaveBeenCalledWith("http://localhost:8080", 10000);
+    expect(mockNativeReceiveCheck).toHaveBeenCalledWith(
+      "http://localhost:8080",
+      10000,
+      "+14259798283",
+    );
+    expect(mockContainerCheck).not.toHaveBeenCalled();
+  });
+
+  it("reports explicit native reachability failures before receive readiness", async () => {
+    mockNativeCheck.mockResolvedValue({
+      ok: false,
+      status: null,
+      error: "Connection refused",
+    });
+
+    const result = await signalCheckImpl("http://native-down.local:8080", 10000, {
+      apiMode: currentApiMode,
+      account: "+14259798283",
+      requireReceive: true,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: null,
+      error: "Connection refused",
+    });
+    expect(mockNativeCheck).toHaveBeenCalledWith("http://native-down.local:8080", 10000);
+    expect(mockNativeReceiveCheck).not.toHaveBeenCalled();
+    expect(mockContainerCheck).not.toHaveBeenCalled();
+  });
+
+  it("preserves container receive failure details during auto detection", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({
+      ok: false,
+      status: null,
+      error: "Connection refused",
+    });
+    mockContainerCheck.mockResolvedValue({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
+
+    const result = await signalCheckImpl("http://auto-receive.local:8080", 10000, {
+      apiMode: currentApiMode,
+      account: "+14259798283",
+      requireReceive: true,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
+    expect(mockNativeCheck).toHaveBeenCalledWith("http://auto-receive.local:8080", 10000);
+    expect(mockContainerCheck).toHaveBeenCalledWith(
+      "http://auto-receive.local:8080",
+      10000,
+      "+14259798283",
+    );
+  });
+
+  it("does not reuse cached native mode that has not proven receive readiness", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockNativeReceiveCheck.mockResolvedValue({
+      ok: false,
+      status: null,
+      error: "Signal native receive endpoint unavailable: Signal SSE failed (503 Unavailable)",
+    });
+    mockContainerCheck.mockResolvedValue({ ok: false, status: 404 });
+
+    await expect(signalCheck("http://auto-native-receive.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+    expect(mockContainerCheck).toHaveBeenCalledTimes(1);
+    mockContainerCheck.mockClear();
+
+    await expect(
+      signalCheckImpl("http://auto-native-receive.local:8080", 10000, {
+        apiMode: currentApiMode,
+        account: "+14259798283",
+        requireReceive: true,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      status: null,
+      error: "Signal native receive endpoint unavailable: Signal SSE failed (503 Unavailable)",
+    });
+    expect(mockNativeCheck).toHaveBeenCalledWith("http://auto-native-receive.local:8080", 10000);
+    expect(mockNativeReceiveCheck).toHaveBeenCalledWith(
+      "http://auto-native-receive.local:8080",
+      10000,
+      "+14259798283",
+    );
+    expect(mockContainerCheck).toHaveBeenCalledWith(
+      "http://auto-native-receive.local:8080",
+      10000,
+      "+14259798283",
+    );
+  });
+
+  it("returns auto-detected native receive readiness without repeating the receive probe", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockNativeReceiveCheck.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+    });
+    mockContainerCheck.mockResolvedValue({ ok: false, status: 404 });
+
+    await expect(
+      signalCheckImpl("http://auto-native-ready.local:8080", 10000, {
+        apiMode: currentApiMode,
+        account: "+14259798283",
+        requireReceive: true,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      status: null,
+      error: null,
+    });
+
+    expect(mockNativeCheck).toHaveBeenCalledTimes(1);
+    expect(mockNativeReceiveCheck).toHaveBeenCalledTimes(1);
+    expect(mockNativeReceiveCheck).toHaveBeenCalledWith(
+      "http://auto-native-ready.local:8080",
+      10000,
+      "+14259798283",
+    );
+    expect(mockContainerCheck).toHaveBeenCalledWith(
+      "http://auto-native-ready.local:8080",
+      10000,
+      "+14259798283",
+    );
+  });
+
+  it("falls back to container receive when auto mode native receive is unavailable", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockNativeReceiveCheck.mockResolvedValue({
+      ok: false,
+      status: null,
+      error: "Signal native receive endpoint unavailable: Signal SSE failed (503 Unavailable)",
+    });
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 101 });
+
+    await expect(
+      signalCheckImpl("http://auto-container-fallback.local:8080", 10000, {
+        apiMode: currentApiMode,
+        account: "+14259798283",
+        requireReceive: true,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      status: 101,
+    });
+    expect(mockNativeReceiveCheck).toHaveBeenCalledWith(
+      "http://auto-container-fallback.local:8080",
+      10000,
+      "+14259798283",
+    );
+    expect(mockContainerCheck).toHaveBeenCalledWith(
+      "http://auto-container-fallback.local:8080",
+      10000,
+      "+14259798283",
+    );
+  });
+
   it("respects timeout parameter", async () => {
     mockNativeCheck.mockResolvedValue({ ok: true });
 
@@ -397,7 +626,7 @@ describe("signalCheck", () => {
       status: 200,
     });
 
-    expect(mockNativeCheck).toHaveBeenCalledTimes(4);
+    expect(mockNativeCheck).toHaveBeenCalledTimes(2);
     expect(mockContainerCheck).toHaveBeenCalledTimes(2);
   });
 
@@ -416,7 +645,7 @@ describe("signalCheck", () => {
       status: 200,
     });
 
-    expect(mockNativeCheck).toHaveBeenCalledTimes(4);
+    expect(mockNativeCheck).toHaveBeenCalledTimes(2);
     expect(mockContainerCheck).toHaveBeenCalledTimes(2);
   });
 });
@@ -540,6 +769,7 @@ describe("streamSignalEvents", () => {
     });
 
     expect(mockNativeCheck).toHaveBeenCalledWith("http://zero-timeout.local:8080", 10000);
+    expect(mockNativeReceiveCheck).not.toHaveBeenCalled();
     expect(mockContainerCheck).toHaveBeenCalledWith(
       "http://zero-timeout.local:8080",
       10000,
@@ -548,6 +778,52 @@ describe("streamSignalEvents", () => {
     expectSingleObjectCall(mockNativeStreamEvents, {
       timeoutMs: 0,
     });
+  });
+
+  it("does not treat native auto stream cache as receive-ready", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 101 });
+    mockNativeStreamEvents.mockResolvedValue(undefined);
+
+    await streamSignalEvents({
+      baseUrl: "http://native-cache-no-receive.local:8080",
+      account: "+14259798283",
+      onEvent: vi.fn(),
+    });
+    const result = await signalCheckImpl("http://native-cache-no-receive.local:8080", 10000, {
+      apiMode: "auto",
+      account: "+14259798283",
+      requireReceive: true,
+    });
+
+    expect(result).toEqual({ ok: true, status: 101 });
+    expect(mockNativeReceiveCheck).toHaveBeenCalledTimes(1);
+    expect(mockContainerCheck).toHaveBeenLastCalledWith(
+      "http://native-cache-no-receive.local:8080",
+      10000,
+      "+14259798283",
+    );
+  });
+
+  it("reuses the detected native mode across stream reconnects", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 101 });
+    mockNativeStreamEvents.mockResolvedValue(undefined);
+
+    const params = {
+      baseUrl: "http://native-stream-cache.local:8080",
+      account: "+14259798283",
+      onEvent: vi.fn(),
+    };
+    await streamSignalEvents(params);
+    await streamSignalEvents(params);
+
+    expect(mockNativeCheck).toHaveBeenCalledTimes(1);
+    expect(mockContainerCheck).toHaveBeenCalledTimes(1);
+    expect(mockNativeReceiveCheck).not.toHaveBeenCalled();
+    expect(mockNativeStreamEvents).toHaveBeenCalledTimes(2);
   });
 
   it("forwards timeout to container event stream", async () => {
@@ -568,14 +844,11 @@ describe("streamSignalEvents", () => {
   it("revalidates an unvalidated cached container mode before streaming", async () => {
     setApiMode("auto");
     mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
-    mockContainerCheck
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 200,
-        error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
-      });
+    mockContainerCheck.mockResolvedValueOnce({ ok: true, status: 200 }).mockResolvedValueOnce({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
 
     await expect(signalCheck("http://auto-cache.local:8080")).resolves.toEqual({
       ok: true,
@@ -588,7 +861,7 @@ describe("streamSignalEvents", () => {
         account: "+14259798283",
         onEvent: vi.fn(),
       }),
-    ).rejects.toThrow("Signal API not reachable at http://auto-cache.local:8080");
+    ).rejects.toThrow("Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)");
     expect(mockStreamContainerEvents).not.toHaveBeenCalled();
     expect(mockContainerCheck).toHaveBeenLastCalledWith(
       "http://auto-cache.local:8080",
@@ -614,7 +887,7 @@ describe("streamSignalEvents", () => {
       }),
     ).rejects.toThrow("Signal API not reachable at http://auto-cache-no-account.local:8080");
     expect(mockStreamContainerEvents).not.toHaveBeenCalled();
-    expect(mockContainerCheck).toHaveBeenCalledTimes(2);
+    expect(mockContainerCheck).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -1,12 +1,24 @@
 // Signal plugin module implements channel.setup behavior.
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/channel-plugin-common";
 import type { ResolvedSignalAccount } from "./accounts.js";
 import { signalSetupAdapter } from "./setup-core.js";
-import { createSignalPluginBase, signalSetupWizard } from "./shared.js";
+import { signalSetupWizard } from "./setup-surface.js";
+import { signalConfigAdapter } from "./shared.js";
 
 export const signalSetupPlugin: ChannelPlugin<ResolvedSignalAccount> = {
-  ...createSignalPluginBase({
-    setupWizard: signalSetupWizard,
-    setup: signalSetupAdapter,
-  }),
+  id: "signal",
+  meta: {
+    ...getChatChannelMeta("signal"),
+  },
+  capabilities: {
+    chatTypes: ["direct", "group"],
+    media: true,
+    reactions: true,
+  },
+  setupWizard: signalSetupWizard,
+  config: {
+    ...signalConfigAdapter,
+    isConfigured: (account) => account.configured,
+  },
+  setup: signalSetupAdapter,
 };

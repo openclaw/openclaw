@@ -1186,6 +1186,7 @@ const SignalAccountSchemaBase = z
     httpPort: z.number().int().positive().optional(),
     cliPath: ExecutableTokenSchema.optional(),
     autoStart: z.boolean().optional(),
+    apiMode: z.enum(["auto", "native", "container"]).optional(),
     startupTimeoutMs: z.number().int().min(1000).max(120000).optional(),
     receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
     ignoreAttachments: z.boolean().optional(),
@@ -1223,7 +1224,6 @@ const SignalAccountSchemaBase = z
   .strict();
 
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
-  apiMode: z.enum(["auto", "native", "container"]).optional(),
   // Account-level schemas skip allowFrom validation because accounts inherit
   // allowFrom from the parent channel config at runtime.
   accounts: z.record(z.string(), SignalAccountSchemaBase.optional()).optional(),

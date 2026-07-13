@@ -5,15 +5,24 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  createPluginSetupWizardConfigure,
+  createPluginSetupWizardStatus,
+  createQueuedWizardPrompter,
+  runSetupWizardConfigure,
+  runSetupWizardPrepare,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveSignalAccount } from "./accounts.js";
 import {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
+import { SignalRpcRequestError } from "./client.js";
 import { classifySignalCliLogLine } from "./daemon.js";
 import {
   looksLikeUuid,
@@ -33,10 +42,43 @@ import {
   createSignalCliPathTextInput,
   normalizeSignalAccountInput,
   parseSignalAllowFromEntries,
+  prepareSignalSetupWizard,
+  setSignalSetupServerProbeForTest,
   signalDmPolicy,
+  signalSetupAdapter,
 } from "./setup-core.js";
 
+const { execFileAsyncMock, execFileMock, installSignalCliMock } = vi.hoisted(() => {
+  const hoistedExecFileAsyncMock = vi.fn();
+  const hoistedExecFileMock = vi.fn();
+  (hoistedExecFileMock as unknown as Record<symbol, typeof hoistedExecFileAsyncMock>)[
+    Symbol.for("nodejs.util.promisify.custom")
+  ] = hoistedExecFileAsyncMock;
+  return {
+    execFileAsyncMock: hoistedExecFileAsyncMock,
+    execFileMock: hoistedExecFileMock,
+    installSignalCliMock: vi.fn(),
+  };
+});
+
+vi.mock("node:child_process", () => ({
+  execFile: execFileMock,
+}));
+
+vi.mock("./install-signal-cli.js", () => ({
+  installSignalCli: installSignalCliMock,
+}));
+
 const getSignalSetupStatus = createPluginSetupWizardStatus(signalPlugin);
+const configureSignalSetup = createPluginSetupWizardConfigure(signalPlugin);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  setSignalSetupServerProbeForTest(undefined);
+  execFileAsyncMock.mockReset();
+  execFileMock.mockReset();
+  installSignalCliMock.mockReset();
+});
 
 describe("looksLikeUuid", () => {
   it("accepts hyphenated UUIDs", () => {
@@ -104,71 +146,418 @@ describe("signal sender identity", () => {
 });
 
 describe("probeSignal", () => {
-  it("falls back to the direct probe helper when runtime is not initialized", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function mockSingleAccountNativeRpc(version = "0.13.22") {
+    return vi
+      .spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version })
+      .mockRejectedValueOnce(new SignalRpcRequestError(-32601, "Method not implemented"));
+  }
+
+  it("forwards named-account transport config through the status probe", async () => {
     clearSignalRuntime();
-    vi.spyOn(clientModule, "signalCheck")
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        error: null,
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        error: null,
-      });
-    vi.spyOn(clientModule, "signalRpcRequest")
-      .mockResolvedValueOnce({ version: "0.13.22" })
-      .mockResolvedValueOnce({ version: "0.13.22" });
+    const signalCheck = vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    const signalRpcRequest = mockSingleAccountNativeRpc();
 
     const params = {
       cfg: {} as never,
       account: {
-        accountId: "default",
+        accountId: "work",
         enabled: true,
         configured: true,
         baseUrl: "http://127.0.0.1:8080",
+        config: { account: "+15555550123", apiMode: "native" },
       } as never,
       timeoutMs: 1000,
     };
 
-    const expected = await probeSignal("http://127.0.0.1:8080", 1000);
     const result = await signalPlugin.status!.probeAccount!(params);
 
-    expect(result.ok).toBe(expected.ok);
-    expect(result.status).toBe(expected.status);
-    expect(result.error).toBe(expected.error);
-    expect(result.version).toBe(expected.version);
-    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
-  });
-
-  it("extracts version from {version} result", async () => {
-    vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
+    expect(result).toMatchObject({
       ok: true,
       status: 200,
       error: null,
+      version: "0.13.22",
+      readiness: "ready",
     });
-    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(signalCheck).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "native",
+      requireReceive: false,
+    });
+    expect(signalRpcRequest).toHaveBeenCalledWith("version", undefined, {
+      baseUrl: "http://127.0.0.1:8080",
+      timeoutMs: 1000,
+      apiMode: "native",
+    });
+    expect(signalRpcRequest).toHaveBeenCalledWith("listAccounts", undefined, {
+      baseUrl: "http://127.0.0.1:8080",
+      timeoutMs: 1000,
+      apiMode: "native",
+    });
+  });
 
-    const res = await probeSignal("http://127.0.0.1:8080", 1000);
+  it("extracts version from {version} result", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    mockSingleAccountNativeRpc();
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+    });
 
     expect(res.ok).toBe(true);
     expect(res.version).toBe("0.13.22");
     expect(res.status).toBe(200);
+    expect(res.readiness).toBe("ready");
+  });
+
+  it("does not hard-fail native probes on finite receive readiness", async () => {
+    const signalCheck = vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    const signalRpcRequest = mockSingleAccountNativeRpc();
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "auto",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.version).toBe("0.13.22");
+    expect(res.readiness).toBe("ready");
+    expect(signalCheck).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "auto",
+      requireReceive: false,
+    });
+    expect(signalRpcRequest).toHaveBeenCalledWith("version", undefined, {
+      baseUrl: "http://127.0.0.1:8080",
+      timeoutMs: 1000,
+      apiMode: "native",
+    });
+  });
+
+  it("still requires receive readiness for auto-detected container probes", async () => {
+    const initialCheck = vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: { ok: true, status: 200, error: null },
+    });
+    const receiveCheck = vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "auto",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.version).toBe("0.13.22");
+    expect(res.readiness).toBe("receive_unavailable");
+    expect(initialCheck).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "auto",
+      requireReceive: false,
+    });
+    expect(receiveCheck).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "container",
+      requireReceive: true,
+    });
   });
 
   it("returns ok=false when /check fails", async () => {
-    vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
-      ok: false,
-      status: 503,
-      error: "HTTP 503",
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: false, status: 503, error: "HTTP 503" },
     });
 
-    const res = await probeSignal("http://127.0.0.1:8080", 1000);
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+    });
 
     expect(res.ok).toBe(false);
     expect(res.status).toBe(503);
     expect(res.version).toBe(null);
+    expect(res.readiness).toBe("unreachable");
+  });
+
+  it("reports accountless native RPC failures as unreachable", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockRejectedValueOnce(new Error("RPC unavailable"));
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      apiMode: "native",
+    });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: 200,
+      error: "RPC unavailable",
+      readiness: "unreachable",
+    });
+  });
+
+  it("reports accountful native RPC failures as unreachable", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockRejectedValueOnce(new Error("RPC unavailable"));
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "native",
+    });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: 200,
+      error: "RPC unavailable",
+      readiness: "unreachable",
+    });
+  });
+
+  it("reports missing account after probing transport reachability", async () => {
+    const signalCheck = vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: { ok: true, status: 200, error: null },
+    });
+    const signalRpcRequest = vi
+      .spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" });
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      apiMode: "container",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.readiness).toBe("account_missing");
+    expect(res.error).toBe("Signal account is not configured");
+    expect(res.version).toBe("0.13.22");
+    expect(signalCheck).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
+      account: undefined,
+      apiMode: "container",
+      requireReceive: false,
+    });
+    expect(signalRpcRequest).toHaveBeenCalledWith("version", undefined, {
+      apiMode: "container",
+      baseUrl: "http://127.0.0.1:8080",
+      timeoutMs: 1000,
+    });
+  });
+
+  it("reports native transport-only probes as ready without an account", async () => {
+    const signalCheck = vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    mockSingleAccountNativeRpc();
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      apiMode: "auto",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.readiness).toBe("ready");
+    expect(res.error).toBeNull();
+    expect(res.version).toBe("0.13.22");
+    expect(signalCheck).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
+      account: undefined,
+      apiMode: "auto",
+      requireReceive: false,
+    });
+  });
+
+  it("requires an account for a multi-account native daemon", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550123" }, { number: "+15555550999" }]);
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, { apiMode: "native" });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: 200,
+      readiness: "account_missing",
+      error: "Signal native daemon serves multiple accounts; configure a Signal phone number",
+      version: "0.13.22",
+    });
+  });
+
+  it("rejects an account that a multi-account native daemon does not serve", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550999" }]);
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "native",
+    });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: 200,
+      readiness: "account_missing",
+      error: "Signal native daemon does not list +15555550123",
+      version: "0.13.22",
+    });
+  });
+
+  it("accepts an account that a multi-account native daemon serves", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550123" }]);
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "native",
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      status: 200,
+      readiness: "ready",
+      version: "0.13.22",
+    });
+  });
+
+  it("reports container receive failures separately from unreachable transport", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: {
+        ok: false,
+        status: 200,
+        error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+      },
+    });
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "container",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe(200);
+    expect(res.readiness).toBe("receive_unavailable");
+  });
+
+  it("does not report a container probe ready when the account is not linked", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: { ok: true, status: 101, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify(["+15555550999"]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.spyOn(fetchRuntime, "resolveFetch").mockReturnValue(fetchImpl as unknown as typeof fetch);
+
+    const res = await probeSignal("http://signal-cli:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "container",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith("http://signal-cli:8080/v1/accounts", {
+      method: "GET",
+      signal: expect.any(AbortSignal),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe(101);
+    expect(res.version).toBe("0.13.22");
+    expect(res.readiness).toBe("account_missing");
+    expect(res.error).toContain("Signal container does not list +15555550123");
+  });
+
+  it("reports linked-account lookup failures as unreachable", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: { ok: true, status: 101, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
+    vi.spyOn(fetchRuntime, "resolveFetch").mockReturnValue(
+      vi.fn(async () => new Response("not-json", { status: 200 })) as unknown as typeof fetch,
+    );
+
+    const res = await probeSignal("http://signal-cli:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "container",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.readiness).toBe("unreachable");
+    expect(res.error).toContain("Signal accounts check failed");
+  });
+
+  it("reports a container probe ready when the account is linked", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: { ok: true, status: 101, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify(["+15555550123"]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.spyOn(fetchRuntime, "resolveFetch").mockReturnValue(fetchImpl as unknown as typeof fetch);
+
+    const res = await probeSignal("http://signal-cli:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "container",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith("http://signal-cli:8080/v1/accounts", {
+      method: "GET",
+      signal: expect.any(AbortSignal),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe(101);
+    expect(res.version).toBe("0.13.22");
+    expect(res.readiness).toBe("ready");
+  });
+
+  it("lets generic probe wrapper failures fall back to generic capability output", () => {
+    const lines = signalPlugin.status!.formatCapabilitiesProbe!({
+      probe: { ok: false, error: "probe timed out after 30000ms" } as never,
+    });
+
+    expect(lines).toEqual([]);
   });
 
   it("setup status lines use the selected account cliPath", async () => {
@@ -189,6 +578,95 @@ describe("probeSignal", () => {
     });
 
     expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
+  });
+
+  it("setup status does not require local signal-cli for existing server transport", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            account: "+15555550123",
+            httpUrl: "http://signal-cli:8080",
+            autoStart: false,
+            apiMode: "container",
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+    expect(status.quickstartScore).toBe(1);
+    expect(status.statusLines).toContain("Signal transport: existing Signal server");
+    expect(status.statusLines.some((line) => line.includes("signal-cli: missing"))).toBe(false);
+  });
+
+  it("keeps an accountless external native daemon configured", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            httpUrl: "http://127.0.0.1:8080",
+            autoStart: false,
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+    expect(status.quickstartScore).toBe(1);
+    expect(status.statusLines).toContain("Signal: configured");
+    expect(status.statusLines).toContain("Signal transport: existing Signal server");
+  });
+
+  it("keeps endpoint-only Signal setup incomplete until an account is configured", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            httpUrl: "http://signal-cli:8080",
+            autoStart: false,
+            apiMode: "container",
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.quickstartScore).toBe(0);
+    expect(status.statusLines).toContain("Signal: needs setup");
+    expect(status.statusLines).toContain("Signal transport: existing Signal server");
+    expect(status.statusLines.some((line) => line.includes("signal-cli: missing"))).toBe(false);
+  });
+
+  it("setup status uses the configured default account for external transport", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                account: "+15555550123",
+                httpUrl: "http://signal-cli:8080",
+                autoStart: false,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+    expect(status.quickstartScore).toBe(1);
+    expect(status.statusLines).toContain("Signal transport: existing Signal server");
+    expect(status.statusLines.some((line) => line.includes("signal-cli: missing"))).toBe(false);
   });
 
   it("setup status uses configured defaultAccount for omitted cliPath lookup", async () => {
@@ -225,7 +703,7 @@ describe("probeSignal", () => {
               },
               work: {
                 cliPath: "",
-                account: "",
+                account: "+15555550123",
                 httpHost: "",
                 httpUrl: "",
               },
@@ -239,11 +717,14 @@ describe("probeSignal", () => {
     expect(status.configured).toBe(true);
   });
 
-  it("does not show a second missing-binary note before the cliPath prompt", () => {
+  it("shows focused signal-cli path help before the cliPath prompt", () => {
     const input = createSignalCliPathTextInput(async () => true);
 
-    expect(input.helpLines).toBeUndefined();
-    expect(input.helpTitle).toBeUndefined();
+    expect(input.helpTitle).toBe("signal-cli path");
+    expect(input.helpLines).toEqual([
+      "This is the command OpenClaw runs for local signal-cli setup.",
+      "Use the full path if it is not on PATH, for example /opt/homebrew/bin/signal-cli.",
+    ]);
   });
 });
 
@@ -1243,6 +1724,1239 @@ describe("signal setup parsing", () => {
       policyKey: "channels.signal.accounts.work.dmPolicy",
       allowFromKey: "channels.signal.accounts.work.allowFrom",
     });
+  });
+
+  it("configures native signal-cli auto-start setup through the wizard", async () => {
+    const cliPath = "/tmp/openclaw-missing-signal-cli-native-setup";
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+      textValues: [cliPath, "+1 (555) 555-0123", "~/.local/share/signal-cli"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            cliPath,
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal).toMatchObject({
+      enabled: true,
+      account: "+15555550123",
+      cliPath,
+      configPath: "~/.local/share/signal-cli",
+      autoStart: true,
+    });
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining("/opt/homebrew/bin/signal-cli"),
+      "signal-cli path",
+    );
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining("for example +15555550123"),
+      "Signal phone number",
+    );
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining("Example: ~/.local/share/signal-cli"),
+      "signal-cli config path",
+    );
+    expect(
+      prompts.text.mock.calls.map(([prompt]) => (prompt as { message?: string }).message),
+    ).toEqual(["signal-cli path", "Signal phone number", "signal-cli config path (optional)"]);
+    expect(result.cfg.channels?.signal?.httpUrl).toBeUndefined();
+    expect(result.cfg.channels?.signal?.apiMode).toBeUndefined();
+  });
+
+  it("returns to the Signal setup choice after signal-cli auto-install fails", async () => {
+    installSignalCliMock.mockResolvedValueOnce({
+      ok: false,
+      error: "Signal setup hit an error while installing signal-cli.",
+    });
+    setSignalSetupServerProbeForTest(async () => ({ ok: true as const, version: "0.13.22" }));
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native", "external-native"],
+      confirmValues: [true],
+      textValues: ["+15555550123", "http://127.0.0.1:18080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            cliPath: "/tmp/openclaw-missing-signal-cli-install-retry",
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+      options: { allowSignalInstall: true },
+    });
+
+    expect(installSignalCliMock).toHaveBeenCalledTimes(1);
+    expect(prompts.note).toHaveBeenCalledWith(
+      "Signal setup hit an error while installing signal-cli.",
+      "Signal",
+    );
+    expect(prompts.select).toHaveBeenCalledTimes(2);
+    expect(
+      prompts.select.mock.calls.map(([prompt]) => (prompt as { message?: string }).message),
+    ).toEqual([
+      "How do you want to set up Signal for OpenClaw?",
+      "How do you want to set up Signal for OpenClaw?",
+    ]);
+    expect(
+      prompts.text.mock.calls.map(([prompt]) => (prompt as { message?: string }).message),
+    ).not.toContain("signal-cli path");
+    expect(result.cfg.channels?.signal).toMatchObject({
+      enabled: true,
+      account: "+15555550123",
+      httpUrl: "http://127.0.0.1:18080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+    const status = await getSignalSetupStatus({
+      cfg: result.cfg,
+      accountOverrides: {},
+    });
+    expect(status.statusLines).toContain("Signal transport: existing Signal server");
+  });
+
+  it("uses an installed signal-cli path for native setup", async () => {
+    installSignalCliMock.mockResolvedValueOnce({
+      ok: true,
+      cliPath: "/tmp/openclaw-installed-signal-cli",
+    });
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+      confirmValues: [true],
+      textValues: [
+        "/tmp/openclaw-installed-signal-cli",
+        "+1 (555) 555-0123",
+        "~/.local/share/signal-cli",
+      ],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            cliPath: "/tmp/openclaw-missing-signal-cli-install-success",
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+      options: { allowSignalInstall: true },
+    });
+
+    expect(installSignalCliMock).toHaveBeenCalledTimes(1);
+    expect(prompts.note).toHaveBeenCalledWith(
+      "Installed signal-cli at /tmp/openclaw-installed-signal-cli",
+      "Signal",
+    );
+    const textPrompts = prompts.text.mock.calls.map(
+      ([prompt]) =>
+        prompt as {
+          message?: string;
+          initialValue?: string;
+        },
+    );
+    expect(textPrompts).toEqual([
+      expect.objectContaining({
+        message: "signal-cli path",
+        initialValue: "/tmp/openclaw-installed-signal-cli",
+      }),
+      expect.objectContaining({ message: "Signal phone number" }),
+      expect.objectContaining({ message: "signal-cli config path (optional)" }),
+    ]);
+    expect(result.cfg.channels?.signal).toMatchObject({
+      enabled: true,
+      account: "+15555550123",
+      cliPath: "/tmp/openclaw-installed-signal-cli",
+      configPath: "~/.local/share/signal-cli",
+      autoStart: true,
+    });
+    expect(result.cfg.channels?.signal?.httpUrl).toBeUndefined();
+    expect(result.cfg.channels?.signal?.apiMode).toBeUndefined();
+  });
+
+  it("switches stale external setup back to native signal-cli setup", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+      confirmValues: [true],
+      textValues: ["/tmp/missing-signal-cli-native-switch", ""],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            account: "+15555550123",
+            cliPath: "/tmp/missing-signal-cli-native-switch",
+            configPath: "/tmp/stale-signal-config",
+            httpHost: "192.0.2.10",
+            httpPort: 18080,
+            autoStart: false,
+            apiMode: "auto",
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal).toMatchObject({
+      enabled: true,
+      account: "+15555550123",
+      cliPath: "/tmp/missing-signal-cli-native-switch",
+      autoStart: true,
+    });
+    expect(result.cfg.channels?.signal?.httpUrl).toBeUndefined();
+    expect(result.cfg.channels?.signal?.httpHost).toBeUndefined();
+    expect(result.cfg.channels?.signal?.httpPort).toBeUndefined();
+    expect(result.cfg.channels?.signal?.configPath).toBeUndefined();
+    expect(result.cfg.channels?.signal?.apiMode).toBe("native");
+  });
+
+  it("preserves custom native daemon host and port when rerunning native setup", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+      textValues: ["/tmp/missing-signal-cli-native-custom", "+15555550123", ""],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            account: "+15555550123",
+            cliPath: "/tmp/missing-signal-cli-native-custom",
+            autoStart: true,
+            apiMode: "native",
+            httpHost: "127.0.0.1",
+            httpPort: 19089,
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal).toMatchObject({
+      account: "+15555550123",
+      cliPath: "/tmp/missing-signal-cli-native-custom",
+      autoStart: true,
+      apiMode: "native",
+      httpHost: "127.0.0.1",
+      httpPort: 19089,
+    });
+  });
+
+  it("preserves the root native port when interactive setup scopes the default account", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+      textValues: ["/tmp/missing-signal-cli-native-default", "+15555550123", ""],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            cliPath: "/tmp/missing-signal-cli-native-default",
+            httpHost: "127.0.0.1",
+            httpPort: 19089,
+            autoStart: true,
+            apiMode: "native",
+            accounts: {
+              work: {
+                account: "+15555550124",
+                httpUrl: "http://signal-container:8080",
+                autoStart: false,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal?.httpPort).toBeUndefined();
+    expect(result.cfg.channels?.signal?.accounts?.default).toMatchObject({
+      httpHost: "127.0.0.1",
+      httpPort: 19089,
+      autoStart: true,
+      apiMode: "native",
+    });
+  });
+
+  it("persists native transport clears for named Signal accounts", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+      textValues: ["/tmp/missing-signal-cli-native-work", "+15555550124", ""],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            account: "+15555550123",
+            httpUrl: "http://127.0.0.1:18080",
+            httpHost: "signal-container",
+            httpPort: 18080,
+            autoStart: false,
+            apiMode: "container",
+            accounts: {
+              default: {
+                account: "+15555550123",
+                cliPath: "/usr/local/bin/signal-cli",
+                autoStart: true,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+      accountOverrides: { signal: "work" },
+    });
+
+    const workAccount = result.cfg.channels?.signal?.accounts?.work;
+    expect(workAccount).toMatchObject({
+      account: "+15555550124",
+      autoStart: true,
+      apiMode: "native",
+      httpUrl: "",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+      configPath: "",
+    });
+
+    const reloadedCfg = structuredClone(result.cfg);
+    const resolved = resolveSignalAccount({ cfg: reloadedCfg, accountId: "work" });
+    expect(resolved.baseUrl).toBe("http://127.0.0.1:8080");
+    expect(resolved.config.apiMode).toBe("native");
+    expect(resolved.config.autoStart).toBe(true);
+    expect(resolved.config.httpUrl).toBe("");
+  });
+
+  it("scopes default native setup fields when Signal named accounts exist", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+      textValues: ["/tmp/missing-signal-cli-native-default", "+15555550123", ""],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            name: "Legacy default",
+            account: "+15550000000",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            cliPath: "/tmp/stale-root-signal-cli",
+            configPath: "/tmp/stale-root-signal-config",
+            httpUrl: "http://stale-root:8080",
+            httpHost: "stale-root",
+            httpPort: 19090,
+            autoStart: false,
+            apiMode: "container",
+            accounts: {
+              default: {
+                enabled: false,
+              },
+              work: {
+                name: "Work",
+                autoStart: false,
+              },
+              personal: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal?.account).toBeUndefined();
+    expect(result.cfg.channels?.signal?.name).toBeUndefined();
+    expect(result.cfg.channels?.signal?.accountUuid).toBeUndefined();
+    expect(result.cfg.channels?.signal?.cliPath).toBeUndefined();
+    expect(result.cfg.channels?.signal?.configPath).toBeUndefined();
+    expect(result.cfg.channels?.signal?.httpUrl).toBeUndefined();
+    expect(result.cfg.channels?.signal?.httpHost).toBeUndefined();
+    expect(result.cfg.channels?.signal?.httpPort).toBeUndefined();
+    expect(result.cfg.channels?.signal?.autoStart).toBeUndefined();
+    expect(result.cfg.channels?.signal?.apiMode).toBe("container");
+    expect(result.cfg.channels?.signal?.accounts?.default).toMatchObject({
+      enabled: true,
+      name: "Legacy default",
+      account: "+15555550123",
+      cliPath: "/tmp/missing-signal-cli-native-default",
+      autoStart: true,
+      apiMode: "native",
+      httpUrl: "",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+    });
+
+    const reloadedCfg = structuredClone(result.cfg);
+    const work = resolveSignalAccount({ cfg: reloadedCfg, accountId: "work" });
+    expect(work.name).toBe("Work");
+    expect(work.config.account).toBe("+15550000000");
+    expect(work.config.accountUuid).toBe("123e4567-e89b-12d3-a456-426614174000");
+    expect(work.config.cliPath).toBe("/tmp/stale-root-signal-cli");
+    expect(work.config.configPath).toBe("/tmp/stale-root-signal-config");
+    expect(work.config.httpUrl).toBe("http://stale-root:8080");
+    expect(work.config.httpHost).toBe("stale-root");
+    expect(work.config.httpPort).toBe(19090);
+    expect(work.config.apiMode).toBe("container");
+    expect(work.config.autoStart).toBe(false);
+    expect(resolveSignalAccount({ cfg: reloadedCfg, accountId: "personal" }).name).toBeUndefined();
+  });
+
+  it("preselects native setup for an existing native Signal account", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+    });
+
+    await runSetupWizardPrepare({
+      prepare: prepareSignalSetupWizard,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "How do you want to set up Signal for OpenClaw?",
+        initialValue: "native",
+      }),
+    );
+  });
+
+  it("preselects existing-server setup when container mode has an existing URL", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+    });
+
+    const result = await runSetupWizardPrepare({
+      prepare: prepareSignalSetupWizard,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            httpUrl: "http://127.0.0.1:18080",
+            autoStart: false,
+            apiMode: "container",
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "How do you want to set up Signal for OpenClaw?",
+        initialValue: "external-native",
+      }),
+    );
+    expect(result?.credentialValues?.signalTransport).toBe("external-native");
+  });
+
+  it("preselects native setup when explicit auto-start uses a custom URL", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+    });
+
+    const result = await runSetupWizardPrepare({
+      prepare: prepareSignalSetupWizard,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            httpUrl: "http://127.0.0.1:18080",
+            autoStart: true,
+            apiMode: "native",
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "How do you want to set up Signal for OpenClaw?",
+        initialValue: "native",
+      }),
+    );
+    expect(result?.credentialValues?.signalTransport).toBe("native");
+  });
+
+  it("preselects existing-server setup when container mode has host and port", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+    });
+
+    const result = await runSetupWizardPrepare({
+      prepare: prepareSignalSetupWizard,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            httpHost: "127.0.0.1",
+            httpPort: 18080,
+            autoStart: false,
+            apiMode: "container",
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "How do you want to set up Signal for OpenClaw?",
+        initialValue: "external-native",
+      }),
+    );
+    expect(result?.credentialValues?.signalTransport).toBe("external-native");
+  });
+
+  it("connects to an existing Signal server through the wizard", async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: "0.13.22" }));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["+15555550123", "http://127.0.0.1:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal).toMatchObject({
+      enabled: true,
+      account: "+15555550123",
+      httpUrl: "http://127.0.0.1:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining("For a local helper, this usually looks like http://127.0.0.1:8080."),
+      "Signal server URL",
+    );
+    expect(probe).toHaveBeenCalledWith({
+      httpUrl: "http://127.0.0.1:8080",
+      account: "+15555550123",
+      apiMode: "auto",
+    });
+    expect(prompts.progress).toHaveBeenCalledWith("Testing Signal server URL");
+    const progress = prompts.progress.mock.results[0]?.value;
+    expect(progress?.update).toHaveBeenCalledWith("Testing http://127.0.0.1:8080");
+    expect(progress?.stop).toHaveBeenCalledWith("Signal server reachable");
+    expect(result.cfg.channels?.signal?.cliPath).toBeUndefined();
+    const nextStepsNotes = prompts.note.mock.calls.filter(
+      ([, title]) => title === "Signal next steps",
+    );
+    expect(nextStepsNotes).toEqual([
+      [
+        expect.stringContaining("Link and manage this account through the selected Signal server."),
+        "Signal next steps",
+      ],
+    ]);
+    expect(nextStepsNotes[0]?.[0]).not.toContain("signal-cli link");
+  });
+
+  it("connects to an accountless native Signal server through the wizard", async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: "0.13.22" }));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["", "http://127.0.0.1:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal).toMatchObject({
+      enabled: true,
+      httpUrl: "http://127.0.0.1:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+    expect(result.cfg.channels?.signal?.account).toBeUndefined();
+    expect(probe).toHaveBeenCalledWith({
+      httpUrl: "http://127.0.0.1:8080",
+      account: "",
+      apiMode: "auto",
+    });
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining("Signal server connected.\n"),
+      "Signal next steps",
+    );
+    expect(prompts.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("undefined"),
+      expect.anything(),
+    );
+  });
+
+  it("clears an existing Signal account for accountless native server setup", async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: "0.13.22" }));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["", "http://127.0.0.1:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            httpUrl: "http://127.0.0.1:8080",
+            autoStart: false,
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal?.account).toBe("");
+    expect(resolveSignalAccount({ cfg: structuredClone(result.cfg) }).config.account).toBe("");
+  });
+
+  it("clears a stale invalid Signal account for accountless native server setup", async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: "0.13.22" }));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["", "http://127.0.0.1:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            account: "stale-invalid-account",
+            httpUrl: "http://127.0.0.1:8080",
+            autoStart: false,
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal?.account).toBe("");
+    expect(resolveSignalAccount({ cfg: structuredClone(result.cfg) }).config.account).toBe("");
+  });
+
+  it("clears an inherited Signal account for named accountless server setup", async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: "0.13.22" }));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["", "http://127.0.0.1:8081"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accounts: {
+              work: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+      accountOverrides: { signal: "work" },
+    });
+
+    expect(result.cfg.channels?.signal?.account).toBe("+15555550123");
+    expect(result.cfg.channels?.signal?.accounts?.work?.account).toBe("");
+    expect(
+      normalizeSignalAccountInput(
+        resolveSignalAccount({ cfg: structuredClone(result.cfg), accountId: "work" }).config
+          .account,
+      ),
+    ).toBeNull();
+  });
+
+  it("validates an existing native server account without receive probing", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValue({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550123" }]);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["+15555550123", "http://signal-cli:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(clientModule.signalCheckWithMode).toHaveBeenCalledWith(
+      "http://signal-cli:8080",
+      5_000,
+      expect.objectContaining({ requireReceive: false }),
+    );
+    expect(result.cfg.channels?.signal).toMatchObject({
+      account: "+15555550123",
+      httpUrl: "http://signal-cli:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+  });
+
+  it("re-prompts an account that an existing native server does not list", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValue({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550999" }])
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550999" }]);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: [
+        "+15555550123",
+        "http://signal-cli:8080",
+        "+15555550999",
+        "http://signal-cli:8080",
+      ],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.confirm).not.toHaveBeenCalled();
+    expect(
+      prompts.text.mock.calls.map(([prompt]) => (prompt as { message?: string }).message),
+    ).toEqual([
+      "Signal phone number",
+      "Signal server URL",
+      "Signal phone number",
+      "Signal server URL",
+    ]);
+    expect(result.cfg.channels?.signal).toMatchObject({
+      account: "+15555550999",
+      httpUrl: "http://signal-cli:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+  });
+
+  it("does not save an existing native server when the RPC probe fails", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValue({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockRejectedValue(new Error("RPC unavailable"));
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      confirmValues: [false],
+      textValues: ["+15555550123", "http://signal-cli:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining("OpenClaw could not reach a working Signal server"),
+      "Signal server URL",
+    );
+    expect(prompts.confirm).toHaveBeenCalledWith({
+      message: "Try the Signal server URL again?",
+      initialValue: true,
+    });
+    expect(result.cancelled).toBe(true);
+    expect(result.cfg).toEqual({});
+  });
+
+  it("saves a new default account number when connecting to an existing server with named accounts", async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: "0.13.22" }));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      confirmValues: [false],
+      textValues: ["+15555550124", "http://127.0.0.1:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            account: "+15550000000",
+            cliPath: "/tmp/stale-root-signal-cli",
+            configPath: "/tmp/stale-root-signal-config",
+            httpUrl: "http://stale-root:8080",
+            httpHost: "stale-root",
+            httpPort: 19090,
+            autoStart: false,
+            apiMode: "auto",
+            accounts: {
+              default: {
+                account: "+15555550123",
+              },
+              work: {
+                account: "+15555550125",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(probe).toHaveBeenCalledWith({
+      httpUrl: "http://127.0.0.1:8080",
+      account: "+15555550124",
+      apiMode: "auto",
+    });
+    expect(result.cfg.channels?.signal?.account).toBeUndefined();
+    expect(result.cfg.channels?.signal?.accounts?.default).toMatchObject({
+      account: "+15555550124",
+      httpUrl: "http://127.0.0.1:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+    expect(result.cfg.channels?.signal?.accounts?.work).toMatchObject({
+      account: "+15555550125",
+    });
+  });
+
+  it("re-prompts the Signal account when the container does not list it", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValue({
+      mode: "container",
+      check: { ok: true, status: 101, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValue({
+      version: "0.13.22",
+    } as never);
+    vi.spyOn(clientModule, "signalCheck").mockResolvedValue({
+      ok: true,
+      status: 101,
+      error: null,
+    });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify(["+15555550999"]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.spyOn(fetchRuntime, "resolveFetch").mockReturnValue(fetchImpl as unknown as typeof fetch);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: [
+        "+15555550123",
+        "http://signal-cli:8080",
+        "+15555550999",
+        "http://signal-cli:8080",
+      ],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith("http://signal-cli:8080/v1/accounts", {
+      method: "GET",
+      signal: expect.any(AbortSignal),
+    });
+    expect(prompts.confirm).not.toHaveBeenCalled();
+    expect(
+      prompts.text.mock.calls.map(([prompt]) => (prompt as { message?: string }).message),
+    ).toEqual([
+      "Signal phone number",
+      "Signal server URL",
+      "Signal phone number",
+      "Signal server URL",
+    ]);
+    expect(result.cfg.channels?.signal).toMatchObject({
+      account: "+15555550999",
+      httpUrl: "http://signal-cli:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+  });
+
+  it("accepts a bare existing container server URL when the account is linked", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValue({
+      mode: "container",
+      check: { ok: true, status: 101, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValue({
+      version: "0.13.22",
+    } as never);
+    vi.spyOn(clientModule, "signalCheck").mockResolvedValue({
+      ok: true,
+      status: 101,
+      error: null,
+    });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify(["+15555550123"]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.spyOn(fetchRuntime, "resolveFetch").mockReturnValue(fetchImpl as unknown as typeof fetch);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["+15555550123", "signal-cli:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith("http://signal-cli:8080/v1/accounts", {
+      method: "GET",
+      signal: expect.any(AbortSignal),
+    });
+    expect(result.cfg.channels?.signal).toMatchObject({
+      account: "+15555550123",
+      httpUrl: "signal-cli:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+  });
+
+  it("retries the Signal server URL until the server check passes", async () => {
+    const probe = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false as const, error: "connect ECONNREFUSED 127.0.0.1:8080" })
+      .mockResolvedValueOnce({ ok: true as const, version: "0.13.22" });
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      confirmValues: [true],
+      textValues: ["+15555550123", "http://127.0.0.1:8080", "http://127.0.0.1:18080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "OpenClaw could not reach a working Signal server at http://127.0.0.1:8080.",
+      ),
+      "Signal server URL",
+    );
+    expect(prompts.confirm).toHaveBeenCalledWith({
+      message: "Try the Signal server URL again?",
+      initialValue: true,
+    });
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(result.cfg.channels?.signal).toMatchObject({
+      enabled: true,
+      account: "+15555550123",
+      httpUrl: "http://127.0.0.1:18080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+    const status = await getSignalSetupStatus({
+      cfg: result.cfg,
+      accountOverrides: {},
+    });
+    expect(status.statusLines).toContain("Signal transport: existing Signal server");
+  });
+
+  it("cancels Signal server URL setup without throwing when the user declines retry", async () => {
+    const probe = vi.fn().mockResolvedValueOnce({
+      ok: false as const,
+      error: "connect ECONNREFUSED 127.0.0.1:8080",
+    });
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      confirmValues: [false],
+      textValues: ["+15555550123", "http://127.0.0.1:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.confirm).toHaveBeenCalledWith({
+      message: "Try the Signal server URL again?",
+      initialValue: true,
+    });
+    expect(prompts.note).toHaveBeenCalledWith(
+      "Signal server URL was not saved. Start or fix the Signal helper, then run setup again.",
+      "Signal server URL",
+    );
+    expect(
+      prompts.note.mock.calls.some(([message]) =>
+        String(message).includes("Then run: openclaw channels status --probe"),
+      ),
+    ).toBe(false);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(result.cancelled).toBe(true);
+    expect(result.cfg).toEqual({});
+  });
+
+  it("does not save Signal server URL setup when the server probe throws", async () => {
+    const probe = vi.fn().mockRejectedValueOnce(new Error("probe exploded"));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      confirmValues: [false],
+      textValues: ["+15555550123", "http://127.0.0.1:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "OpenClaw could not check the Signal server at http://127.0.0.1:8080.",
+      ),
+      "Signal server URL",
+    );
+    expect(prompts.note).toHaveBeenCalledWith(
+      "Signal server URL was not saved. Start or fix the Signal helper, then run setup again.",
+      "Signal server URL",
+    );
+    expect(prompts.confirm).toHaveBeenCalledWith({
+      message: "Try the Signal server URL again?",
+      initialValue: true,
+    });
+    const progress = prompts.progress.mock.results[0]?.value;
+    expect(progress?.update).toHaveBeenCalledWith("Testing http://127.0.0.1:8080");
+    expect(progress?.stop).toHaveBeenCalledWith();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(result.cancelled).toBe(true);
+    expect(result.cfg).toEqual({});
+  });
+
+  it("uses auto mode for existing Signal server setup", async () => {
+    setSignalSetupServerProbeForTest(async () => ({ ok: true as const, version: "0.13.22" }));
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      confirmValues: [true],
+      textValues: ["+15555550123", "http://signal-cli:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            account: "+15555550123",
+            httpUrl: "http://signal-cli:8080",
+            autoStart: false,
+            apiMode: "auto",
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal).toMatchObject({
+      account: "+15555550123",
+      httpUrl: "http://signal-cli:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+  });
+
+  it("prompts with existing host and port for Signal server setup", async () => {
+    setSignalSetupServerProbeForTest(async () => ({ ok: true as const, version: "0.13.22" }));
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      confirmValues: [true],
+      textValues: ["+15555550123", "http://signal-cli:8081"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            account: "+15555550123",
+            httpHost: "signal-cli",
+            httpPort: 8081,
+            autoStart: false,
+            apiMode: "auto",
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Signal server URL",
+        initialValue: "http://signal-cli:8081",
+      }),
+    );
+    expect(result.cfg.channels?.signal).toMatchObject({
+      account: "+15555550123",
+      httpUrl: "http://signal-cli:8081",
+      autoStart: false,
+      apiMode: "auto",
+    });
+  });
+
+  it("keeps native daemon auto-start when non-interactive setup supplies bind options", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      input: {
+        signalNumber: "+15555550123",
+        httpHost: "0.0.0.0",
+        httpPort: "8081",
+      },
+    });
+
+    expect(next?.channels?.signal).toMatchObject({
+      enabled: true,
+      account: "+15555550123",
+      httpHost: "0.0.0.0",
+      httpPort: 8081,
+    });
+    expect(next?.channels?.signal?.autoStart).toBe(true);
+    expect(next?.channels?.signal?.apiMode).toBe("native");
+  });
+
+  it("resets stale container mode for non-interactive external server setup", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            httpUrl: "http://127.0.0.1:18080",
+            apiMode: "container",
+            autoStart: false,
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+      input: {
+        httpUrl: "http://127.0.0.1:8080",
+      },
+    });
+
+    expect(next?.channels?.signal).toMatchObject({
+      enabled: true,
+      account: "+15555550123",
+      httpUrl: "http://127.0.0.1:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+  });
+
+  it("resets stale container mode for non-interactive native setup", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            httpUrl: "http://127.0.0.1:18080",
+            apiMode: "container",
+            autoStart: false,
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+      input: {
+        cliPath: "/usr/local/bin/signal-cli",
+      },
+    });
+
+    expect(next?.channels?.signal).toMatchObject({
+      enabled: true,
+      account: "+15555550123",
+      cliPath: "/usr/local/bin/signal-cli",
+      httpUrl: "",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+      autoStart: true,
+      apiMode: "native",
+    });
+  });
+
+  it("lets the native cliPath prompt write before the Signal account prompt", async () => {
+    const input = createSignalCliPathTextInput(async () => true);
+
+    const next = await input.applySet?.({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      value: "/usr/local/bin/signal-cli",
+    });
+
+    expect(next?.channels?.signal).toMatchObject({
+      enabled: true,
+      cliPath: "/usr/local/bin/signal-cli",
+    });
+    expect(next?.channels?.signal?.account).toBeUndefined();
+  });
+
+  it("keeps existing Signal server setup as an escape hatch", async () => {
+    setSignalSetupServerProbeForTest(async () => ({ ok: true as const, version: "0.13.22" }));
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["+15555550123", "http://signal-cli:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal).toMatchObject({
+      enabled: true,
+      account: "+15555550123",
+      httpUrl: "http://signal-cli:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+    expect(result.cfg.channels?.signal?.cliPath).toBeUndefined();
   });
 
   it("uses configured defaultAccount for omitted DM policy account context", () => {

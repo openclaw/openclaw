@@ -8,11 +8,15 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
+import {
+  CONFIG_DIR,
+  extractArchive,
+  formatCliCommand,
+  resolveBrewExecutable,
+} from "openclaw/plugin-sdk/setup-tools";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export type ReleaseAsset = {
   name?: string;
@@ -34,6 +38,7 @@ const MAX_SIGNAL_CLI_ARCHIVE_BYTES = 256 * 1024 * 1024;
 export const MAX_SIGNAL_CLI_EXTRACTED_BYTES = 384 * 1024 * 1024;
 const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS = 30_000;
+const SIGNAL_CLI_INSTALL_ERROR_OUTPUT_CHARS = 4_000;
 const CONTENT_LENGTH_RE = /^\d+$/;
 
 export type SignalInstallResult = {
@@ -81,6 +86,22 @@ function chunkByteLength(chunk: unknown): number {
     return chunk.byteLength;
   }
   return Buffer.byteLength(String(chunk));
+}
+
+function formatCommand(argv: string[]): string {
+  return formatCliCommand(
+    argv
+      .map((part) => (/^[\w./:@%+=,-]+$/.test(part) ? part : `'${part.replaceAll("'", "'\\''")}'`))
+      .join(" "),
+  );
+}
+
+function trimCommandOutput(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= SIGNAL_CLI_INSTALL_ERROR_OUTPUT_CHARS) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, SIGNAL_CLI_INSTALL_ERROR_OUTPUT_CHARS).trimEnd()}\n...`;
 }
 
 /**
@@ -249,16 +270,26 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
     };
   }
 
+  const installCommand = [brewExe, "install", "signal-cli"];
   runtime.log(`Installing signal-cli via Homebrew (${brewExe})…`);
   const result = await runPluginCommandWithTimeout({
-    argv: [brewExe, "install", "signal-cli"],
+    argv: installCommand,
     timeoutMs: 15 * 60_000, // brew builds from source; can take a while
   });
 
   if (result.code !== 0) {
+    const output = trimCommandOutput(result.stderr || result.stdout || "No command output.");
     return {
       ok: false,
-      error: `brew install signal-cli failed (exit ${result.code}): ${truncateUtf16Safe(result.stderr.trim(), 200)}`,
+      error: [
+        "Signal setup hit an error while installing signal-cli.",
+        `OpenClaw ran: ${formatCommand(installCommand)}`,
+        `Exit code: ${result.code}`,
+        "",
+        "Review the Homebrew error below, fix it, then run the command above and try Signal setup again.",
+        "",
+        output,
+      ].join("\n"),
     };
   }
 

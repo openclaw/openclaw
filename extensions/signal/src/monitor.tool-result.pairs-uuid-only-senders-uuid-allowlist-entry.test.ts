@@ -242,7 +242,26 @@ describe("monitorSignalProvider tool results", () => {
     const abortController = new AbortController();
     const maxBytes = 2 * 1024 * 1024;
     const expectedMaxResponseBytes = Math.ceil((maxBytes * 4) / 3) + 64 * 1024;
+    const baseChannels = (config.channels ?? {}) as Record<string, unknown>;
 
+    setSignalToolResultTestConfig({
+      ...config,
+      channels: {
+        ...baseChannels,
+        signal: {
+          autoStart: false,
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          apiMode: "native",
+          accounts: {
+            work: {
+              account: "+15550009999",
+              apiMode: "container",
+            },
+          },
+        },
+      },
+    });
     replyMock.mockResolvedValue({ text: "ok" });
     signalRpcRequestMock.mockResolvedValue({ data: Buffer.from("hello").toString("base64") });
     streamMock.mockImplementation(async ({ onEvent }) => {
@@ -265,23 +284,30 @@ describe("monitorSignalProvider tool results", () => {
 
     await monitorSignalProvider({
       autoStart: false,
+      accountId: "work",
       baseUrl: "http://127.0.0.1:8080",
       mediaMaxMb: 2,
       abortSignal: abortController.signal,
     });
 
+    expect(streamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiMode: "container",
+      }),
+    );
+
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "getAttachment",
-      {
+      expect.objectContaining({
+        account: "+15550009999",
         id: "attachment-1",
         recipient: "+15550001111",
-      },
-      {
+      }),
+      expect.objectContaining({
         baseUrl: "http://127.0.0.1:8080",
-        timeoutMs: undefined,
-        apiMode: "auto",
+        apiMode: "container",
         maxResponseBytes: expectedMaxResponseBytes,
-      },
+      }),
     );
   });
 });

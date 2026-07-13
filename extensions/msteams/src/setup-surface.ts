@@ -259,6 +259,9 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
     // incoming cfg if the base ever returns void for forward-compat.
     const baseFinalize = msteamsSetupWizardBase.finalize;
     const baseResult = baseFinalize ? await baseFinalize(params) : undefined;
+    if (baseResult?.cancelled) {
+      return baseResult;
+    }
     let next = baseResult?.cfg ?? params.cfg;
     const finalCreds = resolveMSTeamsCredentials(next.channels?.msteams);
     if (finalCreds?.type === "secret") {

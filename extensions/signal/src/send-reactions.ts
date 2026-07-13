@@ -5,9 +5,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client-adapter.js";
-import { resolveSignalRpcContext } from "./rpc-context.js";
+import {
+  resolveSignalRpcAccountInfo,
+  resolveSignalRpcApiMode,
+  resolveSignalRpcContext,
+} from "./rpc-context.js";
 
 export type SignalReactionOpts = {
   cfg: OpenClawConfig;
@@ -79,11 +82,7 @@ async function sendReactionSignalCore(params: {
   errors: SignalReactionErrorMessages;
 }): Promise<SignalReactionResult> {
   const cfg = requireRuntimeConfig(params.opts.cfg, "Signal reactions");
-  const apiMode = cfg.channels?.signal?.apiMode;
-  const accountInfo = resolveSignalAccount({
-    cfg,
-    accountId: params.opts.accountId,
-  });
+  const accountInfo = resolveSignalRpcAccountInfo(params.opts);
   const { baseUrl, account } = resolveSignalRpcContext(params.opts, accountInfo);
 
   const normalizedRecipient = normalizeSignalUuid(params.recipient);
@@ -127,7 +126,7 @@ async function sendReactionSignalCore(params: {
   const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", requestParams, {
     baseUrl,
     timeoutMs: params.opts.timeoutMs,
-    apiMode,
+    apiMode: resolveSignalRpcApiMode(cfg, accountInfo),
   });
 
   return {

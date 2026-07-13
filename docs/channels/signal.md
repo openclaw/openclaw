@@ -37,17 +37,19 @@ Bare plugin specs try ClawHub first, then npm fallback. Force a source with `ope
     ```bash
     openclaw channels add
     ```
-    The wizard detects whether `signal-cli` is on `PATH` and, when missing, offers to install it: downloads the official native GraalVM build on Linux x86-64, or installs via Homebrew on macOS and other architectures. It then prompts for the bot number and `signal-cli` path.
+    Choose **Use local signal-cli** for a native daemon, or **Connect to an existing Signal server** when you already manage a native daemon or compatible REST bridge.
   </Step>
   <Step title="Link or register the account">
-    - **QR link (fastest):** `signal-cli link -n "OpenClaw"`, then scan with Signal. See [Path A](#setup-path-a-link-existing-signal-account-qr).
-    - **SMS registration:** dedicated number with captcha + SMS verification. See [Path B](#setup-path-b-register-dedicated-bot-number-sms-linux).
+    - **Native QR link:** `signal-cli link -n "OpenClaw"`, then scan with Signal. See [Path A](#setup-path-a-link-existing-signal-account-qr).
+    - **Native SMS registration:** dedicated number with captcha + SMS verification. See [Path B](#setup-path-b-register-dedicated-bot-number-sms-linux).
+    - **Existing server:** link or register the account in the server you manage before saving its URL in OpenClaw.
 
   </Step>
   <Step title="Verify and pair">
     ```bash
-    openclaw gateway call channels.status --params '{"probe":true}'
+    openclaw channels status --probe
     ```
+    The probe follows the same bounded setup pattern as other connectors: native mode checks daemon/RPC reachability, while container mode also checks that the account is linked and the receive endpoint is ready.
     Send a first DM and approve pairing: `openclaw pairing approve signal <CODE>`.
   </Step>
 </Steps>
@@ -177,15 +179,19 @@ Requirements:
 - The container **must** run with `MODE=json-rpc` for real-time message receiving.
 - Register or link your Signal account inside the container before connecting OpenClaw.
 
+The setup wizard has one server-oriented choice:
+
+- **Connect to an existing Signal server:** enter a URL such as `http://127.0.0.1:8080`; OpenClaw checks native servers for daemon/RPC reachability and container servers for linked-account plus receive endpoint readiness, then writes the URL with `autoStart: false` and `apiMode: "auto"`.
+
 Example `docker-compose.yml` service:
 
 ```yaml
 signal-cli:
-  image: bbernhard/signal-cli-rest-api:latest
+  image: bbernhard/signal-cli-rest-api:0.100@sha256:2399d449123cdad56c4d859277e3b9127e1a00c4d2ab4601c239882609286cf8
   environment:
     MODE: json-rpc
   ports:
-    - "8080:8080"
+    - "127.0.0.1:8080:8080"
   volumes:
     - signal-cli-data:/home/.local/share/signal-cli
 ```
@@ -206,7 +212,7 @@ OpenClaw config:
 }
 ```
 
-`apiMode` controls which protocol OpenClaw uses:
+`apiMode` controls which protocol OpenClaw uses. Set it at `channels.signal.apiMode` as the default for all Signal accounts, or at `channels.signal.accounts.<accountId>.apiMode` for an account-specific override:
 
 | Value         | Behavior                                                                             |
 | ------------- | ------------------------------------------------------------------------------------ |
@@ -222,7 +228,7 @@ Operational notes:
 
 - Use `autoStart: false` with container mode; OpenClaw should not spawn a native daemon when `apiMode: "container"` is selected.
 - Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so OpenClaw will not select container receive streaming in `auto` mode.
-- Set `apiMode: "container"` when `httpUrl` points at the bbernhard REST API, `"native"` when it points at native `signal-cli` JSON-RPC/SSE, and `"auto"` when the deployment may vary.
+- Set `apiMode: "container"` when the selected account's `httpUrl` points at the bbernhard REST API, `"native"` when it points at native `signal-cli` JSON-RPC/SSE, and `"auto"` when the deployment may vary.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
 
 ## Access control (DMs + groups)
@@ -415,6 +421,7 @@ Provider options:
 
 - `channels.signal.enabled`: enable/disable channel startup.
 - `channels.signal.apiMode`: `auto | native | container` (default: auto). See [Container mode](#container-mode-bbernhardsignal-cli-rest-api).
+- `channels.signal.accounts.<accountId>.apiMode`: account-specific API mode override.
 - `channels.signal.account`: E.164 for the bot account.
 - `channels.signal.cliPath`: path to `signal-cli`.
 - `channels.signal.configPath`: optional `signal-cli --config` directory.

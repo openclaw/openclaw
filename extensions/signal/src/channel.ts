@@ -1,4 +1,3 @@
-// Signal plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
@@ -42,6 +41,7 @@ import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
+import { formatSignalCapabilitiesProbe } from "./probe-readiness.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { resolveSignalReplyContextWithPersistence } from "./reply-authors.js";
 import { signalSetupAdapter } from "./setup-core.js";
@@ -557,11 +557,11 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           const baseUrl = account.baseUrl;
           const { probeSignal } = await loadSignalProbeModule();
           return await probeSignal(baseUrl, timeoutMs, {
+            account: account.config?.account,
             apiMode: account.config?.apiMode ?? "auto",
           });
         },
-        formatCapabilitiesProbe: ({ probe }) =>
-          probe?.version ? [{ text: `Signal daemon: ${probe.version}` }] : [],
+        formatCapabilitiesProbe: formatSignalCapabilitiesProbe,
         resolveAccountSnapshot: ({ account }) => ({
           accountId: account.accountId,
           name: account.name,

@@ -19,6 +19,14 @@ import {
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import WebSocket from "ws";
+import {
+  normalizeSignalContainerBaseUrl,
+  releaseSignalContainerResponseBody,
+  type SignalContainerLinkedAccountResult,
+  validateSignalContainerLinkedAccountWithRuntime,
+} from "./client-container-accounts.js";
+
+export type { SignalContainerLinkedAccountResult } from "./client-container-accounts.js";
 
 type ContainerRpcOptions = {
   baseUrl: string;
@@ -70,23 +78,6 @@ const CONTAINER_TEXT_STYLE_MARKERS: Record<string, string> = {
   MONOSPACE: "`",
   SPOILER: "||",
 };
-
-function normalizeBaseUrl(url: string): string {
-  const trimmed = url.trim();
-  if (!trimmed) {
-    throw new Error("Signal base URL is required");
-  }
-  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-  const parsed = new URL(withProtocol);
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Signal base URL unsupported protocol: ${parsed.protocol}`);
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error("Signal base URL must not include credentials");
-  }
-  const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
-  return `${parsed.protocol}//${parsed.host}${pathname}`;
-}
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
   const fetchImpl = resolveFetch();
@@ -156,12 +147,6 @@ async function readCappedResponseBuffer(
   });
 }
 
-async function releaseUnreadResponseBody(res: Response | undefined): Promise<void> {
-  if (res?.bodyUsed !== true) {
-    await res?.body?.cancel().catch(() => undefined);
-  }
-}
-
 /**
  * Check if bbernhard container REST API is available.
  */
@@ -170,7 +155,7 @@ export async function containerCheck(
   timeoutMs = DEFAULT_TIMEOUT_MS,
   account?: string,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
-  const normalized = normalizeBaseUrl(baseUrl);
+  const normalized = normalizeSignalContainerBaseUrl(baseUrl);
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
@@ -189,8 +174,18 @@ export async function containerCheck(
       error: err instanceof Error ? err.message : String(err),
     };
   } finally {
-    await releaseUnreadResponseBody(res);
+    await releaseSignalContainerResponseBody(res);
   }
+}
+
+export async function validateSignalContainerLinkedAccount(params: {
+  httpUrl: string;
+  account: string;
+  timeoutMs?: number;
+}): Promise<SignalContainerLinkedAccountResult> {
+  return await validateSignalContainerLinkedAccountWithRuntime(params, {
+    fetchWithTimeout,
+  });
 }
 
 function containerReceiveCheck(
@@ -267,7 +262,7 @@ export async function containerRestRequest<T = unknown>(
   method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
   body?: unknown,
 ): Promise<T> {
-  const baseUrl = normalizeBaseUrl(opts.baseUrl);
+  const baseUrl = normalizeSignalContainerBaseUrl(opts.baseUrl);
   const url = `${baseUrl}${endpoint}`;
 
   const init: RequestInit = {
@@ -316,7 +311,7 @@ export async function containerFetchAttachment(
   attachmentId: string,
   opts: ContainerRpcOptions,
 ): Promise<Buffer | null> {
-  const baseUrl = normalizeBaseUrl(opts.baseUrl);
+  const baseUrl = normalizeSignalContainerBaseUrl(opts.baseUrl);
   const url = `${baseUrl}/v1/attachments/${encodeURIComponent(attachmentId)}`;
   let res: Response | undefined;
 
@@ -335,7 +330,7 @@ export async function containerFetchAttachment(
       bodyIdleTimeoutMs,
     );
   } finally {
-    await releaseUnreadResponseBody(res);
+    await releaseSignalContainerResponseBody(res);
   }
 }
 
@@ -352,7 +347,7 @@ export async function streamContainerEvents(params: {
   onEvent: (event: ContainerWebSocketMessage) => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
-  const normalized = normalizeBaseUrl(params.baseUrl);
+  const normalized = normalizeSignalContainerBaseUrl(params.baseUrl);
   const wsUrl = `${normalized.replace(/^http/, "ws")}/v1/receive/${encodeURIComponent(params.account ?? "")}`;
   const redactedWsUrl = `${normalized.replace(/^http/, "ws")}/v1/receive/<redacted>`;
   const log = params.logger?.log ?? (() => {});

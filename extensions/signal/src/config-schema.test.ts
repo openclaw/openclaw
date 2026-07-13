@@ -5,6 +5,7 @@ import { SignalConfigSchema } from "../config-api.js";
 function expectValidSignalConfig(config: unknown) {
   const res = SignalConfigSchema.safeParse(config);
   expect(res.success).toBe(true);
+  return res;
 }
 
 function expectInvalidSignalConfig(config: unknown) {
@@ -94,8 +95,8 @@ describe("signal groups schema", () => {
     }
   });
 
-  it("rejects per-account apiMode", () => {
-    const issues = expectInvalidSignalConfig({
+  it("accepts per-account apiMode", () => {
+    const res = expectValidSignalConfig({
       accounts: {
         primary: {
           apiMode: "container",
@@ -103,7 +104,9 @@ describe("signal groups schema", () => {
       },
     });
 
-    expect(issues.map((issue) => issue.path.join("."))).toContain("accounts.primary");
+    if (res.success) {
+      expect(res.data.accounts?.primary?.apiMode).toBe("container");
+    }
   });
 
   it("accepts top-level group overrides", () => {

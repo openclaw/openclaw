@@ -473,6 +473,18 @@ const setupWizard: ChannelSetupWizard = {
 
 `ChannelSetupWizard` also supports `textInputs`, `dmPolicy`, `allowFrom`, `groupAccess`, `prepare`, `finalize`, and more. See the Discord plugin's `src/setup-core.ts` for a full bundled example.
 
+Use `finalize` for validation or confirmation that must happen after the standard setup steps. It can return `{ cancelled: true }` to leave setup without saving any wizard-local config, recording the account, running post-write hooks, or showing the completion note. If the user accepted installation of an external plugin immediately before its wizard ran, OpenClaw keeps only that installation metadata so the installed package and config record stay consistent. Do not return `cfg` or `credentialValues` together with `cancelled`; cancelled results ignore those values.
+
+```typescript
+finalize: async ({ prompter }) => {
+  const save = await prompter.confirm({
+    message: "Save this channel configuration?",
+    initialValue: true,
+  });
+  return save ? undefined : { cancelled: true };
+},
+```
+
 <AccordionGroup>
   <Accordion title="Shared allowFrom prompts">
     For DM allowlist prompts that only need the standard `note -> prompt -> parse -> merge -> patch` flow, prefer the shared setup helpers from `openclaw/plugin-sdk/setup`: `createPromptParsedAllowFromForAccount(...)`, `createTopLevelChannelParsedAllowFromPrompt(...)`, and `createNestedChannelParsedAllowFromPrompt(...)`.

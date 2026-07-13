@@ -487,6 +487,29 @@ describe("healthCommand", () => {
     ]);
   });
 
+  it("formats missing Signal accounts as failed health", () => {
+    const summary = createHealthSummary({
+      channels: {
+        signal: {
+          accountId: "default",
+          configured: true,
+          probe: {
+            ok: false,
+            status: 200,
+            error: "Signal account is not configured",
+            readiness: "account_missing",
+          },
+        },
+      },
+      channelOrder: ["signal"],
+      channelLabels: { signal: "Signal" },
+    });
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual([
+      "Signal: failed (200) - Signal account is not configured",
+    ]);
+  });
+
   it("formats statusState without inferring from linked", () => {
     const summary = createHealthSummary({
       channels: {

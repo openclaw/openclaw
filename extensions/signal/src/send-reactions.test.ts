@@ -14,13 +14,34 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
 });
 
 vi.mock("./accounts.js", () => ({
-  resolveSignalAccount: () => ({
-    accountId: "default",
-    enabled: true,
-    baseUrl: "http://signal.local",
-    configured: true,
-    config: { account: "+15550001111" },
-  }),
+  resolveSignalAccount: ({
+    cfg,
+    accountId,
+  }: {
+    cfg?: {
+      channels?: {
+        signal?: {
+          apiMode?: string;
+          accounts?: Record<string, { apiMode?: string } | undefined>;
+        };
+      };
+    };
+    accountId?: string;
+  }) => {
+    const resolvedAccountId = accountId ?? "default";
+    const signal = cfg?.channels?.signal;
+    const account = signal?.accounts?.[resolvedAccountId];
+    return {
+      accountId: resolvedAccountId,
+      enabled: true,
+      baseUrl: "http://signal.local",
+      configured: true,
+      config: {
+        account: "+15550001111",
+        apiMode: account?.apiMode ?? signal?.apiMode,
+      },
+    };
+  },
 }));
 
 vi.mock("./client-adapter.js", () => ({
@@ -100,6 +121,52 @@ describe("sendReactionSignal", () => {
     expect(params.recipients).toBeUndefined();
     expect(params.groupIds).toEqual(["group-id"]);
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
+  });
+
+  it("uses the channel apiMode fallback for override reactions", async () => {
+    await sendReactionSignal("+15551230000", 123, "✅", {
+      cfg: {
+        channels: {
+          signal: {
+            apiMode: "container",
+          },
+        },
+      },
+      baseUrl: "http://signal.test",
+      account: "+15550001111",
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "sendReaction",
+      expect.objectContaining({ account: "+15550001111" }),
+      expect.objectContaining({ apiMode: "container" }),
+    );
+  });
+
+  it("uses account-scoped apiMode for named account reactions", async () => {
+    await sendReactionSignal("+15551230000", 123, "✅", {
+      cfg: {
+        channels: {
+          signal: {
+            apiMode: "native",
+            accounts: {
+              work: {
+                apiMode: "container",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      baseUrl: "http://signal.test",
+      account: "+15550001111",
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "sendReaction",
+      expect.objectContaining({ account: "+15550001111" }),
+      expect.objectContaining({ apiMode: "container" }),
+    );
   });
 
   it("defaults targetAuthor to recipient for removals", async () => {

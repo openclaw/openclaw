@@ -14,7 +14,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveSignalAccount } from "./accounts.js";
 import {
   appendSignalApprovalReactionHintForOutboundMessage,
   registerSignalApprovalReactionTargetForOutboundMessage,
@@ -22,7 +21,11 @@ import {
 import { signalRpcRequest } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { registerSignalReplyContext } from "./reply-authors.js";
-import { resolveSignalRpcContext } from "./rpc-context.js";
+import {
+  resolveSignalRpcAccountInfo,
+  resolveSignalRpcApiMode,
+  resolveSignalRpcContext,
+} from "./rpc-context.js";
 
 export type SignalSendOpts = {
   cfg: OpenClawConfig;
@@ -62,22 +65,6 @@ type SignalTarget =
   | { type: "recipient"; recipient: string }
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
-
-async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
-  if (opts.baseUrl?.trim() && opts.account?.trim()) {
-    return undefined;
-  }
-  if (!opts.cfg) {
-    throw new Error(
-      "Signal RPC account resolution requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
-  const cfg = requireRuntimeConfig(opts.cfg, "Signal RPC account resolution");
-  return resolveSignalAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-}
 
 function parseTarget(raw: string): SignalTarget {
   let value = raw.trim();
@@ -243,23 +230,22 @@ export async function sendMessageSignal(
   opts: SignalSendOpts,
 ): Promise<SignalSendResult> {
   const cfg = requireRuntimeConfig(opts.cfg, "Signal send");
-  const apiMode = cfg.channels?.signal?.apiMode;
-  const accountInfo = resolveSignalAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
+  const accountInfo = resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const target = parseTarget(to);
   const targetAuthor = normalizeOptionalString(account);
-  const targetAuthorUuid = normalizeOptionalString(accountInfo.config.accountUuid);
-  const outboundText = appendSignalApprovalReactionHintForOutboundMessage({
-    cfg,
-    accountId: accountInfo.accountId,
-    to,
-    text: text ?? "",
-    targetAuthor,
-    targetAuthorUuid,
-  });
+  const signalAccountId = accountInfo?.accountId;
+  const targetAuthorUuid = normalizeOptionalString(accountInfo?.config.accountUuid);
+  const outboundText = signalAccountId
+    ? appendSignalApprovalReactionHintForOutboundMessage({
+        cfg,
+        accountId: signalAccountId,
+        to,
+        text: text ?? "",
+        targetAuthor,
+        targetAuthorUuid,
+      })
+    : (text ?? "");
   let message = outboundText;
   let messageFromPlaceholder = false;
   let textStyles: SignalTextStyleRange[] = [];
@@ -268,8 +254,11 @@ export async function sendMessageSignal(
     if (typeof opts.maxBytes === "number") {
       return opts.maxBytes;
     }
-    if (typeof accountInfo.config.mediaMaxMb === "number") {
+    if (typeof accountInfo?.config.mediaMaxMb === "number") {
       return accountInfo.config.mediaMaxMb * 1024 * 1024;
+    }
+    if (typeof cfg.channels?.signal?.mediaMaxMb === "number") {
+      return cfg.channels.signal.mediaMaxMb * 1024 * 1024;
     }
     if (typeof cfg.agents?.defaults?.mediaMaxMb === "number") {
       return cfg.agents.defaults.mediaMaxMb * 1024 * 1024;
@@ -300,7 +289,7 @@ export async function sendMessageSignal(
       const tableMode = resolveMarkdownTableMode({
         cfg,
         channel: "signal",
-        accountId: accountInfo.accountId,
+        accountId: accountInfo?.accountId,
       });
       const formatted = markdownToSignalText(message, { tableMode });
       message = formatted.text;
@@ -339,7 +328,7 @@ export async function sendMessageSignal(
   const sendOpts = {
     baseUrl,
     timeoutMs: opts.timeoutMs,
-    apiMode,
+    apiMode: resolveSignalRpcApiMode(cfg, accountInfo),
     maxAttachmentBytes: maxBytes,
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
@@ -365,9 +354,9 @@ export async function sendMessageSignal(
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
   const replyAuthor = targetAuthor ?? targetAuthorUuid;
-  if (timestamp && replyAuthor) {
+  if (timestamp && replyAuthor && signalAccountId) {
     await registerSignalReplyContext({
-      accountId: accountInfo.accountId,
+      accountId: signalAccountId,
       to,
       replyToId: messageId,
       author: replyAuthor,
@@ -375,15 +364,17 @@ export async function sendMessageSignal(
       sourceTimestamp: timestamp,
     });
   }
-  registerSignalApprovalReactionTargetForOutboundMessage({
-    cfg,
-    accountId: accountInfo.accountId,
-    to,
-    messageId,
-    text: outboundText,
-    targetAuthor,
-    targetAuthorUuid,
-  });
+  if (signalAccountId) {
+    registerSignalApprovalReactionTargetForOutboundMessage({
+      cfg,
+      accountId: signalAccountId,
+      to,
+      messageId,
+      text: outboundText,
+      targetAuthor,
+      targetAuthorUuid,
+    });
+  }
   return {
     messageId,
     timestamp,
@@ -401,7 +392,7 @@ export async function sendTypingSignal(
   to: string,
   opts: SignalRpcOpts & { stop?: boolean },
 ): Promise<boolean> {
-  const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const accountInfo = resolveSignalRpcAccountInfo(opts);
   const cfg = requireRuntimeConfig(opts.cfg, "Signal typing");
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const targetParams = buildTargetParams(parseTarget(to), {
@@ -421,7 +412,7 @@ export async function sendTypingSignal(
   await signalRpcRequest("sendTyping", params, {
     baseUrl,
     timeoutMs: opts.timeoutMs,
-    apiMode: cfg.channels?.signal?.apiMode,
+    apiMode: resolveSignalRpcApiMode(cfg, accountInfo),
   });
   return true;
 }
@@ -434,7 +425,7 @@ export async function sendReadReceiptSignal(
   if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
     return false;
   }
-  const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const accountInfo = resolveSignalRpcAccountInfo(opts);
   const cfg = requireRuntimeConfig(opts.cfg, "Signal read receipt");
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const targetParams = buildTargetParams(parseTarget(to), {
@@ -454,7 +445,7 @@ export async function sendReadReceiptSignal(
   await signalRpcRequest("sendReceipt", params, {
     baseUrl,
     timeoutMs: opts.timeoutMs,
-    apiMode: cfg.channels?.signal?.apiMode,
+    apiMode: resolveSignalRpcApiMode(cfg, accountInfo),
   });
   return true;
 }

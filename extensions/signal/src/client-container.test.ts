@@ -13,6 +13,7 @@ import {
   containerSendReaction,
   containerRemoveReaction,
   streamContainerEvents,
+  validateSignalContainerLinkedAccount,
 } from "./client-container.js";
 
 // spyOn approach works with vitest forks pool for cross-directory imports
@@ -256,6 +257,96 @@ describe("containerCheck", () => {
       status: null,
       error: "Signal container receive WebSocket closed before open (1000: done)",
     });
+  });
+});
+
+describe("validateSignalContainerLinkedAccount", () => {
+  it("bounds stalled accounts response bodies", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...stalledBodyStream(),
+    });
+
+    await expect(
+      validateSignalContainerLinkedAccount({
+        httpUrl: "http://localhost:8080",
+        account: "+14259798283",
+        timeoutMs: 10,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "account_check_failed",
+      error: "Signal accounts check failed: Signal accounts response body stalled after 10ms",
+    });
+  });
+
+  it("rejects non-string account arrays from the container", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify(["+14259798283", 123])),
+    });
+
+    await expect(
+      validateSignalContainerLinkedAccount({
+        httpUrl: "http://localhost:8080",
+        account: "+14259798283",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "account_check_failed",
+      error: "Signal accounts check failed: Signal accounts response was not a string array",
+    });
+  });
+
+  it("rejects invalid account strings without echoing untrusted content", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify(["\u001b[31mnot-a-phone-number"])),
+    });
+
+    const result = await validateSignalContainerLinkedAccount({
+      httpUrl: "http://localhost:8080",
+      account: "+14259798283",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "account_check_failed",
+      error:
+        "Signal accounts check failed: Signal accounts response contained an invalid phone number",
+    });
+    if (result.ok) {
+      throw new Error("expected invalid account response to fail");
+    }
+    expect(result.error).not.toContain("\u001b");
+  });
+
+  it("bounds linked-account previews", async () => {
+    const accounts = Array.from({ length: 7 }, (_, index) => `+1555000000${index + 1}`);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify(accounts)),
+    });
+
+    const result = await validateSignalContainerLinkedAccount({
+      httpUrl: "http://localhost:8080",
+      account: "+14259798283",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "account_missing",
+      error:
+        "Signal container does not list +14259798283; linked accounts: +15550000001, +15550000002, +15550000003, +15550000004, +15550000005, … 2 more.",
+    });
+    if (result.ok) {
+      throw new Error("expected missing account response to fail");
+    }
+    expect(result.error).not.toContain("+15550000006");
   });
 });
 

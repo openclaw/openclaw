@@ -32,6 +32,11 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   cliPath?: string;
   /** Auto-start signal-cli daemon (default: true if httpUrl not set). */
   autoStart?: boolean;
+  /**
+   * Signal API mode for this account. Channel-level apiMode is the default;
+   * account-level apiMode lets mixed native/container accounts coexist.
+   */
+  apiMode?: SignalApiMode;
   /** Max time to wait for signal-cli daemon startup (ms, cap 120000). */
   startupTimeoutMs?: number;
   receiveMode?: "on-start" | "manual";
@@ -69,7 +74,7 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
 
 export type SignalConfig = {
   /**
-   * Signal API mode (channel-global):
+   * Default Signal API mode for accounts without their own apiMode:
    * - "auto" (default): Auto-detect based on available endpoints
    * - "native": Use native signal-cli with JSON-RPC + SSE (/api/v1/rpc, /api/v1/events)
    * - "container": Use bbernhard/signal-cli-rest-api with REST + WebSocket (/v2/send, /v1/receive/{account}).
