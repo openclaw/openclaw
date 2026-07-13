@@ -1607,6 +1607,12 @@ jobs:
                 has_package_script "deadcode:unused-files"; then
                 pnpm deadcode:dependencies
                 pnpm deadcode:unused-files
+                if has_package_script "deadcode:exports"; then
+                  pnpm deadcode:exports
+                elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                  echo "Current CI targets must provide the deadcode:exports package script." >&2
+                  exit 1
+                fi
               elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
               else
