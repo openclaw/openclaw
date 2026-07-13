@@ -285,6 +285,13 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
               workspace: WORKSPACE,
               workspaceGit: true,
             },
+            {
+              id: "research",
+              identity: { name: "Research" },
+              name: "Research",
+              workspace: "/home/peter/research",
+              workspaceGit: true,
+            },
           ],
           defaultId: "main",
           mainKey: "main",
@@ -307,6 +314,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const runtime = page.locator(".new-session-page__runtime");
       await expect.poll(() => runtime.textContent()).toContain("Claude Code");
       expect(await runtime.getAttribute("title")).toBe(model);
+      expect(await page.locator('.new-session-page__trigger[title="Agent"]').count()).toBe(0);
 
       await page.locator(".new-session-page__message").fill("use Claude Code");
       await page.getByRole("button", { name: "Start session" }).click();

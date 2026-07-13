@@ -6,7 +6,6 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveModelRuntimePolicy } from "openclaw/plugin-sdk/model-session-runtime";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -24,11 +23,11 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
 export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
-  CLAUDE_CLI_BACKEND_ID,
-  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
-  CLAUDE_CLI_DEFAULT_MODEL_REF,
-} from "./cli-constants.js";
+  boundClaudeThreadId,
+  resolveClaudeCatalogCreateSession,
+} from "./session-catalog-runtime.js";
 
 const CLAUDE_SESSIONS_CAPABILITY = "claude-sessions";
 const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
@@ -1210,7 +1209,6 @@ function adoptedSessionKey(threadId: string): string {
 function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
 }
-
 function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
   const config = currentConfig(api);
   const defaultAgentId = resolveDefaultAgentId(config);
@@ -1222,21 +1220,11 @@ function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
   for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
     api.runtime.agent.session.listSessionEntries({ agentId }),
   )) {
-    const binding = entry.cliSessionBindings?.[CLAUDE_CLI_BACKEND_ID];
-    if (binding?.sessionId) {
-      adopted.set(binding.sessionId, sessionKey);
+    const threadId = boundClaudeThreadId(api.id, entry);
+    if (!threadId) {
       continue;
     }
-    const marker = entry.pluginExtensions?.anthropic?.sessionCatalog;
-    if (
-      entry.pluginOwnerId !== api.id ||
-      entry.modelSelectionLocked !== true ||
-      !isRecord(marker) ||
-      typeof marker.sourceThreadId !== "string"
-    ) {
-      continue;
-    }
-    adopted.set(marker.sourceThreadId, sessionKey);
+    adopted.set(threadId, sessionKey);
   }
   return adopted;
 }
@@ -1476,17 +1464,7 @@ function toGenericClaudeHost(
 }
 
 export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
-  const config = currentConfig(api);
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const createSession =
-    resolveModelRuntimePolicy({
-      config,
-      provider: "anthropic",
-      modelId: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
-      agentId: defaultAgentId,
-    }).policy?.id?.trim() === CLAUDE_CLI_BACKEND_ID
-      ? { model: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF }
-      : undefined;
+  const createSession = resolveClaudeCatalogCreateSession(api);
   const provider: SessionCatalogProvider = {
     id: "claude",
     label: "Claude Code",

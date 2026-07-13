@@ -1089,9 +1089,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
-                  this.navigate("new-session", {
-                    search: newSessionSearch(agentId, target),
-                  });
+                  const search = newSessionSearch(agentId, target);
+                  this.navigate("new-session", { search });
                 }}
                 .draftSessionAgentId=${this.draftSessionAgentId()}
                 .onToggleMore=${() =>
