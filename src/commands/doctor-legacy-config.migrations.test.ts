@@ -191,6 +191,16 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("removes a blank logging.file while preserving sibling settings", () => {
+    const res = normalizeCompatibilityConfigValues({
+      logging: { file: "   ", level: "debug" },
+    });
+
+    expect(res.config.logging).toEqual({ level: "debug" });
+    expect(res.changes).toContain("Removed blank logging.file; the default log path will be used.");
+    expect(validateConfigObject(res.config).ok).toBe(true);
+  });
+
   it("removes null workspace values from agents.list entries", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {

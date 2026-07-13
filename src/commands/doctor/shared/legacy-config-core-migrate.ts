@@ -11,6 +11,20 @@ import {
   normalizeLegacyOpenAICodexModelsAddMetadata,
 } from "./legacy-config-core-normalizers.js";
 
+function repairBlankLoggingFile(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
+  const logging = cfg.logging;
+  if (typeof logging?.file !== "string" || logging.file.trim().length > 0) {
+    return cfg;
+  }
+
+  const { file: _file, ...rest } = logging;
+  changes.push("Removed blank logging.file; the default log path will be used.");
+  return {
+    ...cfg,
+    logging: Object.keys(rest).length > 0 ? rest : undefined,
+  };
+}
+
 function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   const agents = cfg.agents?.list;
   if (!Array.isArray(agents)) {
@@ -87,6 +101,7 @@ export function normalizeCompatibilityConfigValues(
   }
   next = normalizeLegacyCommandsConfig(next, changes);
   next = normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);
+  next = repairBlankLoggingFile(next, changes);
   next = repairNullAgentWorkspaces(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);
 

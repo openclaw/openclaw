@@ -735,7 +735,12 @@ export const OpenClawSchema = z
     logging: z
       .strictObject({
         level: LoggingLevelSchema.optional(),
-        file: z.string().optional(),
+        file: z
+          .string()
+          .optional()
+          .refine((value) => value === undefined || value.trim().length > 0, {
+            message: "logging.file must not be blank",
+          }),
         maxFileBytes: z.number().int().positive().optional(),
         consoleLevel: LoggingLevelSchema.optional(),
         consoleStyle: z
