@@ -16,7 +16,6 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
-import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import {
   optionalFiniteNumberSchema,
@@ -46,10 +45,21 @@ import {
   isEmptyRecoveredCronPatch,
   recoverCronObjectFromFlatParams,
 } from "./cron-tool-canonicalize.js";
+import type {
+  ChatMessage,
+  CronCreatorToolAllowlistEntry,
+  CronToolCallerScope,
+  CronToolDeps,
+  CronToolOptions,
+  GatewayToolCaller,
+  NormalizedCronCreatorTool,
+} from "./cron-tool.types.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
+
+export type { CronCreatorToolAllowlistEntry } from "./cron-tool.types.js";
 
 // Spell out job/patch properties for model-facing schema; runtime validation
 // still happens in normalizeCronJob* to avoid nested union schemas.
@@ -382,35 +392,6 @@ export function createCronToolSchema(): TSchema {
   );
 }
 
-type CronToolOptions = {
-  agentSessionKey?: string;
-  currentDeliveryContext?: DeliveryContext;
-  /**
-   * Effective tool surface visible to the caller that created or edited a cron job.
-   * Isolated cron runs use a fresh session, so agent-origin jobs need this cap
-   * persisted on agentTurn payloads before the original session policy is lost.
-   */
-  creatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
-  selfRemoveOnlyJobId?: string;
-};
-
-type CronToolCallerScope = {
-  kind: "agentTool";
-  agentId: string;
-};
-
-export type CronCreatorToolAllowlistEntry =
-  | string
-  | {
-      name: string;
-      pluginId?: string;
-    };
-
-type NormalizedCronCreatorTool = {
-  name: string;
-  pluginId?: string;
-};
-
 export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: string }>(
   target: CronCreatorToolAllowlistEntry[],
   tools: readonly T[],
@@ -430,17 +411,6 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
     target.push(pluginId ? { name, pluginId } : { name });
   }
 }
-
-type GatewayToolCaller = typeof callGatewayTool;
-
-type CronToolDeps = {
-  callGatewayTool?: GatewayToolCaller;
-};
-
-type ChatMessage = {
-  role?: unknown;
-  content?: unknown;
-};
 
 function stripExistingContext(text: string) {
   const index = text.indexOf(REMINDER_CONTEXT_MARKER);

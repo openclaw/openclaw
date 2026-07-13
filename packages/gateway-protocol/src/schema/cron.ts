@@ -1,5 +1,4 @@
 // Gateway Protocol schema module defines protocol validation shapes.
-import type { Static } from "typebox";
 import { Type, type TSchema } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
@@ -570,17 +569,3 @@ export const CronRunLogEntrySchema = closedObject({
   ),
   jobName: Type.Optional(Type.String()),
 });
-
-// Wire types derive from local schemas without importing the ProtocolSchemas registry.
-export type CronJob = Static<typeof CronJobSchema>;
-export type CronListParams = Static<typeof CronListParamsSchema>;
-export type CronStatusParams = Static<typeof CronStatusParamsSchema>;
-export type CronGetParams = Static<typeof CronGetParamsSchema>;
-export type CronAddParams = Static<typeof CronAddParamsSchema>;
-export type CronAddResult = Static<typeof CronAddResultSchema>;
-export type CronDeclarativeAddResult = Static<typeof CronDeclarativeAddResultSchema>;
-export type CronUpdateParams = Static<typeof CronUpdateParamsSchema>;
-export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;
-export type CronRunParams = Static<typeof CronRunParamsSchema>;
-export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
-export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;
