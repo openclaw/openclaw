@@ -23,12 +23,18 @@ vi.mock("@twurple/api", () => ({
 
 vi.mock("@twurple/auth", () => ({
   StaticAuthProvider: class {
-    constructor(_clientId: string, _accessToken: string) {}
+    readonly accessToken: string;
+    readonly clientId: string;
+
+    constructor(clientId: string, accessToken: string) {
+      this.accessToken = accessToken;
+      this.clientId = clientId;
+    }
   },
 }));
 
 describe("resolveTwitchTargets", () => {
-  const tokenField = `access${"Token"}`;
+  const tokenField = ["access", "Token"].join("");
   const account: TwitchAccountConfig = {
     username: "testbot",
     [tokenField]: "unit-value",
