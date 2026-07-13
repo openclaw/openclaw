@@ -82,6 +82,7 @@ export const ko: TranslationMap = {
     relink: "다시 연결",
     waitForScan: "스캔 대기",
     logout: "로그아웃",
+    skipToMainContent: "주요 콘텐츠로 건너뛰기",
   },
   nativeLinkMenu: {
     label: "링크 작업",
@@ -388,6 +389,18 @@ export const ko: TranslationMap = {
     title: "관리되는 Worktree",
     subtitle: "OpenClaw가 소유한 격리된 저장소 체크아웃입니다.",
     cleanNow: "지금 정리",
+    cleanupTitle: "정리",
+    cleanupSubtitle:
+      "OpenClaw는 디스크 공간을 확보하기 위해 오래된 worktree를 주기적으로 제거합니다. 정리 수준을 조정하세요.",
+    cleanupMaxCount: "최대 worktree 수",
+    cleanupMaxCountHelp:
+      "모든 저장소에서 유지할 관리 대상 worktree의 최대 개수입니다. 오래된 worktree부터 스냅샷을 생성한 후 제거합니다. 개수 제한을 비활성화하려면 0으로 설정하세요.",
+    cleanupMaxSize: "최대 총크기(GB)",
+    cleanupMaxSizeHelp:
+      "관리되는 모든 worktree의 최대 총크기(GB)입니다. 크기 제한을 비활성화하려면 0으로 설정하세요.",
+    cleanupDecrease: "{label} 줄이기",
+    cleanupIncrease: "{label} 늘리기",
+    cleanupSaveFailed: "정리 한도를 저장하지 못했습니다.",
     name: "이름",
     repo: "저장소",
     branch: "브랜치",
@@ -1105,6 +1118,7 @@ export const ko: TranslationMap = {
     settingsView: "설정 보기",
     simple: "간단",
     advanced: "고급",
+    content: "설정 콘텐츠",
     themeImported: "{name}을(를) 가져왔습니다.",
     themeRemoved: "사용자 지정 테마가 제거되었습니다.",
     channels: {
@@ -1458,6 +1472,8 @@ export const ko: TranslationMap = {
     platforms: "플랫폼: {platforms}",
     installNamed: "{name} 설치",
     notFound: "Skill을 찾을 수 없습니다.",
+    openDetails: "{name} 세부 정보 열기",
+    enabledNamed: "{name} 활성화됨",
     invalidLink: "ClawHub 링크가 잘못되었습니다",
     overview: "개요",
     skillCard: "Skill Card",
@@ -3501,11 +3517,13 @@ export const ko: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "자동화 상태",
       all: "전체",
       active: "활성",
       paused: "일시중지됨",
     },
     list: {
+      viewLabel: "자동화 보기",
       searchPlaceholder: "예약된 작업 검색",
       newTask: "새 작업",
       filters: "필터",
@@ -3576,6 +3594,7 @@ export const ko: TranslationMap = {
       nextWake: "다음 실행",
     },
     detail: {
+      tabsLabel: "자동화 세부 정보",
       newTitle: "새 예약 작업",
       newSubtitle: "OpenClaw가 수행할 작업을 설명한 후 실행 시점을 선택하세요.",
       back: "모든 자동화",

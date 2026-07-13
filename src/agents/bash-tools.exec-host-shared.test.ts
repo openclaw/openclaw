@@ -8,7 +8,6 @@ import {
   consumeExecApprovalFollowupRuntimeHandoff,
   isExecApprovalFollowupSessionRebound,
   registerExecApprovalFollowupRuntimeHandoff,
-  resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "./bash-tools.exec-approval-followup-state.js";
 import {
   buildExecApprovalPendingToolResult,
@@ -72,7 +71,6 @@ describe("sendExecApprovalFollowupResult", () => {
       file: { version: 1, agents: {} },
       hash: "approvals-hash",
     });
-    resetExecApprovalFollowupRuntimeHandoffsForTests();
   });
 
   function firstExecApprovalFollowupCall():

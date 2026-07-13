@@ -1655,40 +1655,65 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private renameSessionGroupFromMenu(group: string) {
     const context = this.context;
-    if (!context || !this.connected) {
+    const client = context?.gateway.snapshot.client;
+    if (!context || !client || !this.connected || !context.gateway.snapshot.connected) {
       return;
     }
     const next = window.prompt(t("sessionsView.renameGroupPrompt"), group)?.trim();
     if (!next || next === group) {
       return;
     }
-    // The gateway renames the catalog entry and repoints member sessions.
-    void context.sessions.groupsRename(group, next).finally(() => {
-      const from = `category:${group}`;
-      if (this.collapsedSessionSections.has(from)) {
-        const collapsed = new Set(this.collapsedSessionSections);
-        collapsed.delete(from);
-        collapsed.add(`category:${next}`);
-        this.saveCollapsedSessionSections(collapsed);
-      }
-      this.requestUpdate();
-    });
+    // Collapse keys follow the confirmed Gateway rename only and stay scoped
+    // to the connection that issued it; stale completions must not rewrite storage.
+    void context.sessions.groupsRename(group, next).then(
+      (outcome) => {
+        if (outcome !== "completed" || !this.isCurrentSessionGroupMutation(context, client)) {
+          return;
+        }
+        const from = `category:${group}`;
+        if (this.collapsedSessionSections.has(from)) {
+          const collapsed = new Set(this.collapsedSessionSections);
+          collapsed.delete(from);
+          collapsed.add(`category:${next}`);
+          this.saveCollapsedSessionSections(collapsed);
+        }
+        this.requestUpdate();
+      },
+      () => undefined,
+    );
   }
 
   private deleteSessionGroupFromMenu(group: string) {
     const context = this.context;
-    if (!context || !this.connected) {
+    const client = context?.gateway.snapshot.client;
+    if (!context || !client || !this.connected || !context.gateway.snapshot.connected) {
       return;
     }
     if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
       return;
     }
-    void context.sessions.groupsDelete(group).finally(() => {
-      const collapsed = new Set(this.collapsedSessionSections);
-      collapsed.delete(`category:${group}`);
-      this.saveCollapsedSessionSections(collapsed);
-      this.requestUpdate();
-    });
+    void context.sessions.groupsDelete(group).then(
+      (outcome) => {
+        if (outcome !== "completed" || !this.isCurrentSessionGroupMutation(context, client)) {
+          return;
+        }
+        const collapsed = new Set(this.collapsedSessionSections);
+        collapsed.delete(`category:${group}`);
+        this.saveCollapsedSessionSections(collapsed);
+        this.requestUpdate();
+      },
+      () => undefined,
+    );
+  }
+
+  private isCurrentSessionGroupMutation(
+    context: ApplicationContext<RouteId>,
+    client: GatewayBrowserClient,
+  ) {
+    const snapshot = context.gateway.snapshot;
+    return (
+      this.context === context && this.connected && snapshot.connected && snapshot.client === client
+    );
   }
 
   private saveCollapsedSessionSections(sections: ReadonlySet<string>) {

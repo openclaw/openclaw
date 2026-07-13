@@ -2185,6 +2185,23 @@
   min-width: 0;
 }
 
+.list-item__detail-button {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-item__detail-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .list-title {
   font-weight: 500;
 }
@@ -2367,6 +2384,35 @@
 
 .worktrees-create input {
   min-width: 180px;
+}
+
+.worktrees-cleanup {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.worktrees-cleanup__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+}
+
+.worktrees-cleanup__row + .worktrees-cleanup__row {
+  border-top: 1px solid var(--border);
+}
+
+.worktrees-cleanup__label {
+  font-weight: 500;
+}
+
+.worktrees-cleanup__help {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 560px;
 }
 
 /* Settings caps .settings-workspace at 1120px, so the table container is ~1080px

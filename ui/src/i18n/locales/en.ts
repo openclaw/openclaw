@@ -82,6 +82,7 @@ export const en: TranslationMap = {
     relink: "Relink",
     waitForScan: "Wait for scan",
     logout: "Logout",
+    skipToMainContent: "Skip to main content",
   },
   nativeLinkMenu: {
     label: "Link actions",
@@ -387,6 +388,18 @@ export const en: TranslationMap = {
     title: "Managed Worktrees",
     subtitle: "Isolated repository checkouts owned by OpenClaw.",
     cleanNow: "Clean up now",
+    cleanupTitle: "Cleanup",
+    cleanupSubtitle:
+      "OpenClaw periodically removes old worktrees to free disk space. Tune how aggressively cleanup runs.",
+    cleanupMaxCount: "Max worktrees",
+    cleanupMaxCountHelp:
+      "Maximum number of managed worktrees to retain across all repositories. Older worktrees are snapshotted and removed first. Set to 0 to disable the count limit.",
+    cleanupMaxSize: "Max total size (GB)",
+    cleanupMaxSizeHelp:
+      "Maximum total size in GB across all managed worktrees. Set to 0 to disable the size limit.",
+    cleanupDecrease: "Decrease {label}",
+    cleanupIncrease: "Increase {label}",
+    cleanupSaveFailed: "Saving cleanup limits failed.",
     name: "Name",
     repo: "Repository",
     branch: "Branch",
@@ -1077,6 +1090,7 @@ export const en: TranslationMap = {
     settingsView: "Settings view",
     simple: "Simple",
     advanced: "Advanced",
+    content: "Settings content",
     themeImported: "Imported {name}.",
     themeRemoved: "Custom theme removed.",
     channels: {
@@ -1429,6 +1443,8 @@ export const en: TranslationMap = {
     platforms: "Platforms: {platforms}",
     installNamed: "Install {name}",
     notFound: "Skill not found.",
+    openDetails: "Open {name} details",
+    enabledNamed: "{name} enabled",
     invalidLink: "ClawHub link invalid",
     overview: "Overview",
     skillCard: "Skill Card",
@@ -3466,11 +3482,13 @@ export const en: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Automation status",
       all: "All",
       active: "Active",
       paused: "Paused",
     },
     list: {
+      viewLabel: "Automation views",
       searchPlaceholder: "Search automations",
       newTask: "New automation",
       filters: "Filters",
@@ -3541,6 +3559,7 @@ export const en: TranslationMap = {
       nextWake: "Next wake",
     },
     detail: {
+      tabsLabel: "Automation details",
       newTitle: "New automation",
       newSubtitle: "Describe what OpenClaw should do, then pick when it runs.",
       back: "All automations",

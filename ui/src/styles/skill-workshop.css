@@ -679,19 +679,8 @@
   text-overflow: ellipsis;
 }
 
-.sw-revision-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, 0.58);
-  backdrop-filter: blur(10px);
-}
-
 .sw-revision-dialog {
-  width: min(560px, 100%);
+  width: 100%;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--card);

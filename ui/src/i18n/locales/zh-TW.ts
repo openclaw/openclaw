@@ -82,6 +82,7 @@ export const zh_TW: TranslationMap = {
     relink: "重新連結",
     waitForScan: "等待掃描",
     logout: "登出",
+    skipToMainContent: "跳至主要內容",
   },
   nativeLinkMenu: {
     label: "連結動作",
@@ -385,6 +386,16 @@ export const zh_TW: TranslationMap = {
     title: "受管理的 Worktrees",
     subtitle: "由 OpenClaw 擁有的隔離儲存庫簽出。",
     cleanNow: "立即清理",
+    cleanupTitle: "清理",
+    cleanupSubtitle: "OpenClaw 會定期移除舊的工作樹以釋放磁碟空間。您可以調整清理作業的積極程度。",
+    cleanupMaxCount: "工作樹數量上限",
+    cleanupMaxCountHelp:
+      "所有儲存庫中保留的受管理工作樹數量上限。較舊的工作樹會先建立快照再移除。設為 0 可停用數量限制。",
+    cleanupMaxSize: "總大小上限 (GB)",
+    cleanupMaxSizeHelp: "所有受管理工作樹的總大小上限（以 GB 為單位）。設為 0 可停用大小限制。",
+    cleanupDecrease: "減少 {label}",
+    cleanupIncrease: "增加 {label}",
+    cleanupSaveFailed: "無法儲存清理限制。",
     name: "名稱",
     repo: "儲存庫",
     branch: "分支",
@@ -1100,6 +1111,7 @@ export const zh_TW: TranslationMap = {
     settingsView: "設定檢視",
     simple: "簡易",
     advanced: "進階",
+    content: "設定內容",
     themeImported: "已匯入 {name}。",
     themeRemoved: "已移除自訂佈景主題。",
     channels: {
@@ -1446,6 +1458,8 @@ export const zh_TW: TranslationMap = {
     platforms: "平台：{platforms}",
     installNamed: "安裝 {name}",
     notFound: "找不到 skill。",
+    openDetails: "開啟 {name} 詳細資料",
+    enabledNamed: "{name} 已啟用",
     invalidLink: "ClawHub 連結無效",
     overview: "總覽",
     skillCard: "Skill 卡片",
@@ -3451,11 +3465,13 @@ export const zh_TW: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "自動化狀態",
       all: "全部",
       active: "進行中",
       paused: "已暫停",
     },
     list: {
+      viewLabel: "自動化檢視",
       searchPlaceholder: "搜尋排程工作",
       newTask: "新工作",
       filters: "篩選條件",
@@ -3526,6 +3542,7 @@ export const zh_TW: TranslationMap = {
       nextWake: "下次喚醒",
     },
     detail: {
+      tabsLabel: "自動化詳細資料",
       newTitle: "新排程任務",
       newSubtitle: "描述 OpenClaw 應執行的內容，然後選擇執行時間。",
       back: "所有自動化",

@@ -82,6 +82,7 @@ export const th: TranslationMap = {
     relink: "เชื่อมโยงใหม่",
     waitForScan: "รอการสแกน",
     logout: "ออกจากระบบ",
+    skipToMainContent: "ข้ามไปยังเนื้อหาหลัก",
   },
   nativeLinkMenu: {
     label: "การดำเนินการลิงก์",
@@ -385,6 +386,18 @@ export const th: TranslationMap = {
     title: "Worktrees ที่จัดการ",
     subtitle: "การ checkout คลังแยกที่เป็นของ OpenClaw",
     cleanNow: "ล้างข้อมูลตอนนี้",
+    cleanupTitle: "การล้างข้อมูล",
+    cleanupSubtitle:
+      "OpenClaw จะลบ worktree เก่าเป็นระยะเพื่อเพิ่มพื้นที่ว่างในดิสก์ ปรับระดับความเข้มงวดในการล้างข้อมูลได้",
+    cleanupMaxCount: "จำนวน worktree สูงสุด",
+    cleanupMaxCountHelp:
+      "จำนวน worktree ที่มีการจัดการสูงสุดที่จะเก็บไว้ในทุก repository ระบบจะสร้าง snapshot และลบ worktree ที่เก่ากว่าก่อน ตั้งค่าเป็น 0 เพื่อปิดใช้งานขีดจำกัดจำนวน",
+    cleanupMaxSize: "ขนาดรวมสูงสุด (GB)",
+    cleanupMaxSizeHelp:
+      "ขนาดรวมสูงสุดเป็น GB ของ worktree ที่มีการจัดการทั้งหมด ตั้งค่าเป็น 0 เพื่อปิดใช้งานขีดจำกัดขนาด",
+    cleanupDecrease: "ลด {label}",
+    cleanupIncrease: "เพิ่ม {label}",
+    cleanupSaveFailed: "บันทึกขีดจำกัดการล้างข้อมูลไม่สำเร็จ",
     name: "ชื่อ",
     repo: "คลัง",
     branch: "บรานช์",
@@ -1099,6 +1112,7 @@ export const th: TranslationMap = {
     settingsView: "มุมมองการตั้งค่า",
     simple: "แบบง่าย",
     advanced: "ขั้นสูง",
+    content: "เนื้อหาการตั้งค่า",
     themeImported: "นำเข้า {name} แล้ว",
     themeRemoved: "ลบธีมที่กำหนดเองแล้ว",
     channels: {
@@ -1448,6 +1462,8 @@ export const th: TranslationMap = {
     platforms: "แพลตฟอร์ม: {platforms}",
     installNamed: "ติดตั้ง {name}",
     notFound: "ไม่พบ Skill",
+    openDetails: "เปิดรายละเอียดของ {name}",
+    enabledNamed: "เปิดใช้งาน {name} แล้ว",
     invalidLink: "ลิงก์ ClawHub ไม่ถูกต้อง",
     overview: "ภาพรวม",
     skillCard: "Skill Card",
@@ -3459,11 +3475,13 @@ export const th: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "สถานะระบบอัตโนมัติ",
       all: "ทั้งหมด",
       active: "ใช้งานอยู่",
       paused: "หยุดชั่วคราว",
     },
     list: {
+      viewLabel: "มุมมองระบบอัตโนมัติ",
       searchPlaceholder: "ค้นหางานที่ตั้งเวลาไว้",
       newTask: "งานใหม่",
       filters: "ตัวกรอง",
@@ -3534,6 +3552,7 @@ export const th: TranslationMap = {
       nextWake: "ปลุกครั้งถัดไป",
     },
     detail: {
+      tabsLabel: "รายละเอียดระบบอัตโนมัติ",
       newTitle: "งานตามกำหนดเวลาใหม่",
       newSubtitle: "อธิบายสิ่งที่ OpenClaw ควรทำ แล้วเลือกเวลาที่จะให้ทำงาน",
       back: "การทำงานอัตโนมัติทั้งหมด",

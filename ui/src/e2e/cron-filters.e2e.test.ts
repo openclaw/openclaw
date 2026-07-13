@@ -338,4 +338,48 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
       await context.close();
     }
   });
+
+  it("supports skip navigation and keyboard tab activation", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([]),
+        "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await page.locator('[data-test-id="cron-list-tab-tasks"]').waitFor();
+
+      await page.keyboard.press("Tab");
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
+        .toBe("Skip to main content");
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.id))
+        .toBe("control-ui-main");
+
+      const tasksTab = page.getByRole("tab", { name: "Automations", exact: true });
+      const activityTab = page.getByRole("tab", { name: "Run history", exact: true });
+      await tasksTab.focus();
+      await page.keyboard.press("ArrowRight");
+      await expect
+        .poll(() => activityTab.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await expect.poll(() => activityTab.getAttribute("aria-selected")).toBe("true");
+      await expect
+        .poll(() => page.getByRole("tabpanel", { name: "Run history" }).isVisible())
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
 });
