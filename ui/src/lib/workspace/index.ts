@@ -5,6 +5,7 @@
 // Follows the workboard three-way split — this module owns all logic; the view is
 // pure render fns and the page/controller is thin lifecycle glue.
 
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { buildSessionUsageDateParams } from "../sessions/usage.ts";
 import {
@@ -103,10 +104,6 @@ export function getWorkspaceState(host: WorkspaceHost): WorkspaceUiState {
 
 function notify(state: WorkspaceUiState): void {
   state.requestUpdate?.();
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function readString(value: unknown, fallback = ""): string {

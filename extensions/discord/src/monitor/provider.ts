@@ -686,5 +686,3 @@ export const testing = {
     shouldLogVerboseForTesting = mock;
   },
 };
-
-export const resolveDiscordRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;

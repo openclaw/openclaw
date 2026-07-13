@@ -126,6 +126,7 @@ export const zh_TW: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}：{title}，由 {author} 提交",
   },
   channels: {
+    lastError: "上次錯誤",
     refreshingStaleSnapshot: "正在背景重新整理頻道狀態；顯示上次成功的快照。",
     config: {
       schemaUnavailable: "結構描述無法使用。請使用 Raw。",
@@ -379,7 +380,6 @@ export const zh_TW: TranslationMap = {
   },
   worktrees: {
     newWorktree: "新增 worktree",
-    owner: "擁有者",
     ownerManual: "手動",
     ownerSession: "工作階段",
     ownerWorkboard: "Workboard",
@@ -398,10 +398,6 @@ export const zh_TW: TranslationMap = {
     cleanupSaveFailed: "無法儲存清理限制。",
     name: "名稱",
     repo: "儲存庫",
-    branch: "分支",
-    status: "狀態",
-    lastActive: "上次活動",
-    actions: "操作",
     empty: "沒有受管理的 worktrees。",
     restorable: "可還原",
     restore: "還原",
@@ -454,6 +450,7 @@ export const zh_TW: TranslationMap = {
     start: "啟動工作階段",
     starting: "正在啟動…",
     createFailed: "無法建立工作階段。",
+    catalogUnavailable: "此工作階段目標無法使用。",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -814,6 +811,7 @@ export const zh_TW: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "呼叫失敗",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1394,6 +1392,7 @@ export const zh_TW: TranslationMap = {
     moreLiveTitle: "下方群組中還有 {count} 個可用的即時工具。",
     moreLive: "+{count} 個更多即時工具",
     quickPresets: "快速預設",
+    catalogTitle: "工具目錄",
     inherit: "繼承",
     profile: "設定檔",
     source: "來源",
@@ -2460,6 +2459,7 @@ export const zh_TW: TranslationMap = {
       uptime: "運作時間",
       tickInterval: "更新間隔",
       lastChannelsRefresh: "上次重新整理頻道",
+      lastError: "上次錯誤",
     },
     help: {
       title: "如何連線",

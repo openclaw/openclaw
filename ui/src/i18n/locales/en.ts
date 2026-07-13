@@ -382,7 +382,6 @@ export const en: TranslationMap = {
   },
   worktrees: {
     newWorktree: "New worktree",
-    owner: "Owner",
     ownerManual: "Manual",
     ownerSession: "Session",
     ownerWorkboard: "Workboard",
@@ -403,10 +402,6 @@ export const en: TranslationMap = {
     cleanupSaveFailed: "Saving cleanup limits failed.",
     name: "Name",
     repo: "Repository",
-    branch: "Branch",
-    status: "Status",
-    lastActive: "Last active",
-    actions: "Actions",
     empty: "No managed worktrees.",
     restorable: "Restorable",
     restore: "Restore",

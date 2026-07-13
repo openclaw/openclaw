@@ -4,8 +4,6 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type {
   SessionCatalog,
-  SessionCatalogHost,
-  SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -96,6 +94,12 @@ import {
   sidebarMoreMenuHoldsActiveRoute,
   sidebarPluginTabs,
 } from "./app-sidebar-nav-menus.ts";
+import {
+  mergeCatalogSessionRows,
+  mergeSessionCatalogPage,
+  preserveExpandedCatalogHost,
+  sessionCatalogRequestError,
+} from "./app-sidebar-session-catalog-state.ts";
 import {
   adoptedCatalogSessionKeys,
   bindAdoptedCatalogSession,
@@ -232,31 +236,6 @@ const SIDEBAR_SESSION_SORT_OPTIONS = [
 
 function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;
-}
-
-function mergeCatalogSessionRows(
-  first: readonly SessionCatalogSession[],
-  second: readonly SessionCatalogSession[],
-): SessionCatalogSession[] {
-  const seen = new Set(first.map((session) => session.threadId));
-  return [...first, ...second.filter((session) => !seen.has(session.threadId))];
-}
-
-function preserveExpandedCatalogHost(
-  freshHost: SessionCatalogHost,
-  previous: SessionCatalogHost | undefined,
-): SessionCatalogHost {
-  if (!previous) {
-    return freshHost;
-  }
-  const { sessions, nextCursor, ...previousDetails } = previous;
-  const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
-  return {
-    ...previousDetails,
-    ...freshDetails,
-    sessions,
-    ...(nextCursor !== undefined ? { nextCursor } : {}),
-  };
 }
 
 class AppSidebar extends OpenClawLightDomContentsElement {
@@ -658,49 +637,37 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       if (!page) {
         return;
       }
-      const pageHosts = new Map(page.hosts.map((host) => [host.hostId, host]));
-      const requestedHosts = new Set(Object.keys(cursors));
-      let updated = false;
-      const catalogs = this.sessionCatalogs.map((currentCatalog) => {
-        if (currentCatalog.id !== catalogId) {
-          return currentCatalog;
-        }
-        return {
-          ...currentCatalog,
-          hosts: currentCatalog.hosts.map((host) => {
-            const pageHost = pageHosts.get(host.hostId);
-            if (
-              !requestedHosts.has(host.hostId) ||
-              host.nextCursor !== cursors[host.hostId] ||
-              !pageHost ||
-              pageHost.error
-            ) {
-              return host;
-            }
-            updated = true;
-            const key = sessionCatalogHostKey(catalogId, host.hostId);
-            this.sessionCatalogPageDepths.set(
-              key,
-              (this.sessionCatalogPageDepths.get(key) ?? 0) + 1,
-            );
-            const { nextCursor, sessions, ...pageHostDetails } = pageHost;
-            const { nextCursor: _currentCursor, ...currentHost } = host;
-            return {
-              ...currentHost,
-              ...pageHostDetails,
-              sessions: mergeCatalogSessionRows(host.sessions, sessions),
-              ...(nextCursor ? { nextCursor } : {}),
-            };
-          }),
-        };
-      });
-      if (updated) {
-        this.sessionCatalogs = catalogs;
-        this.sessionCatalogRevisions.set(catalogId, revision + 1);
-        this.sessionCatalogRevision += 1;
+      const current = this.sessionCatalogs.find((candidate) => candidate.id === catalogId);
+      if (!current) {
+        return;
       }
-    } catch {
-      // Keep the current cursor so the user can retry the same page.
+      const merged = mergeSessionCatalogPage({ current, page, cursors });
+      for (const hostId of merged.advancedHostIds) {
+        const key = sessionCatalogHostKey(catalogId, hostId);
+        this.sessionCatalogPageDepths.set(key, (this.sessionCatalogPageDepths.get(key) ?? 0) + 1);
+      }
+      this.sessionCatalogs = this.sessionCatalogs.map((candidate) =>
+        candidate.id === catalogId ? merged.catalog : candidate,
+      );
+      this.sessionCatalogRevisions.set(catalogId, revision + 1);
+      this.sessionCatalogRevision += 1;
+    } catch (error) {
+      if (
+        generation !== this.sessionCatalogGeneration ||
+        revision !== (this.sessionCatalogRevisions.get(catalogId) ?? 0) ||
+        client !== this.gatewayClient
+      ) {
+        return;
+      }
+      // Preserve rows and cursors: the visible error explains that retrying
+      // Load More will request the same page rather than advancing past it.
+      this.sessionCatalogs = this.sessionCatalogs.map((candidate) =>
+        candidate.id === catalogId
+          ? { ...candidate, error: sessionCatalogRequestError(error) }
+          : candidate,
+      );
+      this.sessionCatalogRevisions.set(catalogId, revision + 1);
+      this.sessionCatalogRevision += 1;
     } finally {
       if (generation === this.sessionCatalogGeneration) {
         const loading = new Set(this.loadingMoreSessionCatalogIds);

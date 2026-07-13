@@ -126,6 +126,7 @@ export const vi: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, bởi {author}",
   },
   channels: {
+    lastError: "Lỗi gần nhất",
     refreshingStaleSnapshot:
       "Đang làm mới trạng thái kênh ở chế độ nền; hiển thị ảnh chụp thành công gần nhất.",
     config: {
@@ -385,7 +386,6 @@ export const vi: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Worktree mới",
-    owner: "Chủ sở hữu",
     ownerManual: "Thủ công",
     ownerSession: "Phiên",
     ownerWorkboard: "Workboard",
@@ -406,10 +406,6 @@ export const vi: TranslationMap = {
     cleanupSaveFailed: "Không thể lưu các giới hạn dọn dẹp.",
     name: "Tên",
     repo: "Kho lưu trữ",
-    branch: "Nhánh",
-    status: "Trạng thái",
-    lastActive: "Hoạt động lần cuối",
-    actions: "Hành động",
     empty: "Không có worktree được quản lý.",
     restorable: "Có thể khôi phục",
     restore: "Khôi phục",
@@ -462,6 +458,7 @@ export const vi: TranslationMap = {
     start: "Bắt đầu phiên",
     starting: "Đang bắt đầu…",
     createFailed: "Không thể tạo phiên.",
+    catalogUnavailable: "Đích của phiên này hiện không khả dụng.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -826,6 +823,7 @@ export const vi: TranslationMap = {
     },
     manualRpcTitle: "RPC thủ công",
     manualRpcSubtitle: "Gửi phương thức gateway thô với tham số JSON.",
+    callFailed: "Cuộc gọi thất bại",
     method: "Phương thức",
     selectMethod: "Chọn một phương thức…",
     paramsJson: "Tham số (JSON)",
@@ -1414,6 +1412,7 @@ export const vi: TranslationMap = {
     moreLiveTitle: "{count} công cụ trực tiếp khác có sẵn trong các nhóm bên dưới.",
     moreLive: "+{count} công cụ trực tiếp khác",
     quickPresets: "Cài đặt sẵn nhanh",
+    catalogTitle: "Danh mục công cụ",
     inherit: "Kế thừa",
     profile: "Hồ sơ",
     source: "Nguồn",
@@ -2497,6 +2496,7 @@ export const vi: TranslationMap = {
       uptime: "Thời gian hoạt động",
       tickInterval: "Khoảng thời gian cập nhật",
       lastChannelsRefresh: "Lần làm mới kênh gần nhất",
+      lastError: "Lỗi gần nhất",
     },
     help: {
       title: "Cách kết nối",

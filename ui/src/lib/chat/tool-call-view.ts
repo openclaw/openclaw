@@ -6,6 +6,7 @@
  * the OpenClaw session tools and foreign harnesses (Claude/Codex style).
  */
 
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   buildWriteDiffLines,
   computeLineDiff,
@@ -55,12 +56,6 @@ const WRITE_TOOL_NAMES = new Set(["write", "write_file", "create_file"]);
 const SEARCH_TOOL_NAMES = new Set(["grep", "find", "glob", "ls", "list", "codebase_search"]);
 const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;

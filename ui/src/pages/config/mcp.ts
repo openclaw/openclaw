@@ -1,5 +1,6 @@
 // Control UI MCP Settings page presentation.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type TemplateResult } from "lit";
 import {
   renderSettingsEmpty,
@@ -31,12 +32,6 @@ export type McpViewProps = {
   onApplyConfig: () => void;
   editor: TemplateResult;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function getMcpServers(configObject: Record<string, unknown>): Record<string, unknown> {
   return asRecord(asRecord(configObject.mcp)?.servers) ?? {};

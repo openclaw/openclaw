@@ -78,11 +78,6 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.controlChannel.state) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
-            if self.controlChannel.state == .connected {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
-                }
-            }
         }
         .onChange(of: self.gatewayManager.status) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
@@ -453,9 +448,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppStateStore.shared.applyPeekabooBridgeHostState()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
         }
 
         #if DEBUG
