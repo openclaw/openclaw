@@ -1,7 +1,7 @@
 // Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { buildFeishuPostMessagePayload } from "./post-message-payload.js";
+import { buildFeishuPostMessagePayloads } from "./post-message-payload.js";
 
 const {
   mockConvertMarkdownTables,
@@ -64,6 +64,23 @@ let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTempl
 let sendMarkdownCardFeishu: typeof import("./send.js").sendMarkdownCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 let sendStructuredCardFeishu: typeof import("./send.js").sendStructuredCardFeishu;
+
+function buildFeishuPostMessagePayload(
+  params: Omit<Parameters<typeof buildFeishuPostMessagePayloads>[0], "maxMarkdownTextLength"> & {
+    maxMarkdownTextLength?: number;
+  },
+) {
+  const payloads = buildFeishuPostMessagePayloads({
+    ...params,
+    maxMarkdownTextLength: params.maxMarkdownTextLength ?? Number.MAX_SAFE_INTEGER,
+  });
+  expect(payloads).toHaveLength(1);
+  const payload = payloads[0];
+  if (!payload) {
+    throw new Error("expected a single Feishu post payload");
+  }
+  return payload;
+}
 
 describe("buildFeishuPostMessagePayload", () => {
   it("prepends structured mention targets as native post at elements", () => {

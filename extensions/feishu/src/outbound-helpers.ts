@@ -3,7 +3,7 @@ import path from "node:path";
 import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type FeishuReplyMode =
+type FeishuReplyMode =
   | { normalizedReplyToId: string; replyToMessageId: string; replyInThread: false }
   | { normalizedReplyToId: undefined; replyToMessageId: string; replyInThread: true }
   | { normalizedReplyToId: undefined; replyToMessageId: undefined; replyInThread: false };

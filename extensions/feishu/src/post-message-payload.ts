@@ -56,19 +56,6 @@ export function resolveFeishuPostTextChunkLimit(params: {
     : params.defaultLimit;
 }
 
-export function buildFeishuPostMessagePayload(params: {
-  messageText: string;
-  mentions?: MentionTarget[];
-  preparedPostMarkdown?: boolean;
-}): FeishuPostMessagePayload {
-  return buildFeishuPostMessagePayloadFromText({
-    postText: params.preparedPostMarkdown
-      ? params.messageText
-      : materializeFeishuPostMarkdownLineBreaks(params.messageText),
-    mentions: params.mentions,
-  });
-}
-
 function buildFeishuPostMessagePayloadFromText(params: {
   postText: string;
   mentions?: MentionTarget[];
