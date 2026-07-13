@@ -114,6 +114,10 @@ describe("workspace gateway methods", () => {
     expect([...methods.keys()]).toEqual([
       "workspaces.get",
       "workspaces.tab.get",
+      "workspaces.export",
+      "workspaces.tab.export",
+      "workspaces.import.preview",
+      "workspaces.import.commit",
       "workspaces.sharing.sync",
       "workspaces.widget.frame",
       "workspaces.tab.create",
@@ -145,6 +149,18 @@ describe("workspace gateway methods", () => {
     });
     expect(methods.get("workspaces.widget.frame")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workspaces.data.read")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workspaces.tab.export")?.opts).toMatchObject({
+      scope: "operator.read",
+      access: { kind: "resource", member: true, permission: "workspaces.tab.read" },
+    });
+    expect(methods.get("workspaces.import.preview")?.opts).toMatchObject({
+      scope: "operator.write",
+      access: { permission: "workspaces.workspace.manageSharing" },
+    });
+    expect(methods.get("workspaces.import.commit")?.opts).toMatchObject({
+      scope: "operator.approvals",
+      access: { permission: "workspaces.workspace.manageSharing" },
+    });
     expect(methods.get("workspaces.tab.update")?.opts).toMatchObject({
       scope: "operator.write",
       access: { kind: "resource", permission: "workspaces.tab.write" },
@@ -157,6 +173,8 @@ describe("workspace gateway methods", () => {
     const readOnly = new Set([
       "workspaces.get",
       "workspaces.tab.get",
+      "workspaces.export",
+      "workspaces.tab.export",
       "workspaces.widget.frame",
       "workspaces.data.read",
     ]);
@@ -175,6 +193,184 @@ describe("workspace gateway methods", () => {
       }
       expect(method.opts).toEqual({ scope: "operator.write" });
     }
+  });
+
+  it("exports an exact shared tab without letting request parameters widen its grant", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { api, methods } = createApi({ teamsDomainId: "domain-1" });
+      const store = new WorkspaceStore({ stateDir, isolationDomainId: "domain-1" });
+      registerWorkspaceGatewayMethods({ api, store, storeForDomain: () => store });
+      const method = methods.get("workspaces.tab.export")!;
+      const resources = await method.opts?.access?.resolveResources?.({
+        params: { workspaceId: "default", tabId: "main" },
+      } as never);
+
+      expect(resources).toEqual([{ namespace: "workspaces", type: "tab", id: "main" }]);
+      const result = await callMethod(method, { workspaceId: "default", tabId: "main" });
+      const payload = result.response?.[1] as { content: string };
+      expect(result.response?.[0]).toBe(true);
+      expect(payload.content).toContain('"format": "openclaw-workspaces"');
+      expect(payload.content).not.toContain('"id": "main"');
+      expect(payload.content).not.toContain("createdBy");
+      store.close();
+    });
+  });
+
+  it("stages an owner-bound import and mutates only after explicit approval", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { api, methods } = createApi({
+        teamsDomainId: "domain-1",
+        principalId: "owner-1",
+        ownerPrincipalId: "owner-1",
+      });
+      const store = new WorkspaceStore({ stateDir, isolationDomainId: "domain-1" });
+      registerWorkspaceGatewayMethods({ api, store, storeForDomain: () => store });
+      const exported = await callMethod(methods.get("workspaces.tab.export")!, {
+        workspaceId: "default",
+        tabId: "main",
+      });
+      const content = (exported.response?.[1] as { content?: string } | undefined)?.content;
+      expect(content).toBeTypeOf("string");
+      if (!content) {
+        throw new Error("tab export content missing");
+      }
+
+      const preview = await callMethod(methods.get("workspaces.import.preview")!, {
+        workspaceId: "default",
+        content,
+      });
+      const previewPayload = preview.response?.[1] as {
+        previewId: string;
+        summary: { tabs: number; widgets: number; customWidgets: number };
+        tabs: Array<{ slug: string }>;
+      };
+      expect(preview.response?.[0]).toBe(true);
+      expect(previewPayload.summary).toEqual({
+        tabs: 1,
+        widgets: store.read().tabs[0]!.widgets.length,
+        customWidgets: 0,
+      });
+      expect(previewPayload.tabs).toEqual([expect.objectContaining({ slug: "main-2" })]);
+      expect(store.read().tabs).toHaveLength(1);
+
+      const declined = await callMethod(methods.get("workspaces.import.commit")!, {
+        workspaceId: "default",
+        previewId: previewPayload.previewId,
+        approved: false,
+      });
+      expect(declined.response?.[0]).toBe(false);
+      expect(store.read().tabs).toHaveLength(1);
+
+      const committed = await callMethod(methods.get("workspaces.import.commit")!, {
+        workspaceId: "default",
+        previewId: previewPayload.previewId,
+        approved: true,
+      });
+      expect(committed.response?.[0]).toBe(true);
+      expect(store.read().tabs).toHaveLength(2);
+      expect(store.read().tabs[1]).toMatchObject({ slug: "main-2", createdBy: "user" });
+      store.close();
+    });
+  });
+
+  it("does not evict a valid preview merely because the cache is at capacity", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { api, methods } = createApi({
+        teamsDomainId: "domain-capacity",
+        principalId: "owner-capacity",
+        ownerPrincipalId: "owner-capacity",
+      });
+      const store = new WorkspaceStore({ stateDir, isolationDomainId: "domain-capacity" });
+      registerWorkspaceGatewayMethods({ api, store, storeForDomain: () => store });
+      const exported = await callMethod(methods.get("workspaces.tab.export")!, {
+        workspaceId: "default",
+        tabId: "main",
+      });
+      const content = (exported.response?.[1] as { content?: string } | undefined)?.content;
+      if (!content) {
+        throw new Error("tab export content missing");
+      }
+
+      const previews = [];
+      for (let index = 0; index < 32; index += 1) {
+        previews.push(
+          await callMethod(methods.get("workspaces.import.preview")!, {
+            workspaceId: "default",
+            content,
+          }),
+        );
+      }
+      const firstPreviewId = (previews[0]?.response?.[1] as { previewId?: string } | undefined)
+        ?.previewId;
+      expect(firstPreviewId).toBeTypeOf("string");
+
+      const committed = await callMethod(methods.get("workspaces.import.commit")!, {
+        workspaceId: "default",
+        previewId: firstPreviewId,
+        approved: true,
+      });
+
+      expect(committed.response?.[0]).toBe(true);
+      store.close();
+    });
+  });
+
+  it("rejects import commit by a different owner or after the workspace version changes", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const owner = createApi({
+        teamsDomainId: "domain-1",
+        principalId: "owner-1",
+        ownerPrincipalId: "owner-1",
+      });
+      const store = new WorkspaceStore({ stateDir, isolationDomainId: "domain-1" });
+      registerWorkspaceGatewayMethods({ api: owner.api, store, storeForDomain: () => store });
+      const exported = await callMethod(owner.methods.get("workspaces.tab.export")!, {
+        workspaceId: "default",
+        tabId: "main",
+      });
+      const content = (exported.response?.[1] as { content?: string } | undefined)?.content;
+      expect(content).toBeTypeOf("string");
+      if (!content) {
+        throw new Error("tab export content missing");
+      }
+      const preview = await callMethod(owner.methods.get("workspaces.import.preview")!, {
+        workspaceId: "default",
+        content,
+      });
+      const previewId = (preview.response?.[1] as { previewId?: string } | undefined)?.previewId;
+      expect(previewId).toBeTypeOf("string");
+      if (!previewId) {
+        throw new Error("import preview id missing");
+      }
+
+      store.mutate(
+        (draft) => {
+          draft.tabs[0]!.title = "Changed after preview";
+        },
+        { actor: "user" },
+      );
+      const stale = await callMethod(owner.methods.get("workspaces.import.commit")!, {
+        workspaceId: "default",
+        previewId,
+        approved: true,
+      });
+      expect(stale.response?.[0]).toBe(false);
+      expect(stale.response?.[2]).toMatchObject({ message: expect.stringMatching(/changed/) });
+
+      const notOwner = createApi({
+        teamsDomainId: "domain-1",
+        principalId: "member-2",
+        ownerPrincipalId: "owner-1",
+      });
+      registerWorkspaceGatewayMethods({ api: notOwner.api, store, storeForDomain: () => store });
+      const denied = await callMethod(notOwner.methods.get("workspaces.import.preview")!, {
+        workspaceId: "default",
+        content,
+      });
+      expect(denied.response?.[0]).toBe(false);
+      expect(denied.response?.[2]).toMatchObject({ message: expect.stringMatching(/owner/) });
+      store.close();
+    });
   });
 
   it("lets the domain owner idempotently register the plugin-owned tab inventory", async () => {
@@ -603,7 +799,10 @@ describe("workspace gateway methods", () => {
 
       const read = await callMethod(methods.get("workspaces.get")!, {}, broadcast);
       expect(read.response?.[0]).toBe(true);
-      expect(read.response?.[1]).toMatchObject({ workspaceVersion: 1 });
+      expect(read.response?.[1]).toMatchObject({
+        workspaceVersion: 1,
+        distributionAccess: { owner: true },
+      });
       expect(broadcast).not.toHaveBeenCalled();
 
       // Provenance is derived from the caller. An RPC client must not be able to
@@ -636,6 +835,24 @@ describe("workspace gateway methods", () => {
         changedTabSlug: "finance-ops",
         actor: "user",
       });
+    });
+  });
+
+  it("reports resource-specific distribution ownership for a Teams member", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { api, methods } = createApi({
+        teamsDomainId: "domain-member",
+        principalId: "principal-member",
+        ownerPrincipalId: "principal-owner",
+      });
+      const store = new WorkspaceStore({ stateDir });
+      registerWorkspaceGatewayMethods({ api, store });
+
+      const read = await callMethod(methods.get("workspaces.get")!, {});
+
+      expect(read.response?.[0]).toBe(true);
+      expect(read.response?.[1]).toMatchObject({ distributionAccess: { owner: false } });
+      store.close();
     });
   });
 

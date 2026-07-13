@@ -5,6 +5,8 @@ import {
   applyPointer,
   cancelActiveDrag,
   clearActiveDrag,
+  commitWorkspaceImport,
+  exportWorkspace,
   WORKSPACE_POLL_INTERVAL_MS,
   getWorkspaceState,
   hiddenTabs,
@@ -18,6 +20,7 @@ import {
   removeWidgetFromTab,
   resolveActiveSlug,
   resolveBinding,
+  previewWorkspaceImport,
   setWidgetCollapsed,
   updateWidgetTitle,
   startBindingPolling,
@@ -69,11 +72,21 @@ describe("normalizeWorkspace", () => {
   it("normalizes tabs, widgets, and prefs defensively", () => {
     const ws = normalizeWorkspace(sampleDoc);
     expect(ws.workspaceVersion).toBe(3);
+    expect(ws.workspaceId).toBe("default");
     expect(ws.tabs).toHaveLength(2);
     expect(itemAt(itemAt(ws.tabs, 0, "workspace tab").widgets, 0, "workspace widget").grid).toEqual(
       { x: 0, y: 0, w: 4, h: 2 },
     );
     expect(ws.prefs.tabOrder).toEqual(["archive", "main"]);
+  });
+
+  it("keeps immutable resource ids needed by distribution and Teams access", () => {
+    const ws = normalizeWorkspace({
+      workspaceId: "workspace-1",
+      tabs: [{ id: "tab-1", revision: 4, slug: "main", title: "Main", widgets: [] }],
+    });
+    expect(ws.workspaceId).toBe("workspace-1");
+    expect(ws.tabs[0]).toMatchObject({ id: "tab-1", revision: 4 });
   });
 
   it("drops malformed tabs and widgets", () => {
@@ -97,6 +110,84 @@ describe("normalizeWorkspace", () => {
     expect(itemAt(itemAt(ws.tabs, 0, "workspace tab").widgets, 0, "workspace widget").grid).toEqual(
       { x: 0, y: 0, w: 12, h: 1 },
     );
+  });
+});
+
+describe("workspace distribution RPC", () => {
+  it("uses the workspace id for owner export and preview", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ filename: "workspace.json", content: "{}" })
+      .mockResolvedValueOnce({
+        previewId: "preview-1",
+        workspaceId: "workspace-1",
+        baseWorkspaceVersion: 3,
+        expiresAt: 10,
+        summary: { tabs: 1, widgets: 2, customWidgets: 1 },
+        tabs: [{ slug: "finance-2", title: "Finance", widgets: 2, customWidgets: 1 }],
+      });
+    const client = mockClient({ request: request as never });
+
+    await expect(exportWorkspace(client, "workspace-1")).resolves.toEqual({
+      filename: "workspace.json",
+      content: "{}",
+    });
+    await expect(previewWorkspaceImport(client, "workspace-1", "package")).resolves.toMatchObject({
+      previewId: "preview-1",
+      summary: { tabs: 1, widgets: 2, customWidgets: 1 },
+    });
+    expect(request).toHaveBeenNthCalledWith(1, "workspaces.export", {
+      workspaceId: "workspace-1",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "workspaces.import.preview", {
+      workspaceId: "workspace-1",
+      content: "package",
+    });
+  });
+
+  it("falls back to the exact tab export for a shared member", async () => {
+    const request = vi.fn().mockResolvedValueOnce({ filename: "tab.json", content: "{}" });
+    const client = mockClient({ request: request as never });
+
+    await expect(exportWorkspace(client, "workspace-1", "tab-1", false)).resolves.toEqual({
+      filename: "tab.json",
+      content: "{}",
+    });
+    expect(request).toHaveBeenCalledWith("workspaces.tab.export", {
+      workspaceId: "workspace-1",
+      tabId: "tab-1",
+    });
+  });
+
+  it("sets owner approval and completes sharing sync after committing a preview", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ workspaceVersion: 4, sharingSyncRequired: true })
+      .mockResolvedValueOnce({ tabs: [] });
+    const client = mockClient({ request: request as never });
+    await expect(commitWorkspaceImport(client, "workspace-1", "preview-1")).resolves.toEqual({
+      sharingSyncError: null,
+    });
+    expect(request).toHaveBeenNthCalledWith(1, "workspaces.import.commit", {
+      workspaceId: "workspace-1",
+      previewId: "preview-1",
+      approved: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "workspaces.sharing.sync", {
+      workspaceId: "workspace-1",
+    });
+  });
+
+  it("reports sharing sync failure separately from a durable import", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ workspaceVersion: 4, sharingSyncRequired: true })
+      .mockRejectedValueOnce(new Error("sync unavailable"));
+    const client = mockClient({ request: request as never });
+
+    const result = await commitWorkspaceImport(client, "workspace-1", "preview-1");
+
+    expect(result.sharingSyncError?.message).toBe("sync unavailable");
   });
 });
 
@@ -130,13 +221,18 @@ describe("loadWorkspace", () => {
     const state = getWorkspaceState(host);
     const client = mockClient({
       // Real gateway shape: workspaces.get returns { doc, workspaceVersion }.
-      request: vi.fn(async () => ({ doc: sampleDoc, workspaceVersion: 3 })) as never,
+      request: vi.fn(async () => ({
+        doc: sampleDoc,
+        workspaceVersion: 3,
+        distributionAccess: { owner: true },
+      })) as never,
     });
     await loadWorkspace(state, client, { requestedSlug: "archive" });
     expect(state.loaded).toBe(true);
     // The workspace actually populates (tabs present), not an empty fallback.
     expect(state.workspace?.workspaceVersion).toBe(3);
     expect(state.workspace?.tabs).toHaveLength(2);
+    expect(state.distributionOwner).toBe(true);
     expect(state.activeSlug).toBe("archive");
   });
 
