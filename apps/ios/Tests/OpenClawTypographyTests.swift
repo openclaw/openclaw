@@ -361,6 +361,7 @@ struct OpenClawTypographyTests {
             "Image(systemName: \"circle\").accessibilityLabel(Text(title))",
             ".accessibilityLabel(Text(title)).accessibilityIdentifier(\"status\")",
             "Image(systemName: \"circle\").accessibilityLabel(Text(title)).accessibilityHint(Text(hint))",
+            ".accessibilityLabel(Text(self.statusLabel ?? LocalizedStringResource(\"Allowed\")))",
             ".accessibilityLabel(Text(title))\n)",
             ".accessibilityLabel(\n    Text(title)\n)",
             "Image(systemName: \"circle\")\n    .accessibilityLabel(\n        Text(title)\n    )",
@@ -492,6 +493,7 @@ struct OpenClawTypographyTests {
         return try self.swiftSourcesForTypographyAudit().flatMap { url -> [String] in
             let source = try String(contentsOf: url, encoding: .utf8)
             let lines = source.components(separatedBy: .newlines)
+            let accessibilityMetadataTextLines = self.accessibilityMetadataTextLines(in: lines)
             return lines.indices.compactMap { idx -> String? in
                 let rawLine = lines[idx]
                 let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -503,7 +505,7 @@ struct OpenClawTypographyTests {
                     || self.hasAllowedBrandedFontParameter(window, line: rawLine, in: url)
 
                 if self.isTextOrLabelCall(rawLine),
-                   !self.isAccessibilityMetadataTextCall(at: idx, in: lines),
+                   !accessibilityMetadataTextLines.contains(idx),
                    !hasLocalFont
                 {
                     return "\(self.relativePath(url)):\(idx + 1): \(line)"
@@ -523,40 +525,167 @@ struct OpenClawTypographyTests {
     }
 
     private static func isAccessibilityMetadataTextCall(at idx: Int, in lines: [String]) -> Bool {
-        let rawLine = lines[idx]
-        let textArgument = #"(?:[^()"\\]|\\.|"(?:\\.|[^"\\])*")*"#
-        let inlineAccessibilityText =
-            #"\.accessibility(?:Label|Value|Hint)\s*\(\s*Text\s*\(\#(textArgument)\)\s*\)"#
+        self.accessibilityMetadataTextLines(in: lines).contains(idx)
+    }
 
-        var inlineRemainder = rawLine
-        var removedInlineMetadata = false
-        while let range = inlineRemainder.range(of: inlineAccessibilityText, options: .regularExpression) {
-            inlineRemainder.removeSubrange(range)
-            removedInlineMetadata = true
-        }
-        if removedInlineMetadata {
-            // Do not let metadata Text hide a visual Text or Label sharing the audited line.
-            return !self.isTextOrLabelCall(inlineRemainder)
-        }
+    private static func accessibilityMetadataTextLines(in lines: [String]) -> Set<Int> {
+        let code = self.maskedSwiftCode(lines.joined(separator: "\n"))
+        let textToken = Array("Text".utf8)
+        let labelToken = Array("Label".utf8)
+        let modifiers = [
+            Array(".accessibilityLabel".utf8),
+            Array(".accessibilityValue".utf8),
+            Array(".accessibilityHint".utf8),
+        ]
+        var callCounts: [Int: Int] = [:]
+        var metadataCallCounts: [Int: Int] = [:]
+        var line = 0
 
-        let directText = #"^\s*Text\s*\(\#(textArgument)\)"#
-        guard let range = rawLine.range(of: directText, options: .regularExpression) else { return false }
-        let remainder = rawLine.replacingCharacters(in: range, with: "")
-        guard !self.isTextOrLabelCall(remainder) else { return false }
-
-        let contextStart = max(lines.startIndex, idx - 4)
-        // Comment text cannot open a metadata modifier for a following visual Text.
-        let leadingContext = lines[contextStart..<idx]
-            .map { line in
-                guard let comment = line.range(of: "//") else { return line }
-                return String(line[..<comment.lowerBound])
+        for offset in code.indices {
+            if code[offset] == 10 {
+                line += 1
+                continue
             }
-            .joined(separator: "\n")
-        let accessibilityOpener =
-            #"(?s)(?:^|\n)[^\n]*\.accessibility(?:Label|Value|Hint)\s*\(\s*$"#
+            if self.callOpeningParenthesis(after: textToken, at: offset, in: code) != nil ||
+                self.callOpeningParenthesis(after: labelToken, at: offset, in: code) != nil
+            {
+                callCounts[line, default: 0] += 1
+            }
 
-        // Direct accessibility metadata is announced, not rendered. Complex expressions fail closed.
-        return leadingContext.range(of: accessibilityOpener, options: .regularExpression) != nil
+            for modifier in modifiers {
+                guard let modifierOpen = self.callOpeningParenthesis(after: modifier, at: offset, in: code)
+                else { continue }
+                let textOffset = self.skippingWhitespace(in: code, after: modifierOpen)
+                guard let textOpen = self.callOpeningParenthesis(after: textToken, at: textOffset, in: code),
+                      let textClose = self.matchingParenthesis(in: code, openingAt: textOpen)
+                else { continue }
+                let metadataClose = self.skippingWhitespace(in: code, after: textClose)
+                guard metadataClose < code.count, code[metadataClose] == 41 else { continue }
+
+                // Exempt only the direct Text argument; visible calls sharing its source line stay audited.
+                let textLine = line + code[offset..<textOffset].count(where: { $0 == 10 })
+                metadataCallCounts[textLine, default: 0] += 1
+            }
+        }
+
+        return Set(metadataCallCounts.compactMap { line, count in
+            callCounts[line] == count ? line : nil
+        })
+    }
+
+    private static func callOpeningParenthesis(
+        after token: [UInt8],
+        at offset: Int,
+        in code: [UInt8]) -> Int?
+    {
+        guard offset + token.count <= code.count,
+              code[offset..<(offset + token.count)].elementsEqual(token),
+              token.first == 46 || offset == 0 || !self.isSwiftIdentifierByte(code[offset - 1])
+        else { return nil }
+        let afterToken = offset + token.count
+        guard afterToken == code.count || !self.isSwiftIdentifierByte(code[afterToken]) else { return nil }
+        let opening = self.skippingWhitespace(in: code, after: afterToken - 1)
+        return opening < code.count && code[opening] == 40 ? opening : nil
+    }
+
+    private static func skippingWhitespace(in code: [UInt8], after offset: Int) -> Int {
+        var cursor = offset + 1
+        while cursor < code.count, code[cursor] == 9 || code[cursor] == 10 || code[cursor] == 13 || code[cursor] == 32 {
+            cursor += 1
+        }
+        return cursor
+    }
+
+    private static func matchingParenthesis(in code: [UInt8], openingAt offset: Int) -> Int? {
+        var depth = 0
+        for cursor in offset..<code.count {
+            if code[cursor] == 40 {
+                depth += 1
+            } else if code[cursor] == 41 {
+                depth -= 1
+                if depth == 0 { return cursor }
+            }
+        }
+        return nil
+    }
+
+    private static func isSwiftIdentifierByte(_ byte: UInt8) -> Bool {
+        byte == 95 || (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte) || byte >= 128
+    }
+
+    private static func maskedSwiftCode(_ source: String) -> [UInt8] {
+        let sourceBytes = Array(source.utf8)
+        var code = sourceBytes
+        var cursor = 0
+
+        func mask(_ range: Range<Int>) {
+            for offset in range where code[offset] != 10 && code[offset] != 13 {
+                code[offset] = 32
+            }
+        }
+
+        while cursor < sourceBytes.count {
+            if cursor + 1 < sourceBytes.count, sourceBytes[cursor] == 47, sourceBytes[cursor + 1] == 47 {
+                let start = cursor
+                while cursor < sourceBytes.count, sourceBytes[cursor] != 10 {
+                    cursor += 1
+                }
+                mask(start..<cursor)
+                continue
+            }
+            if cursor + 1 < sourceBytes.count, sourceBytes[cursor] == 47, sourceBytes[cursor + 1] == 42 {
+                let start = cursor
+                var depth = 1
+                cursor += 2
+                while cursor < sourceBytes.count, depth > 0 {
+                    if cursor + 1 < sourceBytes.count, sourceBytes[cursor] == 47, sourceBytes[cursor + 1] == 42 {
+                        depth += 1
+                        cursor += 2
+                    } else if cursor + 1 < sourceBytes.count,
+                              sourceBytes[cursor] == 42,
+                              sourceBytes[cursor + 1] == 47
+                    {
+                        depth -= 1
+                        cursor += 2
+                    } else {
+                        cursor += 1
+                    }
+                }
+                mask(start..<cursor)
+                continue
+            }
+
+            let start = cursor
+            var hashCount = 0
+            while cursor < sourceBytes.count, sourceBytes[cursor] == 35 {
+                hashCount += 1
+                cursor += 1
+            }
+            guard cursor < sourceBytes.count, sourceBytes[cursor] == 34 else {
+                cursor = start + 1
+                continue
+            }
+            let quoteCount = cursor + 2 < sourceBytes.count &&
+                sourceBytes[cursor + 1] == 34 && sourceBytes[cursor + 2] == 34 ? 3 : 1
+            cursor += quoteCount
+            while cursor < sourceBytes.count {
+                if hashCount == 0, quoteCount == 1, sourceBytes[cursor] == 92 {
+                    cursor = min(sourceBytes.count, cursor + 2)
+                    continue
+                }
+                let closingEnd = cursor + quoteCount + hashCount
+                if closingEnd <= sourceBytes.count,
+                   sourceBytes[cursor..<(cursor + quoteCount)].allSatisfy({ $0 == 34 }),
+                   sourceBytes[(cursor + quoteCount)..<closingEnd].allSatisfy({ $0 == 35 })
+                {
+                    cursor = closingEnd
+                    break
+                }
+                cursor += 1
+            }
+            mask(start..<cursor)
+        }
+        return code
     }
 
     private static func isShorthandControlCall(_ line: String) -> Bool {
