@@ -222,6 +222,67 @@ the callback button when inbound policy skips the text or processing fails, so
 the user can retry after the blocking condition changes. This result field is
 Telegram-specific; other channels keep their own interactive result contracts.
 
+### Host-bound Teams resources
+
+`api.teams` is the fail-closed multi-tenant resource seam for plugin gateway
+methods. It is available only while the host is executing an isolated-mode
+request that already passed a resource authorization decision:
+
+```typescript
+const context = api.teams.context.require();
+const operation = await api.teams.resources.prepareRegister({
+  context,
+  resource: { namespace: "workspaces", type: "tab", id: tabId },
+  parent: { namespace: "workspaces", type: "workspace", id: workspaceId },
+  requiredAction: "workspaces.workspace.createTab",
+  idempotencyKey: requestId,
+});
+```
+
+The host derives the isolation domain, principal, delegated assignment and
+sponsor, request ID, and plugin operation scope. These fields are never
+accepted as resource-operation input. Request context objects are
+host-authenticated, request-lifetime capabilities; copying or retaining one
+outside its current request fails. The required action and parent/resource
+must exactly match the decision that admitted the gateway method.
+Plugin access policies are copied and frozen by the host, and every resolved
+resource must use the loader-supplied plugin ID as its namespace.
+
+Registration and retirement return opaque durable operation handles. Plugins
+may persist those handles in an outbox and replay them later with
+`api.teams.resources.replayPrepared({ operation })`; the host resolves the
+stored domain and binds replay to the loader-supplied plugin ID. Plugins must
+not deep-import gateway authorization modules or create parallel tenant,
+membership, owner, or grant tables.
+
+For an agent-created resource, the agent remains the acting provenance
+principal while its server-attested canonical human sponsor is the resource
+custodian. The agent receives no resource-owner or domain-admin inheritance,
+and sponsorship alone grants no resource permission.
+
+Plugin tools authorize the resource selected by each tool call instead of
+reusing gateway-method proof. Pass the exact factory context object from the
+owning tool's `execute` callback:
+
+```typescript
+const call = api.teams.context.require(toolContext);
+const decision = await api.teams.authorization.decide({
+  context: call,
+  permission: "workspaces.tab.update",
+  resources: [{ namespace: "workspaces", type: "tab", id: tabId }],
+});
+if (!decision.allowed) {
+  throw new Error("workspace resource is unavailable");
+}
+```
+
+An allowed decision returns a fresh request proof for the resource APIs. Tool
+factory contexts, call proofs, and decision proofs are exact-object,
+execution-lifetime capabilities. Copies, retained callbacks, another plugin,
+or `prepareArguments` cannot use them. Agent IDs, session keys, sender fields,
+and tool arguments are never Teams identity. Runs without a server-bound
+delegated assignment fail closed.
+
 ### Host hooks for workflow plugins
 
 Host hooks are the SDK seams for plugins that need to participate in the host

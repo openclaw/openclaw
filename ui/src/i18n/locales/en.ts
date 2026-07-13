@@ -2107,6 +2107,16 @@ export const en: TranslationMap = {
     header: {
       subtitle: "Arrange widgets and tabs for this workspace.",
     },
+    distribution: {
+      export: "Export",
+      import: "Import",
+      previewTitle: "Review workspace import",
+      previewSummary:
+        "Add {tabs} tabs and {widgets} widgets. {customWidgets} custom widgets require separate approval.",
+      customPending:
+        "Custom widgets stay pending and cannot run until you approve their installed files separately.",
+      approve: "Approve import",
+    },
     onboarding: {
       title: "Build your first workspace tab",
       primary: "Ask your agent to build a tab.",

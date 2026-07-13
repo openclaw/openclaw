@@ -25,6 +25,27 @@
   gap: 2px;
 }
 
+.workspace-page-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-distribution__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.workspace-distribution__tabs {
+  margin: 12px 0;
+  padding-left: 20px;
+}
+
 /* --- Tab strip ----------------------------------------------------------- */
 
 .workspace-tabs {

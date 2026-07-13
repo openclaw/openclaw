@@ -47,6 +47,10 @@ export type WorkspaceWidget = {
 };
 
 export type WorkspaceTab = {
+  /** Immutable authorization resource id; present on current gateway payloads. */
+  id?: string;
+  /** Store-owned optimistic-concurrency revision. */
+  revision?: number;
   slug: string;
   title: string;
   icon?: string;
@@ -71,6 +75,8 @@ export type WorkspaceWidgetRegistryEntry = {
 };
 
 export type WorkspaceDocument = {
+  /** Immutable workspace authorization resource id. */
+  workspaceId?: string;
   schemaVersion: number;
   workspaceVersion: number;
   tabs: WorkspaceTab[];

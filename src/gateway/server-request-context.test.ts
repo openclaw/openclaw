@@ -102,6 +102,7 @@ describe("createGatewayRequestContext", () => {
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
 
+    expect(context.authorization).toEqual({ mode: "legacy" });
     expect(context.cron).toBe(cronA);
     expect(context.cronStorePath).toBe("/tmp/cron-a");
 

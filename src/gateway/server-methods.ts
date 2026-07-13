@@ -12,6 +12,15 @@ import {
   isGatewayRestartDraining,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  getGatewayClientAuthorizationDelegation,
+  getGatewayClientAuthorizationDomain,
+  getGatewayClientTeamsSession,
+} from "./authorization/client-domain.js";
+import { authorizeGatewayAccess } from "./authorization/kernel.js";
+import { withGatewayAuthorizationContext } from "./authorization/request-context.js";
+import { createStateGatewayAuthorizationRuntime } from "./authorization/state-provider.js";
+import { resolveTeamsSessionById } from "./authorization/teams-identity.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import {
@@ -312,10 +321,14 @@ function authorizeGatewayMethod(
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${roleRaw}`);
   }
   const scopes = client.connect.scopes ?? [];
-  if (!isRoleAuthorizedForMethod(role, method)) {
+  const accessPolicy = methodRegistry.getAccessPolicy(method);
+  if (!isRoleAuthorizedForMethod(role, method, accessPolicy)) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
   if (role === "node") {
+    return null;
+  }
+  if (role === "member") {
     return null;
   }
   if (scopes.includes(ADMIN_SCOPE)) {
@@ -844,9 +857,64 @@ export async function handleGatewayRequest(
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry
       : createRequestGatewayMethodRegistry(opts.extraHandlers);
+  const role = parseGatewayRole(client?.connect.role ?? "operator");
+  const domain = getGatewayClientAuthorizationDomain(client);
+  if (role === "member") {
+    const binding = getGatewayClientTeamsSession(client);
+    const session = binding ? resolveTeamsSessionById({ id: binding.id }) : undefined;
+    const principal = client?.principal;
+    if (
+      !binding ||
+      !session ||
+      !domain ||
+      principal?.kind !== "human" ||
+      session.id !== binding.id ||
+      session.principalId !== binding.principalId ||
+      session.domainId !== binding.domainId ||
+      domain.id !== binding.domainId ||
+      session.principal.issuer !== principal.issuer ||
+      session.principal.subject !== principal.subject ||
+      session.principal.kind !== principal.kind
+    ) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "authentication required"));
+      return;
+    }
+  }
   const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);
+    return;
+  }
+  const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
+  if (!handler) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`),
+    );
+    return;
+  }
+  const principalKind = client?.principal?.kind;
+  const requiresStateAuthorization =
+    role === "member" ||
+    (domain !== undefined && (principalKind === "human" || principalKind === "service"));
+  const authorizationRuntime =
+    requiresStateAuthorization && context.authorization.mode === "legacy"
+      ? createStateGatewayAuthorizationRuntime()
+      : context.authorization;
+  const access = await authorizeGatewayAccess({
+    runtime: authorizationRuntime,
+    policy: methodRegistry.getAccessPolicy(req.method),
+    principal: client?.principal,
+    domain,
+    delegation: getGatewayClientAuthorizationDelegation(client),
+    method: req.method,
+    params: req.params,
+    getConfig: context.getRuntimeConfig,
+  });
+  if (!access.allowed) {
+    context.logGateway.warn(`gateway access denied method=${req.method} reason=${access.reason}`);
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "resource not found"));
     return;
   }
   if (context.unavailableGatewayMethods?.has(req.method)) {
@@ -896,15 +964,6 @@ export async function handleGatewayRequest(
   const isSuspendPrepare = req.method === "gateway.suspend.prepare";
   if (isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
     // Preparation must stay protected even before it owns the root admission that it closes.
-    return;
-  }
-  const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
-  if (!handler) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`),
-    );
     return;
   }
   const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
@@ -964,10 +1023,17 @@ export async function handleGatewayRequest(
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
   // The scope also carries caller identity into plugin-owned gateway methods.
+  const methodOwner = methodRegistry.getOwner(req.method);
+  const requestAuthorizationContext = access.security
+    ? Object.freeze({
+        ...access.security,
+        requestId: req.id,
+        ...(methodOwner?.kind === "plugin" ? { pluginId: methodOwner.pluginId } : {}),
+      })
+    : undefined;
   const invokeWithRequestScope = async () =>
-    await withPluginRuntimeGatewayRequestScope(
-      { context, client, isWebchatConnect },
-      invokeHandler,
+    await withGatewayAuthorizationContext(requestAuthorizationContext, () =>
+      withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler),
     );
   if (!rootWorkAdmission) {
     await invokeWithRequestScope();

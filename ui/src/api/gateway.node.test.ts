@@ -143,6 +143,7 @@ type ConnectFrame = {
     maxProtocol?: number;
     minProtocol?: number;
     caps?: string[];
+    role?: string;
     scopes?: string[];
   };
 };
@@ -421,6 +422,32 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("connects a Teams browser session as a scope-less member while preserving device signing", async () => {
+    const client = new GatewayBrowserClient({
+      url: "wss://gateway.example",
+      role: "member",
+      scopes: [],
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.role).toBe("member");
+    expect(connectFrame.params?.scopes).toEqual([]);
+    expect(connectFrame.params?.caps).toEqual([]);
+    const [, signedPayload] = requireFirstSignCall();
+    expect(signedPayload.split("|")).toEqual([
+      "v2",
+      "device-1",
+      "openclaw-control-ui",
+      "webchat",
+      "member",
+      "",
+      expect.stringMatching(/^\d+$/),
+      "",
+      "nonce-1",
+    ]);
   });
 
   it("requests handoff scopes with bootstrap token auth", async () => {

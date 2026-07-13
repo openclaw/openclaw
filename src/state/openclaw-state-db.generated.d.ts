@@ -135,6 +135,114 @@ export interface AuthProfileStores {
   updated_at: number;
 }
 
+export interface AuthorizationAgentSessionBindings {
+  agent_principal_id: string;
+  assignment_id: string;
+  binding_id: string;
+  created_at: number;
+  created_by_principal_id: string;
+  delegation_id: string;
+  domain_id: string;
+  revoked_at: number | null;
+  runtime_agent_id: string;
+  session_key: string;
+  sponsor_principal_id: string;
+  state: string;
+  updated_at: number;
+}
+
+export interface AuthorizationAgentSponsors {
+  agent_principal_id: string;
+  created_at: number;
+  domain_id: string;
+  sponsor_principal_id: string;
+}
+
+export interface AuthorizationDelegations {
+  agent_principal_id: string;
+  assignment_id: string;
+  created_at: number;
+  created_by_principal_id: string;
+  delegation_id: string;
+  domain_id: string;
+  revoked_at: number | null;
+  sponsor_principal_id: string;
+  state: string;
+  updated_at: number;
+}
+
+export interface AuthorizationDomainMemberships {
+  added_by_principal_id: string;
+  added_by_role: string;
+  created_at: number;
+  domain_id: string;
+  principal_id: string;
+  role: string;
+}
+
+export interface AuthorizationDomains {
+  created_at: number;
+  domain_id: string;
+  updated_at: number;
+}
+
+export interface AuthorizationGrants {
+  created_at: number;
+  domain_id: string;
+  granted_by_principal_id: string;
+  namespace: string;
+  permission: string;
+  principal_id: string;
+  resource_id: string;
+  resource_type: string;
+}
+
+export interface AuthorizationPrincipals {
+  created_at: number;
+  issuer: string;
+  kind: string;
+  principal_id: string;
+  subject: string;
+  updated_at: number;
+}
+
+export interface AuthorizationResourceOperations {
+  actor_principal_id: string;
+  applied_at: number | null;
+  assignment_id: string | null;
+  created_at: number;
+  delegation_id: string | null;
+  domain_id: string;
+  idempotency_key: string;
+  namespace: string;
+  operation_id: string;
+  operation_scope: string;
+  operation_type: string;
+  owner_principal_id: string;
+  parent_namespace: string | null;
+  parent_resource_id: string | null;
+  parent_resource_type: string | null;
+  resource_id: string;
+  resource_type: string;
+  state: string;
+  updated_at: number;
+}
+
+export interface AuthorizationResources {
+  created_at: number;
+  domain_id: string;
+  namespace: string;
+  owner_principal_id: string;
+  parent_namespace: string | null;
+  parent_resource_id: string | null;
+  parent_resource_type: string | null;
+  resource_id: string;
+  resource_type: string;
+  retired_at: number | null;
+  retired_by_principal_id: string | null;
+  updated_at: number;
+}
+
 export interface BackupRuns {
   archive_path: string;
   created_at: number;
@@ -1030,6 +1138,56 @@ export interface TaskRuns {
   tool_use_count: number | null;
 }
 
+export interface TeamsInviteGrants {
+  created_at: number;
+  domain_id: string;
+  invite_id: string;
+  namespace: string;
+  permission: string;
+  resource_id: string;
+  resource_type: string;
+}
+
+export interface TeamsInvites {
+  code_digest: string;
+  created_at: number;
+  created_by_principal_id: string;
+  domain_id: string;
+  expires_at: number;
+  invite_id: string;
+  recipient_label: string | null;
+  redeemed_at: number | null;
+  redeemed_by_principal_id: string | null;
+  revoked_at: number | null;
+  revoked_by_principal_id: string | null;
+  state: string;
+}
+
+export interface TeamsLocalAccounts {
+  account_id: string;
+  created_at: number;
+  login_label: string;
+  password_salt: Uint8Array;
+  password_scrypt_n: number;
+  password_scrypt_p: number;
+  password_scrypt_r: number;
+  password_verifier: Uint8Array;
+  principal_id: string;
+}
+
+export interface TeamsSessions {
+  account_id: string;
+  created_at: number;
+  domain_id: string;
+  expires_at: number;
+  principal_id: string;
+  revoked_at: number | null;
+  revoked_by_principal_id: string | null;
+  session_id: string;
+  state: string;
+  token_digest: string;
+}
+
 export interface TuiLastSessions {
   scope_key: string;
   session_key: string;
@@ -1204,6 +1362,15 @@ export interface DB {
   audit_identity_keys: AuditIdentityKeys;
   auth_profile_state: AuthProfileState;
   auth_profile_stores: AuthProfileStores;
+  authorization_agent_session_bindings: AuthorizationAgentSessionBindings;
+  authorization_agent_sponsors: AuthorizationAgentSponsors;
+  authorization_delegations: AuthorizationDelegations;
+  authorization_domain_memberships: AuthorizationDomainMemberships;
+  authorization_domains: AuthorizationDomains;
+  authorization_grants: AuthorizationGrants;
+  authorization_principals: AuthorizationPrincipals;
+  authorization_resource_operations: AuthorizationResourceOperations;
+  authorization_resources: AuthorizationResources;
   backup_runs: BackupRuns;
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;
@@ -1262,6 +1429,10 @@ export interface DB {
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
+  teams_invite_grants: TeamsInviteGrants;
+  teams_invites: TeamsInvites;
+  teams_local_accounts: TeamsLocalAccounts;
+  teams_sessions: TeamsSessions;
   tui_last_sessions: TuiLastSessions;
   update_check_state: UpdateCheckState;
   voicewake_routing_config: VoicewakeRoutingConfig;

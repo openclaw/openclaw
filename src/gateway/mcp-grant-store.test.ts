@@ -100,6 +100,18 @@ describe("mcp-grant-store", () => {
     const context = {
       sessionKey: " agent:main:telegram:group:1 ",
       sessionId: "session-1",
+      authorizationSubject: {
+        principal: { issuer: "core", subject: "agent:main", kind: "service" as const },
+        domain: { id: "domain-1" },
+        agentSession: {
+          id: "binding-1",
+          invokingPrincipal: {
+            issuer: "trusted-proxy",
+            subject: "owner@example.com",
+            kind: "human" as const,
+          },
+        },
+      },
       messageProvider: "telegram",
       clientCaps: ["tool-events"],
       currentChannelId: "telegram:-1001",
@@ -126,7 +138,11 @@ describe("mcp-grant-store", () => {
     ).toBe(true);
 
     context.clientCaps.push("caller-mutation");
+    context.authorizationSubject.domain.id = "caller-mutation";
     grant.context.clientCaps?.push("return-value-mutation");
+    if (grant.context.authorizationSubject) {
+      (grant.context.authorizationSubject.domain as { id: string }).id = "return-value-mutation";
+    }
 
     expect(
       resolveMcpLoopbackClientGrant({
@@ -138,6 +154,18 @@ describe("mcp-grant-store", () => {
       ...context,
       sessionKey: "agent:main:telegram:group:1",
       clientCaps: ["tool-events"],
+      authorizationSubject: {
+        principal: { issuer: "core", subject: "agent:main", kind: "service" },
+        domain: { id: "domain-1" },
+        agentSession: {
+          id: "binding-1",
+          invokingPrincipal: {
+            issuer: "trusted-proxy",
+            subject: "owner@example.com",
+            kind: "human",
+          },
+        },
+      },
     });
   });
 

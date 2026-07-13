@@ -31,16 +31,19 @@ import {
 import {
   approveWidget,
   clearActiveDrag,
+  commitWorkspaceImport,
   customWidgetName,
   customWidgetStatus,
   findTab,
   getWorkspaceState,
   hiddenTabs,
   hideWidget,
+  exportWorkspace,
   loadWorkspace,
   moveWidget,
   moveWidgetToTab,
   orderedTabs,
+  previewWorkspaceImport,
   removeWidgetFromTab,
   resolveActiveSlug,
   registerActiveDrag,
@@ -51,6 +54,7 @@ import {
   updateWidgetTitle,
   visibleTabs,
   type WorkspaceBindingResult,
+  type WorkspaceImportPreview,
   type WorkspaceUiState,
 } from "../../lib/workspace/index.ts";
 import type {
@@ -106,6 +110,8 @@ type WorkspaceViewState = {
   dataVersion: number;
   /** Active themed dialog (#12) for edit-title / move-to-tab, or null. */
   dialog: WorkspaceDialogState | null;
+  distributionPreview: WorkspaceImportPreview | null;
+  distributionBusy: boolean;
   /** First-visit onboarding banner dismissed this session (#5); mirrors localStorage. */
   onboardingDismissed: boolean;
 };
@@ -226,6 +232,8 @@ function getViewState(host: object): WorkspaceViewState {
       manifestEpoch: 0,
       dataVersion: 0,
       dialog: null,
+      distributionPreview: null,
+      distributionBusy: false,
       onboardingDismissed: isOnboardingDismissed(),
     };
     workspaceViewStates.set(host, state);
@@ -953,6 +961,7 @@ function renderBody(
   }
   if (workspace.tabs.length === 0) {
     return html`
+      ${renderWorkspacesHeader(props, state, viewState)}
       <div class="workspace-empty workspace-empty--onboarding" data-test-id="workspace-empty">
         <div class="workspace-empty__title">${t("workspaces.empty.onboardingTitle")}</div>
         <div class="workspace-empty__sub">${t("workspaces.empty.onboardingSubtitle")}</div>
@@ -967,7 +976,7 @@ function renderBody(
     </div>`;
   }
   return html`
-    ${renderWorkspacesHeader(tab)}
+    ${renderWorkspacesHeader(props, state, viewState, tab)}
     ${renderOnboardingBanner(viewState, () => props.onRequestUpdate?.())}
     ${renderTabStrip(state, workspace)} ${renderGrid(props, state, viewState, workspace, tab)}
   `;
@@ -978,12 +987,180 @@ function renderBody(
  * the title with a subtitle line, matching the app's .page-title / .page-sub
  * idiom used by the other top-level pages.
  */
-function renderWorkspacesHeader(tab: WorkspaceTab): TemplateResult {
+function downloadWorkspaceFile(filename: string, content: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function renderDistributionPreview(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+): TemplateResult | typeof nothing {
+  const preview = viewState.distributionPreview;
+  if (!preview) {
+    return nothing;
+  }
+  const close = () => {
+    viewState.distributionPreview = null;
+    props.onRequestUpdate?.();
+  };
+  const approve = async (event: SubmitEvent) => {
+    event.preventDefault();
+    if (!props.client || viewState.distributionBusy) {
+      return;
+    }
+    viewState.distributionBusy = true;
+    props.onRequestUpdate?.();
+    try {
+      const commit = await commitWorkspaceImport(
+        props.client,
+        preview.workspaceId,
+        preview.previewId,
+      );
+      viewState.distributionPreview = null;
+      await loadWorkspace(state, props.client, { silent: true });
+      if (commit.sharingSyncError) {
+        state.actionError = `Import succeeded, but sharing sync failed: ${commit.sharingSyncError.message}`;
+      }
+    } catch (error) {
+      state.actionError = error instanceof Error ? error.message : String(error);
+    } finally {
+      viewState.distributionBusy = false;
+      props.onRequestUpdate?.();
+    }
+  };
+  return html`
+    <openclaw-modal-dialog
+      label=${t("workspaces.distribution.previewTitle")}
+      @modal-cancel=${close}
+    >
+      <form class="exec-approval-card" @submit=${approve}>
+        <div class="exec-approval-header">
+          <div class="exec-approval-title">${t("workspaces.distribution.previewTitle")}</div>
+        </div>
+        <div class="exec-approval-sub">
+          ${t("workspaces.distribution.previewSummary", {
+            tabs: String(preview.summary.tabs),
+            widgets: String(preview.summary.widgets),
+            customWidgets: String(preview.summary.customWidgets),
+          })}
+        </div>
+        <ul class="workspace-distribution__tabs">
+          ${preview.tabs.map(
+            (tab) => html`<li><strong>${tab.title}</strong> <code>${tab.slug}</code></li>`,
+          )}
+        </ul>
+        ${preview.summary.customWidgets > 0
+          ? html`<div class="callout warning" role="note">
+              ${t("workspaces.distribution.customPending")}
+            </div>`
+          : nothing}
+        <div class="exec-approval-actions">
+          <button
+            class="btn btn--primary"
+            type="submit"
+            data-test-id="workspace-import-approve"
+            ?disabled=${viewState.distributionBusy}
+          >
+            ${t("workspaces.distribution.approve")}
+          </button>
+          <button class="btn" type="button" @click=${close}>${t("common.cancel")}</button>
+        </div>
+      </form>
+    </openclaw-modal-dialog>
+  `;
+}
+
+function renderWorkspacesHeader(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+  tab?: WorkspaceTab,
+): TemplateResult {
+  const workspaceId = state.workspace?.workspaceId ?? "default";
+  const exportCurrent = async () => {
+    if (!props.client || viewState.distributionBusy) {
+      return;
+    }
+    viewState.distributionBusy = true;
+    props.onRequestUpdate?.();
+    try {
+      const exported = await exportWorkspace(
+        props.client,
+        workspaceId,
+        tab?.id,
+        state.distributionOwner,
+      );
+      downloadWorkspaceFile(exported.filename, exported.content);
+    } catch (error) {
+      state.actionError = error instanceof Error ? error.message : String(error);
+    } finally {
+      viewState.distributionBusy = false;
+      props.onRequestUpdate?.();
+    }
+  };
+  const selectImport = (event: Event) => {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || !props.client || viewState.distributionBusy) {
+      return;
+    }
+    viewState.distributionBusy = true;
+    props.onRequestUpdate?.();
+    void file
+      .text()
+      .then((content) => previewWorkspaceImport(props.client!, workspaceId, content))
+      .then((preview) => {
+        viewState.distributionPreview = preview;
+      })
+      .catch((error: unknown) => {
+        state.actionError = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        viewState.distributionBusy = false;
+        props.onRequestUpdate?.();
+      });
+  };
   return html`
     <div class="workspace-page-header" data-test-id="workspace-page-header">
-      <div class="page-title">${tab.title}</div>
-      <div class="page-sub">${t("workspaces.header.subtitle")}</div>
+      <div>
+        <div class="page-title">${tab?.title ?? t("workspaces.tabs.label")}</div>
+        <div class="page-sub">${t("workspaces.header.subtitle")}</div>
+      </div>
+      <div class="workspace-page-header__actions">
+        ${state.distributionOwner || tab?.id
+          ? html`<button
+              class="btn btn--small"
+              type="button"
+              data-test-id="workspace-export"
+              ?disabled=${viewState.distributionBusy}
+              @click=${exportCurrent}
+            >
+              ${t("workspaces.distribution.export")}
+            </button>`
+          : nothing}
+        ${state.distributionOwner
+          ? html`<label class="btn btn--small" data-test-id="workspace-import-label">
+              ${t("workspaces.distribution.import")}
+              <input
+                class="workspace-distribution__input"
+                type="file"
+                accept="application/json,.json"
+                data-test-id="workspace-import"
+                ?disabled=${viewState.distributionBusy}
+                @change=${selectImport}
+              />
+            </label>`
+          : nothing}
+      </div>
     </div>
+    ${renderDistributionPreview(props, state, viewState)}
   `;
 }
 

@@ -31,6 +31,7 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
+import { withPluginToolAuthorizationInvocation } from "./tool-authorization-context.js";
 import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   buildPluginToolDescriptorCacheKey,
@@ -81,7 +82,10 @@ const PLUGIN_TOOL_FACTORY_WARN_FACTORY_MS = 1_000;
 const PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT = 20;
 
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
-const scopedPluginTools = new WeakMap<AnyAgentTool, Map<string, AnyAgentTool>>();
+const scopedPluginTools = new WeakMap<
+  AnyAgentTool,
+  Map<string, WeakMap<OpenClawPluginToolContext, AnyAgentTool>>
+>();
 
 /** Attaches plugin ownership metadata to a concrete agent tool instance. */
 export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
@@ -124,10 +128,15 @@ function isAgentTool(value: unknown): value is AnyAgentTool {
   );
 }
 
-function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTool): AnyAgentTool {
+function wrapPluginToolCallbacks(
+  entry: PluginToolRegistration,
+  tool: AnyAgentTool,
+  context: OpenClawPluginToolContext,
+): AnyAgentTool {
   const key = pluginToolScopeKey(entry);
   const scopedByKey = scopedPluginTools.get(tool);
-  const cached = scopedByKey?.get(key);
+  const scopedByContext = scopedByKey?.get(key);
+  const cached = scopedByContext?.get(context);
   if (cached) {
     return cached;
   }
@@ -143,12 +152,20 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
     signal?: AbortSignal,
     onUpdate?: unknown,
   ) =>
-    runWithPluginToolScope(
-      entry,
-      () =>
-        Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
-          AnyAgentTool["execute"]
-        >,
+    runWithPluginToolScope(entry, () =>
+      withPluginToolAuthorizationInvocation(
+        {
+          pluginId: entry.pluginId,
+          toolName: tool.name,
+          toolCallId,
+          context,
+          signal,
+        },
+        () =>
+          Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
+            AnyAgentTool["execute"]
+          >,
+      ),
     );
   const wrapped = new Proxy<AnyAgentTool>(tool, {
     get(target, prop) {
@@ -182,8 +199,10 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
   });
 
   copyPluginToolMeta(tool, wrapped);
-  const nextScopedByKey = scopedByKey ?? new Map<string, AnyAgentTool>();
-  nextScopedByKey.set(key, wrapped);
+  const nextScopedByKey = scopedByKey ?? new Map();
+  const nextScopedByContext = scopedByContext ?? new WeakMap();
+  nextScopedByContext.set(context, wrapped);
+  nextScopedByKey.set(key, nextScopedByContext);
   scopedPluginTools.set(tool, nextScopedByKey);
   return wrapped;
 }
@@ -191,16 +210,19 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
 function wrapPluginToolFactoryResult(
   entry: PluginToolRegistration,
   result: PluginToolFactoryResult,
+  context: OpenClawPluginToolContext,
 ): PluginToolFactoryResult {
   if (Array.isArray(result)) {
-    return result.map((tool) => (isAgentTool(tool) ? wrapPluginToolCallbacks(entry, tool) : tool));
+    return result.map((tool) =>
+      isAgentTool(tool) ? wrapPluginToolCallbacks(entry, tool, context) : tool,
+    );
   }
-  return isAgentTool(result) ? wrapPluginToolCallbacks(entry, result) : result;
+  return isAgentTool(result) ? wrapPluginToolCallbacks(entry, result, context) : result;
 }
 
 function resolvePluginToolFactory(entry: PluginToolRegistration, ctx: OpenClawPluginToolContext) {
   return runWithPluginToolScope(entry, () =>
-    wrapPluginToolFactoryResult(entry, entry.factory(ctx)),
+    wrapPluginToolFactoryResult(entry, entry.factory(ctx), ctx),
   );
 }
 

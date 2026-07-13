@@ -78,7 +78,7 @@ describe("renderWorkspace", () => {
     window.history.replaceState({}, "", "/");
   });
 
-  it("shows the onboarding empty state with no tabs", () => {
+  it("keeps the owner import entrypoint in a zero-tab workspace", () => {
     const host = {};
     const state = getWorkspaceState(host);
     state.loaded = true;
@@ -89,8 +89,10 @@ describe("renderWorkspace", () => {
       widgetsRegistry: {},
       prefs: { tabOrder: [] },
     };
+    state.distributionOwner = true;
     const container = renderView(host);
     expect(container.querySelector('[data-test-id="workspace-empty"]')).not.toBeNull();
+    expect(container.querySelector('[data-test-id="workspace-import"]')).not.toBeNull();
   });
 
   it("renders the tab strip with visible tabs and a hidden overflow", () => {
@@ -98,6 +100,7 @@ describe("renderWorkspace", () => {
     const state = getWorkspaceState(host);
     state.loaded = true;
     state.workspace = doc;
+    state.distributionOwner = true;
     state.activeSlug = "main";
     const container = renderView(host);
     const tabs = container.querySelectorAll('[data-test-id="workspace-tab"]');
@@ -105,6 +108,25 @@ describe("renderWorkspace", () => {
     expect(container.querySelector(".workspace-tabs__hidden")).not.toBeNull();
     // Active tab's widget grid renders.
     expect(container.querySelector('[data-test-id="workspace-grid"]')).not.toBeNull();
+    expect(container.querySelector('[data-test-id="workspace-export"]')).not.toBeNull();
+    expect(container.querySelector('[data-test-id="workspace-import"]')).not.toBeNull();
+  });
+
+  it("never sends a ws deep link as gateway authorization input", async () => {
+    window.history.replaceState({}, "", "/plugin?plugin=workspaces&id=workspaces&ws=archive");
+    const host = document.createElement("div");
+    const request = vi.fn(async () => ({ doc }));
+    const client = {
+      request,
+      addEventListener: vi.fn(() => () => {}),
+    } as unknown as GatewayBrowserClient;
+
+    render(renderWorkspace({ host, client, connected: true }), host);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("workspaces.get", {}));
+    expect(
+      request.mock.calls.some(([, params]) => (params as { ws?: string }).ws === "archive"),
+    ).toBe(false);
+    stopWorkspace(host);
   });
 
   it("renders the empty-tab hint for a tab with no widgets", () => {

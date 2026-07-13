@@ -2990,30 +2990,43 @@ function emitIngressModelUsageDiagnostic(
   });
 }
 
-/** Runs an agent turn from an inbound channel/gateway ingress context. */
+/**
+ * Runs an agent turn from an inbound channel/gateway ingress context.
+ * Server-owned authorization stays separate so hostile ingress fields cannot replace it.
+ */
+function sanitizeAgentCommandIngressOpts(opts: AgentCommandIngressOpts): AgentCommandIngressOpts {
+  const sanitized = { ...opts } as AgentCommandIngressOpts & Partial<AgentCommandOpts>;
+  delete sanitized.authorizationSubject;
+  delete sanitized.resultMetaOverrides;
+  return sanitized;
+}
+
 export async function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
+  trusted?: Readonly<Pick<AgentCommandOpts, "authorizationSubject">>,
 ) {
-  if (typeof opts.allowModelOverride !== "boolean") {
+  const ingressOpts = sanitizeAgentCommandIngressOpts(opts);
+  if (typeof ingressOpts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }
   const lifecycleGeneration =
-    opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
+    ingressOpts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(ingressOpts.runId ?? "");
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
     const result = await agentCommandInternal(
       {
-        ...opts,
+        ...ingressOpts,
         lifecycleGeneration,
-        senderIsOwner: opts.senderIsOwner === true,
+        senderIsOwner: ingressOpts.senderIsOwner === true,
+        authorizationSubject: trusted?.authorizationSubject,
       },
       runtime,
       deps,
     );
 
     if (result) {
-      emitIngressModelUsageDiagnostic(result, opts);
+      emitIngressModelUsageDiagnostic(result, ingressOpts);
     }
 
     return result;

@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { createPluginTeamsApi } from "./teams-api.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
 type BuildPluginApiParams = {
@@ -297,5 +298,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
   };
-  return attachPluginApiFacades(api);
+  return attachPluginApiFacades(api, {
+    teams: createPluginTeamsApi({ pluginId: params.id }),
+  });
 }

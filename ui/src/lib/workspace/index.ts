@@ -27,6 +27,8 @@ export type WorkspaceUiState = {
   loaded: boolean;
   error: string | null;
   workspace: WorkspaceDocument | null;
+  /** Canonical ownership for distribution controls, resolved by the gateway. */
+  distributionOwner: boolean;
   /** Slug of the workspace tab in view; null until the doc resolves a default. */
   activeSlug: string | null;
   /** Whether the hidden-tabs overflow menu is open. */
@@ -90,6 +92,7 @@ export function getWorkspaceState(host: WorkspaceHost): WorkspaceUiState {
       loaded: false,
       error: null,
       workspace: null,
+      distributionOwner: false,
       activeSlug: null,
       hiddenMenuOpen: false,
       pendingWidgetIds: new Set(),
@@ -198,6 +201,8 @@ function normalizeTab(value: unknown): WorkspaceTab | null {
         .filter((w): w is WorkspaceWidget => w !== null)
     : [];
   return {
+    id: readString(value.id, slug),
+    revision: Math.max(1, Math.trunc(readNumber(value.revision, 1))),
     slug,
     title: readString(value.title, slug),
     hidden: value.hidden === true,
@@ -249,12 +254,83 @@ export function normalizeWorkspace(payload: unknown): WorkspaceDocument {
     ? prefsRecord.tabOrder.filter((slug): slug is string => typeof slug === "string")
     : [];
   return {
+    workspaceId: readString(record.workspaceId, "default"),
     schemaVersion: readNumber(record.schemaVersion, 1),
     workspaceVersion: readNumber(record.workspaceVersion, 0),
     tabs,
     prefs: { tabOrder },
     widgetsRegistry: normalizeWidgetsRegistry(record.widgetsRegistry),
   };
+}
+
+export type WorkspaceImportPreview = {
+  previewId: string;
+  workspaceId: string;
+  baseWorkspaceVersion: number;
+  expiresAt: number;
+  summary: { tabs: number; widgets: number; customWidgets: number };
+  tabs: Array<{ slug: string; title: string; widgets: number; customWidgets: number }>;
+};
+
+export async function exportWorkspace(
+  client: GatewayBrowserClient,
+  workspaceId: string,
+  tabId?: string,
+  owner = true,
+): Promise<{ filename: string; content: string }> {
+  let payload: unknown;
+  if (!owner) {
+    if (!tabId) {
+      throw new Error("Shared workspace export requires an exact tab id.");
+    }
+    payload = await client.request("workspaces.tab.export", { workspaceId, tabId });
+  } else {
+    payload = await client.request("workspaces.export", { workspaceId });
+  }
+  const result = isRecord(payload) ? payload : {};
+  const filename = readString(result.filename).trim();
+  const content = readString(result.content);
+  if (!filename || !content) {
+    throw new Error("Workspace export returned an invalid response.");
+  }
+  return { filename, content };
+}
+
+export async function previewWorkspaceImport(
+  client: GatewayBrowserClient,
+  workspaceId: string,
+  content: string,
+): Promise<WorkspaceImportPreview> {
+  const payload = await client.request("workspaces.import.preview", { workspaceId, content });
+  if (!isRecord(payload) || !isRecord(payload.summary) || !Array.isArray(payload.tabs)) {
+    throw new Error("Workspace import preview returned an invalid response.");
+  }
+  const previewId = readString(payload.previewId).trim();
+  const returnedWorkspaceId = readString(payload.workspaceId).trim();
+  if (!previewId || returnedWorkspaceId !== workspaceId) {
+    throw new Error("Workspace import preview returned an invalid response.");
+  }
+  return payload as unknown as WorkspaceImportPreview;
+}
+
+export async function commitWorkspaceImport(
+  client: GatewayBrowserClient,
+  workspaceId: string,
+  previewId: string,
+): Promise<{ sharingSyncError: Error | null }> {
+  const result = await client.request("workspaces.import.commit", {
+    workspaceId,
+    previewId,
+    approved: true,
+  });
+  if (isRecord(result) && result.sharingSyncRequired === true) {
+    try {
+      await client.request("workspaces.sharing.sync", { workspaceId });
+    } catch (error) {
+      return { sharingSyncError: error instanceof Error ? error : new Error(String(error)) };
+    }
+  }
+  return { sharingSyncError: null };
 }
 
 /** The `custom:<name>` widget name, or null for builtin/unknown kinds. */
@@ -368,6 +444,10 @@ export async function loadWorkspace(
       isRecord(payload) && "doc" in payload ? payload.doc : payload,
     );
     state.workspace = workspace;
+    state.distributionOwner =
+      isRecord(payload) &&
+      isRecord(payload.distributionAccess) &&
+      payload.distributionAccess.owner === true;
     state.activeSlug = resolveActiveSlug(workspace, opts?.requestedSlug ?? state.activeSlug);
     state.error = null;
     state.loaded = true;

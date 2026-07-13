@@ -301,6 +301,9 @@ export type GatewayBrowserClientOptions = {
   token?: string;
   bootstrapToken?: string;
   password?: string;
+  role?: string;
+  scopes?: string[];
+  caps?: string[];
   clientName?: GatewayClientName;
   clientVersion?: string;
   platform?: string;
@@ -801,11 +804,15 @@ export class GatewayBrowserClient {
       role: plan.role,
       scopes: plan.scopes,
       device: plan.device,
-      caps: [
-        GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
-        GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-        GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
-      ],
+      caps: this.opts.caps
+        ? [...this.opts.caps]
+        : plan.role === CONTROL_UI_OPERATOR_ROLE
+          ? [
+              GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+              GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+              GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+            ]
+          : [],
       auth: plan.auth,
       userAgent: navigator.userAgent,
       locale: navigator.language,
@@ -816,7 +823,7 @@ export class GatewayBrowserClient {
     connectNonce: string | null,
     generation: number,
   ): Promise<ConnectPlan> {
-    const role = CONTROL_UI_OPERATOR_ROLE;
+    const role = this.opts.role?.trim() || CONTROL_UI_OPERATOR_ROLE;
     const client = this.buildConnectClient();
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;
@@ -843,7 +850,9 @@ export class GatewayBrowserClient {
         deviceId: deviceIdentity.deviceId,
       });
     }
-    const scopes = resolveControlUiConnectScopes(selectedAuth);
+    const scopes = this.opts.scopes
+      ? [...this.opts.scopes]
+      : resolveControlUiConnectScopes(selectedAuth);
     const device = await buildGatewayConnectDevice({
       deviceIdentity,
       client,

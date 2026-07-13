@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
-import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
@@ -13,6 +12,7 @@ import {
 } from "./registry-state.js";
 import type { PluginHttpRouteRegistration, PluginRecord } from "./registry-types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
+import type { OpenClawPluginApi } from "./types.js";
 import type {
   OpenClawPluginChannelRegistration,
   OpenClawPluginHostedMediaResolver,
@@ -44,7 +44,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope },
+    opts?: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2],
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
@@ -76,6 +76,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         name: trimmed,
         handler: wrappedHandler,
         scope: normalizedScope.scope,
+        access: opts?.access,
       }),
     );
   };

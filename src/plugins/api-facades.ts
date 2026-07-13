@@ -3,7 +3,7 @@ import type { OpenClawPluginApi } from "./types.js";
 
 type PluginApiFacadeFields = Pick<
   OpenClawPluginApi,
-  "agent" | "lifecycle" | "runContext" | "session"
+  "agent" | "lifecycle" | "runContext" | "session" | "teams"
 >;
 /** Plugin API shape without nested facade namespaces attached. */
 export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof PluginApiFacadeFields>;
@@ -28,7 +28,9 @@ type PluginApiFacadeSource = Pick<
 /** Attaches nested facade namespaces to the flat plugin API implementation. */
 export function attachPluginApiFacades<T extends object>(
   api: T & PluginApiFacadeSource & Partial<PluginApiFacadeFields>,
+  facades: Pick<PluginApiFacadeFields, "teams">,
 ): T & PluginApiFacadeFields {
+  api.teams = facades.teams;
   api.session = {
     state: {
       registerSessionExtension: (...args) => api.registerSessionExtension(...args),
