@@ -107,6 +107,38 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
 
+  it("continues with core tools when bundle MCP startup fails", async () => {
+    hoisted.getOrCreateSessionMcpRuntimeMock.mockRejectedValueOnce(
+      new Error("MCP config unavailable"),
+    );
+
+    await expect(
+      createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:main",
+        tempPaths,
+        attemptOverrides: { disableTools: false },
+      }),
+    ).resolves.toBeDefined();
+
+    expect(hoisted.materializeBundleMcpToolsForRunMock).not.toHaveBeenCalled();
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalled();
+  });
+
+  it("preserves bundle MCP cancellation", async () => {
+    const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+    hoisted.getOrCreateSessionMcpRuntimeMock.mockRejectedValueOnce(abortError);
+
+    await expect(
+      createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:main",
+        tempPaths,
+        attemptOverrides: { disableTools: false },
+      }),
+    ).rejects.toBe(abortError);
+  });
+
   it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {
     // Sandboxed attempts already remap the workspace; accepting an extra cwd
     // override would make tool roots ambiguous.

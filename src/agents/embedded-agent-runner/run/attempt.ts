@@ -2,6 +2,7 @@
  * Orchestrates one embedded-agent attempt from prompt setup through stream result.
  */
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -152,6 +153,7 @@ import { copyToolTerminalPresentation } from "../../tool-terminal-presentation.j
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
 import type { NormalizedUsage } from "../../usage.js";
+import { isRunnerAbortError } from "../abort.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
@@ -745,25 +747,36 @@ export async function runEmbeddedAttempt(
       bundleMetadataSnapshot?.pluginIds === undefined
         ? bundleMetadataSnapshot?.manifestRegistry
         : undefined;
-    const bundleMcpSessionRuntime = bundleMcpEnabled
-      ? await getOrCreateSessionMcpRuntime({
+    if (bundleMcpEnabled) {
+      try {
+        const bundleMcpSessionRuntime = await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
           agentDir,
           cfg: params.config,
           manifestRegistry: bundleManifestRegistry,
-        })
-      : undefined;
-    bundleMcpRuntime = bundleMcpSessionRuntime
-      ? await materializeBundleMcpToolsForRun({
-          runtime: bundleMcpSessionRuntime,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-          ],
-        })
-      : undefined;
+        });
+        bundleMcpRuntime = bundleMcpSessionRuntime
+          ? await materializeBundleMcpToolsForRun({
+              runtime: bundleMcpSessionRuntime,
+              reservedToolNames: [
+                ...tools.map((tool) => tool.name),
+                ...(clientTools?.map((tool) => tool.function.name) ?? []),
+              ],
+            })
+          : undefined;
+      } catch (error) {
+        if (params.abortSignal?.aborted || isRunnerAbortError(error)) {
+          throw error;
+        }
+        const errorMessage = redactSensitiveUrlLikeString(formatErrorMessage(error));
+        log.warn(
+          `bundle-mcp tools unavailable for this attempt; continuing with core tools: ${errorMessage}`,
+        );
+        bundleMcpRuntime = undefined;
+      }
+    }
     const bundleLspEnabled =
       !params.forceRestartSafeTools &&
       shouldCreateBundleLspRuntimeForAttempt({

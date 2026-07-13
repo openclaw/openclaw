@@ -101,6 +101,8 @@ type AttemptSpawnWorkspaceHoisted = {
   resolveSkillsPromptForRunMock: UnknownMock;
   supportsModelToolsMock: Mock<(model?: unknown) => boolean>;
   getGlobalHookRunnerMock: Mock<() => unknown>;
+  getOrCreateSessionMcpRuntimeMock: AsyncUnknownMock;
+  materializeBundleMcpToolsForRunMock: AsyncUnknownMock;
   initializeGlobalHookRunnerMock: UnknownMock;
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
   prepareSessionManagerForRunMock: AsyncUnknownMock;
@@ -203,6 +205,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const resolveSkillsPromptForRunMock = vi.fn(() => "");
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
+  const getOrCreateSessionMcpRuntimeMock = vi.fn(async () => undefined);
+  const materializeBundleMcpToolsForRunMock = vi.fn(async () => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
   const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
   const prepareSessionManagerForRunMock = vi.fn(async (_params?: unknown) => undefined);
@@ -266,6 +270,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     resolveSkillsPromptForRunMock,
     supportsModelToolsMock,
     getGlobalHookRunnerMock,
+    getOrCreateSessionMcpRuntimeMock,
+    materializeBundleMcpToolsForRunMock,
     initializeGlobalHookRunnerMock,
     runContextEngineMaintenanceMock,
     prepareSessionManagerForRunMock,
@@ -688,8 +694,10 @@ vi.mock("../../agent-tools.js", () => ({
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => undefined,
-  getOrCreateSessionMcpRuntime: async () => undefined,
-  materializeBundleMcpToolsForRun: async () => undefined,
+  getOrCreateSessionMcpRuntime: (...args: unknown[]) =>
+    hoisted.getOrCreateSessionMcpRuntimeMock(...args),
+  materializeBundleMcpToolsForRun: (...args: unknown[]) =>
+    hoisted.materializeBundleMcpToolsForRunMock(...args),
   retireSessionMcpRuntime: async () => true,
 }));
 
@@ -1095,6 +1103,8 @@ export function resetEmbeddedAttemptHarness(
   hoisted.resolveSkillsPromptForRunMock.mockReset().mockReturnValue("");
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
+  hoisted.getOrCreateSessionMcpRuntimeMock.mockReset().mockResolvedValue(undefined);
+  hoisted.materializeBundleMcpToolsForRunMock.mockReset().mockResolvedValue(undefined);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.prepareSessionManagerForRunMock.mockReset().mockResolvedValue(undefined);
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
