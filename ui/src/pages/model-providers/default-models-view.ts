@@ -4,7 +4,7 @@ import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
 
-export type DefaultModelsViewProps = {
+type DefaultModelsViewProps = {
   models: ModelPickerEntry[];
   selection: DefaultModelSelection;
   canMutate: boolean;
