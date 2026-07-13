@@ -404,7 +404,7 @@ function createCronPatchObjectSchema(): TSchema {
 // recognised flat key in cron-tool-canonicalize.ts (CRON_FLAT_PAYLOAD_KEYS /
 // CRON_FLAT_SCHEDULE_KEYS); otherwise the canonicalizer silently drops it.
 // cron-tool.schema.test.ts guards that invariant.
-export function createCronFlatJobSchemaProperties() {
+function createCronFlatJobSchemaProperties() {
   return {
     name: Type.Optional(
       Type.String({

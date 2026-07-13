@@ -3,12 +3,8 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { isCronRecoverableObjectKey } from "./cron-tool-canonicalize.js";
-import {
-  createCronFlatJobSchemaProperties,
-  createCronTool,
-  createCronToolSchema,
-} from "./cron-tool.js";
+import { recoverCronObjectFromFlatParams } from "./cron-tool-canonicalize.js";
+import { createCronTool, createCronToolSchema } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
 function keysAt(schema: Record<string, unknown>, path: string): string[] {
@@ -143,12 +139,36 @@ describe("createCronToolSchema", () => {
   // Drift guard: every flat field the schema advertises must be a key the
   // canonicalizer recovers into the nested job/patch shape. A field that is not
   // recoverable would be silently dropped, so a model would set it with no
-  // effect. `text` is the flat systemEvent field added outside the helper.
+  // effect. Keys that route the call itself (action, job/patch targeting,
+  // gateway options, wake/run/list options) are the only advertised keys the
+  // canonicalizer may ignore; adding one here needs the same scrutiny.
   it("only advertises flat fields the canonicalizer can recover", () => {
-    const flatFields = [...Object.keys(createCronFlatJobSchemaProperties()), "text"];
+    const callRoutingFields = new Set([
+      "action",
+      "contextMessages",
+      "gatewayToken",
+      "gatewayUrl",
+      "id",
+      "includeDisabled",
+      "job",
+      "jobId",
+      "mode",
+      "patch",
+      "runMode",
+      "timeoutMs",
+    ]);
+    const topLevelFields = Object.keys(
+      (schemaRecord["properties"] ?? {}) as Record<string, unknown>,
+    );
+    const flatFields = topLevelFields.filter((field) => !callRoutingFields.has(field));
+    expect(flatFields.length).toBeGreaterThan(0);
     for (const field of flatFields) {
-      expect(propertyAt(schemaRecord, field)).toBeDefined();
-      expect(isCronRecoverableObjectKey(field)).toBe(true);
+      // `found` reflects key recognition before value normalization, so a
+      // placeholder value is enough to prove the key is not dropped.
+      expect({ field, found: recoverCronObjectFromFlatParams({ [field]: true }).found }).toEqual({
+        field,
+        found: true,
+      });
     }
   });
 

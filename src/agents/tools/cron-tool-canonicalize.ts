@@ -338,12 +338,3 @@ export function hasCronCreateSignal(value: Record<string, unknown>): boolean {
     value.text !== undefined
   );
 }
-
-/**
- * Whether a top-level key is recovered into the nested job/patch shape. The
- * cron tool's flat schema must only advertise recoverable keys; the schema test
- * uses this to guard that the schema and canonicalizer cannot drift apart.
- */
-export function isCronRecoverableObjectKey(key: string): boolean {
-  return CRON_RECOVERABLE_OBJECT_KEYS.has(key);
-}
