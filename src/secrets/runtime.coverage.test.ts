@@ -13,8 +13,46 @@ import type {
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
 
+const COVERAGE_WEB_PROVIDER_PLUGIN_IDS = vi.hoisted(() => ({
+  search: [
+    "brave",
+    "exa",
+    "firecrawl",
+    "google",
+    "minimax",
+    "moonshot",
+    "parallel",
+    "perplexity",
+    "tavily",
+    "xai",
+  ],
+  fetch: ["firecrawl"],
+}));
+
+vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProviders: () => [],
+}));
+
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecordsSync: () => ({}),
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: () => {
+    throw new Error("runtime coverage expects bundled channel secret contracts");
+  },
+}));
+
+vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
+  resolveManifestContractPluginIds: ({ contract }: { contract: string }) => {
+    if (contract === "webSearchProviders") {
+      return [...COVERAGE_WEB_PROVIDER_PLUGIN_IDS.search];
+    }
+    if (contract === "webFetchProviders") {
+      return [...COVERAGE_WEB_PROVIDER_PLUGIN_IDS.fetch];
+    }
+    return [];
+  },
 }));
 
 function createCoverageWebSearchProvider(params: {
@@ -135,6 +173,12 @@ const COVERAGE_WEB_SEARCH_PROVIDERS = new Map(
       id: "minimax",
       envVar: "MINIMAX_API_KEY",
       order: 70,
+    }),
+    createCoverageWebSearchProvider({
+      pluginId: "parallel",
+      id: "parallel",
+      envVar: "PARALLEL_API_KEY",
+      order: 75,
     }),
     createCoverageWebSearchProvider({
       pluginId: "tavily",
@@ -609,6 +653,9 @@ function applyConfigForOpenClawTarget(
   if (entry.id === "plugins.entries.google.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
   }
+  if (entry.id === "plugins.entries.parallel.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "parallel");
+  }
   if (entry.id === "plugins.entries.xai.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");
   }
@@ -623,6 +670,9 @@ function applyConfigForOpenClawTarget(
   }
   if (entry.id === "plugins.entries.minimax.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "minimax");
+  }
+  if (entry.id === "plugins.entries.parallel.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "parallel");
   }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
@@ -863,6 +913,14 @@ describe("secrets runtime target coverage", () => {
     );
     if (googleChatBatch) {
       await expectOpenClawCoverageBatchResolved("openclaw.json core", googleChatBatch);
+    }
+    const webProviderBatch = OPENCLAW_PLUGIN_COVERAGE_BATCHES.find((batch) =>
+      batch.some((entry) => entry.id.includes(".config.webSearch.")),
+    );
+    if (webProviderBatch) {
+      // Warm the shared plugin snapshot once; individual target assertions then
+      // measure resolution work instead of one-time manifest discovery.
+      await expectOpenClawCoverageBatchResolved("openclaw.json plugins", webProviderBatch);
     }
   });
 

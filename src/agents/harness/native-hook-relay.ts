@@ -24,6 +24,8 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
@@ -36,6 +38,7 @@ import {
   hasBeforeToolCallPolicy,
   requestDeferredPluginToolApproval,
   runBeforeToolCallHook,
+  type BeforeToolCallFailureDisposition,
   type DeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -91,6 +94,7 @@ export type NativeHookRelayProcessResponse = {
   stdout: string;
   stderr: string;
   exitCode: number;
+  failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
 export type NativeHookRelayRegistration = {
@@ -107,6 +111,12 @@ export type NativeHookRelayRegistration = {
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
   signal?: AbortSignal;
+  onPreToolUseFailure?: (failure: {
+    toolName: string;
+    toolCallId: string;
+    disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">;
+    durationMs: number;
+  }) => void | Promise<void>;
 };
 
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
@@ -135,6 +145,7 @@ export type RegisterNativeHookRelayParams = {
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
+  onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };
 
 export type NativeHookRelayCommandOptions = {
@@ -183,7 +194,10 @@ type NativeHookRelayProviderAdapter = {
   readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
   readToolResponse: (rawPayload: JsonValue) => unknown;
   renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
-  renderPreToolUseBlockResponse: (reason: string) => NativeHookRelayProcessResponse;
+  renderPreToolUseBlockResponse: (
+    reason: string,
+    failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">,
+  ) => NativeHookRelayProcessResponse;
   renderBeforeAgentFinalizeReviseResponse: (reason: string) => NativeHookRelayProcessResponse;
   renderBeforeAgentFinalizeStopResponse: (reason?: string) => NativeHookRelayProcessResponse;
   renderPermissionDecisionResponse: (
@@ -219,7 +233,6 @@ const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
 const NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS = 250;
 const NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR =
   "native hook relay bridge stale registration";
-const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 function resolveNativeHookRelayExpiresAtMs(ttlMs: number | undefined): number | undefined {
@@ -245,6 +258,7 @@ type NativeHookRelaySharedState = {
 
 type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
+  preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
 };
 
 type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
@@ -313,6 +327,7 @@ export type NativeHookRelayDeferredApprovalOutcome =
       handled: true;
       outcome: "denied";
       reason: string;
+      failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
     };
 
 type NativeHookRelayBridgeRegistration = {
@@ -361,7 +376,7 @@ const nativeHookRelayProviderAdapters: Record<
       // Codex treats empty stdout plus exit 0 as no decision/no additional context.
       return { stdout: "", stderr: "", exitCode: 0 };
     },
-    renderPreToolUseBlockResponse: (reason) => ({
+    renderPreToolUseBlockResponse: (reason, failureDisposition) => ({
       stdout: `${JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -371,6 +386,7 @@ const nativeHookRelayProviderAdapters: Record<
       })}\n`,
       stderr: "",
       exitCode: 0,
+      ...(failureDisposition ? { failureDisposition } : {}),
     }),
     renderBeforeAgentFinalizeReviseResponse: (reason) => ({
       stdout: `${JSON.stringify({
@@ -437,7 +453,9 @@ export function registerNativeHookRelay(
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
     expiresAtMs,
+    preToolUseFailureProjections: new Map(),
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
   };
   relays.set(relayId, registration);
   registerNativeHookRelayBridge(registration);
@@ -474,7 +492,7 @@ export function registerNativeHookRelay(
       current.expiresAtMs = renewedExpiresAtMs;
       handle.expiresAtMs = renewedExpiresAtMs;
       const bridge = relayBridges.get(relayId);
-      if (bridge) {
+      if (bridge && bridge.server.listening) {
         writeNativeHookRelayBridgeRecordForRegistration(current, bridge);
       }
     },
@@ -656,11 +674,72 @@ export async function invokeNativeHookRelay(
     rawPayload: params.rawPayload,
   });
   recordNativeHookRelayInvocation(normalized);
-  return processNativeHookRelayInvocation({
+  const startedAt = Date.now();
+  const response = await processNativeHookRelayInvocation({
     registration,
     invocation: normalized,
     adapter: getNativeHookRelayProviderAdapter(provider),
   });
+  if (
+    normalized.toolUseId &&
+    response.failureDisposition &&
+    readNativeHookRelayApprovalMode(normalized.rawPayload) !== "report"
+  ) {
+    projectNativeHookRelayPreToolUseFailure(registration, {
+      toolName: normalizeNativeHookToolName(normalized.toolName),
+      toolCallId: normalized.toolUseId,
+      disposition: response.failureDisposition,
+      durationMs: Date.now() - startedAt,
+    });
+  }
+  return response;
+}
+
+function projectNativeHookRelayPreToolUseFailure(
+  registration: ActiveNativeHookRelayRegistration,
+  failure: Parameters<NonNullable<NativeHookRelayRegistration["onPreToolUseFailure"]>>[0],
+): void {
+  const callback = registration.onPreToolUseFailure;
+  if (!callback) {
+    return;
+  }
+  if (registration.preToolUseFailureProjections.has(failure.toolCallId)) {
+    return;
+  }
+  const record = {
+    promise: Promise.resolve().then(() => callback(failure)),
+    settled: false,
+  };
+  registration.preToolUseFailureProjections.set(failure.toolCallId, record);
+  void record.promise.then(
+    () => {
+      record.settled = true;
+    },
+    (error: unknown) => {
+      record.settled = true;
+      if (registration.preToolUseFailureProjections.get(failure.toolCallId) === record) {
+        registration.preToolUseFailureProjections.delete(failure.toolCallId);
+      }
+      log.debug("native pre-tool failure projection failed", {
+        error,
+        relayId: registration.relayId,
+        toolCallId: failure.toolCallId,
+      });
+    },
+  );
+  if (registration.preToolUseFailureProjections.size > MAX_NATIVE_HOOK_RELAY_INVOCATIONS) {
+    let oldestToolCallId: string | undefined;
+    for (const [toolCallId, candidate] of registration.preToolUseFailureProjections) {
+      oldestToolCallId ??= toolCallId;
+      if (candidate.settled) {
+        registration.preToolUseFailureProjections.delete(toolCallId);
+        return;
+      }
+    }
+    if (oldestToolCallId) {
+      registration.preToolUseFailureProjections.delete(oldestToolCallId);
+    }
+  }
 }
 
 export function hasNativeHookRelayInvocation(params: {
@@ -716,7 +795,14 @@ async function resolveNativeHookRelayPreToolUseApproval(
     signal,
   });
   if (outcome.blocked) {
-    return { handled: true, outcome: "denied", reason: outcome.reason };
+    return {
+      handled: true,
+      outcome: "denied",
+      reason: outcome.reason,
+      ...(outcome.kind === "failure" && outcome.disposition !== "blocked"
+        ? { failureDisposition: outcome.disposition }
+        : {}),
+    };
   }
   if (
     nativeHookRelayParamsWereRewritten(pendingApproval.originalParamsFingerprint, outcome.params)
@@ -992,9 +1078,6 @@ function registerNativeHookRelayBridge(registration: ActiveNativeHookRelayRegist
     }
     writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
   });
-  if (relayBridges.get(registration.relayId) === bridge) {
-    writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
-  }
   server.unref();
 }
 
@@ -1404,11 +1487,18 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-      ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+      ...(params.invocation.cwd
+        ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
+        : {}),
     },
   });
   if (outcome.blocked) {
-    return params.adapter.renderPreToolUseBlockResponse(outcome.reason);
+    return params.adapter.renderPreToolUseBlockResponse(
+      outcome.reason,
+      outcome.kind === "failure" && outcome.disposition !== "blocked"
+        ? outcome.disposition
+        : undefined,
+    );
   }
   if (outcome.deferredApproval) {
     if (
@@ -1680,7 +1770,10 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
   for (const key of keys) {
     hash.update(JSON.stringify(key));
     hash.update(":");
-    updateJsonHash(hash, value[key]);
+    const item = value[key];
+    if (item !== undefined) {
+      updateJsonHash(hash, item);
+    }
     hash.update(",");
   }
   if (truncated) {
@@ -1694,7 +1787,10 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
       }
       hash.update(JSON.stringify(key));
       hash.update(":");
-      updateJsonHash(hash, value[key]);
+      const item = value[key];
+      if (item !== undefined) {
+        updateJsonHash(hash, item);
+      }
       hash.update(",");
     }
   }
@@ -1819,7 +1915,10 @@ function snapshotJsonValue(value: JsonValue, state: { remainingStringLength: num
   const snapshot: Record<string, JsonValue> = {};
   const keys = Object.keys(value);
   for (const key of keys.slice(0, MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS)) {
-    snapshot[snapshotString(key, state)] = snapshotJsonValue(value[key], state);
+    const item = value[key];
+    if (item !== undefined) {
+      snapshot[snapshotString(key, state)] = snapshotJsonValue(item, state);
+    }
   }
   if (keys.length > MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS) {
     snapshot["[truncated]"] = keys.length - MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS;
@@ -1836,11 +1935,14 @@ function snapshotString(value: string, state: { remainingStringLength: number })
     MAX_NATIVE_HOOK_RELAY_HISTORY_STRING_LENGTH,
     state.remainingStringLength,
   );
-  state.remainingStringLength -= limit;
   if (limit >= value.length) {
+    state.remainingStringLength -= limit;
     return value;
   }
-  return `${value.slice(0, limit)}...[truncated]`;
+  const prefix = truncateUtf16Safe(value, limit);
+  // Charge the retained prefix; a safe boundary may back up one code unit.
+  state.remainingStringLength -= prefix.length;
+  return `${prefix}...[truncated]`;
 }
 
 function normalizeNativeHookInvocation(params: {
@@ -2030,7 +2132,9 @@ async function requestNativeHookRelayPermissionApproval(
       signal: request.signal,
       timeoutMs,
     });
-    decision = waitResult?.decision;
+    // Bind the verdict to the request that parked this call. A stale or
+    // misrouted reply must never release a different tool gate.
+    decision = waitResult?.id === approvalId ? waitResult.decision : undefined;
   }
   if (decision === PluginApprovalResolutions.ALLOW_ONCE) {
     return "allow";
@@ -2104,7 +2208,7 @@ function formatToolInputPreview(toolInput: Record<string, unknown>): string | un
 
 function sanitizeApprovalText(value: string): string {
   let sanitized = "";
-  for (const char of value.replace(ANSI_ESCAPE_PATTERN, "")) {
+  for (const char of stripAnsi(value)) {
     const codePoint = char.codePointAt(0);
     sanitized += codePoint != null && isUnsafeApprovalCodePoint(codePoint) ? " " : char;
   }
@@ -2134,7 +2238,7 @@ function truncateText(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value;
   }
-  return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+  return `${truncateUtf16Safe(value, Math.max(0, maxLength - 3))}...`;
 }
 
 function resolveOpenClawCliExecutable(): string {
@@ -2380,4 +2484,3 @@ export const testing = {
     nativeHookRelayDeferredToolApprovalRequester = requester;
   },
 } as const;
-export { testing as __testing };

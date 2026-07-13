@@ -276,6 +276,14 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/bindings/current-conversations.json",
       hasLegacy: false,
     },
+    channelPairing: {
+      sourceDir: "/tmp/oauth",
+      files: [],
+      knownChannelIds: [],
+      defaultAccountIds: {},
+      accountIds: {},
+      hasLegacy: false,
+    },
     execApprovals: {
       sourcePath: "/tmp/state/exec-approvals.legacy.json",
       targetPath: "/tmp/state/exec-approvals.json",
@@ -286,6 +294,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       plans: [],
     },
     warnings: [],
+    notices: [],
     preview: params?.preview ?? [],
   };
 }
@@ -420,10 +429,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   }),
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot,
-  resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
-}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRoot,
+  };
+});
 
 vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate,

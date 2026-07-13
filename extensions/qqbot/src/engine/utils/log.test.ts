@@ -18,6 +18,14 @@ describe("QQBot debug logging", () => {
     expect(sanitizeDebugLogValue("before\nforged\r\tentry")).toBe("before forged entry");
   });
 
+  it.each([
+    { name: "drops a pair crossing the cap", prefixLength: 4095, expectedEmoji: "" },
+    { name: "keeps a pair ending at the cap", prefixLength: 4094, expectedEmoji: "🎉" },
+  ])("$name", ({ prefixLength, expectedEmoji }) => {
+    const prefix = "x".repeat(prefixLength);
+    expect(sanitizeDebugLogValue(`${prefix}🎉tail`)).toBe(`${prefix}${expectedEmoji}...`);
+  });
+
   it("sanitizes arguments before debug console output", () => {
     process.env.QQBOT_DEBUG = "1";
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});

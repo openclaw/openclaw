@@ -8,10 +8,17 @@ import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
+import {
+  OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV,
+  OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV,
+  OPENCLAW_TOOLS_MCP_TOOLS_ENV,
+} from "../../mcp/openclaw-tools-serve-config.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
+import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import {
   findClaudeMcpConfigPath,
@@ -62,19 +69,38 @@ function normalizeOpenClawLoopbackUrl(value: string): string {
   return `${match[1]}:<openclaw-loopback>${match[2]}`;
 }
 
+function canonicalizeCrestodianTurnStateForResume(
+  server: BundleMcpConfig["mcpServers"][string],
+): BundleMcpConfig["mcpServers"][string] {
+  if (!isRecord(server.env) || server.env[OPENCLAW_TOOLS_MCP_TOOLS_ENV] !== "crestodian") {
+    return server;
+  }
+  // The host reissues approval authority through a fresh stdio server each turn.
+  // Its values may change while tool topology and the native transcript stay safe to resume.
+  return {
+    ...server,
+    env: {
+      ...server.env,
+      [OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV]: "<crestodian-turn-state>",
+      [OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV]: "<crestodian-turn-state>",
+    },
+  };
+}
+
 function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
   // The OpenClaw loopback MCP port changes across runs. Replace it before
   // hashing so resume compatibility tracks config shape, not ephemeral ports.
   const canonicalServers = Object.fromEntries(
     Object.entries(config.mcpServers).map(([name, server]) => {
-      if (name !== "openclaw" || typeof server.url !== "string") {
-        return [name, sortJsonValue(server)];
+      const canonicalServer = canonicalizeCrestodianTurnStateForResume(server);
+      if (name !== "openclaw" || typeof canonicalServer.url !== "string") {
+        return [name, sortJsonValue(canonicalServer)];
       }
       return [
         name,
         sortJsonValue({
-          ...server,
-          url: normalizeOpenClawLoopbackUrl(server.url),
+          ...canonicalServer,
+          url: normalizeOpenClawLoopbackUrl(canonicalServer.url),
         }),
       ];
     }),
@@ -92,7 +118,8 @@ function resolveOpenClawMcpEnvTemplates(value: unknown, env?: Record<string, str
   }
   if (typeof value === "string") {
     return value.replace(OPENCLAW_MCP_ENV_TEMPLATE_PATTERN, (match, name: string) => {
-      return Object.hasOwn(env, name) ? env[name] : match;
+      const replacement = env[name];
+      return Object.hasOwn(env, name) && replacement !== undefined ? replacement : match;
     });
   }
   if (Array.isArray(value)) {
@@ -181,7 +208,14 @@ export async function prepareCliBundleMcpConfig(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
+  agentDir?: string;
   additionalConfig?: BundleMcpConfig;
+  /**
+   * Serve exactly these servers, skipping user/plugin/additional merges.
+   * Ring-zero Crestodian runs use this so the CLI harness sees only the
+   * crestodian MCP server instead of the normal openclaw tool surface.
+   */
+  exclusiveConfig?: BundleMcpConfig;
   env?: Record<string, string>;
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
@@ -190,6 +224,14 @@ export async function prepareCliBundleMcpConfig(params: {
   }
 
   const mode = resolveBundleMcpMode(params.mode);
+  if (params.exclusiveConfig) {
+    return await prepareModeSpecificBundleMcpConfig({
+      mode,
+      backend: params.backend,
+      mergedConfig: params.exclusiveConfig,
+      env: params.env,
+    });
+  }
   const resumeMcpConfigPaths =
     mode === "claude-config-file" ? findClaudeMcpConfigPaths(params.backend.resumeArgs) : [];
   const existingMcpConfigPaths =
@@ -224,12 +266,23 @@ export async function prepareCliBundleMcpConfig(params: {
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
+  const resolvedBearerConfig = await resolveMcpBearerBundleConfig({
+    config: mergedConfig,
+    cfg: params.config,
+    agentDir: params.agentDir,
+    env: params.env,
+    omitUnavailableOAuthServers: true,
+    onServerUnavailable: (serverName, error) =>
+      params.warn?.(
+        `bundle MCP skipped unavailable OAuth server ${serverName}: ${formatErrorMessage(error)}`,
+      ),
+  });
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
-    mergedConfig,
-    env: params.env,
+    mergedConfig: resolvedBearerConfig.config,
+    env: resolvedBearerConfig.env,
   });
 }
 

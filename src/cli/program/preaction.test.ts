@@ -146,6 +146,19 @@ describe("registerPreActionHooks", () => {
       .command("status")
       .option("--json")
       .action(() => {});
+    const acp = programLocal
+      .command("acp")
+      .option("--token <token>")
+      .option("--verbose")
+      .action(() => {});
+    acp
+      .command("client")
+      .option("--cwd <dir>")
+      .action(() => {});
+    programLocal
+      .command("mcp")
+      .command("serve")
+      .action(() => {});
     const gateway = programLocal
       .command("gateway")
       .option("--force")
@@ -607,6 +620,45 @@ describe("registerPreActionHooks", () => {
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
+  it("uses the Commander action path for protocol stdout ownership", async () => {
+    await runPreAction({
+      parseArgv: ["acp"],
+      processArgv: ["node", "openclaw", "acp", "--token", "-secret"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["acp"],
+      suppressDoctorStdout: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["acp", "client"],
+      processArgv: ["node", "openclaw", "acp", "--verbose", "client"],
+    });
+
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["acp", "client"],
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["mcp", "serve"],
+      processArgv: ["node", "openclaw", "mcp", "serve"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["mcp", "serve"],
+      suppressDoctorStdout: true,
+    });
+  });
+
   it("does not preload plugins for agents list JSON output", async () => {
     await runPreAction({
       parseArgv: ["agents", "list"],
@@ -661,6 +713,25 @@ describe("registerPreActionHooks", () => {
     await runPreAction({
       parseArgv: ["backup", "create"],
       processArgv: ["node", "openclaw", "backup", "create", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("bypasses config guard for SQLite snapshot recovery commands", async () => {
+    await runPreAction({
+      parseArgv: ["backup", "sqlite", "restore"],
+      processArgv: [
+        "node",
+        "openclaw",
+        "backup",
+        "sqlite",
+        "restore",
+        "/tmp/snapshot",
+        "--target",
+        "/tmp/restore.sqlite",
+      ],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();

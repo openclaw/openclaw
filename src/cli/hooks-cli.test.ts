@@ -1,4 +1,5 @@
 // Hooks CLI tests cover hook command registration and output behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
 import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.js";
@@ -20,6 +21,7 @@ const report: HookStatusReport = {
       emoji: "💾",
       homepage: "https://docs.openclaw.ai/automation/hooks#session-memory",
       events: ["command:new"],
+      unknownEvents: [],
       always: false,
       enabledByConfig: true,
       requirementsSatisfied: true,
@@ -48,6 +50,7 @@ function createPluginManagedHookReport(): HookStatusReport {
         emoji: "🔗",
         homepage: undefined,
         events: ["command:new"],
+        unknownEvents: [],
         always: false,
         enabledByConfig: true,
         requirementsSatisfied: true,
@@ -77,6 +80,24 @@ describe("hooks cli formatting", () => {
 
     const output = formatHooksList(pluginReport, {});
     expect(output).toContain("plugin:voice-call");
+  });
+
+  it("warns about unknown events in hook info", () => {
+    const typoReport: HookStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedHooksDir: "/tmp/hooks",
+      hooks: [
+        {
+          ...expectDefined(report.hooks[0], "report.hooks[0] test invariant"),
+          name: "typo-hook",
+          events: ["command:nwe", "command:new"],
+          unknownEvents: ["command:nwe"],
+        },
+      ],
+    };
+
+    const output = formatHookInfo(typoReport, "typo-hook", {});
+    expect(output).toContain("Event not emitted by core (likely typo): command:nwe");
   });
 
   it("shows plugin-managed details in hook info", () => {

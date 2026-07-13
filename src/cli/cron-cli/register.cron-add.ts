@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -26,6 +27,7 @@ import {
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
+import { readCronTriggerScript } from "./trigger-options.js";
 
 export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
@@ -85,6 +87,8 @@ export function registerCronAddCommand(cron: Command) {
       .argument("[scheduleOrName]", "Schedule string, or job name when using --at/--every/--cron")
       .argument("[message]", "Agent message when using a positional schedule")
       .option("--name <name>", "Job name")
+      .option("--declaration-key <key>", "Idempotent declaration identity key")
+      .option("--display-name <name>", "Human-readable declarative job label")
       .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
@@ -111,6 +115,8 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
+      .option("--trigger-script <path|->", "Condition script file, or - for stdin")
+      .option("--trigger-once", "Disable after the first successful triggered run", false)
       .option("--system-event <text>", "System event payload (main session)")
       .option("--message <text>", "Agent message payload")
       .option("--command <shell>", "Command payload run as sh -lc <shell> on the Gateway")
@@ -122,10 +128,7 @@ export function registerCronAddCommand(cron: Command) {
         (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
       )
       .option("--command-input <text>", "stdin for command payloads")
-      .option(
-        "--thinking <level>",
-        "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
-      )
+      .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--fallbacks <list>", "Fallback model list for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
@@ -370,8 +373,26 @@ export function registerCronAddCommand(cron: Command) {
             }
 
             const description = normalizeOptionalString(opts.description);
+            const declarationKey = normalizeOptionalString(opts.declarationKey);
+            if (typeof opts.declarationKey === "string" && !declarationKey) {
+              throw new Error("--declaration-key must not be blank");
+            }
+            const displayName = normalizeOptionalString(opts.displayName);
+            if (typeof opts.displayName === "string" && !displayName) {
+              throw new Error("--display-name must not be blank");
+            }
 
             const sessionKey = normalizeOptionalString(opts.sessionKey);
+            const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
+            if (opts.triggerOnce && !triggerScriptPath) {
+              throw new Error("--trigger-once requires --trigger-script");
+            }
+            const trigger = triggerScriptPath
+              ? {
+                  script: await readCronTriggerScript(triggerScriptPath),
+                  ...(opts.triggerOnce ? { once: true } : {}),
+                }
+              : undefined;
 
             if ((payload.kind === "agentTurn" || payload.kind === "command") && !agentId) {
               defaultRuntime.error(
@@ -384,12 +405,17 @@ export function registerCronAddCommand(cron: Command) {
 
             const params = {
               name,
+              declarationKey,
+              displayName,
               description,
-              enabled: !opts.disabled,
+              ...(declarationKey && optionSource("disabled") !== "cli"
+                ? {}
+                : { enabled: !opts.disabled }),
               deleteAfterRun: opts.deleteAfterRun ? true : opts.keepAfterRun ? false : undefined,
               agentId,
               sessionKey,
               schedule,
+              trigger,
               sessionTarget,
               wakeMode,
               payload,

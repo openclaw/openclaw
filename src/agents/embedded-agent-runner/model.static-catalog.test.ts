@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const manifestMocks = vi.hoisted(() => ({
+  getCurrentPluginMetadataSnapshot: vi.fn(),
   listOpenClawPluginManifestMetadata: vi.fn(),
   loadPluginManifest: vi.fn(),
   loadPluginManifestRegistry: vi.fn(),
@@ -17,6 +18,10 @@ const providerMocks = vi.hoisted(() => ({
 
 vi.mock("../../plugins/manifest-metadata-scan.js", () => ({
   listOpenClawPluginManifestMetadata: manifestMocks.listOpenClawPluginManifestMetadata,
+}));
+
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: manifestMocks.getCurrentPluginMetadataSnapshot,
 }));
 
 vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
@@ -45,6 +50,7 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
 
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
+  canonicalizeManifestModelCatalogProviderAlias,
   createBundledProviderStaticCatalogContextResolver,
   createBundledProviderStaticCatalogModelResolver,
   createBundledStaticCatalogModelResolver,
@@ -116,6 +122,7 @@ function createMistralManifestPlugin(overrides?: {
 }
 
 beforeEach(() => {
+  manifestMocks.getCurrentPluginMetadataSnapshot.mockReset();
   manifestMocks.listOpenClawPluginManifestMetadata.mockReset();
   manifestMocks.loadPluginManifest.mockReset();
   manifestMocks.loadPluginManifestRegistry.mockReset();
@@ -126,6 +133,7 @@ beforeEach(() => {
   providerMocks.resolveRuntimePluginDiscoveryProviders.mockReset();
   providerMocks.runProviderStaticCatalog.mockReset();
   setManifestPlugins([]);
+  manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
   manifestMocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [] });
   providerMocks.resolveActivatableProviderOwnerPluginIds.mockImplementation(
     ({ pluginIds }: { pluginIds: string[] }) => pluginIds,
@@ -135,6 +143,100 @@ beforeEach(() => {
   providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
   providerMocks.runProviderStaticCatalog.mockResolvedValue(undefined);
   providerMocks.normalizePluginDiscoveryResult.mockReturnValue({});
+});
+
+describe("canonicalizeManifestModelCatalogProviderAlias", () => {
+  it("canonicalizes unambiguous manifest-owned aliases", () => {
+    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          providers: ["moonshot"],
+          modelCatalog: {
+            aliases: {
+              "moonshot-ai": { provider: "moonshot" },
+              moonshotai: { provider: "moonshot" },
+            },
+          },
+        },
+      ],
+    });
+
+    for (const provider of ["moonshotai", "moonshot-ai"]) {
+      expect(canonicalizeManifestModelCatalogProviderAlias({ provider })).toBe("moonshot");
+    }
+  });
+
+  it("reuses the current plugin metadata snapshot for repeated alias lookups", () => {
+    const plugins = [
+      {
+        providers: ["moonshot"],
+        modelCatalog: {
+          aliases: {
+            "moonshot-ai": { provider: "moonshot" },
+          },
+        },
+      },
+    ];
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({ plugins });
+
+    expect(canonicalizeManifestModelCatalogProviderAlias({ provider: "moonshot-ai" })).toBe(
+      "moonshot",
+    );
+    expect(canonicalizeManifestModelCatalogProviderAlias({ provider: "moonshot-ai" })).toBe(
+      "moonshot",
+    );
+    expect(manifestMocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenLastCalledWith({
+      config: undefined,
+      env: process.env,
+      requireDefaultDiscoveryContext: true,
+      workspaceDir: undefined,
+    });
+  });
+
+  it("requests an exact configured workspace snapshot", () => {
+    const cfg = { plugins: { allow: ["openai"] } };
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({ plugins: [] });
+
+    canonicalizeManifestModelCatalogProviderAlias({
+      provider: "openai",
+      cfg,
+      workspaceDir: "/workspace",
+    });
+
+    expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+      config: cfg,
+      env: process.env,
+      workspaceDir: "/workspace",
+    });
+  });
+
+  it("keeps custom environments on their own manifest registry context", () => {
+    const env = { HOME: "/custom-home" };
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({ plugins: [] });
+    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          providers: ["moonshot"],
+          modelCatalog: {
+            aliases: {
+              "moonshot-ai": { provider: "moonshot" },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(canonicalizeManifestModelCatalogProviderAlias({ provider: "moonshot-ai", env })).toBe(
+      "moonshot",
+    );
+    expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(manifestMocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
+      config: undefined,
+      env,
+      workspaceDir: undefined,
+    });
+  });
 });
 
 describe("resolveBundledStaticCatalogModel", () => {

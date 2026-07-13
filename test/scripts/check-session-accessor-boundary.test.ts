@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   allowedSessionStoreRuntimeFileBackedCompatExports,
   collectSessionStoreRuntimeFileBackedCompatExports,
+  compareSessionAccessorDebt,
   findGatewaySessionCreateLifecycleViolations,
   findEmbeddedAgentSessionTargetViolations,
   findMemoryHostSessionCorpusBoundaryViolations,
@@ -11,6 +12,7 @@ import {
   findSessionLifecycleCleanupBoundaryViolations,
   findSessionStoreRuntimeFileBackedCompatExportViolations,
   findTranscriptWriterBoundaryViolations,
+  formatSessionAccessorDebtImprovements,
   migratedBundledPluginSessionAccessorFiles,
   migratedEmbeddedAgentSessionTargetFiles,
   migratedMemoryHostSessionCorpusFiles,
@@ -26,6 +28,8 @@ describe("session accessor boundary guard", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([
         "packages/memory-host-sdk/src/host/session-files.ts",
+        "src/acp/control-plane/manager.background-task.ts",
+        "src/acp/control-plane/manager.core.ts",
         "src/acp/runtime/session-meta.ts",
         "src/agents/acp-spawn.ts",
         "src/agents/auth-profiles/session-override.ts",
@@ -52,6 +56,8 @@ describe("session accessor boundary guard", () => {
         "src/commands/status.summary.ts",
         "src/commands/tasks.ts",
         "src/config/sessions/combined-store-gateway.ts",
+        "src/config/sessions/delivery-info.ts",
+        "src/config/sessions/goals.ts",
         "src/cron/isolated-agent/delivery-target.ts",
         "src/cron/service/timer.ts",
         "src/gateway/session-compaction-checkpoints.ts",
@@ -118,8 +124,10 @@ describe("session accessor boundary guard", () => {
         "src/agents/command/session-store.ts",
         "src/agents/embedded-agent-runner/run.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
+        "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
         "src/agents/live-model-switch.ts",
         "src/agents/main-session-restart-recovery.ts",
+        "src/agents/session-suspension.ts",
         "src/auto-reply/reply/abort.ts",
         "src/agents/subagent-control.ts",
         "src/agents/subagent-registry-helpers.ts",
@@ -146,11 +154,16 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/session-usage.ts",
         "src/commands/tasks.ts",
         "src/config/sessions/cleanup-service.ts",
+        "src/config/sessions/goals.ts",
         "src/gateway/boot.ts",
+        "src/gateway/server-methods/chat.ts",
+        "src/gateway/server-methods/sessions.ts",
         "src/gateway/server-node-events.ts",
         "src/gateway/session-compaction-checkpoints.ts",
+        "src/infra/outbound/outbound-session.ts",
         "src/plugins/host-hook-cleanup.ts",
         "src/plugins/host-hook-state.ts",
+        "src/plugins/runtime/runtime-channel.ts",
         "src/tui/embedded-backend.ts",
       ]),
     );
@@ -161,6 +174,7 @@ describe("session accessor boundary guard", () => {
       new Set([
         "src/agents/command/attempt-execution.ts",
         "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
+        "src/auto-reply/reply/session-fork.runtime.ts",
         "src/config/sessions/transcript.ts",
         "src/gateway/server-methods/chat.ts",
         "src/gateway/server-methods/chat-transcript-inject.ts",
@@ -198,14 +212,37 @@ describe("session accessor boundary guard", () => {
     expect(allowedSessionStoreRuntimeFileBackedCompatExports).toEqual(
       new Set([
         "loadSessionStore",
-        "readLatestAssistantTextFromSessionTranscript",
-        "resolveAndPersistSessionFile",
         "resolveSessionFilePath",
         "resolveSessionStoreEntry",
-        "saveSessionStore",
         "updateSessionStore",
       ]),
     );
+  });
+
+  it("allows the exact beta.5 compatibility exports without opening aliases", () => {
+    expect(
+      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+        export function loadSessionStore() {}
+        export function updateSessionStore() {}
+        export function resolveSessionFilePath() {}
+        export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+      `),
+    ).toEqual([]);
+    expect(
+      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+        export { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+        export { saveSessionStore } from "../config/sessions/store.js";
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: 'exports unratcheted file-backed SDK session helper "resolveSessionFilePath"',
+      },
+      {
+        line: 3,
+        reason: 'exports unratcheted file-backed SDK session helper "saveSessionStore"',
+      },
+    ]);
   });
 
   it("collects file-backed SDK session compatibility exports", () => {
@@ -402,7 +439,7 @@ describe("session accessor boundary guard", () => {
   it("flags legacy transcript writer imports", () => {
     expect(
       findTranscriptWriterBoundaryViolations(`
-        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.test-support.js";
         import { emitSessionTranscriptUpdate as emitUpdate } from "../sessions/transcript-events.js";
       `),
     ).toEqual([
@@ -572,5 +609,57 @@ describe("session accessor boundary guard", () => {
         });
       `),
     ).toEqual([]);
+  });
+});
+
+describe("session accessor debt ratchet", () => {
+  it("flags unmigrated files whose legacy call-site count exceeds the baseline", () => {
+    expect(
+      compareSessionAccessorDebt(
+        {
+          sessionAccessorRead: { "src/a.ts": 3 },
+          sessionAccessorWrite: { "src/new.ts": 1 },
+        },
+        {
+          sessionAccessorRead: { "src/a.ts": 2 },
+          sessionAccessorWrite: {},
+        },
+      ),
+    ).toEqual({
+      regressions: [
+        { concern: "sessionAccessorRead", path: "src/a.ts", currentCount: 3, baselineCount: 2 },
+        { concern: "sessionAccessorWrite", path: "src/new.ts", currentCount: 1, baselineCount: 0 },
+      ],
+      improvements: [],
+    });
+  });
+
+  it("passes when counts match the baseline", () => {
+    expect(
+      compareSessionAccessorDebt(
+        { sessionAccessorRead: { "src/a.ts": 2 } },
+        { sessionAccessorRead: { "src/a.ts": 2 } },
+      ),
+    ).toEqual({ regressions: [], improvements: [] });
+  });
+
+  it("fails with a regen instruction when counts drop below the baseline", () => {
+    const debt = compareSessionAccessorDebt(
+      { sessionAccessorRead: { "src/a.ts": 1 } },
+      { sessionAccessorRead: { "src/a.ts": 2, "src/gone.ts": 3 } },
+    );
+    expect(debt).toEqual({
+      regressions: [],
+      improvements: [
+        { concern: "sessionAccessorRead", path: "src/a.ts", currentCount: 1, baselineCount: 2 },
+        { concern: "sessionAccessorRead", path: "src/gone.ts", currentCount: 0, baselineCount: 3 },
+      ],
+    });
+    expect(formatSessionAccessorDebtImprovements(debt.improvements)).toEqual([
+      "Legacy session accessor debt dropped below scripts/lib/session-accessor-debt-baseline.json:",
+      "- src/a.ts [sessionAccessorRead]: 1 legacy call site(s), stale baseline allows 2",
+      "- src/gone.ts [sessionAccessorRead]: 0 legacy call site(s), stale baseline allows 3",
+      "Run `pnpm lint:tmp:session-accessor-boundary:gen` to ratchet the baseline down and commit it.",
+    ]);
   });
 });

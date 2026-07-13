@@ -53,7 +53,7 @@ export function setCurrentManifestModelIdNormalizationRecords(
 }
 
 /** Return the current process-local manifest normalization policy snapshot. */
-export function getCurrentManifestModelIdNormalizationPolicies():
+function getCurrentManifestModelIdNormalizationPolicies():
   | ReadonlyMap<string, ManifestModelIdNormalizationProvider>
   | undefined {
   return currentManifestModelIdNormalizationPolicies;
@@ -139,6 +139,8 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "opus-4.8": "claude-opus-4-8",
       opus: "claude-opus-4-8",
       "opus-4.6": "claude-opus-4-6",
+      "sonnet-5": "claude-sonnet-5",
+      sonnet: "claude-sonnet-5",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const anthropicPrefix = "anthropic/";
@@ -151,6 +153,8 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
   if (normalizedProvider === "vercel-ai-gateway") {
     const vercelAliases: Record<string, string> = {
       "opus-4.6": "claude-opus-4-6",
+      "sonnet-5": "claude-sonnet-5",
+      sonnet: "claude-sonnet-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const aliased = vercelAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
@@ -170,12 +174,11 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
   }
   if (normalizedProvider === "xai") {
     const xaiAliases: Record<string, string> = {
+      "grok-4.3-latest": "grok-4.3",
+      "grok-4.5-latest": "grok-4.5",
+      "grok-build-latest": "grok-4.5",
       "grok-4-fast-reasoning": "grok-4-fast",
       "grok-4-1-fast-reasoning": "grok-4-1-fast",
-      "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
-      "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
-      "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
-      "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
     };
     return xaiAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
   }

@@ -776,6 +776,72 @@ describe("runEmbeddedAgent", () => {
     ).toBe("openai");
   });
 
+  it("lets a locked Codex harness own stale model resolution, prompts, and context policy", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
+    const prompt = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
+    resolveModelAsyncMock.mockRejectedValueOnce(new Error("stale outer model must not resolve"));
+    mockSuccessfulEmbeddedAttempt();
+
+    await runEmbeddedAgent({
+      sessionId: "locked-codex-native-policy",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt,
+      provider: "anthropic",
+      model: "retired-outer-model",
+      timeoutMs: 5_000,
+      agentDir,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      runId: nextRunId("locked-codex-native-policy"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    const attempt = firstRunEmbeddedAttemptParams() as Record<string, unknown>;
+    expect(attempt).toMatchObject({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      provider: "anthropic",
+      modelId: "retired-outer-model",
+      prompt,
+    });
+    expect("contextEngine" in attempt).toBe(false);
+    expect("contextTokenBudget" in attempt).toBe(false);
+    expect("contextWindowInfo" in attempt).toBe(false);
+  });
+
+  it("does not apply outer context-overflow recovery to a locked Codex harness", async () => {
+    const sessionFile = nextSessionFile();
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        promptError: new Error("request exceeds the model context window"),
+      }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "locked-codex-native-overflow",
+      sessionFile,
+      workspaceDir,
+      config: createEmbeddedAgentRunnerOpenAiConfig([]),
+      prompt: "hello",
+      provider: "anthropic",
+      model: "retired-outer-model",
+      timeoutMs: 5_000,
+      agentDir,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      runId: nextRunId("locked-codex-native-overflow"),
+      enqueue: immediateEnqueue,
+    }).catch(() => undefined);
+
+    expect(resolveModelAsyncMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+  });
+
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
@@ -817,7 +883,7 @@ describe("runEmbeddedAgent", () => {
     expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
   });
 
-  it("drops whitespace-only session keys when backfill cannot resolve a session key", async () => {
+  it("falls back to the session id when a whitespace-only session key cannot be resolved", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveSessionKeyForRequestMock.mockReturnValue({
@@ -855,7 +921,7 @@ describe("runEmbeddedAgent", () => {
       agentId: undefined,
       clone: false,
     });
-    expect(firstRunEmbeddedAttemptParams().sessionKey).toBeUndefined();
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("resume-124");
   });
 
   it("logs when embedded session-key backfill resolution fails", async () => {
@@ -898,7 +964,7 @@ describe("runEmbeddedAgent", () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveStoredSessionKeyForSessionIdMock.mockReturnValue({
-      sessionKey: "agent:test:resolved",
+      sessionKey: "agent:embedded-agent:resolved",
       sessionStore: {},
       storePath: "/tmp/session-store.json",
     });

@@ -6,6 +6,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   isExecutableFile,
+  isRegularFile,
   resolveExecutable,
   resolveExecutableFromPathEnv,
   resolveExecutablePath,
@@ -32,8 +33,11 @@ describe("executable path helpers", () => {
       await fs.mkdir(dirPath);
 
       expect(isExecutableFile(execPath)).toBe(true);
+      expect(isRegularFile(execPath)).toBe(true);
       expect(isExecutableFile(filePath)).toBe(false);
+      expect(isRegularFile(filePath)).toBe(true);
       expect(isExecutableFile(dirPath)).toBe(false);
+      expect(isRegularFile(dirPath)).toBe(false);
       expect(isExecutableFile(path.join(base, "missing"))).toBe(false);
     });
   });
@@ -281,6 +285,25 @@ describe("caller env PATHEXT propagation", () => {
     } finally {
       restoreEnvValue("PATHEXT", orig);
     }
+  });
+
+  it("keeps PATHEXT checks for non-native explicit PATH extensions", async () => {
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const binDir = path.join(base, "bin");
+      await fs.mkdir(binDir, { recursive: true });
+      const exePath = path.join(binDir, "tool.exe");
+      const ps1Path = path.join(binDir, "tool.ps1");
+      await fs.writeFile(exePath, "exe\n", "utf8");
+      await fs.writeFile(ps1Path, 'Write-Output "ok"\n', "utf8");
+
+      withMockedPlatform("win32", () => {
+        expect(resolveExecutableFromPathEnv("tool.exe", binDir, { PATHEXT: ".CMD" })).toBe(exePath);
+        expect(
+          resolveExecutableFromPathEnv("tool.ps1", binDir, { PATHEXT: ".EXE" }),
+        ).toBeUndefined();
+        expect(resolveExecutableFromPathEnv("tool.ps1", binDir, { PATHEXT: ".PS1" })).toBe(ps1Path);
+      });
+    });
   });
 
   it("resolveExecutablePath with path separator passes env to PATHEXT check on Windows", async () => {

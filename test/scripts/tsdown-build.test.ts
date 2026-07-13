@@ -796,7 +796,7 @@ describe("runTsdownBuildInvocation", () => {
     async () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-");
       const childPidPath = path.join(rootDir, "child.pid");
-      const timeoutMs = 1_000;
+      const timeoutMs = 250;
       let childPid: number | undefined;
       const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
       const parentScript = [
@@ -860,7 +860,7 @@ describe("runTsdownBuildInvocation", () => {
         "  setTimeout(() => {",
         `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean');`,
         "    process.exit(0);",
-        "  }, 75);",
+        "  }, 50);",
         "});",
         `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
         "setInterval(() => {}, 1000);",
@@ -892,7 +892,7 @@ describe("runTsdownBuildInvocation", () => {
             env: {
               ...process.env,
               OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
-              OPENCLAW_TSDOWN_TIMEOUT_MS: "1000",
+              OPENCLAW_TSDOWN_TIMEOUT_MS: "250",
             },
           },
         );
@@ -903,7 +903,7 @@ describe("runTsdownBuildInvocation", () => {
 
         expect(result.timedOut).toBe(true);
         expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
-        expect(Date.now() - startedAt).toBeLessThan(1_700);
+        expect(Date.now() - startedAt).toBeLessThan(900);
         await waitForDead(childPid, 2_000);
       } finally {
         if (childPid && isProcessAlive(childPid)) {

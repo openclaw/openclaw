@@ -38,7 +38,7 @@ export type OutputRuntimeEnv = {
   exit(code: number): void;
 };
 
-export interface PathCommandOptions {
+interface PathCommandOptions {
   readonly json?: boolean;
   readonly human?: boolean;
   readonly valueJson?: boolean;
@@ -66,7 +66,7 @@ const defaultRuntime: OutputRuntimeEnv = {
 
 // Defense-in-depth: replace the redaction sentinel with `[REDACTED]`
 // before writing, even if upstream emits it.
-export function scrubSentinel(s: string): string {
+function scrubSentinel(s: string): string {
   if (!s.includes(REDACTED_SENTINEL)) {
     return s;
   }
@@ -358,6 +358,8 @@ export async function pathSetCommand(
     return;
   }
 
+  const byteLength = Buffer.byteLength(newBytes, "utf8");
+
   if (options.dryRun === true) {
     const diff = options.diff === true ? formatUnifiedDiff(oldBytes, newBytes, fsPath) : undefined;
     emit(
@@ -367,7 +369,7 @@ export async function pathSetCommand(
       () =>
         diff !== undefined
           ? diff || `--dry-run: no byte changes for ${fsPath}`
-          : `--dry-run: would write ${newBytes.length} bytes to ${fsPath}\n${newBytes}`,
+          : `--dry-run: would write ${byteLength} bytes to ${fsPath}\n${newBytes}`,
     );
     return;
   }
@@ -375,8 +377,8 @@ export async function pathSetCommand(
   emit(
     runtime,
     mode,
-    { ok: true, dryRun: false, bytesWritten: newBytes.length, fsPath },
-    () => `wrote ${newBytes.length} bytes to ${fsPath}`,
+    { ok: true, dryRun: false, bytesWritten: byteLength, fsPath },
+    () => `wrote ${byteLength} bytes to ${fsPath}`,
   );
 }
 

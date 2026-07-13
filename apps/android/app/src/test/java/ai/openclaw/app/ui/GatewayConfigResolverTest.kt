@@ -10,6 +10,60 @@ import java.util.Base64
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
   @Test
+  fun insecureRemoteGuidanceRetainsTheCompleteSecurityRuleAndFix() {
+    val message =
+      gatewayEndpointValidationMessage(
+        GatewayEndpointValidationError.INSECURE_REMOTE_URL,
+        GatewayEndpointInputSource.MANUAL,
+      )
+
+    assertEquals(
+      "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs. " +
+        "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access.",
+      message,
+    )
+  }
+
+  @Test
+  fun manualTransportForcesSecureConnectionForRemoteHosts() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "gateway.example.com",
+        requestedTls = false,
+      )
+
+    assertEquals(true, presentation.requiresTls)
+    assertEquals(true, presentation.effectiveTls)
+    assertEquals("Secure connection is required for this host.", presentation.helperText)
+  }
+
+  @Test
+  fun manualTransportAllowsUnencryptedPrivateLanConnections() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "192.168.1.20",
+        requestedTls = false,
+      )
+
+    assertEquals(false, presentation.requiresTls)
+    assertEquals(false, presentation.effectiveTls)
+    assertEquals("Use only on a trusted private network.", presentation.helperText)
+  }
+
+  @Test
+  fun manualTransportDoesNotRepeatSelectedPrivateLanTlsState() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "192.168.1.20",
+        requestedTls = true,
+      )
+
+    assertEquals(false, presentation.requiresTls)
+    assertEquals(true, presentation.effectiveTls)
+    assertNull(presentation.helperText)
+  }
+
+  @Test
   fun parseGatewayEndpointUsesDefaultTlsPortForBareWssUrls() {
     val parsed = parseGatewayEndpoint("wss://gateway.example")
 
@@ -191,14 +245,13 @@ class GatewayConfigResolverTest {
   @Test
   fun parseGatewayEndpointReportsUnsupportedIpv6ZoneIds() {
     listOf(
-        "ws://[fe80::1%25eth0]",
-        "wss://[fe80::1%25wlan0]:443",
-      )
-      .forEach { url ->
-        val parsed = parseGatewayEndpointResult(url)
-        assertNull(url, parsed.config)
-        assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
-      }
+      "ws://[fe80::1%25eth0]",
+      "wss://[fe80::1%25wlan0]:443",
+    ).forEach { url ->
+      val parsed = parseGatewayEndpointResult(url)
+      assertNull(url, parsed.config)
+      assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
+    }
   }
 
   @Test
@@ -661,6 +714,7 @@ class GatewayConfigResolverTest {
     assertEquals("token", plan?.config?.token)
     assertEquals("", plan?.config?.bootstrapToken)
     assertEquals("", plan?.config?.password)
+    assertEquals(GatewaySavedAuthAction.REPLACE_CREDENTIALS, plan?.savedAuthAction)
   }
 
   @Test
@@ -807,10 +861,31 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun composeGatewayManualUrlRejectsBlankPortWhenTlsIsOff() {
+  fun composeGatewayManualUrlDefaultsPortTo18789ForNonTailnetTlsHostsWhenPortBlank() {
+    val url = composeGatewayManualUrl("gateway.example.com", "", tls = true)
+
+    assertEquals("https://gateway.example.com:18789", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDefaultsPortTo443ForTailnetHostWithTrailingDotWhenPortBlank() {
+    val url = composeGatewayManualUrl("device.sample.ts.net.", "", tls = true)
+
+    assertEquals("https://device.sample.ts.net.:443", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDoesNotTreatLookalikeTailnetSuffixAsTailnet() {
+    val url = composeGatewayManualUrl("gateway.ts.net.evil.com", "", tls = true)
+
+    assertEquals("https://gateway.ts.net.evil.com:18789", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDefaultsBlankCleartextPortTo18789() {
     val url = composeGatewayManualUrl("127.0.0.1", "", tls = false)
 
-    assertNull(url)
+    assertEquals("http://127.0.0.1:18789", url)
   }
 
   @Test

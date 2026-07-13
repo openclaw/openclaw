@@ -94,14 +94,6 @@ describe("run-oxlint", () => {
     expect(childSkipIndex).toBeGreaterThan(lockIndex);
   });
 
-  it("keeps a serial oxlint shard path available", () => {
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
-
-    expect(shardedLintRunner).toContain("OPENCLAW_OXLINT_SHARDS_SERIAL");
-    expect(shardedLintRunner).toContain('platform === "win32"');
-    expect(shardedLintRunner).toContain("runShardsSerial");
-  });
-
   it("serializes broad oxlint shards on constrained local hosts", () => {
     expect(
       shouldRunOxlintShardsSerial({
@@ -310,7 +302,7 @@ describe("run-oxlint", () => {
             CHILD_PID_PATH: childPidPath,
             OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
             OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
-            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "1000",
+            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "250",
           },
           extraArgs: [],
           runner,

@@ -1,9 +1,15 @@
 // Gateway Protocol tests cover native protocol levels.guard behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, it } from "vitest";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
-import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./version.js";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "./version.js";
 
 /**
  * Cross-language guard for Gateway protocol version constants.
@@ -13,14 +19,19 @@ import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./version.js";
  * and connect payloads aligned with the package source of truth.
  */
 
-/** Min/max protocol pair expected in every native client surface. */
+/** Min/max protocol pair expected in a native client surface. */
 type ProtocolLevels = {
   min: number;
   max: number;
 };
 
-const expectedLevels: ProtocolLevels = {
+const expectedClientLevels: ProtocolLevels = {
   min: MIN_CLIENT_PROTOCOL_VERSION,
+  max: PROTOCOL_VERSION,
+};
+
+const expectedAndroidLevels: ProtocolLevels = {
+  min: MIN_NODE_PROTOCOL_VERSION,
   max: PROTOCOL_VERSION,
 };
 
@@ -42,16 +53,20 @@ function extractInteger(
       `${relativePath}: missing ${label}; keep native Gateway protocol levels in sync with packages/gateway-protocol/src/version.ts.`,
     );
   }
-  return Number.parseInt(match[1], 10);
+  return Number.parseInt(expectDefined(match[1], "match[1] test invariant"), 10);
 }
 
 /** Compares native min/max values to the TypeScript version constants. */
-function assertLevelsMatch(relativePath: string, actual: ProtocolLevels): void {
-  if (actual.min === expectedLevels.min && actual.max === expectedLevels.max) {
+function assertLevelsMatch(
+  relativePath: string,
+  actual: ProtocolLevels,
+  expected: ProtocolLevels = expectedClientLevels,
+): void {
+  if (actual.min === expected.min && actual.max === expected.max) {
     return;
   }
   throw new Error(
-    `${relativePath}: Gateway protocol level mismatch: expected min=${expectedLevels.min} max=${expectedLevels.max} from packages/gateway-protocol/src/version.ts, got min=${actual.min} max=${actual.max}. Update the native constants/generated artifacts before shipping.`,
+    `${relativePath}: Gateway protocol level mismatch: expected min=${expected.min} max=${expected.max} from packages/gateway-protocol/src/version.ts, got min=${actual.min} max=${actual.max}. Update the native constants/generated artifacts before shipping.`,
   );
 }
 
@@ -74,7 +89,7 @@ function stringLiteralUnionValues(schema: unknown): string[] | undefined {
   }
   const candidate = schema as { anyOf?: unknown; oneOf?: unknown };
   const branches = candidate.oneOf ?? candidate.anyOf;
-  if (!Array.isArray(branches) || branches.length < 2) {
+  if (!Array.isArray(branches) || branches.length === 0) {
     return undefined;
   }
 
@@ -99,6 +114,14 @@ describe("native Gateway protocol levels", () => {
         `packages/gateway-protocol/src/version.ts: MIN_CLIENT_PROTOCOL_VERSION (${MIN_CLIENT_PROTOCOL_VERSION}) must not exceed PROTOCOL_VERSION (${PROTOCOL_VERSION}).`,
       );
     }
+    if (
+      MIN_NODE_PROTOCOL_VERSION !== PROTOCOL_VERSION - 1 ||
+      MIN_PROBE_PROTOCOL_VERSION !== PROTOCOL_VERSION - 1
+    ) {
+      throw new Error(
+        "packages/gateway-protocol/src/version.ts: node and probe compatibility must remain exactly N-1.",
+      );
+    }
 
     const swiftGeneratedPath =
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
@@ -120,20 +143,24 @@ describe("native Gateway protocol levels", () => {
 
     const androidPath = "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt";
     const android = await readRepoFile(androidPath);
-    assertLevelsMatch(androidPath, {
-      min: extractInteger(
-        android,
-        /const val GATEWAY_MIN_PROTOCOL_VERSION = (\d+)/,
-        androidPath,
-        "GATEWAY_MIN_PROTOCOL_VERSION",
-      ),
-      max: extractInteger(
-        android,
-        /const val GATEWAY_PROTOCOL_VERSION = (\d+)/,
-        androidPath,
-        "GATEWAY_PROTOCOL_VERSION",
-      ),
-    });
+    assertLevelsMatch(
+      androidPath,
+      {
+        min: extractInteger(
+          android,
+          /const val GATEWAY_MIN_PROTOCOL_VERSION = (\d+)/,
+          androidPath,
+          "GATEWAY_MIN_PROTOCOL_VERSION",
+        ),
+        max: extractInteger(
+          android,
+          /const val GATEWAY_PROTOCOL_VERSION = (\d+)/,
+          androidPath,
+          "GATEWAY_PROTOCOL_VERSION",
+        ),
+      },
+      expectedAndroidLevels,
+    );
   });
 
   it("uses the min constant for native connect compatibility ranges", async () => {
@@ -231,5 +258,30 @@ describe("native Gateway protocol levels", () => {
         );
       }
     }
+  });
+
+  it("emits the session approval event as a discriminated Swift union", async () => {
+    const swiftGeneratedPath =
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
+    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
+
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /public enum SessionApprovalEvent: Codable, Sendable \{/,
+      "missing the generated SessionApprovalEvent union.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case pending\(PendingSessionApprovalEvent\)/,
+      "SessionApprovalEvent must decode pending transitions.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case terminal\(TerminalSessionApprovalEvent\)/,
+      "SessionApprovalEvent must decode terminal transitions.",
+    );
   });
 });

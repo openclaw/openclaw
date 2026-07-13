@@ -20,17 +20,12 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 
-export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
+export { getCoreCliCommandsWithSubcommands };
 
 type CommandRegisterParams = {
   program: Command;
   ctx: ProgramContext;
   argv: string[];
-};
-
-export type CommandRegistration = {
-  id: string;
-  register: (params: CommandRegisterParams) => void;
 };
 
 function withProgramOnlySpecs(
@@ -86,6 +81,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         commandNames: ["migrate"],
         loadModule: () => import("./register.migrate.js"),
         exportName: "registerMigrateCommand",
+      },
+      {
+        commandNames: ["audit"],
+        loadModule: () => import("./register.audit.js"),
+        exportName: "registerAuditCommand",
       },
       {
         commandNames: ["doctor", "dashboard", "reset", "uninstall"],

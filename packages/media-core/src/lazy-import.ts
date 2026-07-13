@@ -1,11 +1,11 @@
 /** Cached async loader used by runtime boundaries that should import on first use. */
-export type LazyPromiseLoader<T> = {
+type LazyPromiseLoader<T> = {
   load(): Promise<T>;
   clear(): void;
 };
 
 /** Controls whether a failed first import stays cached or is retried later. */
-export type LazyPromiseLoaderOptions = {
+type LazyPromiseLoaderOptions = {
   cacheRejections?: boolean;
 };
 

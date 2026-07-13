@@ -47,8 +47,10 @@ describe("slash command browser import", () => {
     );
 
     expect(importDeclarations(commands)).toEqual([
+      'import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";',
       'import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";',
       'import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";',
+      'import { t } from "../../i18n/index.ts";',
       'import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";',
     ]);
     expect(importDeclarations(sharedRegistry)).toEqual([

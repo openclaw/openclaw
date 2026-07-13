@@ -80,6 +80,16 @@ const NON_OVERFLOW_PATTERNS = [
   /too many requests/i, // Generic HTTP 429 style
 ];
 
+function resolveContextInputTokens(message: AssistantMessage): number | undefined {
+  if (message.usage.contextUsage?.state === "available") {
+    return message.usage.contextUsage.promptTokens;
+  }
+  if (message.usage.contextUsage?.state === "unavailable") {
+    return undefined;
+  }
+  return message.usage.input + message.usage.cacheRead;
+}
+
 /**
  * Check if an assistant message represents a context overflow error.
  *
@@ -132,17 +142,19 @@ const NON_OVERFLOW_PATTERNS = [
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
   // Case 1: Check error message patterns
   if (message.stopReason === "error" && message.errorMessage) {
+    // Hoist so the regex closures keep the narrowing without assertions.
+    const errorMessage = message.errorMessage;
     // Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)
-    const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!));
-    if (!isNonOverflow && OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!))) {
+    const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(errorMessage));
+    if (!isNonOverflow && OVERFLOW_PATTERNS.some((p) => p.test(errorMessage))) {
       return true;
     }
   }
 
   // Case 2: Silent overflow (z.ai style) - successful but usage exceeds context
   if (contextWindow && message.stopReason === "stop") {
-    const inputTokens = message.usage.input + message.usage.cacheRead;
-    if (inputTokens > contextWindow) {
+    const inputTokens = resolveContextInputTokens(message);
+    if (inputTokens !== undefined && inputTokens > contextWindow) {
       return true;
     }
   }
@@ -151,8 +163,8 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
   // to fit the context window, leaving no room for output. Returns stopReason "length"
   // with output=0 and input+cacheRead filling the context window.
   if (contextWindow && message.stopReason === "length" && message.usage.output === 0) {
-    const inputTokens = message.usage.input + message.usage.cacheRead;
-    if (inputTokens >= contextWindow * 0.99) {
+    const inputTokens = resolveContextInputTokens(message);
+    if (inputTokens !== undefined && inputTokens >= contextWindow * 0.99) {
       return true;
     }
   }

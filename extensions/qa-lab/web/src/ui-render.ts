@@ -1,3 +1,5 @@
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import prettyMilliseconds from "pretty-ms";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -402,16 +404,12 @@ function formatIso(iso?: string) {
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1000) {
-    return `${Math.round(ms)}ms`;
-  }
-  const seconds = ms / 1000;
-  if (seconds < 60) {
-    return `${seconds.toFixed(seconds >= 10 ? 0 : 1)}s`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.round(seconds % 60);
-  return `${minutes}m ${remainingSeconds}s`;
+  const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
+  return prettyMilliseconds(Math.max(0, roundedMs), {
+    millisecondsDecimalDigits: 0,
+    secondsDecimalDigits: 0,
+    unitCount: 2,
+  });
 }
 
 function esc(text: string) {
@@ -572,7 +570,7 @@ function redactCaptureScalar(value: string, label?: string): string {
     return "[redacted]";
   }
   if (trimmed.length > 400) {
-    return `${trimmed.slice(0, 280)}\n…\n${trimmed.slice(-80)}`;
+    return `${sliceUtf16Safe(trimmed, 0, 280)}\n…\n${sliceUtf16Safe(trimmed, -80)}`;
   }
   return trimmed;
 }
@@ -1083,15 +1081,15 @@ function renderMessageAttachments(message: Message): string {
 
 const MOCK_MODELS: RunnerModelOption[] = [
   {
-    key: "mock-openai/gpt-5.5",
-    name: "GPT-5.5 (mock)",
+    key: "mock-openai/gpt-5.6-luna",
+    name: "GPT-5.6 Luna (mock)",
     provider: "mock-openai",
     input: "text",
     preferred: true,
   },
   {
-    key: "mock-openai/gpt-5.5-alt",
-    name: "GPT-5.5 Alt (mock)",
+    key: "mock-openai/gpt-5.6-luna-alt",
+    name: "GPT-5.6 Luna Alt (mock)",
     provider: "mock-openai",
     input: "text",
     preferred: false,
@@ -1915,7 +1913,7 @@ function renderProducerContextFile(params: {
 function formatMatrixLabel(id: string): string {
   return id
     .split("-")
-    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
     .join(" ");
 }
 
@@ -2454,7 +2452,7 @@ function renderCaptureView(state: UiState): string {
         state.captureTimelineSparklineMode === "lane-relative" ? laneSpanMs : totalSpanMs;
       const rawIndex = spanMs <= 0 ? 0 : Math.floor(((event.ts - spanStart) / spanMs) * binCount);
       const index = Math.max(0, Math.min(binCount - 1, rawIndex));
-      bins[index] += 1;
+      bins[index] = (bins[index] ?? 0) + 1;
     }
     const maxBin = Math.max(...bins, 1);
     return `<div class="capture-timeline-sparkline">
@@ -2818,7 +2816,10 @@ function renderCaptureView(state: UiState): string {
     },
   ];
   if (!availableDetailViews.some((view) => view.recommended && view.available)) {
-    availableDetailViews[0].recommended = true;
+    const overviewView = availableDetailViews.find((view) => view.value === "overview");
+    if (overviewView) {
+      overviewView.recommended = true;
+    }
   }
   const preferredDetailView = state.capturePreferredDetailView;
   const effectiveDetailView = availableDetailViews.some(
@@ -3581,10 +3582,14 @@ function renderCaptureView(state: UiState): string {
                                     const leftPct = ((event.ts - minTs) / totalSpanMs) * 100;
                                     const leftPx = (leftPct / 100) * timelineTrackWidthPx;
                                     let rowIndex = 0;
-                                    while (
-                                      rowIndex < rowRightEdges.length &&
-                                      rowRightEdges[rowIndex] > leftPx - markerGapPx
-                                    ) {
+                                    while (rowIndex < rowRightEdges.length) {
+                                      const rowRightEdge = rowRightEdges[rowIndex];
+                                      if (
+                                        rowRightEdge === undefined ||
+                                        rowRightEdge <= leftPx - markerGapPx
+                                      ) {
+                                        break;
+                                      }
                                       rowIndex += 1;
                                     }
                                     rowRightEdges[rowIndex] = leftPx + markerGapPx;
@@ -3678,8 +3683,13 @@ function renderCaptureView(state: UiState): string {
                                           if (markers.length < 2) {
                                             return [];
                                           }
-                                          return markers.slice(1).map((marker, index) => {
-                                            const previous = markers[index];
+                                          const followingMarkers = markers.slice(1).values();
+                                          return markers.slice(0, -1).flatMap((previous) => {
+                                            const following = followingMarkers.next();
+                                            if (following.done) {
+                                              return [];
+                                            }
+                                            const marker = following.value;
                                             const dx = marker.leftPx - previous.leftPx;
                                             const dy = marker.topPx - previous.topPx;
                                             const length = Math.sqrt(dx * dx + dy * dy);
@@ -3693,10 +3703,12 @@ function renderCaptureView(state: UiState): string {
                                             const paired =
                                               pairedEventKey != null &&
                                               captureEventKey(marker.event) === pairedEventKey;
-                                            return `<div
+                                            return [
+                                              `<div
                                         class="capture-timeline-flow-link${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}${paired ? " paired" : ""}"
                                         style="left:${previous.leftPct.toFixed(2)}%;top:${previous.topPx}px;width:${length.toFixed(2)}px;transform:translateY(-50%) rotate(${angle.toFixed(2)}deg)"
-                                      ></div>`;
+                                      ></div>`,
+                                            ];
                                           });
                                         })
                                         .join("");

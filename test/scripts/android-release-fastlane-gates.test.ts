@@ -21,6 +21,18 @@ function functionBody(source: string, name: string): string {
   return nextDef < 0 ? rest : rest.slice(0, nextDef);
 }
 
+function laneBody(source: string, name: string): string {
+  const startMarker = `lane :${name} do`;
+  const start = source.indexOf(startMarker);
+  if (start < 0) {
+    throw new Error(`missing Fastlane lane ${name}`);
+  }
+
+  const rest = source.slice(start + startMarker.length);
+  const nextLane = rest.search(/\n\s*(?:desc |lane :|end\nend)/);
+  return nextLane < 0 ? rest : rest.slice(0, nextLane);
+}
+
 describe("Android Fastlane release upload gates", () => {
   it("preflights and records mobile release refs around Play build upload", () => {
     const fastfile = readFastfile();
@@ -42,5 +54,19 @@ describe("Android Fastlane release upload gates", () => {
       uploadBuild.indexOf("upload_to_play_store("),
     );
     expect(uploadBuild).toContain("unless play_validate_only?");
+  });
+
+  it("generates fresh screenshots before building and uploading a release", () => {
+    const releaseUpload = laneBody(readFastfile(), "release_upload");
+
+    expect(releaseUpload).toContain("screenshots");
+    expect(releaseUpload.indexOf("screenshots")).toBeLessThan(
+      releaseUpload.indexOf("build_release_artifacts!"),
+    );
+    expect(releaseUpload.indexOf("screenshots")).toBeLessThan(
+      releaseUpload.indexOf("upload_play_store_build!"),
+    );
+    expect(releaseUpload).toContain('ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"');
+    expect(readFastfile()).toContain("*.{png,jpg,jpeg}");
   });
 });

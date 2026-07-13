@@ -43,7 +43,7 @@ export async function recordInboundSession(params: {
   const canonicalSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   const runtime = await loadInboundSessionRuntime();
   const metaTask = runtime
-    .recordSessionMetaFromInbound({
+    .recordInboundSessionMeta({
       storePath,
       sessionKey: canonicalSessionKey,
       ctx,
@@ -62,7 +62,7 @@ export async function recordInboundSession(params: {
     return;
   }
   const targetSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(update.sessionKey);
-  await runtime.updateLastRoute({
+  await runtime.updateSessionLastRoute({
     storePath,
     sessionKey: targetSessionKey,
     route: update.route,

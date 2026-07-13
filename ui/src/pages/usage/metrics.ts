@@ -11,6 +11,14 @@ import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
 
 const CHARS_PER_TOKEN = 4;
+const DAY_MS = 86_400_000;
+
+type UsageCostWindowSummary = {
+  days: number;
+  startDate: string;
+  endDate: string;
+  totals: UsageTotals;
+};
 
 function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
@@ -79,6 +87,7 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     if (!usage?.messageCounts || usage.messageCounts.total === 0) {
       continue;
     }
+    const messageCounts = usage.messageCounts;
 
     // Prefer precise quarter-hour message counts when available.
     // Data is stored as UTC quarter-hour buckets (quarterIndex 0-95) with UTC date keys.
@@ -94,22 +103,22 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
         if (!mapped) {
           continue;
         }
-        hourErrors[mapped.hour] += quarterHour.errors;
-        hourMsgs[mapped.hour] += quarterHour.total;
+        hourErrors[mapped.hour] = (hourErrors[mapped.hour] ?? 0) + quarterHour.errors;
+        hourMsgs[mapped.hour] = (hourMsgs[mapped.hour] ?? 0) + quarterHour.total;
       }
       continue;
     }
 
     // Fallback: time-based proportional allocation (legacy algorithm)
     forEachSessionHourSlice(session, timeZone, ({ hour, share }) => {
-      hourErrors[hour] += usage.messageCounts!.errors * share;
-      hourMsgs[hour] += usage.messageCounts!.total * share;
+      hourErrors[hour] = (hourErrors[hour] ?? 0) + (messageCounts.errors ?? 0) * share;
+      hourMsgs[hour] = (hourMsgs[hour] ?? 0) + messageCounts.total * share;
     });
   }
 
   return hourMsgs
     .map((msgs, hour) => {
-      const errors = hourErrors[hour];
+      const errors = hourErrors[hour] ?? 0;
       const rate = msgs > 0 ? errors / msgs : 0;
       return {
         hour,
@@ -278,8 +287,8 @@ function buildUsageMosaicStats(
 
     if (
       forEachSessionTokenUsageBucket(session, timeZone, ({ hour, weekday, tokens }) => {
-        hourTotals[hour] += tokens;
-        weekdayTotals[weekday] += tokens;
+        hourTotals[hour] = (hourTotals[hour] ?? 0) + tokens;
+        weekdayTotals[weekday] = (weekdayTotals[weekday] ?? 0) + tokens;
       })
     ) {
       hasData = true;
@@ -288,8 +297,8 @@ function buildUsageMosaicStats(
 
     if (
       !forEachSessionHourSlice(session, timeZone, ({ usage: usageLocal, hour, weekday, share }) => {
-        hourTotals[hour] += usageLocal.totalTokens * share;
-        weekdayTotals[weekday] += usageLocal.totalTokens * share;
+        hourTotals[hour] = (hourTotals[hour] ?? 0) + usageLocal.totalTokens * share;
+        weekdayTotals[weekday] = (weekdayTotals[weekday] ?? 0) + usageLocal.totalTokens * share;
       })
     ) {
       continue;
@@ -307,7 +316,7 @@ function buildUsageMosaicStats(
     t("usage.mosaic.sat"),
   ].map((label, index) => ({
     label,
-    tokens: weekdayTotals[index],
+    tokens: weekdayTotals[index] ?? 0,
   }));
 
   return {
@@ -462,6 +471,30 @@ function parseYmdDate(dateStr: string): Date | null {
   return date;
 }
 
+function parseIsoDayIndex(dateStr: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const date = new Date(timestamp);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return timestamp / DAY_MS;
+}
+
+function formatIsoDayIndex(dayIndex: number): string {
+  return new Date(dayIndex * DAY_MS).toISOString().slice(0, 10);
+}
+
 function formatDayLabel(dateStr: string): string {
   const date = parseYmdDate(dateStr);
   if (!date) {
@@ -505,6 +538,56 @@ const mergeUsageTotals = (target: UsageTotals, source: Partial<UsageTotals>) => 
   target.cacheWriteCost += source.cacheWriteCost ?? 0;
   target.missingCostEntries += source.missingCostEntries ?? 0;
 };
+
+function buildUsageCostWindowSummary(
+  daily: Array<UsageTotals & { date: string }>,
+  startDate: string,
+  endDate: string,
+): UsageCostWindowSummary | null {
+  const startDay = parseIsoDayIndex(startDate);
+  const endDay = parseIsoDayIndex(endDate);
+  if (startDay === null || endDay === null || startDay > endDay) {
+    return null;
+  }
+
+  const totals = emptyUsageTotals();
+  for (const entry of daily) {
+    const day = parseIsoDayIndex(entry.date);
+    if (day !== null && day >= startDay && day <= endDay) {
+      mergeUsageTotals(totals, entry);
+    }
+  }
+
+  return {
+    days: endDay - startDay + 1,
+    startDate,
+    endDate,
+    totals,
+  };
+}
+
+function buildUsageCostWindows(
+  daily: Array<UsageTotals & { date: string }>,
+  rangeStartDate: string,
+  rangeEndDate: string,
+  periods: number[] = [1, 7, 30, 90],
+): UsageCostWindowSummary[] {
+  const rangeStartDay = parseIsoDayIndex(rangeStartDate);
+  const rangeEndDay = parseIsoDayIndex(rangeEndDate);
+  if (rangeStartDay === null || rangeEndDay === null || rangeStartDay > rangeEndDay) {
+    return [];
+  }
+
+  const rangeDays = rangeEndDay - rangeStartDay + 1;
+  return Array.from(new Set(periods.map((days) => Math.max(1, Math.trunc(days)))))
+    .filter((days) => days < rangeDays)
+    .toSorted((left, right) => left - right)
+    .map((days) => {
+      const startDate = formatIsoDayIndex(rangeEndDay - days + 1);
+      return buildUsageCostWindowSummary(daily, startDate, rangeEndDate);
+    })
+    .filter((summary): summary is UsageCostWindowSummary => summary !== null);
+}
 
 const buildAggregatesFromSessions = (
   sessions: UsageSessionEntry[],
@@ -759,6 +842,8 @@ const buildUsageInsightStats = (
 export type { UsageInsightStats };
 export {
   buildAggregatesFromSessions,
+  buildUsageCostWindowSummary,
+  buildUsageCostWindows,
   buildPeakErrorHours,
   buildUsageInsightStats,
   charsToTokens,

@@ -5,10 +5,6 @@ import type { GroupMetadata, WAMessageKey } from "baileys";
 import "./monitor-inbox.test-harness.js";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  registerWhatsAppConnectionController,
-  unregisterWhatsAppConnectionController,
-} from "./connection-controller-registry.js";
 import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
 import {
   readWhatsAppBaileysCacheEntry,
@@ -32,14 +28,21 @@ import {
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
+import { lookupInboundMessageMeta } from "./quoted-message.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
-const { imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
+const { controllerContexts, imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
+  controllerContexts: new Map<string, unknown>(),
   imageOps: {
     getImageMetadata: vi.fn(),
     resizeToJpeg: vi.fn(),
   },
   sleepWithAbortMock: vi.fn(async (_ms: number, _signal?: AbortSignal) => undefined),
+}));
+
+vi.mock("./connection-controller-runtime-context.js", () => ({
+  WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY: "connection-controller",
+  getWhatsAppConnectionController: (accountId: string) => controllerContexts.get(accountId) ?? null,
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
@@ -199,6 +202,7 @@ describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
   beforeEach(() => {
+    controllerContexts.clear();
     imageOps.getImageMetadata.mockReset();
     imageOps.getImageMetadata.mockResolvedValue(null);
     imageOps.resizeToJpeg.mockReset();
@@ -1119,6 +1123,185 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it("rejects direct sends before Baileys sendMessage when reachout timelock is active", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({
+      isActive: true,
+      enforcementType: "WEB_COMPANION_ONLY",
+      timeEnforcementEnds: new Date(Date.now() + 60_000),
+    });
+
+    try {
+      await expect(listener.sendMessage("+1555", "hello")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("uses connection.update reachout timelock state before direct sends", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+      },
+    });
+
+    try {
+      await expect(listener.sendMessage("+1555", "hello")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+
+      expect(sock.fetchAccountReachoutTimelock).not.toHaveBeenCalled();
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("allows direct sends after reachout timelock clears", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+      },
+    });
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: false,
+      },
+    });
+
+    try {
+      await expect(listener.sendMessage("+1555", "hello")).resolves.toBeDefined();
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("refreshes inactive reachout timelock state before later direct sends", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.fetchAccountReachoutTimelock
+      .mockResolvedValueOnce({ isActive: false })
+      .mockResolvedValueOnce({
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+        timeEnforcementEnds: new Date(Date.now() + 60_000),
+      });
+
+    try {
+      await expect(listener.sendMessage("+1555", "first")).resolves.toBeDefined();
+      await expect(listener.sendMessage("+1555", "second")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(2);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("reuses a successful readiness preflight for the immediate direct send", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({ isActive: false });
+
+    try {
+      await listener.assertSendReady?.("+1555");
+      await expect(listener.sendMessage("+1555", "hello")).resolves.toBeDefined();
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("invalidates readiness preflight when a later active timelock update arrives", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({ isActive: false });
+
+    try {
+      await listener.assertSendReady?.("+1555");
+      sock.ev.emit("connection.update", {
+        reachoutTimeLock: {
+          isActive: true,
+          enforcementType: "WEB_COMPANION_ONLY",
+        },
+      });
+
+      await expect(listener.sendMessage("+1555", "hello")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("does not apply account reachout timelock to group sends", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+      },
+    });
+
+    try {
+      await expect(listener.sendMessage("120363401234567890@g.us", "hello")).resolves.toBeDefined();
+
+      expect(sock.fetchAccountReachoutTimelock).not.toHaveBeenCalled();
+      expect(sock.sendMessage).toHaveBeenCalledWith("120363401234567890@g.us", { text: "hello" });
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("blocks direct inbound composing presence when reachout timelock is active", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef = createSocketRef();
+    const { listener, sock, inbound } = await primeInboundReplyHandle({
+      onMessage,
+      socketRef,
+      upsertId: "reachout-composing",
+      retryPolicy: fastReconnectPolicy(2),
+    });
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+      },
+    });
+    sock.sendPresenceUpdate.mockClear();
+
+    try {
+      await inbound.platform.sendComposing();
+
+      expect(sock.fetchAccountReachoutTimelock).not.toHaveBeenCalled();
+      expect(sock.sendPresenceUpdate).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
   it("times out stalled socket sends at the default Baileys query timeout", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
@@ -1186,6 +1369,9 @@ describe("web monitor inbox", () => {
         remoteJid: "999@s.whatsapp.net",
       }),
     ).resolves.toBe(message);
+    expect(
+      lookupInboundMessageMeta(DEFAULT_ACCOUNT_ID, "999@s.whatsapp.net", "outbound-cached"),
+    ).toMatchObject({ fromMe: true, body: "pong" });
 
     await listener.close();
   });
@@ -1377,22 +1563,12 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
     const inbound = inboundMessage(onMessage);
 
-    // The mock harness socket exposes user.id = "123@s.whatsapp.net"; the
-    // successor handle must report a self identity that overlaps that JID
-    // so the session-safety guard accepts the fallback.
-    const handleA = {
-      getActiveListener: () => null,
-      getCurrentSock: () => null,
-      getSelfIdentity: () => null,
-    } as never;
-    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleA);
-
     // === Simulate health-monitor-driven shutdown of controller A ===
     socketRefA.current = null;
     aShouldRetryDisconnect = false;
-    unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleA);
 
-    // === Successor controller B comes up with its OWN socket and registers ===
+    // The mock harness socket exposes user.id = "123@s.whatsapp.net"; the
+    // successor must report an overlapping identity for the handoff to succeed.
     const sockB = {
       sendMessage: vi.fn(async () => ({ key: { id: "post-restart-msg-id" } })),
     };
@@ -1401,13 +1577,13 @@ describe("web monitor inbox", () => {
       getCurrentSock: () => sockB as never,
       getSelfIdentity: () => ({ jid: "123@s.whatsapp.net", lid: null }),
     } as never;
-    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+    controllerContexts.set(DEFAULT_ACCOUNT_ID, handleB);
 
     try {
       await inbound.reply("pong");
       await inbound.sendMedia({ text: "media after restart" });
 
-      // Captured A reply routed through B via the registry handle.
+      // Captured A reply routed through B via the runtime context.
       expect(sockB.sendMessage).toHaveBeenCalledTimes(2);
       expect(sockB.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
         text: "pong",
@@ -1416,7 +1592,7 @@ describe("web monitor inbox", () => {
         text: "media after restart",
       });
     } finally {
-      unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+      controllerContexts.delete(DEFAULT_ACCOUNT_ID);
       await listenerA.close();
     }
   });
@@ -1470,14 +1646,14 @@ describe("web monitor inbox", () => {
       getCurrentSock: () => sockB as never,
       getSelfIdentity: () => ({ jid: null, lid: "12300:1@lid", e164: sharedE164 }),
     } as never;
-    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+    controllerContexts.set(DEFAULT_ACCOUNT_ID, handleB);
 
     try {
       await inbound.reply("pong");
       expect(sockB.sendMessage).toHaveBeenCalledTimes(1);
       expect(sockB.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", { text: "pong" });
     } finally {
-      unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+      controllerContexts.delete(DEFAULT_ACCOUNT_ID);
       await listenerA.close();
     }
   });
@@ -1525,7 +1701,7 @@ describe("web monitor inbox", () => {
       getCurrentSock: () => sockB as never,
       getSelfIdentity: () => ({ jid: "456@s.whatsapp.net", lid: null }),
     } as never;
-    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleBMismatch);
+    controllerContexts.set(DEFAULT_ACCOUNT_ID, handleBMismatch);
 
     try {
       await expect(inbound.reply("pong")).rejects.toThrow(
@@ -1535,7 +1711,7 @@ describe("web monitor inbox", () => {
       // The mismatched successor's socket was never used.
       expect(sockB.sendMessage).not.toHaveBeenCalled();
     } finally {
-      unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleBMismatch);
+      controllerContexts.delete(DEFAULT_ACCOUNT_ID);
       await listenerA.close();
     }
   });
@@ -1573,6 +1749,39 @@ describe("web monitor inbox", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const upsert = buildNotifyMessageUpsert({
       id: nextMessageId("retryable-dedupe"),
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+    expect(sock.readMessages).not.toHaveBeenCalled();
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 2);
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledTimes(1);
+    });
+
+    await listener.close();
+  });
+
+  it("retries redelivered messages after reply session initialization conflicts", async () => {
+    let attempts = 0;
+    const onMessage = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error(
+          "reply session initialization conflicted for agent:main:whatsapp:direct:+15551234567",
+        );
+      }
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const upsert = buildNotifyMessageUpsert({
+      id: nextMessageId("session-init-conflict"),
       remoteJid: "999@s.whatsapp.net",
       text: "ping",
       timestamp: 1_700_000_000,

@@ -1,5 +1,4 @@
 // Qa Matrix plugin module implements cli behavior.
-import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createLazyCliRuntimeLoader,
@@ -9,11 +8,15 @@ import {
 } from "./shared/live-transport-cli.js";
 
 type MatrixQaCliRuntime = typeof import("./cli.runtime.js");
+type MatrixQaAdapterRuntime = typeof import("./adapter.runtime.js");
 
 const DISABLE_MATRIX_QA_FORCE_EXIT_ENV = "OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT";
 
 const loadMatrixQaCliRuntime = createLazyCliRuntimeLoader<MatrixQaCliRuntime>(
   () => import("./cli.runtime.js"),
+);
+const loadMatrixQaAdapterRuntime = createLazyCliRuntimeLoader<MatrixQaAdapterRuntime>(
+  () => import("./adapter.runtime.js"),
 );
 
 async function flushProcessStream(stream: NodeJS.WriteStream) {
@@ -52,9 +55,34 @@ async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
   }
 }
 
+export const matrixQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> =
+  {
+    id: "matrix",
+    scenarioIds: [
+      "channel-chat-baseline",
+      "channel-canary",
+      "channel-dm-group-routing",
+      "channel-mention-gating",
+      "channel-sender-allowlist",
+      "channel-top-level-reply-shape",
+      "channel-secondary-conversation-isolation",
+      "channel-multi-actor-ordering",
+      "thread-follow-up",
+      "thread-isolation",
+      "thread-reply-override",
+      "dm-shared-session",
+      "dm-per-room-session",
+    ],
+    matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
+    async create(context) {
+      return await (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
+    },
+  };
+
 export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "matrix",
+    adapterFactory: matrixQaAdapterFactory,
     description: "Run the Docker-backed Matrix live QA lane against a disposable homeserver",
     outputDirHelp: "Matrix QA artifact directory",
     profileHelp:
@@ -66,7 +94,3 @@ export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
   });
 
 export const qaRunnerCliRegistrations = [matrixQaCliRegistration] as const;
-
-export function registerMatrixQaCli(qa: Command) {
-  matrixQaCliRegistration.register(qa);
-}

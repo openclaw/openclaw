@@ -1,5 +1,4 @@
 // Hosted media provider live producer tests cover QA evidence wiring.
-import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +9,7 @@ import {
   buildHostedMediaEvidence,
   classifyHostedMediaFailureStatus,
   findSkippedExplicitProviderSelections,
+  formatHelp,
   parseArgs,
   parseHostedMediaOptions,
   runCli,
@@ -100,16 +100,11 @@ describe("hosted media provider live QA producer", () => {
 });
 
 describe("hosted media provider live CLI", () => {
-  it("prints help through the real node --import tsx entrypoint", () => {
-    const result = spawnSync(process.execPath, ["--import", "tsx", SOURCE_PATH, "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+  it("prints help for the live media command", () => {
+    const help = formatHelp();
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Media live harness");
-    expect(result.stdout).toContain("pnpm test:live:media");
-    expect(result.stderr).toBe("");
+    expect(help).toContain("Media live harness");
+    expect(help).toContain("pnpm test:live:media");
   });
 
   it("rejects unknown global providers for the selected suites", () => {

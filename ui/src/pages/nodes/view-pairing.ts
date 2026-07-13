@@ -3,18 +3,20 @@ import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
-import type { DevicePairSetup } from "../../lib/device-pair-setup.ts";
+import type { DevicePairSetup, DevicePairSetupAccess } from "../../lib/device-pair-setup.ts";
 
 const PAIRING_DOCS_URL =
   "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
 
-export type DevicePairSetupProps = {
+type DevicePairSetupProps = {
   open: boolean;
   loading: boolean;
   error: string | null;
   setup: DevicePairSetup | null;
+  access: DevicePairSetupAccess;
   pendingCount: number;
   onRefresh: () => void;
+  onAccessChange: (access: DevicePairSetupAccess) => void;
   onClose: () => void;
   onCopy: (setupCode: string) => void;
   onManageDevices: () => void;
@@ -28,6 +30,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   const description = t("nodes.pairing.subtitle");
   const setup = props.setup;
   const pendingCount = props.pendingCount;
+  const gatewayUrls = setup?.gatewayUrls ?? (setup ? [setup.gatewayUrl] : []);
 
   return html`
     <openclaw-modal-dialog label=${title} description=${description} @modal-cancel=${props.onClose}>
@@ -49,6 +52,40 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
         </header>
 
         <div class="device-pair-setup__body">
+          <fieldset class="device-pair-setup__access" ?disabled=${props.loading || setup !== null}>
+            <legend>${t("nodes.pairing.accessTitle")}</legend>
+            <label>
+              <input
+                type="radio"
+                name="device-pair-access"
+                .checked=${props.access === "full"}
+                @change=${() => props.onAccessChange("full")}
+              />
+              <span>
+                <strong>${t("nodes.pairing.fullAccess")}</strong>
+                <small>${t("nodes.pairing.fullAccessHint")}</small>
+              </span>
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="device-pair-access"
+                .checked=${props.access === "limited"}
+                @change=${() => props.onAccessChange("limited")}
+              />
+              <span>
+                <strong>${t("nodes.pairing.limitedAccess")}</strong>
+                <small>${t("nodes.pairing.limitedAccessHint")}</small>
+              </span>
+            </label>
+          </fieldset>
+          ${!setup && !props.loading && !props.error
+            ? html`
+                <button class="btn primary" type="button" @click=${props.onRefresh}>
+                  ${icons.smartphone} ${t("nodes.pairing.generateCode")}
+                </button>
+              `
+            : nothing}
           ${props.loading && !setup
             ? html`
                 <div class="device-pair-setup__loading" role="status">
@@ -90,10 +127,25 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
 
                 <div class="device-pair-setup__meta">
                   <span class="pill">${setup.auth}</span>
-                  <span class="device-pair-setup__gateway" title=${setup.gatewayUrl}
-                    >${setup.gatewayUrl}</span
-                  >
+                  <div class="device-pair-setup__gateways">
+                    ${gatewayUrls.map(
+                      (gatewayUrl) => html`
+                        <span class="device-pair-setup__gateway" title=${gatewayUrl}
+                          >${gatewayUrl}</span
+                        >
+                      `,
+                    )}
+                  </div>
                 </div>
+
+                ${setup.accessDowngraded
+                  ? html`
+                      <div class="callout warn device-pair-setup__access-warning" role="status">
+                        <strong>${t("nodes.pairing.transportLimitedTitle")}</strong>
+                        <span>${t("nodes.pairing.transportLimitedHint")}</span>
+                      </div>
+                    `
+                  : nothing}
 
                 <div class="device-pair-setup__actions">
                   <button

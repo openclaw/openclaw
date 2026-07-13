@@ -5,7 +5,7 @@ import path from "node:path";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { say, warn } from "./host-command.ts";
 
-export const PHASE_LOG_TAIL_MAX_BYTES = 512 * 1024;
+const PHASE_LOG_TAIL_MAX_BYTES = 512 * 1024;
 
 function appendTextTail(current: string, chunk: string, maxBytes: number): string {
   const text = chunk.endsWith("\n") ? chunk : `${chunk}\n`;

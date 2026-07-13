@@ -134,63 +134,6 @@ describe("getCachedPluginModuleLoader", () => {
     };
   });
 
-  it("resolves deterministic cache entries for equivalent alias maps", async () => {
-    const { resolvePluginModuleLoaderCacheEntry } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=cache-entry-alias-order");
-
-    const first = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/extensions/demo/index.ts",
-      importerUrl: "file:///repo/src/plugins/loader.ts",
-      loaderFilename: "/repo/src/plugins/loader.ts",
-      aliasMap: {
-        alpha: "/repo/alpha.js",
-        zeta: "/repo/zeta.js",
-      },
-      tryNative: false,
-    });
-    const second = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/extensions/demo/index.ts",
-      importerUrl: "file:///repo/src/plugins/loader.ts",
-      loaderFilename: "/repo/src/plugins/loader.ts",
-      aliasMap: {
-        zeta: "/repo/zeta.js",
-        alpha: "/repo/alpha.js",
-      },
-      tryNative: false,
-    });
-
-    expect(second.cacheKey).toBe(first.cacheKey);
-    expect(second.scopedCacheKey).toBe(first.scopedCacheKey);
-    expect(first.loaderFilename).toBe("/repo/src/plugins/loader.ts");
-  });
-
-  it("keeps explicit shared cache scope keys independent of loader options", async () => {
-    const { resolvePluginModuleLoaderCacheEntry } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=cache-entry-shared-scope");
-
-    const first = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/dist/extensions/demo-a/api.js",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      loaderFilename: "/repo/src/plugins/public-surface-loader.ts",
-      aliasMap: { demo: "/repo/demo-a.js" },
-      tryNative: true,
-      sharedCacheScopeKey: "bundled:native",
-    });
-    const second = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/dist/extensions/demo-b/api.js",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      loaderFilename: "/repo/src/plugins/public-surface-loader.ts",
-      aliasMap: { demo: "/repo/demo-b.js" },
-      tryNative: false,
-      sharedCacheScopeKey: "bundled:native",
-    });
-
-    expect(first.cacheKey).not.toBe(second.cacheKey);
-    expect(first.scopedCacheKey).toBe(second.scopedCacheKey);
-  });
-
   it("reuses cached loaders for the same module config and filename", async () => {
     const { createJiti, getCachedPluginModuleLoader } =
       await loadCachedPluginModuleLoader("cached-loader");
@@ -633,9 +576,15 @@ describe("getCachedPluginModuleLoader", () => {
 
     const result = loader("/repo/dist/extensions/demo/api.js") as { fromSourceTransform: boolean };
     expect(result.fromSourceTransform).toBe(true);
-    expectJitiOptions(createJiti, 0, "file:///repo/src/plugins/public-surface-loader.ts", {
-      tryNative: true,
-    });
+    const options = expectJitiOptions(
+      createJiti,
+      0,
+      "file:///repo/src/plugins/public-surface-loader.ts",
+      {
+        tryNative: false,
+      },
+    );
+    expect(options.nativeModules).toEqual([]);
     expect(fromSourceTransformer).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
     const stats = expectStats(getPluginModuleLoaderStats(), {
       calls: 1,
@@ -673,12 +622,13 @@ describe("getCachedPluginModuleLoader", () => {
 
     loader("C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\api.js");
 
-    expectJitiOptions(
+    const options = expectJitiOptions(
       createJiti,
       0,
       "file:///C:/Users/alice/openclaw/dist/extensions/feishu/api.js",
-      { tryNative: true },
+      { tryNative: false },
     );
+    expect(options.nativeModules).toEqual([]);
     expect(fromSourceTransformer).toHaveBeenCalledWith(
       "file:///C:/Users/alice/openclaw/dist/extensions/feishu/api.js",
     );
@@ -709,6 +659,9 @@ describe("getCachedPluginModuleLoader", () => {
 
     const result = loader("/repo/dist/extensions/demo/api.js") as { fromSourceTransform: boolean };
     expect(result.fromSourceTransform).toBe(true);
+    const options = requireRecord(callArg(createJiti, 0, 1, "jiti options"), "jiti options");
+    expect(options.tryNative).toBe(false);
+    expect(options.nativeModules).toEqual(["openclaw"]);
     // With tryNative: false the wrapper must route every target through the source transformer
     // so its alias rewrites still apply; native require must not be consulted.
     expect(nativeStub).not.toHaveBeenCalled();

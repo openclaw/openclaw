@@ -29,9 +29,7 @@ import type {
   TelegramUpdateOffsetRotationInfo,
 } from "./update-offset-store.js";
 
-export type { MonitorTelegramOpts } from "./monitor.types.js";
-
-export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
+function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
   return {
     sink: {
       concurrency: resolveAgentMaxConcurrent(cfg),

@@ -8,6 +8,7 @@ import { buildDeclaredToolAllowlistContext } from "../tool-policy-declared-conte
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
+  type ToolPolicyFilterEvent,
   type ToolPolicyPipelineStep,
 } from "../tool-policy-pipeline.js";
 import { collectExplicitDenylist, mergeAlsoAllowPolicy } from "../tool-policy.js";
@@ -34,6 +35,7 @@ type FinalEffectiveToolPolicyParams = {
   conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
   warn: (message: string) => void;
   toolPolicyAuditLogLevel?: "info" | "debug";
+  onFilter?: (event: ToolPolicyFilterEvent) => void;
 };
 
 export function applyFinalEffectiveToolPolicy(
@@ -110,6 +112,7 @@ export function applyFinalEffectiveToolPolicy(
     warn: params.warn,
     steps: pipelineSteps,
     auditLogLevel: params.toolPolicyAuditLogLevel,
+    onFilter: params.onFilter,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: params.config,
       toolDenylist: collectExplicitDenylist(pipelineSteps.map((step) => step.policy)),

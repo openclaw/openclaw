@@ -1,4 +1,5 @@
 // Control UI tests cover chat model ref behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   createAmbiguousModelCatalog,
@@ -25,10 +26,12 @@ const catalog = createModelCatalog(OPENAI_GPT5_MINI_MODEL, {
 
 describe("chat-model-ref helpers", () => {
   it("builds provider-qualified option values and prefers catalog names for labels", () => {
-    expect(buildChatModelOption(catalog[0], catalog)).toEqual({
-      value: "openai/gpt-5-mini",
-      label: "GPT-5 Mini",
-    });
+    expect(buildChatModelOption(expectDefined(catalog[0], "first model fixture"), catalog)).toEqual(
+      {
+        value: "openai/gpt-5-mini",
+        label: "GPT-5 Mini",
+      },
+    );
   });
 
   it("preserves already-qualified model refs without prepending provider", () => {
@@ -99,7 +102,12 @@ describe("chat-model-ref helpers", () => {
       },
     );
 
-    expect(buildChatModelOption(duplicateNameCatalog[0], duplicateNameCatalog)).toEqual({
+    expect(
+      buildChatModelOption(
+        expectDefined(duplicateNameCatalog[0], "first duplicate-name model fixture"),
+        duplicateNameCatalog,
+      ),
+    ).toEqual({
       value: "anthropic/claude-3-7-sonnet",
       label: "Claude Sonnet · anthropic",
     });
@@ -123,7 +131,10 @@ describe("chat-model-ref helpers", () => {
     );
 
     expect(
-      buildChatModelOption(duplicateNameAndProviderCatalog[0], duplicateNameAndProviderCatalog),
+      buildChatModelOption(
+        expectDefined(duplicateNameAndProviderCatalog[0], "first duplicate-provider model fixture"),
+        duplicateNameAndProviderCatalog,
+      ),
     ).toEqual({
       value: "anthropic/claude-3-7-sonnet",
       label: "Claude Sonnet · claude-3-7-sonnet · anthropic",
@@ -200,6 +211,23 @@ describe("chat-model-ref helpers", () => {
         },
       ]),
     ).toBe("nvidia/moonshotai/kimi-k2.5");
+  });
+
+  it("uses the recorded provider when a slash-containing id exists under multiple providers", () => {
+    expect(
+      resolvePreferredServerChatModelValue("google/gemma-4-26b-a4b-it", "openrouter", [
+        {
+          id: "google/gemma-4-26b-a4b-it",
+          name: "Gemma 4",
+          provider: "google",
+        },
+        {
+          id: "google/gemma-4-26b-a4b-it",
+          name: "Gemma 4",
+          provider: "openrouter",
+        },
+      ]),
+    ).toBe("openrouter/google/gemma-4-26b-a4b-it");
   });
 
   it("uses the catalog-backed provider for slash-containing nested ids before stale provider fallback", () => {

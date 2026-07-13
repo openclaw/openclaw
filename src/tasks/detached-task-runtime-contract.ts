@@ -11,6 +11,10 @@ import type {
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
 
+// A killed subagent can still report a completion that raced the kill marker.
+// Task cancellation replaces this marker once the operator request is accepted.
+export const SUBAGENT_KILL_TASK_ERROR = "Subagent run killed.";
+
 export type DetachedTaskCreateParams = {
   runtime: TaskRuntime;
   taskKind?: string;
@@ -38,7 +42,7 @@ export type DetachedRunningTaskCreateParams = DetachedTaskCreateParams & {
   progressSummary?: string | null;
 };
 
-export type DetachedTaskStartParams = {
+type DetachedTaskStartParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -48,7 +52,7 @@ export type DetachedTaskStartParams = {
   eventSummary?: string | null;
 };
 
-export type DetachedTaskProgressParams = {
+type DetachedTaskProgressParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -57,7 +61,7 @@ export type DetachedTaskProgressParams = {
   eventSummary?: string | null;
 };
 
-export type DetachedTaskCompleteParams = {
+type DetachedTaskCompleteParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -66,9 +70,10 @@ export type DetachedTaskCompleteParams = {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  suppressDelivery?: boolean;
 };
 
-export type DetachedTaskFailParams = {
+type DetachedTaskFailParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -78,6 +83,7 @@ export type DetachedTaskFailParams = {
   error?: string;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  suppressDelivery?: boolean;
 };
 
 export type DetachedTaskFinalizeParams = {
@@ -91,9 +97,15 @@ export type DetachedTaskFinalizeParams = {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  suppressDelivery?: boolean;
 };
 
-export type DetachedTaskDeliveryStatusParams = {
+export type DetachedTaskTerminalState = Omit<
+  DetachedTaskFinalizeParams,
+  "runId" | "runtime" | "sessionKey"
+>;
+
+type DetachedTaskDeliveryStatusParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -101,13 +113,13 @@ export type DetachedTaskDeliveryStatusParams = {
   error?: string;
 };
 
-export type DetachedTaskCancelParams = {
+type DetachedTaskCancelParams = {
   cfg: OpenClawConfig;
   taskId: string;
   reason?: string;
 };
 
-export type DetachedTaskCancelResult = {
+type DetachedTaskCancelResult = {
   found: boolean;
   cancelled: boolean;
   reason?: string;
@@ -125,6 +137,19 @@ export type DetachedTaskRecoveryAttemptResult = {
   recovered: boolean;
 };
 
+export type DetachedTaskFindParams = {
+  runId: string;
+  runtime: TaskRuntime;
+  sessionKey: string;
+  createdAtOrAfter: number;
+  createdBefore?: number;
+  allowSessionFallback?: boolean;
+};
+
+export type DetachedTaskFindResult =
+  | { lookup: "available"; task?: TaskRecord }
+  | { lookup: "unavailable"; task?: undefined };
+
 export type DetachedTaskLifecycleRuntime = {
   createQueuedTaskRun: (params: DetachedTaskCreateParams) => TaskRecord | null;
   createRunningTaskRun: (params: DetachedRunningTaskCreateParams) => TaskRecord | null;
@@ -134,6 +159,11 @@ export type DetachedTaskLifecycleRuntime = {
   completeTaskRunByRunId: (params: DetachedTaskCompleteParams) => TaskRecord[];
   failTaskRunByRunId: (params: DetachedTaskFailParams) => TaskRecord[];
   setDetachedTaskDeliveryStatusByRunId: (params: DetachedTaskDeliveryStatusParams) => TaskRecord[];
+  /**
+   * Resolve the task owned by one run generation. Custom runtimes should
+   * implement this when their records are not mirrored into core task state.
+   */
+  findTaskRun?: (params: DetachedTaskFindParams) => TaskRecord | undefined;
   /**
    * Return `found: false` when this runtime does not own the task so core can
    * fall back to the legacy detached-task cancel path.

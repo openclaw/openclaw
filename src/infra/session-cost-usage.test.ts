@@ -5,12 +5,18 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  persistSessionTranscriptTurn,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import {
   setGatewayModelPricingForTest,
   clearGatewayModelPricingCacheState,
 } from "../gateway/model-pricing-cache-state.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
+import * as formatDatetime from "./format-time/format-datetime.js";
+import { sessionCostUsageCacheTestApi } from "./session-cost-usage-cache.sqlite.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
@@ -22,6 +28,7 @@ import {
   loadSessionUsageTimeSeries,
   requestCostUsageCacheRefresh,
   refreshCostUsageCache,
+  resolveExistingUsageSessionFile,
 } from "./session-cost-usage.js";
 
 describe("session cost usage", () => {
@@ -47,6 +54,16 @@ describe("session cost usage", () => {
       throw new Error(message);
     }
     return value;
+  };
+  const readUsageCostCache = <T>(parse: (raw: string) => T = (raw) => JSON.parse(raw) as T): T => {
+    const raw = sessionCostUsageCacheTestApi.readCacheJson();
+    if (!raw) {
+      throw new Error("expected SQLite usage-cost cache row");
+    }
+    return parse(raw);
+  };
+  const writeUsageCostCache = (value: unknown, agentId?: string): void => {
+    sessionCostUsageCacheTestApi.writeCacheJson(agentId, JSON.stringify(value));
   };
 
   beforeAll(async () => {
@@ -144,7 +161,7 @@ describe("session cost usage", () => {
     } as unknown as OpenClawConfig;
 
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30, config });
+      const summary = await loadCostUsageSummary({ config });
       // Daily series fills every calendar day in the requested range, even
       // days with zero activity, so the chart shows one bar per day.
       expect(summary.daily.length).toBe(summary.days);
@@ -152,6 +169,203 @@ describe("session cost usage", () => {
       expect(populated).toHaveLength(1);
       expect(summary.totals.totalTokens).toBe(50);
       expect(summary.totals.totalCost).toBeCloseTo(0.03003, 5);
+    });
+  });
+
+  it("includes SQLite-only sessions in cached usage cost summaries", async () => {
+    const root = await makeSessionCostRoot("sqlite-cost");
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionId = "sqlite-cost-session";
+    const now = Date.UTC(2026, 5, 25, 12, 0, 0);
+
+    await withStateDir(root, async () => {
+      await upsertSessionEntry(
+        { sessionKey, storePath },
+        {
+          sessionFile: `sqlite:main:${sessionId}:${storePath}`,
+          sessionId,
+          updatedAt: now,
+        },
+      );
+      await persistSessionTranscriptTurn(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        {
+          messages: [
+            { message: { role: "user", content: "sqlite usage prompt", timestamp: now } },
+            {
+              message: {
+                role: "assistant",
+                content: "sqlite usage answer",
+                model: "gpt-5.4",
+                provider: "openai",
+                timestamp: now + 1000,
+                usage: {
+                  input: 7,
+                  output: 11,
+                  totalTokens: 18,
+                  cost: { total: 0.018 },
+                },
+              },
+            },
+          ],
+          touchSessionEntry: false,
+        },
+      );
+
+      const legacyJsonl = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+      await fs.mkdir(path.dirname(legacyJsonl), { recursive: true });
+      await fs.writeFile(
+        legacyJsonl,
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-06-25T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            model: "gpt-5.4",
+            provider: "openai",
+            usage: {
+              input: 100,
+              output: 100,
+              totalTokens: 200,
+              cost: { total: 0.2 },
+            },
+          },
+        }),
+        "utf-8",
+      );
+      expect(nodeFs.existsSync(legacyJsonl)).toBe(true);
+      await refreshCostUsageCache({ agentId: "main" });
+      const summary = await loadCostUsageSummaryFromCache({
+        agentId: "main",
+        startMs: Date.UTC(2026, 5, 25),
+        endMs: Date.UTC(2026, 5, 25, 23, 59, 59, 999),
+        requestRefresh: false,
+      });
+
+      expect(summary.totals.totalTokens).toBe(18);
+      expect(summary.totals.totalCost).toBeCloseTo(0.018, 8);
+      expect(summary.cacheStatus?.status).toBe("fresh");
+
+      const sessionFile = `sqlite:main:${sessionId}:${storePath}`;
+      const sessionEntry = {
+        sessionFile,
+        sessionId,
+        updatedAt: now,
+      };
+      await refreshCostUsageCache({ agentId: "main", sessionFiles: [sessionFile] });
+      const bulk = await loadSessionCostSummariesFromCache({
+        agentId: "main",
+        sessions: [{ sessionId, sessionFile }],
+        startMs: Date.UTC(2026, 5, 25),
+        endMs: Date.UTC(2026, 5, 25, 23, 59, 59, 999),
+        requestRefresh: false,
+      });
+      expect(bulk.cacheStatus.status).toBe("fresh");
+      expect(bulk.summaries[0]?.totalTokens).toBe(18);
+
+      const summaryFromStalePath = await loadSessionCostSummary({
+        agentId: "main",
+        sessionEntry,
+        sessionFile: legacyJsonl,
+        sessionId,
+      });
+      expect(summaryFromStalePath?.totalTokens).toBe(18);
+
+      await expect(loadSessionUsageTimeSeries({ agentId: "main", sessionFile })).resolves.toEqual({
+        sessionId: undefined,
+        points: [
+          expect.objectContaining({
+            input: 7,
+            output: 11,
+            totalTokens: 18,
+          }),
+        ],
+      });
+      await expect(
+        loadSessionUsageTimeSeries({
+          agentId: "main",
+          sessionEntry,
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).resolves.toEqual({
+        sessionId,
+        points: [
+          expect.objectContaining({
+            input: 7,
+            output: 11,
+            totalTokens: 18,
+          }),
+        ],
+      });
+      await expect(loadSessionLogs({ agentId: "main", sessionFile })).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            cost: 0.018,
+            role: "assistant",
+            tokens: 18,
+          }),
+        ]),
+      );
+      await expect(
+        loadSessionLogs({
+          agentId: "main",
+          sessionEntry,
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            cost: 0.018,
+            role: "assistant",
+            tokens: 18,
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("does not fall back from empty SQLite transcripts to stale JSONL usage files", async () => {
+    const root = await makeSessionCostRoot("sqlite-cost-empty");
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:empty-sqlite-cost";
+    const sessionId = "empty-sqlite-cost-session";
+    const sqliteMarker = `sqlite:main:${sessionId}:${storePath}`;
+    const legacyJsonl = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+
+    await withStateDir(root, async () => {
+      await upsertSessionEntry(
+        { sessionKey, storePath },
+        {
+          sessionFile: sqliteMarker,
+          sessionId,
+          updatedAt: Date.UTC(2026, 5, 25, 12, 0, 0),
+        },
+      );
+      await fs.mkdir(path.dirname(legacyJsonl), { recursive: true });
+      await fs.writeFile(
+        legacyJsonl,
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-06-25T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: { input: 100, output: 100, totalTokens: 200, cost: { total: 0.2 } },
+          },
+        }),
+        "utf-8",
+      );
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: { sessionFile: sqliteMarker, sessionId, updatedAt: 1 },
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).toBe(sqliteMarker);
     });
   });
 
@@ -191,7 +405,7 @@ describe("session cost usage", () => {
     const costSpy = vi.spyOn(usageFormat, "resolveModelCostConfig");
     try {
       await withStateDir(root, async () => {
-        const summary = await loadCostUsageSummary({ days: 30, config });
+        const summary = await loadCostUsageSummary({ config });
         expect(summary.totals.totalTokens).toBe(360);
         expect(summary.totals.totalCost).toBeCloseTo(0.0006, 8);
       });
@@ -237,7 +451,7 @@ describe("session cost usage", () => {
     // not an intentional "free" price.
     clearGatewayModelPricingCacheState();
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30 });
+      const summary = await loadCostUsageSummary();
       expect(summary.totals.totalTokens).toBe(23287);
       expect(summary.totals.totalCost).toBe(0);
       // Unknown pricing must be surfaced as missing rather than reported as a
@@ -297,7 +511,7 @@ describe("session cost usage", () => {
 
     clearGatewayModelPricingCacheState();
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30, config });
+      const summary = await loadCostUsageSummary({ config });
       expect(summary.totals.totalTokens).toBe(23287);
       expect(summary.totals.totalCost).toBe(0);
       expect(summary.totals.missingCostEntries).toBe(1);
@@ -449,6 +663,80 @@ describe("session cost usage", () => {
     }
   });
 
+  it("preserves a provider-billed zero total when total provenance is explicit", async () => {
+    const root = await makeSessionCostRoot("cost-provider-billed-zero-origin");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-openrouter-billed-zero.jsonl");
+    const entry = {
+      type: "message",
+      timestamp: "2026-02-05T12:00:00.000Z",
+      message: {
+        role: "assistant",
+        provider: "openrouter",
+        model: "openai/gpt-5.5",
+        content: "provider-billed free route",
+        usage: {
+          input: 10_000,
+          output: 5_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 15_000,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+            totalOrigin: "provider-billed",
+          },
+        },
+      },
+    };
+    await fs.writeFile(sessionFile, transcriptText("sess-openrouter-billed-zero", entry), "utf-8");
+
+    const config = {
+      models: {
+        providers: {
+          openrouter: {
+            models: [
+              {
+                id: "openai/gpt-5.5",
+                cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5, 23, 59, 59, 999),
+        config,
+      });
+      expect(summary.totals.totalTokens).toBe(15_000);
+      expect(summary.totals.totalCost).toBe(0);
+      expect(summary.totals.missingCostEntries).toBe(0);
+
+      await refreshCostUsageCache({ config, sessionFiles: [sessionFile] });
+      const cached = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5, 23, 59, 59, 999),
+        config,
+        requestRefresh: false,
+      });
+      expect(cached.totals.totalCost).toBe(0);
+      expect(cached.totals.missingCostEntries).toBe(0);
+
+      const logs = await loadSessionLogs({ sessionFile, config });
+      expect(logs?.[0]?.tokens).toBe(15_000);
+      expect(logs?.[0]?.cost).toBe(0);
+    });
+  });
+
   it("uses top-level transcript provider and model when recomputing session-log cost", async () => {
     const root = await makeSessionCostRoot("cost-known-pricing-top-level-metadata");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -527,10 +815,9 @@ describe("session cost usage", () => {
       // Simulate a durable cache written by a build from before the current cache
       // semantics: refresh under the current code, then stamp an older version.
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
-      cache.version = 5;
-      await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
+      const cache = readUsageCostCache<{ version: number }>();
+      cache.version = 6;
+      writeUsageCostCache(cache);
 
       // The pre-upgrade cache must be treated as stale (not served), forcing a rebuild
       // under current cost semantics instead of reusing old complete-$0 totals.
@@ -572,15 +859,164 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       await refreshCostUsageCache({ sessionFiles: sessionFiles.map((entry) => entry.sessionFile) });
-      const result = await loadSessionCostSummariesFromCache({
-        sessions: sessionFiles,
-        agentId: "main",
-        startMs: Date.UTC(2026, 1, 5),
-        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
-      });
+      const createDayFormatter = formatDatetime.createTimeZoneDayKeyFormatter;
+      let formatDayKeyCalls = 0;
+      const dayFormatterSpy = vi
+        .spyOn(formatDatetime, "createTimeZoneDayKeyFormatter")
+        .mockImplementation((timeZone) => {
+          const formatDayKey = createDayFormatter(timeZone);
+          return (date) => {
+            formatDayKeyCalls += 1;
+            return formatDayKey(date);
+          };
+        });
+      try {
+        const result = await loadSessionCostSummariesFromCache({
+          sessions: sessionFiles,
+          agentId: "main",
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          dayBucket: { mode: "time-zone", timeZone: "Europe/Vienna" },
+        });
 
-      expect(result.cacheStatus.status).toBe("fresh");
-      expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2]);
+        expect(result.cacheStatus.status).toBe("fresh");
+        expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2]);
+        expect(dayFormatterSpy).toHaveBeenCalledTimes(1);
+        expect(formatDayKeyCalls).toBe(2);
+      } finally {
+        dayFormatterSpy.mockRestore();
+      }
+    });
+  });
+
+  it("rebuckets cached session daily fields with the request timezone offset", async () => {
+    const root = await makeSessionCostRoot("cost-cache-request-offset");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-offset.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "message",
+          timestamp: "2026-02-12T00:29:00.000Z",
+          message: { role: "user", content: "hello" },
+        },
+        {
+          type: "message",
+          timestamp: "2026-02-12T00:30:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.00001 } },
+          },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+      const result = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId: "sess-offset", sessionFile }],
+        agentId: "main",
+        startMs: Date.UTC(2026, 1, 11, 2),
+        endMs: Date.UTC(2026, 1, 12, 1, 59, 59, 999),
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
+      });
+      const summary = requireValue(result.summaries[0], "offset session summary missing");
+
+      expect(summary.activityDates).toEqual(["2026-02-11"]);
+      expect(summary.dailyBreakdown).toEqual([{ date: "2026-02-11", tokens: 15, cost: 0.00001 }]);
+      expect(summary.dailyMessageCounts?.map((entry) => entry.date)).toEqual(["2026-02-11"]);
+      expect(summary.dailyLatency?.map((entry) => entry.date)).toEqual(["2026-02-11"]);
+      expect(summary.dailyModelUsage?.map((entry) => entry.date)).toEqual(["2026-02-11"]);
+      expect(new Set(summary.utcQuarterHourMessageCounts?.map((entry) => entry.date))).toEqual(
+        new Set(["2026-02-12"]),
+      );
+    });
+  });
+
+  it("rebuckets cost and session days with historical DST offsets", async () => {
+    const root = await makeSessionCostRoot("cost-cache-request-timezone");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-timezone.jsonl");
+    const usage = {
+      input: 10,
+      output: 5,
+      totalTokens: 15,
+      cost: { total: 0.00001 },
+    };
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "message",
+          timestamp: "2026-03-28T22:29:00.000Z",
+          message: { role: "user", content: "before DST" },
+        },
+        {
+          type: "message",
+          timestamp: "2026-03-28T22:30:00.000Z",
+          message: { role: "assistant", usage },
+        },
+        {
+          type: "message",
+          timestamp: "2026-03-29T22:29:00.000Z",
+          message: { role: "user", content: "after DST" },
+        },
+        {
+          type: "message",
+          timestamp: "2026-03-29T22:30:00.000Z",
+          message: { role: "assistant", usage },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ agentId: "main", sessionFiles: [sessionFile] });
+      const dayBucket = { mode: "time-zone", timeZone: "Europe/Vienna" } as const;
+      const startMs = Date.parse("2026-03-27T23:00:00.000Z");
+      const endMs = Date.parse("2026-03-30T21:59:59.999Z");
+      const cost = await loadCostUsageSummaryFromCache({
+        agentId: "main",
+        startMs,
+        endMs,
+        dayBucket,
+        requestRefresh: false,
+      });
+      const sessions = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId: "sess-timezone", sessionFile }],
+        agentId: "main",
+        startMs,
+        endMs,
+        dayBucket,
+        requestRefresh: false,
+      });
+      const session = requireValue(sessions.summaries[0], "timezone session summary missing");
+
+      expect(cost.days).toBe(3);
+      expect(cost.daily.map((entry) => [entry.date, entry.totalTokens])).toEqual([
+        ["2026-03-28", 15],
+        ["2026-03-29", 0],
+        ["2026-03-30", 15],
+      ]);
+      expect(session.activityDates).toEqual(["2026-03-28", "2026-03-30"]);
+      expect(session.dailyBreakdown?.map((entry) => [entry.date, entry.tokens])).toEqual([
+        ["2026-03-28", 15],
+        ["2026-03-30", 15],
+      ]);
+      expect(session.dailyMessageCounts?.map((entry) => entry.date)).toEqual([
+        "2026-03-28",
+        "2026-03-30",
+      ]);
     });
   });
 
@@ -620,7 +1056,7 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30 });
+      const summary = await loadCostUsageSummary();
       expect(summary.daily.length).toBe(summary.days);
       const populated = summary.daily.filter((d) => d.totalTokens > 0);
       expect(populated).toHaveLength(1);
@@ -652,6 +1088,38 @@ describe("session cost usage", () => {
       expect(dates.toSorted()).toEqual(dates);
       expect(summary.totals.totalTokens).toBe(0);
       expect(summary.totals.totalCost).toBe(0);
+    });
+  });
+
+  it("buckets daily totals with the request timezone offset", async () => {
+    const root = await makeSessionCostRoot("cost-offset-bucket");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-offset.jsonl"),
+      transcriptText("sess-offset", {
+        type: "message",
+        timestamp: "2026-02-12T00:30:00.000Z",
+        message: {
+          role: "assistant",
+          usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.00001 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const startMs = Date.UTC(2026, 1, 11, 2);
+      const endMs = Date.UTC(2026, 1, 12, 1, 59, 59, 999);
+      const summary = await loadCostUsageSummary({
+        startMs,
+        endMs,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
+      });
+
+      expect(summary.daily.map((entry) => entry.date)).toEqual(["2026-02-11"]);
+      expect(summary.daily[0]?.totalTokens).toBe(15);
+      expect(summary.daily[0]?.totalCost).toBeCloseTo(0.00001, 8);
     });
   });
 
@@ -906,10 +1374,9 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       await refreshCostUsageCache();
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const beforeCache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+      const beforeCache = readUsageCostCache<{
         files: Record<string, { parsedRecords: number; countedRecords: number }>;
-      };
+      }>();
       expect(beforeCache.files[sessionFile]?.parsedRecords).toBe(1);
 
       await fs.appendFile(
@@ -927,9 +1394,9 @@ describe("session cost usage", () => {
         endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
         requestRefresh: false,
       });
-      const afterCache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+      const afterCache = readUsageCostCache<{
         files: Record<string, { parsedRecords: number; countedRecords: number }>;
-      };
+      }>();
 
       expect(summary.totals.totalTokens).toBe(60);
       expect(summary.totals.totalCost).toBeCloseTo(0.06, 5);
@@ -1102,11 +1569,10 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       await refreshCostUsageCache({ config: configFor(1, 1) });
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+      const cache = readUsageCostCache<{
         pricingFingerprint?: unknown;
         files: Record<string, Record<string, unknown>>;
-      };
+      }>();
       expect(typeof cache.pricingFingerprint).toBe("string");
       expect(cache.files[sessionFile]).not.toHaveProperty("pricingFingerprint");
       expect(cache.files[sessionFile]).not.toHaveProperty("filePath");
@@ -1133,14 +1599,14 @@ describe("session cost usage", () => {
     });
   });
 
-  it("reclaims stale usage cache temp files before refreshing", async () => {
-    const root = await makeSessionCostRoot("cost-cache-temp-cleanup");
+  it("does not create usage cache sidecar files", async () => {
+    const root = await makeSessionCostRoot("cost-cache-no-sidecars");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "sess-cache-temp-cleanup.jsonl");
+    const sessionFile = path.join(sessionsDir, "sess-cache-no-sidecars.jsonl");
     await fs.writeFile(
       sessionFile,
-      transcriptText("sess-cache-temp-cleanup", {
+      transcriptText("sess-cache-no-sidecars", {
         type: "message",
         timestamp: "2026-02-05T12:00:00.000Z",
         message: {
@@ -1158,36 +1624,12 @@ describe("session cost usage", () => {
       "utf-8",
     );
 
-    const staleLegacyTempPath = path.join(sessionsDir, ".usage-cost-cache.json.12345.tmp");
-    const staleCurrentTempPath = path.join(sessionsDir, ".usage-cost-cache.12345.tmp");
-    const recentTempPath = path.join(sessionsDir, ".usage-cost-cache.67890.tmp");
-    const lockTempPath = path.join(sessionsDir, ".usage-cost-cache.json.lock.12345.tmp");
-    await Promise.all(
-      [staleLegacyTempPath, staleCurrentTempPath, recentTempPath, lockTempPath].map((tempPath) =>
-        fs.writeFile(tempPath, "partial\n", "utf-8"),
-      ),
-    );
-    const staleTime = new Date(Date.now() - 60_000);
-    await Promise.all(
-      [staleLegacyTempPath, staleCurrentTempPath, lockTempPath].map((tempPath) =>
-        fs.utimes(tempPath, staleTime, staleTime),
-      ),
-    );
-
-    const exists = async (filePath: string): Promise<boolean> =>
-      await fs.stat(filePath).then(
-        () => true,
-        () => false,
-      );
-
     await withStateDir(root, async () => {
       const result = await refreshCostUsageCache();
       expect(result).toBe("refreshed");
-
-      expect(await exists(staleLegacyTempPath)).toBe(false);
-      expect(await exists(staleCurrentTempPath)).toBe(false);
-      expect(await exists(recentTempPath)).toBe(true);
-      expect(await exists(lockTempPath)).toBe(true);
+      expect(
+        (await fs.readdir(sessionsDir)).filter((name) => name.includes("usage-cost-cache")),
+      ).toEqual([]);
 
       const summary = await loadCostUsageSummaryFromCache({
         startMs: Date.UTC(2026, 1, 5),
@@ -1199,7 +1641,7 @@ describe("session cost usage", () => {
     });
   });
 
-  it("keeps queued durable aggregate refresh state scoped to the cache path", async () => {
+  it("keeps queued durable aggregate refresh state scoped to the agent database", async () => {
     const firstRoot = await makeSessionCostRoot("cost-cache-queued-first");
     const secondRoot = await makeSessionCostRoot("cost-cache-queued-second");
     const writeSession = async (root: string, sessionId: string) => {
@@ -1342,11 +1784,10 @@ describe("session cost usage", () => {
       });
 
       expect(summary.totals.totalTokens).toBe(30);
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
       await waitFor(async () => {
-        const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        const cache = readUsageCostCache<{
           files: Record<string, unknown>;
-        };
+        }>();
         return Boolean(cache.files[oldSessionFile]);
       });
     });
@@ -1517,10 +1958,9 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
+      const cache = readUsageCostCache<{ version: number }>();
       cache.version = 2;
-      await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
+      writeUsageCostCache(cache);
 
       const summary = await loadSessionCostSummaryFromCache({
         sessionId: "sess-cache-version",
@@ -1699,6 +2139,49 @@ describe("session cost usage", () => {
     });
   });
 
+  it("preserves offset-aware synchronous fallback for aggregate-only cache entries", async () => {
+    const root = await makeSessionCostRoot("cost-cache-session-sync-offset");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-session-sync-offset.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-05T00:30:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 10,
+            output: 20,
+            totalTokens: 30,
+            cost: { total: 0.03 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      const summary = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-session-sync-offset",
+        sessionFile,
+        startMs: Date.UTC(2026, 1, 4, 2),
+        endMs: Date.UTC(2026, 1, 5, 1, 59, 59, 999),
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
+        requestRefresh: false,
+        refreshMode: "sync-when-empty",
+      });
+
+      expect(summary.summary?.totalTokens).toBe(30);
+      expect(summary.summary?.dailyBreakdown).toEqual([
+        { date: "2026-02-04", tokens: 30, cost: 0.03 },
+      ]);
+      expect(summary.cacheStatus.status).toBe("partial");
+    });
+  });
+
   it("limits session summary refreshes to requested files", async () => {
     const root = await makeSessionCostRoot("cost-cache-session-requested-files");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -1731,10 +2214,9 @@ describe("session cost usage", () => {
     await withStateDir(root, async () => {
       await refreshCostUsageCache();
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+      const cache = readUsageCostCache<{
         files: Record<string, { sessionSummary?: unknown }>;
-      };
+      }>();
 
       expect(cache.files[sessionFile]).toHaveProperty("sessionSummary");
       expect(cache.files[otherSessionFile]?.sessionSummary).toBeUndefined();
@@ -1765,24 +2247,20 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await fs.writeFile(
-        lockPath,
-        `${JSON.stringify({
-          pid: process.pid,
-          startedAt: Date.now() - 60 * 60 * 1000,
-        })}\n`,
-        "utf-8",
-      );
+      sessionCostUsageCacheTestApi.writeRefreshLock(undefined, {
+        pid: process.pid,
+        startedAt: Date.now() - 60 * 60 * 1000,
+        ownerNonce: "live-owner",
+      });
 
       const result = await refreshCostUsageCache();
       expect(result).toBe("busy");
-      expect(await fs.readFile(lockPath, "utf-8")).toContain(String(process.pid));
+      expect(sessionCostUsageCacheTestApi.readRefreshLock()).toMatchObject({ pid: process.pid });
+      sessionCostUsageCacheTestApi.clearRefreshLock();
     });
   });
 
-  it("treats in-progress usage cache lock writes as busy", async () => {
+  it("reclaims malformed SQLite usage cache locks", async () => {
     const root = await makeSessionCostRoot("cost-cache-malformed-lock-recent");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -1806,17 +2284,10 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await fs.writeFile(lockPath, "", "utf-8");
-
-      try {
-        const result = await refreshCostUsageCache();
-        expect(result).toBe("busy");
-        expect(await fs.readFile(lockPath, "utf-8")).toBe("");
-      } finally {
-        await fs.rm(lockPath, { force: true });
-      }
+      sessionCostUsageCacheTestApi.writeMalformedRefreshLock(undefined, "{");
+      const result = await refreshCostUsageCache();
+      expect(result).toBe("refreshed");
+      expect(sessionCostUsageCacheTestApi.readRefreshLock()).toBeNull();
     });
   });
 
@@ -1844,16 +2315,11 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await fs.writeFile(
-        lockPath,
-        `${JSON.stringify({
-          pid: 2_147_483_647,
-          startedAt: Date.now(),
-        })}\n`,
-        "utf-8",
-      );
+      sessionCostUsageCacheTestApi.writeRefreshLock(undefined, {
+        pid: 2_147_483_647,
+        startedAt: Date.now(),
+        ownerNonce: "abandoned-owner",
+      });
 
       const result = await refreshCostUsageCache();
       expect(result).toBe("refreshed");
@@ -1899,11 +2365,7 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await fs.writeFile(lockPath, "{", "utf-8");
-      const old = new Date(Date.now() - 60_000);
-      await fs.utimes(lockPath, old, old);
+      sessionCostUsageCacheTestApi.writeMalformedRefreshLock(undefined, "{");
 
       const result = await refreshCostUsageCache();
       expect(result).toBe("refreshed");
@@ -1925,11 +2387,10 @@ describe("session cost usage", () => {
     });
   });
 
-  it("throttles cache writes during a large stale refresh and skips writes when nothing changed", async () => {
+  it("checkpoints a large SQLite cache refresh and skips writes when nothing changed", async () => {
     const root = await makeSessionCostRoot("cost-cache-throttle");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
 
     const sessionCount = 300; // > USAGE_COST_CACHE_CHECKPOINT_FILES (256)
     const baseTimestamp = "2026-02-05T12:00:00.000Z";
@@ -1960,40 +2421,19 @@ describe("session cost usage", () => {
     }
 
     await withStateDir(root, async () => {
-      const renameSpy = vi.spyOn(fs, "rename");
-      const cacheRenamesBefore = renameSpy.mock.calls.length;
-      try {
-        await refreshCostUsageCache();
-        const cacheRenamesAfterCold = renameSpy.mock.calls.filter(
-          ([, dest]) => dest === cachePath,
-        ).length;
+      await refreshCostUsageCache();
+      const updatedAt = readUsageCostCache<{ updatedAt: number }>().updatedAt;
 
-        // Without throttling this cold refresh would rewrite once per file plus a final flush.
-        // With checkpointing it must be far fewer than the file count.
-        expect(cacheRenamesAfterCold).toBeGreaterThan(0);
-        expect(cacheRenamesAfterCold).toBeLessThan(sessionCount / 4);
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      expect(summary.totals.totalTokens).toBe(sessionCount);
+      expect(summary.cacheStatus?.status).toBe("fresh");
 
-        const summary = await loadCostUsageSummaryFromCache({
-          startMs: Date.UTC(2026, 1, 5),
-          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
-          requestRefresh: false,
-        });
-        expect(summary.totals.totalTokens).toBe(sessionCount);
-        expect(summary.cacheStatus?.status).toBe("fresh");
-
-        // No-op refresh: nothing stale, nothing deleted -> no cache rewrite.
-        const renamesBeforeNoOp = renameSpy.mock.calls.filter(
-          ([, dest]) => dest === cachePath,
-        ).length;
-        await refreshCostUsageCache();
-        const renamesAfterNoOp = renameSpy.mock.calls.filter(
-          ([, dest]) => dest === cachePath,
-        ).length;
-        expect(renamesAfterNoOp).toBe(renamesBeforeNoOp);
-      } finally {
-        renameSpy.mockRestore();
-        void cacheRenamesBefore;
-      }
+      await refreshCostUsageCache();
+      expect(readUsageCostCache<{ updatedAt: number }>().updatedAt).toBe(updatedAt);
     });
   });
 
@@ -2117,10 +2557,9 @@ describe("session cost usage", () => {
         );
       });
 
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+      const cache = readUsageCostCache<{
         files: Record<string, { sessionSummary?: unknown }>;
-      };
+      }>();
       expect(cache.files).toHaveProperty(firstSessionFile);
       expect(cache.files).toHaveProperty(secondSessionFile);
       expect(cache.files[firstSessionFile]).toHaveProperty("sessionSummary");
@@ -2155,13 +2594,11 @@ describe("session cost usage", () => {
     try {
       await withStateDir(root, async () => {
         await refreshCostUsageCache();
-        const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-        const lockPath = `${cachePath}.lock`;
-        await fs.writeFile(
-          lockPath,
-          `${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`,
-          "utf-8",
-        );
+        sessionCostUsageCacheTestApi.writeRefreshLock(undefined, {
+          pid: process.pid,
+          startedAt: Date.now(),
+          ownerNonce: "queued-owner",
+        });
 
         try {
           const cold = await loadSessionCostSummaryFromCache({
@@ -2178,7 +2615,7 @@ describe("session cost usage", () => {
           });
           expect(stillMissing.summary).toBeNull();
         } finally {
-          await fs.rm(lockPath, { force: true });
+          sessionCostUsageCacheTestApi.clearRefreshLock();
         }
 
         await vi.waitFor(
@@ -2521,6 +2958,39 @@ describe("session cost usage", () => {
     });
   });
 
+  it("keeps discovered first-message text on a UTF-16 boundary", async () => {
+    const root = await makeSessionCostRoot("discover-utf16-first-message");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const content = `${"a".repeat(99)}🚀tail`;
+    const fixtures = [
+      { sessionId: "sess-string", content },
+      { sessionId: "sess-block", content: [{ type: "text", text: content }] },
+    ];
+    for (const fixture of fixtures) {
+      await fs.writeFile(
+        path.join(sessionsDir, `${fixture.sessionId}.jsonl`),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T17:47:00.000Z",
+          message: { role: "user", content: fixture.content },
+        }),
+        "utf-8",
+      );
+    }
+
+    await withStateDir(root, async () => {
+      const messages = new Map(
+        (await discoverAllSessions()).map((session) => [
+          session.sessionId,
+          session.firstUserMessage,
+        ]),
+      );
+      expect(messages.get("sess-string")).toBe("a".repeat(99));
+      expect(messages.get("sess-block")).toBe("a".repeat(99));
+    });
+  });
+
   it("falls back to archived reset transcripts for per-session detail queries", async () => {
     const root = await makeSessionCostRoot("session-archive-fallback");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -2791,6 +3261,64 @@ example
     expect(logs).toHaveLength(1);
     expect(logs?.[0]?.role).toBe("user");
     expect(logs?.[0]?.content).toBe("hello there");
+  });
+
+  it("does not split surrogate pairs when truncating session log content", async () => {
+    const root = await makeSessionCostRoot("logs-utf16");
+    const sessionFile = path.join(root, "session.jsonl");
+    const content = "x".repeat(1999) + "🚀tail";
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-21T17:47:00.000Z",
+        message: { role: "assistant", content },
+      }),
+      "utf-8",
+    );
+
+    const logs = await loadSessionLogs({ sessionFile });
+
+    expect(logs?.[0]?.content).toBe(`${"x".repeat(1999)}…`);
+  });
+
+  it("normalizes malformed log timestamps with the transcript timestamp rules", async () => {
+    const root = await makeSessionCostRoot("logs-malformed-timestamp");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-malformed.jsonl");
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "not-a-valid-date-string",
+          message: { role: "user", content: "bad timestamp entry" },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "still-not-a-valid-date-string",
+          message: {
+            role: "assistant",
+            content: "nested timestamp entry",
+            timestamp: Date.parse("2026-02-21T17:46:00.000Z"),
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T17:47:00.000Z",
+          message: { role: "assistant", content: "valid timestamp entry" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const logs = await loadSessionLogs({ sessionFile });
+    expect(logs).toHaveLength(3);
+    expect(logs?.[0]?.timestamp).toBe(0);
+    expect(logs?.[1]?.timestamp).toBe(Date.parse("2026-02-21T17:46:00.000Z"));
+    expect(logs?.[2]?.timestamp).toBe(Date.parse("2026-02-21T17:47:00.000Z"));
   });
 
   it("buckets hourly message counts into UTC quarter-hour slots", async () => {

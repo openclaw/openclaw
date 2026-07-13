@@ -161,6 +161,26 @@ normalizes numeric thread ids the same way core does, so prefer it over ad hoc
 should expose `messaging.resolveOutboundSessionRoute(...)` so core gets
 provider-native session and thread identity without parser shims.
 
+### Account-scoped conversation binding support
+
+Set `conversationBindings.supportsCurrentConversationBinding` when the channel
+supports generic current-conversation bindings. `createChatChannelPlugin(...)`
+sets this static capability to `true` by default.
+
+If support differs by configured account, also implement
+`conversationBindings.isCurrentConversationBindingSupported({ accountId })`.
+Core evaluates this synchronous hook only after the static capability is
+enabled. Returning `false` makes generic current-conversation capability,
+bind, lookup, list, touch, and unbind operations unavailable for that account.
+Omitting the hook applies the static capability to every account.
+
+Resolve the answer from already-loaded account config or runtime state. This
+hook gates only generic current-conversation bindings; it does not replace
+configured binding rules or plugin-owned session routing. Contract tests
+should cover at least one supported and one unsupported account through the
+`ChannelPlugin["conversationBindings"]` contract exported by
+`openclaw/plugin-sdk/channel-core`.
+
 ## Approvals and channel capabilities
 
 Most channel plugins do not need approval-specific code. Core owns same-chat
@@ -291,6 +311,11 @@ Other approval helpers:
 - Preserve the delivered approval id kind end-to-end. Native clients should
   not guess or rewrite exec vs plugin approval routing from channel-local
   state.
+- Pass that explicit `approvalKind` to `resolveApprovalOverGateway`. This uses
+  the canonical `approval.resolve` service and returns the recorded winner when
+  another surface answers first. The older explicit `resolveMethod` input
+  remains for command-backed controls; new native actions must not use it or
+  infer kind from an ID.
 - Different approval kinds can intentionally expose different native
   surfaces. Current bundled examples: Matrix keeps the same native DM/channel
   routing and reaction UX for exec and plugin approvals, while still letting
@@ -309,6 +334,7 @@ For hot channel entrypoints, prefer these narrower subpaths over the broader
 - `openclaw/plugin-sdk/approval-client-runtime`
 - `openclaw/plugin-sdk/approval-delivery-runtime`
 - `openclaw/plugin-sdk/approval-gateway-runtime`
+- `openclaw/plugin-sdk/approval-reference-runtime`
 - `openclaw/plugin-sdk/approval-handler-adapter-runtime`
 - `openclaw/plugin-sdk/approval-handler-runtime`
 - `openclaw/plugin-sdk/approval-native-runtime`

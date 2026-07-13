@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 
@@ -44,6 +45,17 @@ export const TalkSpeakParamsSchema = Type.Object(
     normalize: Type.Optional(Type.String()),
     language: Type.Optional(Type.String()),
     latencyTier: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+/**
+ * One-shot text-to-speech request rendered with the configured TTS provider
+ * chain (unlike `talk.speak`, which pins the Talk-mode provider).
+ */
+export const TtsSpeakParamsSchema = Type.Object(
+  {
+    text: NonEmptyString,
   },
   { additionalProperties: false },
 );
@@ -620,7 +632,14 @@ const TalkRealtimeConfigSchema = Type.Object(
     instructions: Type.Optional(Type.String()),
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
+    vadThreshold: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+    silenceDurationMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    prefixPaddingMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    reasoningEffort: Type.Optional(Type.String({ minLength: 1 })),
     brain: Type.Optional(TalkBrainSchema),
+    consultRouting: Type.Optional(
+      Type.Union([Type.Literal("provider-direct"), Type.Literal("force-agent-consult")]),
+    ),
   },
   { additionalProperties: false },
 );
@@ -686,6 +705,18 @@ export const TalkSpeakResultSchema = Type.Object(
     provider: NonEmptyString,
     outputFormat: Type.Optional(Type.String()),
     voiceCompatible: Type.Optional(Type.Boolean()),
+    mimeType: Type.Optional(Type.String()),
+    fileExtension: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+/** Text-to-speech result for `tts.speak` with encoded audio and provider metadata. */
+export const TtsSpeakResultSchema = Type.Object(
+  {
+    audioBase64: NonEmptyString,
+    provider: NonEmptyString,
+    outputFormat: Type.Optional(Type.String()),
     mimeType: Type.Optional(Type.String()),
     fileExtension: Type.Optional(Type.String()),
   },
@@ -850,3 +881,44 @@ export const WebLoginWaitParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type TalkEvent = Static<typeof TalkEventSchema>;
+export type TalkModeParams = Static<typeof TalkModeParamsSchema>;
+export type TalkCatalogParams = Static<typeof TalkCatalogParamsSchema>;
+export type TalkCatalogResult = Static<typeof TalkCatalogResultSchema>;
+export type TalkConfigParams = Static<typeof TalkConfigParamsSchema>;
+export type TalkConfigResult = Static<typeof TalkConfigResultSchema>;
+export type TalkClientCreateParams = Static<typeof TalkClientCreateParamsSchema>;
+export type TalkClientCreateResult = Static<typeof TalkClientCreateResultSchema>;
+export type TalkClientSteerParams = Static<typeof TalkClientSteerParamsSchema>;
+export type TalkAgentControlResult = Static<typeof TalkAgentControlResultSchema>;
+export type TalkClientToolCallParams = Static<typeof TalkClientToolCallParamsSchema>;
+export type TalkClientToolCallResult = Static<typeof TalkClientToolCallResultSchema>;
+export type TalkSessionCreateParams = Static<typeof TalkSessionCreateParamsSchema>;
+export type TalkSessionCreateResult = Static<typeof TalkSessionCreateResultSchema>;
+export type TalkSessionJoinParams = Static<typeof TalkSessionJoinParamsSchema>;
+export type TalkSessionJoinResult = Static<typeof TalkSessionJoinResultSchema>;
+export type TalkSessionAppendAudioParams = Static<typeof TalkSessionAppendAudioParamsSchema>;
+export type TalkSessionTurnParams = Static<typeof TalkSessionTurnParamsSchema>;
+export type TalkSessionCancelTurnParams = Static<typeof TalkSessionCancelTurnParamsSchema>;
+export type TalkSessionCancelOutputParams = Static<typeof TalkSessionCancelOutputParamsSchema>;
+export type TalkSessionTurnResult = Static<typeof TalkSessionTurnResultSchema>;
+export type TalkSessionSteerParams = Static<typeof TalkSessionSteerParamsSchema>;
+export type TalkSessionSubmitToolResultParams = Static<
+  typeof TalkSessionSubmitToolResultParamsSchema
+>;
+export type TalkSessionCloseParams = Static<typeof TalkSessionCloseParamsSchema>;
+export type TalkSessionOkResult = Static<typeof TalkSessionOkResultSchema>;
+export type TalkSpeakParams = Static<typeof TalkSpeakParamsSchema>;
+export type TalkSpeakResult = Static<typeof TalkSpeakResultSchema>;
+export type TtsSpeakParams = Static<typeof TtsSpeakParamsSchema>;
+export type TtsSpeakResult = Static<typeof TtsSpeakResultSchema>;
+export type ChannelsStatusParams = Static<typeof ChannelsStatusParamsSchema>;
+export type ChannelsStatusResult = Static<typeof ChannelsStatusResultSchema>;
+export type ChannelsStartParams = Static<typeof ChannelsStartParamsSchema>;
+export type ChannelsStopParams = Static<typeof ChannelsStopParamsSchema>;
+export type ChannelsLogoutParams = Static<typeof ChannelsLogoutParamsSchema>;
+export type WebLoginStartParams = Static<typeof WebLoginStartParamsSchema>;
+export type WebLoginWaitParams = Static<typeof WebLoginWaitParamsSchema>;

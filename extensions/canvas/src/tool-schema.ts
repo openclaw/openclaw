@@ -10,7 +10,7 @@ import {
 import { Type } from "typebox";
 
 /** Agent tool actions supported by the Canvas plugin. */
-export const CANVAS_ACTIONS = [
+const CANVAS_ACTIONS = [
   "present",
   "hide",
   "navigate",
@@ -21,7 +21,16 @@ export const CANVAS_ACTIONS = [
 ] as const;
 
 /** Snapshot formats accepted by the Canvas tool. */
-export const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
+const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
+
+/** Gateway capability required for inline transcript widgets. */
+export const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
+
+/** TypeBox schema for inline web chat widgets. */
+export const ShowWidgetToolSchema = Type.Object({
+  title: Type.String(),
+  widget_code: Type.String(),
+});
 
 /** TypeBox schema for the model-facing Canvas tool arguments. */
 export const CanvasToolSchema = Type.Object({

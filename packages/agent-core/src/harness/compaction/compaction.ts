@@ -148,6 +148,9 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
+  if (usage.contextUsage?.state === "available") {
+    return usage.contextUsage.totalTokens;
+  }
   return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
@@ -166,8 +169,7 @@ function getAssistantUsage(msg: AgentMessage): Usage | undefined {
 
 /** Return usage from the last successful assistant message in session entries. */
 export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | undefined {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
+  for (const entry of entries.toReversed()) {
     if (entry.type === "message") {
       const usage = getAssistantUsage(entry.message);
       if (usage) {
@@ -184,7 +186,7 @@ export interface ContextUsageEstimate {
   tokens: number;
   /** Tokens reported by the most recent assistant usage block. */
   usageTokens: number;
-  /** Estimated tokens after the most recent assistant usage block. */
+  /** Estimated tokens not covered by usable provider usage. */
   trailingTokens: number;
   /** Index of the message that provided usage, or null when none exists. */
   lastUsageIndex: number | null;
@@ -194,8 +196,12 @@ function getLastAssistantUsageInfo(
   messages: AgentMessage[],
 ): { usage: Usage; index: number } | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const usage = getAssistantUsage(messages[i]);
-    if (usage) {
+    const message = messages.at(i);
+    if (!message) {
+      continue;
+    }
+    const usage = getAssistantUsage(message);
+    if (usage && usage.contextUsage?.state !== "unavailable") {
       return { usage, index: i };
     }
   }
@@ -221,8 +227,8 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 
   const usageTokens = calculateContextTokens(usageInfo.usage);
   let trailingTokens = 0;
-  for (let i = usageInfo.index + 1; i < messages.length; i++) {
-    trailingTokens += estimateTokens(messages[i]);
+  for (const message of messages.slice(usageInfo.index + 1)) {
+    trailingTokens += estimateTokens(message);
   }
 
   return {
@@ -321,6 +327,9 @@ function findValidCutPoints(
   const cutPoints: number[] = [];
   for (let i = startIndex; i < endIndex; i++) {
     const entry = entries[i];
+    if (!entry) {
+      continue;
+    }
     switch (entry.type) {
       case "message": {
         const role = (entry.message as HarnessMessage).role;
@@ -364,6 +373,9 @@ export function findTurnStartIndex(
 ): number {
   for (let i = entryIndex; i >= startIndex; i--) {
     const entry = entries[i];
+    if (!entry) {
+      continue;
+    }
     if (entry.type === "branch_summary" || entry.type === "custom_message") {
       return i;
     }
@@ -378,7 +390,7 @@ export function findTurnStartIndex(
 }
 
 /** Cut point selected for compaction. */
-export interface CutPointResult {
+interface CutPointResult {
   /** Index of the first entry retained after compaction. */
   firstKeptEntryIndex: number;
   /** Index of the turn-start entry when the cut splits a turn, otherwise -1. */
@@ -400,17 +412,25 @@ export function findCutPoint(
     return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
   }
   let accumulatedTokens = 0;
-  let cutIndex = cutPoints[0];
+  const firstCutIndex = cutPoints.at(0);
+  if (firstCutIndex === undefined) {
+    return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
+  }
+  let cutIndex = firstCutIndex;
 
   for (let i = endIndex - 1; i >= startIndex; i--) {
     const entry = entries[i];
-    if (entry.type !== "message") {
+    if (!entry || entry.type !== "message") {
       continue;
     }
     const messageTokens = estimateTokens(entry.message);
     accumulatedTokens += messageTokens;
     if (accumulatedTokens >= keepRecentTokens) {
-      cutIndex = cutPoints[cutPoints.length - 1];
+      const lastCutIndex = cutPoints.at(-1);
+      if (lastCutIndex === undefined) {
+        throw new Error("compaction cut-point list became empty during selection");
+      }
+      cutIndex = lastCutIndex;
       for (const cutPoint of cutPoints) {
         if (cutPoint >= i) {
           cutIndex = cutPoint;
@@ -422,6 +442,9 @@ export function findCutPoint(
   }
   while (cutIndex > startIndex) {
     const prevEntry = entries[cutIndex - 1];
+    if (!prevEntry) {
+      break;
+    }
     if (prevEntry.type === "compaction") {
       break;
     }
@@ -431,6 +454,9 @@ export function findCutPoint(
     cutIndex--;
   }
   const cutEntry = entries[cutIndex];
+  if (!cutEntry) {
+    throw new Error("compaction cut point does not reference a session entry");
+  }
   const isUserMessage = cutEntry.type === "message" && cutEntry.message.role === "user";
   const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
 
@@ -674,13 +700,13 @@ export function prepareCompaction(
   pathEntries: SessionTreeEntry[],
   settings: CompactionSettings,
 ): Result<CompactionPreparation | undefined, CompactionError> {
-  if (pathEntries.length === 0 || pathEntries[pathEntries.length - 1].type === "compaction") {
+  if (pathEntries.at(-1)?.type === "compaction" || pathEntries.length === 0) {
     return ok(undefined);
   }
 
   let prevCompactionIndex = -1;
   for (let i = pathEntries.length - 1; i >= 0; i--) {
-    if (pathEntries[i].type === "compaction") {
+    if (pathEntries.at(i)?.type === "compaction") {
       prevCompactionIndex = i;
       break;
     }
@@ -715,7 +741,8 @@ export function prepareCompaction(
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
   const messagesToSummarize: AgentMessage[] = [];
   for (let i = boundaryStart; i < historyEnd; i++) {
-    const msg = getMessageFromEntryForCompaction(pathEntries[i]);
+    const entry = pathEntries.at(i);
+    const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
     if (msg) {
       messagesToSummarize.push(msg);
     }
@@ -723,7 +750,8 @@ export function prepareCompaction(
   const turnPrefixMessages: AgentMessage[] = [];
   if (cutPoint.isSplitTurn) {
     for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
-      const msg = getMessageFromEntryForCompaction(pathEntries[i]);
+      const entry = pathEntries.at(i);
+      const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
       if (msg) {
         turnPrefixMessages.push(msg);
       }

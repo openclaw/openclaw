@@ -7,9 +7,9 @@ title: "Onboarding (macOS app)"
 sidebarTitle: "Onboarding: macOS App"
 ---
 
-The macOS app's first-run flow: pick where the Gateway runs, complete local
-setup through a Crestodian conversation, grant permissions, and hand off to
-the agent's own bootstrap ritual.
+The macOS app's first-run flow: pick where the Gateway runs, connect a
+verified AI backend, grant permissions, and hand off to the agent's own
+bootstrap ritual.
 For CLI onboarding and a comparison of both paths, see [Onboarding Overview](/start/onboarding-overview).
 
 <Steps>
@@ -65,18 +65,37 @@ Where does the **Gateway** run?
   preferring npm first. Node remains the recommended runtime for the Gateway
   itself. Existing compatible installations are reused.
 </Step>
-<Step title="Talk to Crestodian">
-  Local setup opens a dedicated conversation with Crestodian after the Gateway
-  is ready. Crestodian detects an existing Claude Code or Codex login and
-  supported API keys, proposes the workspace and configuration, then waits for
-  approval before writing anything. Next remains locked until the conversation
-  has authored setup state. Credential prompts use masked input; after an
-  ambiguous transport failure, restart the setup conversation instead of
-  replaying the previous turn.
+<Step title="Connect your AI">
+  A connected Gateway that already has a configured agent model skips this
+  page entirely and opens the normal agent UI. Crestodian and provider setup
+  only run for a fresh or incomplete Gateway.
 
-  Remote and Configure Later flows skip this local setup conversation.
+Once the Gateway is ready, onboarding looks for AI access you already have:
+a Claude Code or Codex login, or `OPENAI_API_KEY` /
+`ANTHROPIC_API_KEY`. The best option is tested with a real completion and
+only saved after it answers; when a test fails the app automatically tries
+the next option and shows why the previous one failed. If several options
+are found you can switch between them before continuing.
+
+Gemini CLI remains available for normal agents after setup, but it is not
+offered here because it cannot enforce the tool-free inference probe.
+
+You can also sign in through the provider's own OAuth or device-pairing flow.
+The built-in choices include OpenAI/ChatGPT, OpenRouter, GitHub Copilot, Google
+Gemini CLI, xAI, MiniMax Global and CN, and Chutes. The list comes from the
+Gateway's active text-inference provider plugins rather than a fixed app list,
+so another provider can opt in without adding provider-specific macOS code.
+
+The manual key/token picker uses the same provider registry. In every route,
+the provider supplies its starter model and configuration; OpenClaw verifies
+the credential with the same live test before storing its auth profile. Next
+remains locked until one backend has passed, so the first agent chat cannot
+start without working inference. After that live check passes, Crestodian becomes
+available to help configure the remaining workspace, Gateway, channels, and
+other optional features; it is also available later under Settings → Crestodian.
 </Step>
 <Step title="Permissions">
+
 <Frame caption="Choose what permissions do you want to give OpenClaw">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -84,12 +103,13 @@ Where does the **Gateway** run?
 Onboarding requests TCC permissions for: Automation (AppleScript), Notifications, Accessibility, Screen Recording, Microphone, Speech Recognition, Camera, and Location.
 
 </Step>
-<Step title="Onboarding Chat (dedicated session)">
-  After setup, the app opens a separate agent onboarding chat so the agent can
-  introduce itself and guide next steps without mixing that exchange into the
-  normal conversation history. This follows the Crestodian setup conversation;
-  it does not replace it. See [Bootstrapping](/start/bootstrapping) for what
-  happens on the gateway host during the agent's first real turn.
+<Step title="Finish">
+  After inference passes, Crestodian owns the remaining optional setup and can
+  hand you off to the normal agent chat. Finishing the permission walkthrough
+  opens that same chat; the app does not create a workspace or launch a separate
+  agent setup conversation before Crestodian. See
+  [Bootstrapping](/start/bootstrapping) for what happens on the gateway host
+  during the agent's first real turn.
 </Step>
 </Steps>
 

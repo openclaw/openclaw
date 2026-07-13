@@ -1,5 +1,6 @@
 // Executes task records through configured runtimes and updates registry state.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DetachedRunningTaskCreateParams,
@@ -8,6 +9,7 @@ import type {
 } from "./detached-task-runtime-contract.js";
 import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import {
+  assertTaskCancellationReadyById,
   cancelTaskById,
   createTaskRecord,
   getTaskById,
@@ -19,6 +21,10 @@ import {
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
 } from "./runtime-internal.js";
+import {
+  isProvisionalSubagentKillTask,
+  isTaskFlowCancellationPending,
+} from "./task-cancellation-state.js";
 import { getTaskFlowByIdForOwner } from "./task-flow-owner-access.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
@@ -174,6 +180,7 @@ export function completeTaskRunByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  suppressDelivery?: boolean;
 }) {
   return finalizeTaskRunByRunId({
     ...params,
@@ -195,6 +202,7 @@ export function failTaskRunByRunId(params: {
   error?: string;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  suppressDelivery?: boolean;
 }) {
   return finalizeTaskRunByRunId({
     ...params,
@@ -227,10 +235,6 @@ type RunTaskInFlowResult = {
   flow?: TaskFlowRecord;
   task?: TaskRecord;
 };
-
-function isActiveTaskStatus(status: TaskStatus): boolean {
-  return status === "queued" || status === "running";
-}
 
 function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {
   return (
@@ -475,6 +479,33 @@ export async function cancelFlowById(params: {
     };
   }
   if (isTerminalFlowStatus(flow.status)) {
+    const provisionalTasks = listTasksForFlowId(flow.flowId).filter(isProvisionalSubagentKillTask);
+    if (flow.status === "cancelled" && provisionalTasks.length > 0) {
+      for (const task of provisionalTasks) {
+        await cancelDetachedTaskRunById({ cfg: params.cfg, taskId: task.taskId });
+      }
+      const tasks = listTasksForFlowId(flow.flowId);
+      if (tasks.some(isProvisionalSubagentKillTask)) {
+        return {
+          found: true,
+          cancelled: false,
+          reason: "One or more child tasks remain provisionally cancelled.",
+          flow: getTaskFlowById(flow.flowId) ?? flow,
+          tasks,
+        };
+      }
+      const refreshedFlow = getTaskFlowById(flow.flowId) ?? flow;
+      return {
+        found: true,
+        cancelled: refreshedFlow.status === "cancelled",
+        reason:
+          refreshedFlow.status === "cancelled"
+            ? undefined
+            : `Flow is already ${refreshedFlow.status}.`,
+        flow: refreshedFlow,
+        tasks,
+      };
+    }
     return {
       found: true,
       cancelled: false,
@@ -494,7 +525,7 @@ export async function cancelFlowById(params: {
     };
   }
   const linkedTasks = listTasksForFlowId(flow.flowId);
-  const activeTasks = linkedTasks.filter((task) => isActiveTaskStatus(task.status));
+  const activeTasks = linkedTasks.filter(isTaskFlowCancellationPending);
   for (const task of activeTasks) {
     await cancelDetachedTaskRunById({
       cfg: params.cfg,
@@ -502,7 +533,7 @@ export async function cancelFlowById(params: {
     });
   }
   const refreshedTasks = listTasksForFlowId(flow.flowId);
-  const remainingActive = refreshedTasks.filter((task) => isActiveTaskStatus(task.status));
+  const remainingActive = refreshedTasks.filter(isTaskFlowCancellationPending);
   if (remainingActive.length > 0) {
     return {
       found: true,
@@ -566,12 +597,32 @@ export async function cancelFlowByIdForOwner(params: {
   });
 }
 
-export async function cancelDetachedTaskRunById(params: { cfg: OpenClawConfig; taskId: string }) {
+export async function cancelDetachedTaskRunById(params: {
+  cfg: OpenClawConfig;
+  taskId: string;
+  reason?: string;
+}) {
   const task = getTaskById(params.taskId);
+  const registeredRuntime = getRegisteredDetachedTaskLifecycleRuntime();
   if (!task) {
+    if (registeredRuntime) {
+      const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
+      if (cancelled.found) {
+        return cancelled;
+      }
+    }
     return cancelTaskById(params);
   }
-  const registeredRuntime = getRegisteredDetachedTaskLifecycleRuntime();
+  try {
+    assertTaskCancellationReadyById(task.taskId);
+  } catch (error) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: formatErrorMessage(error),
+      task,
+    };
+  }
   if (registeredRuntime) {
     const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
     if (cancelled.found) {

@@ -34,9 +34,10 @@ const CGROUP_MEMORY_LIMIT_PATHS = [
   "/sys/fs/cgroup/memory/memory.limit_in_bytes",
 ];
 const PROC_MEMINFO_PATH = "/proc/meminfo";
-const TERMINATION_GRACE_MS = 5_000;
+// Build descendants get a short cleanup window; a timed-out build must not hold CI for seconds.
+const TERMINATION_GRACE_MS = 250;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
-const POST_FORCE_KILL_WAIT_MS = 1_000;
+const POST_FORCE_KILL_WAIT_MS = 250;
 const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const PRESERVED_TSDOWN_OUTPUT_FILES = ["dist/cli-startup-metadata.json"];
 const PRESERVE_CLI_STARTUP_METADATA_ENV = "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA";
@@ -485,7 +486,7 @@ function resolveTsdownEnv(env, params = {}) {
   };
 }
 
-export function tsdownBuildUsage() {
+function tsdownBuildUsage() {
   return [
     "Usage: node scripts/tsdown-build.mjs [tsdown args...]",
     "",

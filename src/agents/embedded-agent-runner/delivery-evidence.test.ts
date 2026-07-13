@@ -1,5 +1,74 @@
 import { describe, expect, it } from "vitest";
-import { collectDeliveredMediaUrls } from "./delivery-evidence.js";
+import {
+  collectDeliveredMediaUrls,
+  hasCompletedSourceReplyDeliveryEvidence,
+  hasVisibleOutboundDeliveryEvidence,
+  resolveExplicitFinalSourceReplyDeliveryEvidence,
+} from "./delivery-evidence.js";
+
+describe("explicit final source-reply delivery evidence", () => {
+  it("distinguishes progress from a delivered final reply", () => {
+    expect(
+      resolveExplicitFinalSourceReplyDeliveryEvidence({
+        messagingToolSentTargets: [{ sourceReplyFinal: false }],
+      }),
+    ).toBe(false);
+    expect(
+      resolveExplicitFinalSourceReplyDeliveryEvidence({
+        messagingToolSentTargets: [{ sourceReplyFinal: false }, { sourceReplyFinal: true }],
+      }),
+    ).toBe(true);
+    expect(
+      resolveExplicitFinalSourceReplyDeliveryEvidence({
+        messagingToolSourceReplyPayloads: [{ sourceReplyFinal: true }],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns undefined for legacy telemetry without final markers", () => {
+    expect(
+      resolveExplicitFinalSourceReplyDeliveryEvidence({
+        messagingToolSourceReplyPayloads: [{ text: "legacy reply" }],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves legacy completion evidence when no marker is present", () => {
+    expect(
+      hasCompletedSourceReplyDeliveryEvidence({
+        didDeliverSourceReplyViaMessageTool: true,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("visible messaging-tool delivery evidence", () => {
+  it("keeps the coarse flag when detailed delivery metadata is unavailable", () => {
+    expect(hasVisibleOutboundDeliveryEvidence({ didSendViaMessagingTool: true })).toBe(true);
+  });
+
+  it("lets detailed metadata disprove a coarse send flag", () => {
+    expect(
+      hasVisibleOutboundDeliveryEvidence({
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["  "],
+        messagingToolSentMediaUrls: ["\t"],
+        messagingToolSentTargets: [{ text: "\n" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps rich delivery evidence when accompanying text is blank", () => {
+    expect(
+      hasVisibleOutboundDeliveryEvidence({
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [{ text: "  ", hasRichContent: true }],
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("collectDeliveredMediaUrls attachment recursion", () => {
   it("collects media URLs across nested attachments", () => {

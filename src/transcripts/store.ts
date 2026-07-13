@@ -188,40 +188,72 @@ export class TranscriptsStore {
     const transcriptPath = path.join(dir, "transcript.jsonl");
     const maxUtterances = resolveOptionalIntegerOption(options.maxUtterances, { min: 1 });
     if (maxUtterances !== undefined) {
-      const utterances: TranscriptUtterance[] = [];
-      try {
+      return await new Promise<TranscriptUtterance[]>((resolve, reject) => {
+        const utterances: TranscriptUtterance[] = [];
         const stream = createReadStream(transcriptPath, { encoding: "utf8" });
         const lines = createInterface({
           input: stream,
           crlfDelay: Infinity,
         });
-        try {
-          for await (const line of lines) {
-            if (!line) {
-              continue;
-            }
-            utterances.push(JSON.parse(line) as TranscriptUtterance);
-            if (utterances.length > maxUtterances) {
-              // Stream and keep only the tail so large transcripts do not require full-file memory.
-              utterances.shift();
-            }
+        let settled = false;
+        let emptyForENOENT = false;
+        let pendingError: Error | undefined;
+
+        const settle = () => {
+          if (settled) {
+            return;
           }
-        } finally {
+          settled = true;
           lines.close();
           stream.destroy();
-          if (!stream.closed) {
-            await new Promise<void>((resolve) => {
-              stream.once("close", () => resolve());
-            });
+          if (pendingError) {
+            reject(pendingError);
+          } else if (emptyForENOENT) {
+            resolve([]);
+          } else {
+            resolve(utterances);
           }
-        }
-      } catch (err) {
-        if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
-          return [];
-        }
-        throw err;
-      }
-      return utterances;
+        };
+        const setError = (err: unknown) => {
+          if (!pendingError) {
+            pendingError = err instanceof Error ? err : new Error(String(err));
+          }
+        };
+
+        stream.on("close", settle);
+        stream.on("error", (err) => {
+          if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+            emptyForENOENT = true;
+            return;
+          }
+          setError(err);
+          stream.destroy();
+        });
+        lines.on("error", (err) => {
+          if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+            emptyForENOENT = true;
+            return;
+          }
+          setError(err);
+          stream.destroy();
+        });
+        lines.on("line", (line) => {
+          if (!line) {
+            return;
+          }
+          try {
+            utterances.push(JSON.parse(line) as TranscriptUtterance);
+          } catch (err) {
+            setError(err);
+            stream.destroy();
+            return;
+          }
+          if (utterances.length > maxUtterances) {
+            // Stream and keep only the tail so large transcripts do not require full-file memory.
+            utterances.shift();
+          }
+        });
+      });
     }
     let raw: string;
     try {

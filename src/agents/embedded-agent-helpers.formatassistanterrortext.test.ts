@@ -11,8 +11,8 @@ import {
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
 } from "./embedded-agent-helpers.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("formatAssistantErrorText", () => {
@@ -66,6 +66,14 @@ describe("formatAssistantErrorText", () => {
   it("returns a friendly message for Anthropic overload errors", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+  });
+  it("preserves overload wording for Z.AI rate-limit errors", () => {
+    const msg = makeAssistantError(
+      '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "The AI service is temporarily overloaded. Please try again in a moment.",

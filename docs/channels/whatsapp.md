@@ -125,7 +125,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 ## Runtime model
 
 - The gateway owns the WhatsApp socket and reconnect loop.
-- A watchdog tracks two signals independently: raw WhatsApp Web transport activity and application-message activity. A quiet-but-connected session is not restarted just because no message arrived recently; it forces reconnect only when transport frames stop arriving for a fixed internal window (not user-configurable) or application messages stay silent past 4x the normal message timeout. Right after a reconnect for a recently active session, that first window uses the shorter normal message timeout instead of the 4x window.
+- A watchdog tracks two signals independently: raw WhatsApp Web transport activity and application-message activity. A quiet-but-connected session is not restarted just because no message arrived recently; it forces reconnect only when transport frames stop arriving for a fixed internal window (not user-configurable) or application messages stay silent past 4x the normal message timeout. Right after a reconnect for a recently active session, that first window uses the shorter normal message timeout instead of the 4x window. OpenClaw can auto-reply to offline messages that Baileys delivers early in that reconnect, bounded by the inbound message-ID dedupe lifetime; initial startup keeps the short stale-history guard.
 - Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` (application ping interval), `connectTimeoutMs` (opening handshake timeout), `defaultQueryTimeoutMs` (Baileys query waits, plus OpenClaw's outbound send/presence and inbound read-receipt timeouts).
 - Outbound sends require an active WhatsApp listener for the target account; sends fail fast otherwise.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens (in text and media captions) when the token matches current participant metadata, including LID-backed groups.
@@ -391,7 +391,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
 <AccordionGroup>
   <Accordion title="Text chunking">
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
-    - `channels.whatsapp.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
+    - `channels.whatsapp.streaming.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
 
   </Accordion>
 
@@ -598,7 +598,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    WhatsApp gateway runtime should use Node. Bun is flagged as incompatible for stable WhatsApp/Telegram gateway operation.
+    OpenClaw gateways require Node. Bun does not provide the `node:sqlite` API used by the canonical state store, and doctor migrates legacy Bun services to Node.
   </Accordion>
 </AccordionGroup>
 
@@ -677,7 +677,7 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
 | Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
-| Delivery         | `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`                |
+| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`      |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
 | Operations       | `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`       |
 | Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |

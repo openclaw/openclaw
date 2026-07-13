@@ -126,16 +126,6 @@ All fields are optional unless noted.
 </ParamField>
 
 <AccordionGroup>
-  <Accordion title="Legacy input aliases">
-    Still accepted for backward compatibility:
-
-    - `format` -> `fileFormat`
-    - `imageFormat` -> `fileFormat`
-    - `imageQuality` -> `fileQuality`
-    - `imageScale` -> `fileScale`
-    - `imageMaxWidth` -> `fileMaxWidth`
-
-  </Accordion>
   <Accordion title="Validation and limits">
     - `before`/`after`: max 512 KiB each.
     - `patch`: max 2 MiB.
@@ -171,8 +161,11 @@ Without the pack, unsupported languages still render as readable plain text. See
 
 ## Output details contract
 
+All successful results include `changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.
+
 <AccordionGroup>
   <Accordion title="Viewer fields (view and both modes)">
+    - `changed`
     - `artifactId`
     - `viewerUrl`
     - `viewerPath`
@@ -185,6 +178,7 @@ Without the pack, unsupported languages still render as readable plain text. See
 
   </Accordion>
   <Accordion title="File fields (file and both modes)">
+    - `changed`
     - `artifactId`
     - `expiresAt`
     - `filePath`
@@ -196,26 +190,21 @@ Without the pack, unsupported languages still render as readable plain text. See
     - `fileMaxWidth`
 
   </Accordion>
-  <Accordion title="Compatibility aliases (always returned)">
-    - `format` (= `fileFormat`)
-    - `imagePath` (= `filePath`)
-    - `imageBytes` (= `fileBytes`)
-    - `imageQuality` (= `fileQuality`)
-    - `imageScale` (= `fileScale`)
-    - `imageMaxWidth` (= `fileMaxWidth`)
-
-  </Accordion>
 </AccordionGroup>
 
-| Mode     | Returns                                                                                                      |
-| -------- | ------------------------------------------------------------------------------------------------------------ |
-| `"view"` | Viewer fields only.                                                                                          |
-| `"file"` | File fields only, no viewer artifact.                                                                        |
-| `"both"` | Viewer fields plus file fields. If file rendering fails, viewer still returns with `fileError`/`imageError`. |
+| Mode     | Returns                                                                                         |
+| -------- | ----------------------------------------------------------------------------------------------- |
+| `"view"` | Viewer fields only.                                                                             |
+| `"file"` | File fields only, no viewer artifact.                                                           |
+| `"both"` | Viewer fields plus file fields. If file rendering fails, viewer still returns with `fileError`. |
 
 ### Collapsed unchanged sections
 
 The viewer shows rows like `N unmodified lines`. Expand controls only appear when the rendered diff has expandable context data (typical for before/after input). Many unified patches omit context bodies in their hunks, so the row can appear without an expand control -- expected, not a bug. `expandUnchanged` only applies when expandable context exists.
+
+### Multi-file navigation
+
+Patches that touch more than one file start with a changed-files summary card: total `+N` / `-N` counts, per-file counts, added/deleted/renamed badges, and anchor links that jump to each file. Rendered PNG/PDF files keep the per-file header counts but drop the interactive view toggles, since those are dead controls in a static file.
 
 ## Plugin defaults
 

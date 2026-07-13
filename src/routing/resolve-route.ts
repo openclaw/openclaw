@@ -31,7 +31,7 @@ export type RoutePeer = {
   id: string;
 };
 
-export type ResolveAgentRouteInput = {
+type ResolveAgentRouteInput = {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
@@ -48,6 +48,8 @@ export type ResolvedAgentRoute = {
   agentId: string;
   channel: string;
   accountId: string;
+  /** Effective direct-message scope after a matching binding override. */
+  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   /** Internal session key used for persistence + concurrency. */
   sessionKey: string;
   /** Convenience alias for direct-chat collapse. */
@@ -66,8 +68,6 @@ export type ResolvedAgentRoute = {
     | "binding.channel"
     | "default";
 };
-
-export { DEFAULT_ACCOUNT_ID } from "./session-key.js";
 
 export function deriveLastRoutePolicy(params: {
   sessionKey: string;
@@ -93,6 +93,7 @@ function normalizeId(value: unknown): string {
 
 export function buildAgentSessionKey(params: {
   agentId: string;
+  mainKey?: string;
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
@@ -104,7 +105,7 @@ export function buildAgentSessionKey(params: {
   const peer = params.peer;
   return buildAgentPeerSessionKey({
     agentId: params.agentId,
-    mainKey: DEFAULT_MAIN_KEY,
+    mainKey: params.mainKey ?? DEFAULT_MAIN_KEY,
     channel,
     accountId: params.accountId,
     peerKind: peer?.kind ?? "direct",
@@ -664,6 +665,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     const effectiveDmScope = sessionOverride?.dmScope ?? dmScope;
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
+      mainKey: input.cfg.session?.mainKey,
       channel,
       accountId,
       peer,
@@ -673,13 +675,14 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     const mainSessionKey = normalizeLowercaseStringOrEmpty(
       buildAgentMainSessionKey({
         agentId: resolvedAgentId,
-        mainKey: DEFAULT_MAIN_KEY,
+        mainKey: input.cfg.session?.mainKey,
       }),
     );
     const route = {
       agentId: resolvedAgentId,
       channel,
       accountId,
+      dmScope: effectiveDmScope,
       sessionKey,
       mainSessionKey,
       lastRoutePolicy: deriveLastRoutePolicy({ sessionKey, mainSessionKey }),

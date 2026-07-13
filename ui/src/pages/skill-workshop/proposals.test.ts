@@ -29,6 +29,7 @@ function createFixture(
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request } as unknown as ApplicationGatewaySnapshot["client"],
     connected: true,
+    reconnecting: false,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",
@@ -39,14 +40,14 @@ function createFixture(
   const context: SkillWorkshopContext = {
     agentSelection: {
       get state() {
-        return { selectedId: snapshot.assistantAgentId };
+        return { selectedId: snapshot.assistantAgentId, scopeId: snapshot.assistantAgentId };
       },
     },
     gateway: {
       get snapshot() {
         return snapshot;
       },
-      connection: { gatewayUrl: "", token: "", password: "" },
+      connection: { gatewayUrl: "", token: "", bootstrapToken: "", password: "" },
       eventLog: [],
       connect: vi.fn(),
       setSessionKey: vi.fn(),

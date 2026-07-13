@@ -1,39 +1,31 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RealtimeTalkOptions } from "./components/chat-realtime-controls.ts";
-import type { RealtimeTalkCatalogProvider } from "./realtime-talk-catalog.ts";
+import { loadSettings, type UiSettings } from "../../app/settings.ts";
 import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./realtime-talk-conversation.ts";
-import {
-  RealtimeTalkSession,
-  type RealtimeTalkLaunchOptions,
-  type RealtimeTalkStatus,
-} from "./realtime-talk.ts";
+import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
+import { RealtimeTalkSession, type RealtimeTalkStatus } from "./realtime-talk.ts";
 
 export type ChatRealtimeState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  settings: UiSettings;
   sessionKey: string;
   lastError?: string | null;
   chatError?: string | null;
   realtimeTalkActive: boolean;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
-  realtimeTalkTranscript: string | null;
+  realtimeTalkInputLevel: RealtimeTalkLevelSignal;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
-  realtimeTalkOptionsOpen: boolean;
-  realtimeTalkCatalogProviders: RealtimeTalkCatalogProvider[] | null;
-  realtimeTalkOptions: RealtimeTalkOptions;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkConversationState: RealtimeTalkConversationState;
   requestUpdate: () => void;
-  updateRealtimeTalkOptions: (next: Partial<RealtimeTalkOptions>) => void;
   resetRealtimeTalkConversation: () => void;
   toggleRealtimeTalk: () => Promise<void>;
-  fetchRealtimeTalkCatalog: () => Promise<void>;
 };
 
 export function createInitialChatRealtimeState() {
@@ -41,20 +33,8 @@ export function createInitialChatRealtimeState() {
     realtimeTalkActive: false,
     realtimeTalkStatus: "idle" as RealtimeTalkStatus,
     realtimeTalkDetail: null,
-    realtimeTalkTranscript: null,
+    realtimeTalkInputLevel: new RealtimeTalkLevelSignal(),
     realtimeTalkConversation: [],
-    realtimeTalkOptionsOpen: false,
-    realtimeTalkCatalogProviders: null,
-    realtimeTalkOptions: {
-      provider: "",
-      model: "",
-      voice: "",
-      transport: "",
-      vadThreshold: "",
-      silenceDurationMs: "",
-      prefixPaddingMs: "",
-      reasoningEffort: "",
-    },
     realtimeTalkSession: null,
     realtimeTalkConversationState: createRealtimeTalkConversationState(),
   };
@@ -74,27 +54,13 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
   state.realtimeTalkActive = false;
   state.realtimeTalkStatus = "idle";
   state.realtimeTalkDetail = null;
-  state.realtimeTalkTranscript = null;
+  state.realtimeTalkInputLevel.set(0);
   state.resetRealtimeTalkConversation();
 }
 
 export function attachChatRealtimeActions(state: ChatRealtimeState) {
   state.resetRealtimeTalkConversation = () => {
     resetChatRealtimeConversation(state);
-  };
-  state.updateRealtimeTalkOptions = (next) => {
-    state.realtimeTalkOptions = { ...state.realtimeTalkOptions, ...next };
-    state.requestUpdate();
-  };
-  state.fetchRealtimeTalkCatalog = async () => {
-    if (!state.client || !state.connected) {
-      return;
-    }
-    const result = await state.client.request<{
-      realtime?: { providers?: RealtimeTalkCatalogProvider[] };
-    }>("talk.catalog", {});
-    state.realtimeTalkCatalogProviders = result.realtime?.providers ?? [];
-    state.requestUpdate();
   };
   state.toggleRealtimeTalk = async () => {
     if (state.realtimeTalkSession) {
@@ -103,6 +69,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.realtimeTalkActive = false;
       state.realtimeTalkStatus = "idle";
       state.realtimeTalkDetail = null;
+      state.realtimeTalkInputLevel.set(0);
       state.resetRealtimeTalkConversation();
       state.requestUpdate();
       return;
@@ -113,33 +80,40 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.requestUpdate();
       return;
     }
-    const options = state.realtimeTalkOptions;
-    const launchOptions: RealtimeTalkLaunchOptions = {
-      provider: options.provider.trim() || undefined,
-      model: options.model.trim() || undefined,
-      voice: options.voice.trim() || undefined,
-      transport: (options.transport.trim() || undefined) as RealtimeTalkLaunchOptions["transport"],
-      vadThreshold: Number(options.vadThreshold) || undefined,
-      silenceDurationMs: Number(options.silenceDurationMs) || undefined,
-      prefixPaddingMs: Number(options.prefixPaddingMs) || undefined,
-      reasoningEffort: options.reasoningEffort.trim() || undefined,
-    };
+    // Re-read persisted settings so a microphone picked on the Settings page
+    // applies to the next talk session without a reload.
+    const inputDeviceId = loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
     state.realtimeTalkActive = true;
     state.realtimeTalkStatus = "connecting";
     state.realtimeTalkDetail = null;
+    state.realtimeTalkInputLevel.set(0);
     state.resetRealtimeTalkConversation();
     const session = new RealtimeTalkSession(
       state.client,
       state.sessionKey,
       {
         onStatus: (status, detail) => {
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
           state.realtimeTalkStatus = status;
           state.realtimeTalkDetail = detail ?? null;
           state.realtimeTalkActive = status !== "idle";
+          if (status === "idle" || status === "error") {
+            state.realtimeTalkInputLevel.set(0);
+          }
           state.requestUpdate();
         },
+        onInputLevel: (level) => {
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
+          state.realtimeTalkInputLevel.set(level);
+        },
         onTranscript: (entry) => {
-          state.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
           state.realtimeTalkConversationState = updateRealtimeTalkConversation(
             state.realtimeTalkConversationState,
             entry,
@@ -148,17 +122,22 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
           state.requestUpdate();
         },
       },
-      launchOptions,
+      {},
+      { inputDeviceId },
     );
     state.realtimeTalkSession = session;
     try {
       await session.start();
     } catch (error) {
+      if (state.realtimeTalkSession !== session) {
+        return;
+      }
       session.stop();
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
       state.realtimeTalkStatus = "error";
       state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
+      state.realtimeTalkInputLevel.set(0);
       state.requestUpdate();
     }
   };

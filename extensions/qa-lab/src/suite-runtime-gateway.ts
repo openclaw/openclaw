@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements suite runtime gateway behavior.
+import fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -76,11 +77,20 @@ async function waitForConfigRestartSettle(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
   restartDelayMs = 1_000,
   timeoutMs = 60_000,
+  settleBufferMs = 750,
 ) {
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
-  const readyAfterMs = restartDelayMs + 750;
+  const readyAfterMs = restartDelayMs + settleBufferMs;
   let lastHealthError: unknown = null;
+
+  // A delay beyond this mutation's observation window intentionally keeps the
+  // current process alive so scenarios can prove config reads without restart.
+  if (restartDelayMs >= timeoutMs) {
+    await waitForGatewayHealthy(env, timeoutMs);
+    await waitForTransportReady(env, timeoutMs);
+    return;
+  }
 
   while (Date.now() < deadline) {
     try {
@@ -244,6 +254,7 @@ async function runConfigMutation(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  restartSettleBufferMs?: number;
   replacePaths?: readonly string[];
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
@@ -271,7 +282,12 @@ async function runConfigMutation(params: {
         },
         { timeoutMs },
       );
-      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
+      await waitForConfigRestartSettle(
+        params.env,
+        restartDelayMs,
+        timeoutMs,
+        params.restartSettleBufferMs,
+      );
       return result;
     } catch (error) {
       if (isConfigHashConflict(error)) {
@@ -292,7 +308,12 @@ async function runConfigMutation(params: {
       if (!isGatewayRestartRace(error)) {
         throw error;
       }
-      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
+      await waitForConfigRestartSettle(
+        params.env,
+        restartDelayMs,
+        timeoutMs,
+        params.restartSettleBufferMs,
+      );
       const postRestartSnapshot = await readConfigSnapshot(params.env);
       if (isConfigMutationNoopForSnapshot(params.action, postRestartSnapshot.config, params.raw)) {
         return { ok: true, restarted: true };
@@ -321,6 +342,7 @@ async function patchConfig(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  restartSettleBufferMs?: number;
   replacePaths?: readonly string[];
 }) {
   return await runConfigMutation({
@@ -331,6 +353,7 @@ async function patchConfig(params: {
     deliveryContext: params.deliveryContext,
     note: params.note,
     restartDelayMs: params.restartDelayMs,
+    restartSettleBufferMs: params.restartSettleBufferMs,
     replacePaths: params.replacePaths,
   });
 }
@@ -359,6 +382,22 @@ async function applyConfig(params: {
   });
 }
 
+async function restartGatewayWithConfigPatch(params: {
+  env: Pick<QaSuiteRuntimeEnv, "gateway">;
+  patch: Record<string, unknown>;
+}) {
+  const restart = params.env.gateway.restartAfterStateMutation;
+  if (!restart) {
+    throw new Error("qa gateway child cannot restart after state mutation");
+  }
+  await restart(async ({ configPath }) => {
+    const raw = await fs.readFile(configPath, "utf8");
+    const config = JSON.parse(raw || "{}") as Record<string, unknown>;
+    const nextConfig = applyQaMergePatch(config, params.patch);
+    await fs.writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+  });
+}
+
 export {
   applyConfig,
   fetchJson,
@@ -368,6 +407,7 @@ export {
   isConfigHashConflict,
   patchConfig,
   readConfigSnapshot,
+  restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
   waitForGatewayHealthy,
   waitForQaChannelReady,

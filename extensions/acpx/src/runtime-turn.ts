@@ -11,6 +11,10 @@ import type {
   AcpRuntimeTurnResult,
 } from "../runtime-api.js";
 
+function isCancellationStopReason(stopReason: string | undefined): boolean {
+  return stopReason === "cancel" || stopReason === "cancelled" || stopReason === "manual-cancel";
+}
+
 class LegacyRunTurnEventQueue {
   private readonly items: AcpRuntimeEvent[] = [];
   private readonly waits: Array<{
@@ -100,8 +104,12 @@ function legacyRunTurnAsStartTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInpu
     try {
       for await (const event of runtime.runTurn(input)) {
         if (event.type === "done") {
+          // Legacy runTurn events omit result.status but preserve stopReason, so infer
+          // cancellation here instead of silently converting it to success.
           settleResult({
-            status: "completed",
+            status:
+              event.status ??
+              (isCancellationStopReason(event.stopReason) ? "cancelled" : "completed"),
             ...(event.stopReason ? { stopReason: event.stopReason } : {}),
           });
           continue;

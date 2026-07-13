@@ -2,8 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { resolveMemoryWikiConfig } from "./config.js";
+import type { OpenClawConfig } from "../api.js";
+import {
+  resolveMemoryWikiAgentConfig,
+  resolveMemoryWikiConfig,
+  type ResolvedMemoryWikiConfig,
+} from "./config.js";
 import { createWikiPromptSectionBuilder } from "./prompt-section.js";
 
 let suiteRoot = "";
@@ -18,7 +24,11 @@ afterAll(async () => {
   }
 });
 
-const buildDefaultWikiPromptSection = createWikiPromptSectionBuilder(
+function createStaticWikiPromptSectionBuilder(config: ResolvedMemoryWikiConfig) {
+  return createWikiPromptSectionBuilder({ config, resolveConfig: () => config });
+}
+
+const buildDefaultWikiPromptSection = createStaticWikiPromptSectionBuilder(
   resolveMemoryWikiConfig({
     vault: { path: "" },
     context: { includeCompiledDigestPrompt: false },
@@ -74,7 +84,7 @@ describe("default wiki prompt section", () => {
       ),
       "utf8",
     );
-    const builder = createWikiPromptSectionBuilder(
+    const builder = createStaticWikiPromptSectionBuilder(
       resolveMemoryWikiConfig({
         vault: { path: rootDir },
         context: { includeCompiledDigestPrompt: true },
@@ -101,7 +111,7 @@ describe("default wiki prompt section", () => {
       }),
       "utf8",
     );
-    const builder = createWikiPromptSectionBuilder(
+    const builder = createStaticWikiPromptSectionBuilder(
       resolveMemoryWikiConfig({
         vault: { path: rootDir },
       }),
@@ -115,7 +125,7 @@ describe("default wiki prompt section", () => {
     const digestPath = path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json");
     await fs.mkdir(path.dirname(digestPath), { recursive: true });
 
-    const builder = createWikiPromptSectionBuilder(
+    const builder = createStaticWikiPromptSectionBuilder(
       resolveMemoryWikiConfig({
         vault: { path: rootDir },
         context: { includeCompiledDigestPrompt: true },
@@ -161,14 +171,16 @@ describe("default wiki prompt section", () => {
         },
       ],
     };
+    const firstPage = expectDefined(firstDigest.pages[0], "first Memory Wiki digest page");
+    const secondPage = expectDefined(firstDigest.pages[1], "second Memory Wiki digest page");
     const secondDigest = {
       ...firstDigest,
       pages: [
         {
-          ...firstDigest.pages[1],
-          topClaims: firstDigest.pages[1].topClaims.toReversed(),
+          ...secondPage,
+          topClaims: secondPage.topClaims.toReversed(),
         },
-        firstDigest.pages[0],
+        firstPage,
       ],
     };
 
@@ -185,5 +197,60 @@ describe("default wiki prompt section", () => {
     expect(firstLines.join("\n")).toContain(
       "Alpha was renamed in 2026. (confidence 0.42, freshness aging)",
     );
+  });
+
+  it("reads only the invoking agent's compiled digest", async () => {
+    const rootDir = path.join(suiteRoot, "agent-digests");
+    const appConfig = {
+      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+    } as OpenClawConfig;
+    const config = resolveMemoryWikiConfig({
+      vault: { scope: "agent", path: rootDir },
+      context: { includeCompiledDigestPrompt: true },
+    });
+    for (const [agentId, marker] of [
+      ["support", "SUPPORT_SENTINEL"],
+      ["marketing", "MARKETING_SENTINEL"],
+    ] as const) {
+      const digestPath = path.join(
+        rootDir,
+        agentId,
+        ".openclaw-wiki",
+        "cache",
+        "agent-digest.json",
+      );
+      await fs.mkdir(path.dirname(digestPath), { recursive: true });
+      await fs.writeFile(
+        digestPath,
+        JSON.stringify({
+          claimCount: 1,
+          pages: [
+            {
+              title: agentId,
+              kind: "entity",
+              claimCount: 1,
+              topClaims: [{ text: marker }],
+            },
+          ],
+        }),
+        "utf8",
+      );
+    }
+    const builder = createWikiPromptSectionBuilder({
+      config,
+      resolveConfig: (agentId) => resolveMemoryWikiAgentConfig({ config, appConfig, agentId }),
+    });
+
+    const support = builder({ availableTools: new Set(["web_search"]), agentId: "support" });
+    const marketing = builder({
+      availableTools: new Set(["web_search"]),
+      agentId: "marketing",
+    });
+
+    expect(support.join("\n")).toContain("SUPPORT_SENTINEL");
+    expect(support.join("\n")).not.toContain("MARKETING_SENTINEL");
+    expect(marketing.join("\n")).toContain("MARKETING_SENTINEL");
+    expect(marketing.join("\n")).not.toContain("SUPPORT_SENTINEL");
+    expect(builder({ availableTools: new Set(["web_search"]) })).toStrictEqual([]);
   });
 });

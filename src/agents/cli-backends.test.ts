@@ -1,7 +1,10 @@
 /** Tests CLI backend config resolution, normalization, and live-test defaults. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
+import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
@@ -25,6 +28,7 @@ let runtimeBackendEntries: RuntimeBackendEntry[] = [];
 let setupBackendEntries: SetupBackendEntry[] = [];
 
 function createBackendEntry(params: {
+  autoSelectAuthProfile?: boolean;
   pluginId: string;
   id: string;
   config: CliBackendConfig;
@@ -35,6 +39,7 @@ function createBackendEntry(params: {
   ownsNativeCompaction?: boolean;
   prepareExecution?: () => Promise<null>;
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
   normalizeConfig?: (
     config: CliBackendConfig,
     context?: CliBackendNormalizeConfigContext,
@@ -52,9 +57,13 @@ function createBackendEntry(params: {
       ...(params.bundleMcpMode ? { bundleMcpMode: params.bundleMcpMode } : {}),
       ...(params.defaultAuthProfileId ? { defaultAuthProfileId: params.defaultAuthProfileId } : {}),
       ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
+      ...(params.autoSelectAuthProfile !== undefined
+        ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
+        : {}),
       ...(params.ownsNativeCompaction ? { ownsNativeCompaction: params.ownsNativeCompaction } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
+      ...(params.runtimeArtifact ? { runtimeArtifact: params.runtimeArtifact } : {}),
       ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
       liveTest: {
         defaultModelRef:
@@ -163,7 +172,7 @@ function normalizeTestClaudeArgs(
   let hasSettingSources = false;
   let hasPermissionMode = false;
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = expectDefined(args[i], "args[i] test invariant");
     if (arg === "--dangerously-skip-permissions") {
       continue;
     }
@@ -270,6 +279,7 @@ beforeEach(() => {
       id: "claude-cli",
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
+      autoSelectAuthProfile: false,
       ownsNativeCompaction: true,
       config: {
         command: "claude",
@@ -440,6 +450,28 @@ beforeEach(() => {
 });
 
 describe("resolveCliBackendConfig reliability merge", () => {
+  it("preserves backend-owned runtime artifacts across command overrides", () => {
+    const runtimeArtifact = {
+      kind: "bundled-package-tree",
+      packageName: "@fixture/cli",
+      entrypoint: "command",
+    } as const;
+    runtimeBackendEntries.unshift(
+      createRuntimeBackendEntry({
+        pluginId: "fixture",
+        id: "fixture-cli",
+        config: { command: "fixture", args: ["run"] },
+        runtimeArtifact,
+      }),
+    );
+
+    const resolved = resolveCliBackendConfig("fixture-cli", {
+      agents: { defaults: { cliBackends: { "fixture-cli": { command: "/opt/fixture" } } } },
+    });
+    expect(resolved?.config.command).toBe("/opt/fixture");
+    expect(resolved?.runtimeArtifact).toEqual(runtimeArtifact);
+  });
+
   it("defaults codex-cli fresh sandboxing and config-pinned resume sandboxing", () => {
     const resolved = requireCliBackendConfig("codex-cli");
 
@@ -576,6 +608,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("claude-config-file");
+    expect(resolved?.autoSelectAuthProfile).toBe(false);
     expect(resolved?.config.output).toBe("jsonl");
     expect(resolved?.config.args).toContain("stream-json");
     expect(resolved?.config.args).toContain("--include-partial-messages");
@@ -954,6 +987,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("claude-config-file");
+    expect(resolved?.autoSelectAuthProfile).toBe(false);
     expect(resolved?.config.args).toEqual([
       "-p",
       "--output-format",
