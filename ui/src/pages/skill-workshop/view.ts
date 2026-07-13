@@ -18,6 +18,10 @@ import {
   type SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
 import { renderBoardEmptyDetail, renderWorkshopEmptyState } from "./empty-states.ts";
+import {
+  renderSkillWorkshopHistoryScan,
+  type SkillWorkshopHistoryScanState,
+} from "./history-scan.ts";
 import { renderSelfLearningError, type SkillWorkshopSelfLearning } from "./self-learning.ts";
 
 type SkillWorkshopProps = {
@@ -39,6 +43,7 @@ type SkillWorkshopProps = {
   assistantName: string;
   workshopAgentName: string;
   selfLearning: SkillWorkshopSelfLearning | null;
+  historyScan: SkillWorkshopHistoryScanState;
   counts: Record<SkillWorkshopStatusFilter, number>;
   onStatusFilterChange: (status: SkillWorkshopStatusFilter) => void;
   onRetry: () => void;
@@ -58,6 +63,7 @@ type SkillWorkshopProps = {
   onPreviewFile: (key: string, path: string) => void;
   onClosePreview: () => void;
   onSelfLearningToggle: (enabled: boolean) => void;
+  onHistoryScan: () => void;
 };
 
 const STATUS_TABS: SkillWorkshopStatusFilter[] = [
@@ -123,6 +129,10 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
           </div>`
         : nothing}
       ${renderSelfLearningError(props.selfLearning)}
+      ${renderSkillWorkshopHistoryScan({
+        state: props.historyScan,
+        onScan: props.onHistoryScan,
+      })}
       <div class="sw-view" data-mode=${props.mode}>
         ${keyed(props.mode, html`<div class="sw-view__pane">${body}</div>`)}
       </div>

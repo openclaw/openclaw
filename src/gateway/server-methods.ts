@@ -616,6 +616,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.curator.restore",
       "skills.proposals.list",
       "skills.proposals.inspect",
+      "skills.proposals.historyStatus",
+      "skills.proposals.historyScan",
       "skills.proposals.create",
       "skills.proposals.update",
       "skills.proposals.revise",

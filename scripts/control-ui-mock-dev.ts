@@ -323,6 +323,27 @@ function buildSkillWorkshopMocks(baseTime: number) {
         },
       })),
     },
+    historyStatus: {
+      schema: "openclaw.skill-workshop.history-scan.v1",
+      hasScanned: false,
+      reviewedSessions: 0,
+      ideasFound: 0,
+      hasMore: false,
+      lastScanReviewed: 0,
+      lastScanIdeas: 0,
+    },
+    historyScan: {
+      schema: "openclaw.skill-workshop.history-scan.v1",
+      hasScanned: true,
+      reviewedSessions: 34,
+      ideasFound: 2,
+      hasMore: true,
+      lastScanReviewed: 20,
+      lastScanIdeas: 2,
+      lastScanAt: new Date(baseTime).toISOString(),
+      oldestReviewedAt: new Date(baseTime - 25 * day).toISOString(),
+      newestReviewedAt: new Date(baseTime).toISOString(),
+    },
   };
 }
 
@@ -956,6 +977,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       "wizard.cancel": { status: "cancelled" },
       "skills.proposals.list": skillWorkshop.list,
       "skills.proposals.inspect": skillWorkshop.inspect,
+      "skills.proposals.historyStatus": skillWorkshop.historyStatus,
+      "skills.proposals.historyScan": skillWorkshop.historyScan,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelProviders.authStatus,

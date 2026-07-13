@@ -19,11 +19,13 @@ import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts"
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
+import { loadSkillWorkshopHistoryScanStatus, runSkillWorkshopHistoryScan } from "./history-scan.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
   loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
+  resolveSkillWorkshopAgentId,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
   type SkillWorkshopContext,
@@ -52,6 +54,7 @@ type SkillWorkshopRenderContext = {
   onRevisionRequest?: SkillWorkshopRevisionRequest;
   selfLearning: SkillWorkshopSelfLearning | null;
   onSelfLearningToggle: (enabled: boolean) => void;
+  onHistoryScan: () => void;
 };
 
 type SkillWorkshopProposal = SkillWorkshopState["skillWorkshopProposals"][number];
@@ -135,8 +138,14 @@ function renderSkillWorkshopPage(
   renderContext: SkillWorkshopRenderContext,
   requestUpdate: () => void,
 ) {
-  const { context, workshopAgentName, onRevisionRequest, selfLearning, onSelfLearningToggle } =
-    renderContext;
+  const {
+    context,
+    workshopAgentName,
+    onRevisionRequest,
+    selfLearning,
+    onSelfLearningToggle,
+    onHistoryScan,
+  } = renderContext;
   const pageClass =
     state.skillWorkshopMode === "today"
       ? "content--skill-workshop content--skill-workshop-today"
@@ -223,6 +232,7 @@ function renderSkillWorkshopPage(
             assistantName: context.config.current.assistantIdentity.name,
             workshopAgentName,
             selfLearning,
+            historyScan: state.skillWorkshopHistoryScan,
             counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
             onRetry: () => {
               // Force past the loaded/error latch; the loading guard still
@@ -309,6 +319,7 @@ function renderSkillWorkshopPage(
               requestUpdate();
             },
             onSelfLearningToggle,
+            onHistoryScan,
           });
         })()}
       </div>
@@ -598,8 +609,42 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!state || !context || !context.gateway.snapshot.connected) {
       return;
     }
-    void loadSkillWorkshopProposals(state, context, { force }).finally(this.requestPageUpdate);
+    const agentId = resolveSkillWorkshopAgentId(context);
+    void Promise.all([
+      loadSkillWorkshopProposals(state, context, { force }),
+      loadSkillWorkshopHistoryScanStatus({
+        agentId,
+        gateway: context.gateway,
+        state: state.skillWorkshopHistoryScan,
+        force,
+      }),
+    ]).finally(this.requestPageUpdate);
   }
+
+  private readonly handleHistoryScan = () => {
+    const scope = this.captureSourceScope();
+    if (!scope) {
+      return;
+    }
+    const agentId = resolveSkillWorkshopAgentId(scope.context);
+    void runSkillWorkshopHistoryScan({
+      agentId,
+      gateway: scope.gateway,
+      state: scope.state.skillWorkshopHistoryScan,
+    })
+      .then(() => {
+        if (
+          !this.isCurrentSourceScope(scope) ||
+          !this.context ||
+          resolveSkillWorkshopAgentId(this.context) !== agentId
+        ) {
+          return;
+        }
+        return loadSkillWorkshopProposals(scope.state, scope.context, { force: true });
+      })
+      .finally(this.requestPageUpdate);
+    this.requestPageUpdate();
+  };
 
   private readonly handleSelfLearningToggle = (enabled: boolean) => {
     void this.applySelfLearningToggle(enabled);
@@ -651,6 +696,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
               this.selfLearningError,
             ),
             onSelfLearningToggle: this.handleSelfLearningToggle,
+            onHistoryScan: this.handleHistoryScan,
           },
           this.requestPageUpdate,
         )

@@ -15,6 +15,10 @@ import type {
   SkillWorkshopProposalStatus,
   SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
+import {
+  createSkillWorkshopHistoryScanState,
+  type SkillWorkshopHistoryScanState,
+} from "./history-scan.ts";
 
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
 
@@ -106,6 +110,7 @@ export type SkillWorkshopState = {
   skillWorkshopQueueWidth: number;
   skillWorkshopMode: SkillWorkshopMode;
   skillWorkshopUseCurrentChatForRevisions: boolean;
+  skillWorkshopHistoryScan: SkillWorkshopHistoryScanState;
 };
 
 export type SkillWorkshopRouteData = Pick<
@@ -144,6 +149,7 @@ export function createSkillWorkshopState(data?: SkillWorkshopRouteData): SkillWo
     skillWorkshopQueueWidth: 360,
     skillWorkshopMode: "today",
     skillWorkshopUseCurrentChatForRevisions: false,
+    skillWorkshopHistoryScan: createSkillWorkshopHistoryScanState(),
   };
 }
 
@@ -180,6 +186,10 @@ function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: str
   };
 }
 
+export function resolveSkillWorkshopAgentId(context: SkillWorkshopContext): string {
+  return skillWorkshopAgentParams(context).agentId;
+}
+
 function loadedSkillWorkshopAgentParams(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
@@ -199,6 +209,7 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
   state.skillWorkshopRevisionDraft = "";
   state.skillWorkshopFilePreviewKey = null;
   state.skillWorkshopFilePreviewQuery = "";
+  state.skillWorkshopHistoryScan = createSkillWorkshopHistoryScanState();
 }
 
 function parseDateMs(value: string | undefined): number {

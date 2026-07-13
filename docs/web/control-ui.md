@@ -143,7 +143,12 @@ target the store directly with `/settings/plugins?tab=discover`.
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
 **Workshop** tab keeps the Skill Workshop board and Today review flow for
-[skill proposals](/tools/skill-workshop).
+[skill proposals](/tools/skill-workshop). **Find skill ideas** reviews a bounded
+window of substantial sessions from newest to oldest and leaves any results as
+pending proposals. The panel shows cumulative coverage; **Scan earlier work**
+continues from the persisted cursor, then becomes **Scan new work** after older
+history is exhausted. Manual history review works while autonomous self-learning
+is disabled and uses the selected agent's configured model.
 
 Included plugins are already present on the Gateway and show **Enable** or
 **Disable** instead of **Install**. For example, Workboard is included with

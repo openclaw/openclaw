@@ -416,6 +416,9 @@ import {
   SkillsProposalActionParamsSchema,
   SkillsProposalApplyResultSchema,
   SkillsProposalCreateParamsSchema,
+  SkillsProposalHistoryScanParamsSchema,
+  SkillsProposalHistoryScanResultSchema,
+  SkillsProposalHistoryStatusParamsSchema,
   SkillsProposalInspectParamsSchema,
   SkillsProposalInspectResultSchema,
   SkillsProposalRecordResultSchema,
@@ -749,6 +752,12 @@ export const validateSkillsDetailParams = lazyCompile(SkillsDetailParamsSchema);
 export const validateSkillsCuratorStatusParams = lazyCompile(SkillsCuratorStatusParamsSchema);
 export const validateSkillsCuratorActionParams = lazyCompile(SkillsCuratorActionParamsSchema);
 export const validateSkillsProposalsListParams = lazyCompile(SkillsProposalsListParamsSchema);
+export const validateSkillsProposalHistoryStatusParams = lazyCompile(
+  SkillsProposalHistoryStatusParamsSchema,
+);
+export const validateSkillsProposalHistoryScanParams = lazyCompile(
+  SkillsProposalHistoryScanParamsSchema,
+);
 export const validateSkillsProposalInspectParams = lazyCompile(SkillsProposalInspectParamsSchema);
 export const validateSkillsProposalCreateParams = lazyCompile(SkillsProposalCreateParamsSchema);
 export const validateSkillsProposalUpdateParams = lazyCompile(SkillsProposalUpdateParamsSchema);
@@ -1173,6 +1182,9 @@ export {
   SkillsDetailResultSchema,
   SkillsProposalsListParamsSchema,
   SkillsProposalsListResultSchema,
+  SkillsProposalHistoryStatusParamsSchema,
+  SkillsProposalHistoryScanParamsSchema,
+  SkillsProposalHistoryScanResultSchema,
   SkillsProposalInspectParamsSchema,
   SkillsProposalInspectResultSchema,
   SkillsProposalCreateParamsSchema,
@@ -1486,6 +1498,9 @@ export type {
   SkillsDetailResult,
   SkillsProposalsListParams,
   SkillsProposalsListResult,
+  SkillsProposalHistoryStatusParams,
+  SkillsProposalHistoryScanParams,
+  SkillsProposalHistoryScanResult,
   SkillsProposalInspectParams,
   SkillsProposalInspectResult,
   SkillsProposalCreateParams,

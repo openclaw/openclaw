@@ -11,6 +11,8 @@ import {
   validateSkillsInstallParams,
   validateSkillsProposalActionParams,
   validateSkillsProposalCreateParams,
+  validateSkillsProposalHistoryScanParams,
+  validateSkillsProposalHistoryStatusParams,
   validateSkillsProposalInspectParams,
   validateSkillsProposalRequestRevisionParams,
   validateSkillsProposalReviseParams,
@@ -56,6 +58,10 @@ import {
   restoreCuratedSkill,
   unpinCuratedSkill,
 } from "../../skills/workshop/curator.js";
+import {
+  getSkillHistoryScanStatus,
+  runSkillHistoryScan,
+} from "../../skills/workshop/history-scan.js";
 import {
   applySkillProposal,
   inspectSkillProposal,
@@ -434,6 +440,39 @@ export const skillsHandlers: GatewayRequestHandlers = {
       context,
       validate: validateSkillsProposalsListParams,
       run: (_parsedParams, resolved) => listSkillProposals({ workspaceDir: resolved.workspaceDir }),
+    });
+  },
+  "skills.proposals.historyStatus": async ({ params, respond, context }) => {
+    await runSkillsProposalWorkspaceHandler({
+      method: "skills.proposals.historyStatus",
+      rawParams: params,
+      respond,
+      context,
+      validate: validateSkillsProposalHistoryStatusParams,
+      run: (_parsedParams, resolved) =>
+        Promise.resolve(
+          getSkillHistoryScanStatus({
+            agentId: resolved.agentId,
+            config: resolved.cfg,
+            workspaceDir: resolved.workspaceDir,
+          }),
+        ),
+    });
+  },
+  "skills.proposals.historyScan": async ({ params, respond, context }) => {
+    await runSkillsProposalWorkspaceHandler({
+      method: "skills.proposals.historyScan",
+      rawParams: params,
+      respond,
+      context,
+      validate: validateSkillsProposalHistoryScanParams,
+      run: (parsedParams, resolved) =>
+        runSkillHistoryScan({
+          agentId: resolved.agentId,
+          config: resolved.cfg,
+          ...(parsedParams.direction ? { direction: parsedParams.direction } : {}),
+          workspaceDir: resolved.workspaceDir,
+        }),
     });
   },
   "skills.proposals.inspect": async ({ params, respond, context }) => {

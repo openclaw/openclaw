@@ -601,6 +601,40 @@ export const SkillsProposalsListResultSchema = closedObject({
   proposals: Type.Array(SkillProposalManifestEntrySchema),
 });
 
+/** Reads progressive historical-session scan coverage for one agent workspace. */
+export const SkillsProposalHistoryStatusParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+/** Starts the next bounded historical-session review window. */
+export const SkillsProposalHistoryScanParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    direction: Type.Optional(Type.Union([Type.Literal("older"), Type.Literal("newer")])),
+  },
+  { additionalProperties: false },
+);
+
+/** Persisted coverage and proposal counts for progressive historical review. */
+export const SkillsProposalHistoryScanResultSchema = Type.Object(
+  {
+    schema: Type.Literal("openclaw.skill-workshop.history-scan.v1"),
+    hasScanned: Type.Boolean(),
+    reviewedSessions: Type.Integer({ minimum: 0 }),
+    ideasFound: Type.Integer({ minimum: 0 }),
+    hasMore: Type.Boolean(),
+    lastScanReviewed: Type.Integer({ minimum: 0 }),
+    lastScanIdeas: Type.Integer({ minimum: 0 }),
+    lastScanAt: Type.Optional(NonEmptyString),
+    oldestReviewedAt: Type.Optional(NonEmptyString),
+    newestReviewedAt: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 /** Reads a proposal record plus editable draft/support content. */
 export const SkillsProposalInspectParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
@@ -936,6 +970,11 @@ export type SkillsDetailParams = Static<typeof SkillsDetailParamsSchema>;
 export type SkillsDetailResult = Static<typeof SkillsDetailResultSchema>;
 export type SkillsProposalsListParams = Static<typeof SkillsProposalsListParamsSchema>;
 export type SkillsProposalsListResult = Static<typeof SkillsProposalsListResultSchema>;
+export type SkillsProposalHistoryStatusParams = Static<
+  typeof SkillsProposalHistoryStatusParamsSchema
+>;
+export type SkillsProposalHistoryScanParams = Static<typeof SkillsProposalHistoryScanParamsSchema>;
+export type SkillsProposalHistoryScanResult = Static<typeof SkillsProposalHistoryScanResultSchema>;
 export type SkillsProposalInspectParams = Static<typeof SkillsProposalInspectParamsSchema>;
 export type SkillsProposalInspectResult = Static<typeof SkillsProposalInspectResultSchema>;
 export type SkillsProposalCreateParams = Static<typeof SkillsProposalCreateParamsSchema>;
