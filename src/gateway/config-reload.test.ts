@@ -2210,6 +2210,33 @@ describe("startGatewayConfigReloader", () => {
     }
   });
 
+  it("logs expected restart supersession without reporting a reload failure", async () => {
+    const snapshot = makeSnapshot({
+      config: {
+        gateway: { reload: { debounceMs: 0 }, port: 18790 },
+      },
+      hash: "restart-superseded-1",
+    });
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
+    const { watcher, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+    const superseded = new Error("config reload superseded by a newer runtime config source");
+    superseded.name = "GatewayConfigReloadSupersededError";
+    onRestart.mockRejectedValueOnce(superseded);
+
+    watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(log.info).toHaveBeenCalledWith(
+      "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      "config reload superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
+    );
+    expect(log.error).not.toHaveBeenCalled();
+
+    await reloader.stop();
+  });
+
   it("skips invalid external config edits without recovery", async () => {
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
       makeSnapshot({

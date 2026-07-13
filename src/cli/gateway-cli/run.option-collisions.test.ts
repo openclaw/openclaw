@@ -65,6 +65,10 @@ const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { config: {}, exists: false, sourceConfig: {}, valid: true } as Record<string, unknown>,
 }));
+const pristineStartupMigrationPlan = vi.hoisted(() => ({
+  config: vi.fn(),
+  state: vi.fn(),
+}));
 const readBestEffortConfig = vi.fn(async () => configState.cfg);
 type ConfigSnapshotReadOptionsStub = {
   isolateEnv?: boolean;
@@ -136,6 +140,13 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: async () => configState.snapshot,
   readConfigFileSnapshotWithPluginMetadata: (options?: ConfigSnapshotReadOptionsStub) =>
     readConfigFileSnapshotWithPluginMetadata(options),
+}));
+
+vi.mock("../../commands/doctor/shared/pristine-startup-state.js", () => ({
+  planPristineStartupConfigMigrations: (config: unknown, env?: NodeJS.ProcessEnv) =>
+    pristineStartupMigrationPlan.config(config, env),
+  planPristineStartupStateMigrations: (env?: NodeJS.ProcessEnv) =>
+    pristineStartupMigrationPlan.state(env),
 }));
 
 vi.mock("../../config/paths.js", () => ({
@@ -342,6 +353,16 @@ describe("gateway run option collisions", () => {
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { config: {}, exists: false, sourceConfig: {}, valid: true };
+    pristineStartupMigrationPlan.config.mockReset();
+    pristineStartupMigrationPlan.config.mockReturnValue({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
+    pristineStartupMigrationPlan.state.mockReset();
+    pristineStartupMigrationPlan.state.mockReturnValue({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
     netState.autoBindHost = "127.0.0.1";
     netState.container = false;
     readBestEffortConfig.mockClear();
@@ -423,6 +444,50 @@ describe("gateway run option collisions", () => {
 
     expect(beforeRun).toHaveBeenCalledOnce();
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+  });
+
+  it("drops the pristine core fact when guarded config becomes stateful", async () => {
+    const initialConfig = {
+      gateway: { mode: "local" },
+      plugins: { load: { paths: ["/plugins/example"] } },
+    };
+    configState.snapshot = {
+      config: initialConfig,
+      exists: true,
+      hash: "initial",
+      parsed: initialConfig,
+      path: "/tmp/openclaw.json",
+      sourceConfig: initialConfig,
+      valid: true,
+    };
+    pristineStartupMigrationPlan.state.mockReturnValue({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: true,
+    });
+    const {
+      prepareGatewayRunBootstrap,
+      selectGatewayRunEnvironment,
+      wasPreparedGatewayRunCoreStatePristine,
+    } = await import("./pre-bootstrap.js");
+
+    expect(await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime })).toBe(true);
+    const recoveredConfig = {
+      gateway: { mode: "local" },
+      session: { store: "/tmp/sessions.json" },
+    };
+    configState.snapshot = {
+      config: recoveredConfig,
+      exists: true,
+      hash: "recovered",
+      parsed: recoveredConfig,
+      path: "/tmp/openclaw.json",
+      sourceConfig: recoveredConfig,
+      valid: true,
+    };
+
+    expect(await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime })).toBe(true);
+    expect(wasPreparedGatewayRunCoreStatePristine()).toBe(false);
+    expect(pristineStartupMigrationPlan.config).toHaveBeenCalledWith(recoveredConfig, process.env);
   });
 
   it("refreshes the managed proxy from the final accepted config before gateway startup", async () => {

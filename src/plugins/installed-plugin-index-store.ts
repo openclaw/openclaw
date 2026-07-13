@@ -40,7 +40,7 @@ export {
 } from "./installed-plugin-index-store-path.js";
 
 /** Freshness state for the persisted installed plugin index. */
-export type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
+type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
 
 export type InstalledPluginIndexStoreInspection = {
   state: InstalledPluginIndexStoreState;

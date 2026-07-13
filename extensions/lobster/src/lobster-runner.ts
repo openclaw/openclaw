@@ -1,11 +1,9 @@
 // Lobster plugin module implements lobster runner behavior.
-import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
-import { installLobsterAjvCompileCache } from "./lobster-ajv-cache.js";
 
 export type LobsterEnvelope =
   | {
@@ -115,27 +113,6 @@ function toEmbeddedToolRuntime(
     return { runToolRequest, resumeToolRequest };
   }
   throw new Error(`${source} does not export Lobster embedded runtime functions`);
-}
-
-function findLobsterPackageRoot(resolvedEntryPath: string): string {
-  let dir = path.dirname(resolvedEntryPath);
-  while (true) {
-    const packageJsonPath = path.join(dir, "package.json");
-    try {
-      const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { name?: string };
-      if (parsed.name === "@clawdbot/lobster") {
-        return dir;
-      }
-    } catch {
-      // Keep walking until the installed package root is found.
-    }
-
-    const parent = path.dirname(dir);
-    if (parent === dir) {
-      throw new Error(`Could not locate @clawdbot/lobster package root from ${resolvedEntryPath}`);
-    }
-    dir = parent;
-  }
 }
 
 function normalizeForCwdSandbox(p: string): string {
@@ -324,7 +301,6 @@ export async function loadEmbeddedToolRuntimeFromPackage(
   const resolvePackageEntry =
     options.resolvePackageEntry ?? ((specifier: string) => lobsterRequire.resolve(specifier));
   const packageEntryPath = resolvePackageEntry("@clawdbot/lobster");
-  await installLobsterAjvCompileCache(packageEntryPath);
 
   let coreLoadError: unknown;
   try {
@@ -336,8 +312,7 @@ export async function loadEmbeddedToolRuntimeFromPackage(
 
   let fallbackLoadError: unknown;
   try {
-    const packageRoot = findLobsterPackageRoot(packageEntryPath);
-    const coreRuntimeUrl = pathToFileURL(path.join(packageRoot, "dist/src/core/index.js")).href;
+    const coreRuntimeUrl = new URL("../core/index.js", pathToFileURL(packageEntryPath)).href;
     return toEmbeddedToolRuntime(await importModule(coreRuntimeUrl), coreRuntimeUrl);
   } catch (error) {
     fallbackLoadError = error;

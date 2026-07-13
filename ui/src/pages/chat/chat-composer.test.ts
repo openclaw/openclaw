@@ -546,6 +546,7 @@ describe("context notice", () => {
           usage: {
             providerId: "anthropic",
             plan: "Max (20x)",
+            accountEmail: "clawd@example.com",
             windows: [
               { label: "5h", usedPercent: 22, resetAt: fiveHourReset },
               { label: "Week", usedPercent: 25 },
@@ -562,6 +563,7 @@ describe("context notice", () => {
           usage: {
             providerId: "anthropic",
             plan: "Max (20x)",
+            accountEmail: "clawd@example.com",
             windows: [
               { label: "5h", usedPercent: 22, resetAt: fiveHourReset },
               { label: "Week", usedPercent: 25 },
@@ -600,6 +602,9 @@ describe("context notice", () => {
     // Identical usage exposed via anthropic + claude-cli rows collapses to one group.
     expect(container.querySelectorAll(".context-usage__plan-header")).toHaveLength(1);
     expect(container.querySelector(".context-usage__plan-badge")?.textContent).toBe("Max (20x)");
+    expect(container.querySelector(".context-usage__account")?.textContent?.trim()).toBe(
+      "clawd@example.com",
+    );
     const rows = [...container.querySelectorAll(".context-usage__limit")].map((row) =>
       row.textContent?.replace(/\s+/g, " ").trim(),
     );

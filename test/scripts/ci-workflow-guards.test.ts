@@ -709,8 +709,26 @@ describe("ci workflow guards", () => {
     const nativeInventoryStep = nativeFinalize.steps.find(
       (step: { name?: string }) => step.name === "Refresh shared native inventory",
     );
+    const nativeAndroidStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Refresh Android native resources",
+    );
+    const nativeAppleStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Refresh Apple native resources",
+    );
+    const nativeValidationStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Validate native locale refresh",
+    );
+    const nativePublishStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Open or update generated locale PR",
+    );
     const controlUiRefreshStep = controlUiWorkflow.jobs.refresh.steps.find(
       (step: { name?: string }) => step.name === "Refresh control UI locale files",
+    );
+    const controlUiAggregateStep = controlUiFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Finalize control UI generated artifacts",
+    );
+    const controlUiValidationStep = controlUiFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Validate control UI locale refresh",
     );
 
     expect(refresh.if).toBe(
@@ -751,6 +769,8 @@ describe("ci workflow guards", () => {
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
+    expect(workflow.on.push.paths).toContain("scripts/android-app-i18n.ts");
+    expect(workflow.on.push.paths).toContain("scripts/apple-app-i18n.ts");
     expect(refreshStep.run).toContain("run_refresh anthropic");
     expect(refreshStep.run).toContain("retrying with OpenAI");
     expect(refreshStep.run).toContain("run_openai_refresh");
@@ -764,6 +784,32 @@ describe("ci workflow guards", () => {
     expect(nativeInventoryStep.run).toBe(
       "node --import tsx scripts/native-app-i18n.ts sync --write",
     );
+    expect(nativeAndroidStep.run).toBe("node --import tsx scripts/android-app-i18n.ts sync");
+    expect(nativeAppleStep.run).toBe(
+      "node --import tsx scripts/apple-app-i18n.ts sync-ios --write",
+    );
+    expect(nativeValidationStep.run).toContain(
+      "node --import tsx scripts/native-app-i18n.ts check",
+    );
+    expect(nativeValidationStep.run).toContain(
+      "node --import tsx scripts/android-app-i18n.ts check",
+    );
+    expect(nativeValidationStep.run).toContain("node --import tsx scripts/apple-app-i18n.ts check");
+    expect(nativePublishStep.with["generated-paths"].trim().split("\n")).toEqual([
+      "apps/.i18n/native",
+      "apps/.i18n/native-source.json",
+      "apps/.i18n/apple-translation-contradictions.json",
+      "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
+      "apps/android/app/src/main/res/values*/assistant.xml",
+      "apps/android/app/src/main/res/values*/strings.xml",
+      "apps/ios/Resources/Localizable.xcstrings",
+      "apps/ios/Sources/*.lproj/InfoPlist.strings",
+      "apps/ios/WatchApp/*.lproj/InfoPlist.strings",
+      "apps/ios/ShareExtension/*.lproj/InfoPlist.strings",
+      "apps/ios/ActivityWidget/*.lproj/InfoPlist.strings",
+    ]);
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/android-app-i18n.ts");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/apple-app-i18n.ts");
     expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
     expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
     expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
@@ -773,6 +819,12 @@ describe("ci workflow guards", () => {
     );
     expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
     expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
+    expect(controlUiAggregateStep.run).toBe(
+      "node --import tsx scripts/control-ui-i18n.ts sync --write",
+    );
+    expect(controlUiFinalize.steps.indexOf(controlUiAggregateStep)).toBeLessThan(
+      controlUiFinalize.steps.indexOf(controlUiValidationStep),
+    );
 
     for (const ownerWorkflow of [controlUiWorkflow, workflow]) {
       expect(ownerWorkflow.on.push.paths).toContain(CREATE_GENERATED_PR_TOKENS_ACTION);
@@ -1355,6 +1407,14 @@ describe("ci workflow guards", () => {
 
     expect(blacksmithJobs).toEqual([]);
     expect(source).not.toContain("blacksmith-");
+  });
+
+  it("keeps security checks hosted and the cache writer on Blacksmith", () => {
+    const workflow = readCiWorkflow();
+
+    expect(workflow.jobs.preflight["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
+    expect(workflow.jobs["security-fast"]["runs-on"]).toBe("ubuntu-24.04");
+    expect(workflow.jobs["pnpm-store-warmup"]["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {

@@ -3358,6 +3358,7 @@
       "locale": "ru",
       "source": "Limited",
       "translations": [
+        "Ограниченный",
         "Ограниченный доступ",
         "Ограничено"
       ]
@@ -3368,6 +3369,14 @@
       "translations": [
         "Begränsad",
         "Begränsat"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Limited",
+      "translations": [
+        "Обмежений",
+        "Обмежено"
       ]
     },
     {

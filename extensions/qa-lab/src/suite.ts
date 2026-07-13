@@ -19,6 +19,11 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import {
+  hasQaCrablineArtifactPath,
+  resolveQaCrablineChannelDriverArtifactPaths,
+  type QaSuiteChannelDriverSelection,
+} from "./crabline-artifacts.js";
+import {
   buildQaSuiteEvidenceSummary,
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
@@ -100,20 +105,6 @@ type QaSuiteStep = {
 type QaCrablineChannelDriverSmokeResult = Awaited<
   ReturnType<typeof runOpenClawCrablineChannelDriverSmoke>
 >;
-
-type QaSuiteChannelDriverSelection = Omit<
-  OpenClawCrablineChannelDriverSelection,
-  "capabilityMatrixPath" | "providerReadinessArtifactPath" | "smokeArtifactPath"
-> & {
-  capabilityMatrixPath: string;
-  providerReadinessArtifactPath?: string;
-  smokeArtifactPath: string;
-};
-
-function readQaSuiteArtifactPath(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function resolveQaSuiteControlUiEnabled(params: {
   explicit?: boolean;
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
@@ -1076,31 +1067,15 @@ async function writeQaSuiteArtifacts(params: {
           selection: crablineChannelDriverSelection,
         })
       : undefined;
-  const authoritativeCapabilityMatrixPath = readQaSuiteArtifactPath(
-    crablineChannelDriverSmoke?.capabilityMatrixPath,
-  );
-  const authoritativeProviderReadinessArtifactPath = readQaSuiteArtifactPath(
-    crablineChannelDriverSmoke?.providerReadinessArtifactPath,
-  );
-  const authoritativeSmokeArtifactPath = readQaSuiteArtifactPath(
-    crablineChannelDriverSmoke?.smokeArtifactPath,
-  );
+  const crablineChannelDriverArtifactPaths = resolveQaCrablineChannelDriverArtifactPaths({
+    result: crablineChannelDriverSmoke,
+    selection: crablineChannelDriverSelection,
+  });
   const effectiveChannelDriverSelection: QaSuiteChannelDriverSelection | null | undefined =
-    crablineChannelDriverSelection
+    crablineChannelDriverSelection && crablineChannelDriverArtifactPaths
       ? {
           ...crablineChannelDriverSelection,
-          capabilityMatrixPath:
-            authoritativeCapabilityMatrixPath ??
-            crablineChannelDriverSelection.capabilityMatrixPath,
-          providerReadinessArtifactPath:
-            authoritativeProviderReadinessArtifactPath ??
-            authoritativeSmokeArtifactPath ??
-            crablineChannelDriverSelection.providerReadinessArtifactPath ??
-            crablineChannelDriverSelection.smokeArtifactPath,
-          smokeArtifactPath:
-            authoritativeSmokeArtifactPath ??
-            authoritativeProviderReadinessArtifactPath ??
-            crablineChannelDriverSelection.smokeArtifactPath,
+          ...crablineChannelDriverArtifactPaths,
         }
       : crablineChannelDriverSelection;
   const report = renderQaMarkdownReport({
@@ -1153,7 +1128,7 @@ async function writeQaSuiteArtifacts(params: {
   if (
     crablineChannelDriverSelection &&
     crablineChannelDriverSmoke &&
-    !authoritativeCapabilityMatrixPath
+    !hasQaCrablineArtifactPath(crablineChannelDriverSmoke.capabilityMatrixPath)
   ) {
     await fs.writeFile(
       path.join(params.outputDir, crablineChannelDriverSelection.capabilityMatrixPath),
@@ -1175,7 +1150,7 @@ async function writeQaSuiteArtifacts(params: {
   if (
     crablineChannelDriverSelection &&
     crablineChannelDriverSmoke &&
-    !authoritativeSmokeArtifactPath
+    !hasQaCrablineArtifactPath(crablineChannelDriverSmoke.smokeArtifactPath)
   ) {
     await fs.writeFile(
       path.join(params.outputDir, crablineChannelDriverSelection.smokeArtifactPath),

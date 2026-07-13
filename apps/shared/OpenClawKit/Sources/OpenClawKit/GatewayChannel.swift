@@ -769,7 +769,7 @@ extension GatewayChannelActor {
         }
         guard scheme == "ws", let host = self.url.host else { return false }
         // Setup codes intentionally allow plaintext WebSocket bootstrap on local networks
-        // for QR pairing. Persist the resulting bounded device token so reconnects do not
+        // for QR pairing. Persist the resulting server-bounded device token so reconnects do not
         // fall back to auth=none after the single-use bootstrap token is cleared.
         return LoopbackHost.isLocalNetworkHost(host)
     }
@@ -781,6 +781,7 @@ extension GatewayChannelActor {
             return []
         case "operator":
             let allowedOperatorScopes: Set = [
+                "operator.admin",
                 "operator.approvals",
                 "operator.read",
                 "operator.talk.secrets",

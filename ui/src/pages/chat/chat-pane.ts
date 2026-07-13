@@ -33,7 +33,7 @@ import {
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
-} from "../../components/command-palette.ts";
+} from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -84,7 +84,6 @@ import {
   ChatStateController,
   createPageState,
   dismissChatError,
-  handleChatManualRefresh,
   handlePageGatewayEvent,
   refreshChatCommands,
   refreshChatMetadata,
@@ -221,7 +220,7 @@ type ChatPaneConnectionScope = {
 };
 
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 const CHAT_TEXT_ENTRY_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
@@ -1357,11 +1356,11 @@ class ChatPane extends OpenClawLightDomElement {
       });
       return;
     }
-    if (!state.chatMobileControlsOpen) {
+    if (!state.chatViewMenuOpen) {
       return;
     }
     event.preventDefault();
-    state.setChatMobileControlsOpen(false, { restoreFocus: true });
+    state.setChatViewMenuOpen(false, { restoreFocus: true });
   };
 
   private readonly handleDocumentPointerdown = (event: PointerEvent) => {
@@ -1380,16 +1379,14 @@ class ChatPane extends OpenClawLightDomElement {
     if (changed) {
       state.requestUpdate();
     }
-    if (!state.chatMobileControlsOpen) {
+    if (!state.chatViewMenuOpen) {
       return;
     }
-    const wrapper =
-      this.querySelector(".chat-settings-popover-wrapper") ??
-      this.querySelector(".chat-mobile-controls-wrapper");
+    const wrapper = this.querySelector(".chat-view-menu-wrapper");
     if (wrapper && path.includes(wrapper)) {
       return;
     }
-    state.setChatMobileControlsOpen(false);
+    state.setChatViewMenuOpen(false);
   };
 
   override connectedCallback() {
@@ -1434,14 +1431,6 @@ class ChatPane extends OpenClawLightDomElement {
       this.setPaneSessionKey(this.sessionKey);
     }
     chatState.attach(pageState);
-    const mediaDevices = globalThis.navigator?.mediaDevices;
-    if (mediaDevices?.addEventListener) {
-      const handleDeviceChange = () => void pageState.refreshRealtimeTalkInputs();
-      mediaDevices.addEventListener("devicechange", handleDeviceChange);
-      chatState.addCleanup(() =>
-        mediaDevices.removeEventListener("devicechange", handleDeviceChange),
-      );
-    }
     chatState.restoreComposer({ preserveCurrent: true });
     chatState.startComposerPersistence();
     if (this.draft !== undefined) {
@@ -1827,9 +1816,6 @@ class ChatPane extends OpenClawLightDomElement {
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
-      this.context.gateway.snapshot.hello?.auth ?? null,
-    );
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       draftScope: this.paneId,
       narrowLayout: this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
@@ -1922,11 +1908,6 @@ class ChatPane extends OpenClawLightDomElement {
         ? nothing
         : renderChatControls({
             paneId: this.paneId,
-            agentsList: state.agentsList,
-            connected: state.connected,
-            hideCronSessions: state.sessionsHideCron,
-            loading: state.chatLoading,
-            manualRefreshInFlight: state.chatManualRefreshInFlight,
             model: {
               activeRunId: state.chatRunId,
               agentDefaultModel,
@@ -1952,39 +1933,11 @@ class ChatPane extends OpenClawLightDomElement {
                 switchChatThinkingLevel(state, next, targetSessionKey),
             },
             onboarding: state.onboarding,
-            runId: state.chatRunId,
-            sending: state.chatSending,
             settings: state.settings,
-            settingsOpen: state.chatMobileControlsOpen,
-            sessionKey: state.sessionKey,
-            sessionsResult: state.sessionsResult,
-            stream: state.chatStream,
-            realtimeTalkOptions: state.realtimeTalkOptions,
-            realtimeTalkInputDevices: state.realtimeTalkInputDevices,
-            realtimeTalkInputDeviceId: state.realtimeTalkInputDeviceId,
-            realtimeTalkInputLoading: state.realtimeTalkInputLoading,
-            realtimeTalkInputError: state.realtimeTalkInputError,
-            canOpenRealtimeTalkSettings,
-            onRefresh: () => handleChatManualRefresh(state),
-            onRealtimeTalkInputRefresh: () => void state.refreshRealtimeTalkInputs(true),
-            onRealtimeTalkInputSelect: state.selectRealtimeTalkInput,
-            onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
-            onOpenRealtimeTalkSettings: () => {
-              if (!canOpenRealtimeTalkSettings) {
-                return;
-              }
-              this.context.navigate("communications", { search: "?section=talk" });
-            },
+            viewMenuOpen: state.chatViewMenuOpen,
             onSettingsChange: state.applySettings,
-            onSettingsOpenChange: (open, options) => {
-              state.setChatMobileControlsOpen(open, options);
-              if (open) {
-                void state.refreshRealtimeTalkInputs(false);
-              }
-            },
-            onToggleCronSessions: () => {
-              state.sessionsHideCron = !state.sessionsHideCron;
-              state.requestUpdate?.();
+            onViewMenuOpenChange: (open, options) => {
+              state.setChatViewMenuOpen(open, options);
             },
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
@@ -2036,7 +1989,7 @@ class ChatPane extends OpenClawLightDomElement {
       onRequestUpdate: state.requestUpdate,
       onHistoryKeydown: state.handleChatInputHistoryKey,
       onSlashIntent: () => refreshChatCommands(state),
-      showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
+      showNewMessages: state.chatNewMessagesBelow,
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
       getAttachments: () => state.chatAttachments,

@@ -18,7 +18,9 @@ import { t } from "../../i18n/index.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
+import type { AgentIdentityDraft } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
@@ -89,12 +91,17 @@ type AgentsProps = {
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
+  identityDraft: AgentIdentityDraft;
+  identitySaving: boolean;
+  identityError: string | null;
   agentSkills: AgentSkillsState;
   toolsCatalog: ToolsCatalogState;
   toolsEffective: ToolsEffectiveState;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   modelCatalog: ModelCatalogEntry[];
+  pinnedAgentIds: readonly string[];
+  onTogglePinnedAgent: (agentId: string) => void;
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
@@ -107,6 +114,9 @@ type AgentsProps = {
   onToolsOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
   onConfigSave: () => void;
+  onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
+  onIdentityAvatarSelect: (file: File) => void;
+  onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onChannelsRefresh: () => void;
@@ -180,6 +190,15 @@ export function renderAgents(props: AgentsProps) {
                       ? t("agents.default")
                       : t("agents.setDefault")}
                   </button>
+                  <button
+                    type="button"
+                    class="btn btn--sm btn--ghost"
+                    @click=${() => props.onTogglePinnedAgent(selectedAgent.id)}
+                  >
+                    ${props.pinnedAgentIds.includes(selectedAgent.id)
+                      ? t("agents.unpinFromSwitcher")
+                      : t("agents.pinToSwitcher")}
+                  </button>
                 `
               : nothing}
             <button
@@ -221,12 +240,18 @@ export function renderAgents(props: AgentsProps) {
                       agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
                       agentIdentityError: props.agentIdentityError,
                       agentIdentityLoading: props.agentIdentityLoading,
+                      identityDraft: props.identityDraft,
+                      identitySaving: props.identitySaving,
+                      identityError: props.identityError,
                       configLoading: props.config.loading,
                       configSaving: props.config.saving,
                       configDirty: props.config.dirty,
                       modelCatalog: props.modelCatalog,
                       onConfigReload: props.onConfigReload,
                       onConfigSave: props.onConfigSave,
+                      onIdentityFieldChange: props.onIdentityFieldChange,
+                      onIdentityAvatarSelect: props.onIdentityAvatarSelect,
+                      onIdentitySave: props.onIdentitySave,
                       onModelChange: props.onModelChange,
                       onModelFallbacksChange: props.onModelFallbacksChange,
                       onSelectPanel: props.onSelectPanel,
