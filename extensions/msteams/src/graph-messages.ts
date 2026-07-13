@@ -1,7 +1,7 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 // Msteams plugin module implements graph messages behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
-import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
+import { resolveDefaultMSTeamsAccountId } from "./accounts.js";
 import {
   createAccountScopedMSTeamsConversationStore,
   createMSTeamsConversationStoreState,
@@ -62,28 +62,6 @@ function stripTargetPrefix(raw: string): string {
     return trimmed.slice("user:".length).trim();
   }
   return trimmed;
-}
-
-/**
- * Resolve a target to a Graph-compatible conversation ID.
- * `user:<aadId>` targets are looked up in the conversation store to find the
- * actual `19:xxx@thread.*` chat ID that Graph API requires.
- * Conversation IDs and `teamId/channelId` pairs pass through unchanged.
- */
-function resolveMSTeamsGraphConfig(
-  cfg: OpenClawConfig,
-  accountId?: string | null,
-): OpenClawConfig {
-  if (!accountId) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: resolveMSTeamsAccountConfig(cfg, accountId),
-    },
-  };
 }
 
 export async function resolveGraphConversationId(
