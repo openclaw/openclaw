@@ -124,8 +124,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/googlechat/src/auth.ts: testing",
   "extensions/googlechat/src/google-auth.runtime.ts: __testing",
   "extensions/googlechat/src/google-auth.runtime.ts: createGoogleAuthFetch",
-  "extensions/googlechat/src/monitor-access.ts: normalizeGoogleChatEmailEntry",
-  "extensions/googlechat/src/monitor-access.ts: resolveGoogleChatGroupConfig",
   "extensions/googlechat/src/monitor-routing.ts: handleGoogleChatWebhookRequest",
   "extensions/googlechat/src/monitor.ts: testing",
   "extensions/googlechat/src/targets.ts: resolveGoogleChatSpaceChatType",
