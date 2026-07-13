@@ -429,6 +429,11 @@ case "$install" in
       exit 2
     fi
     tar -xzf "$upload" -C "$staging"
+    if ! command -v npm >/dev/null 2>&1; then
+      printf '%s\n' '${NPM_MISSING_MARKER}' >&2
+      exit ${NPM_MISSING_EXIT_CODE}
+    fi
+    OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 npm install --prefix "$staging" --ignore-scripts --omit=dev --no-audit --no-fund
     ;;
   npm)
     if ! command -v npm >/dev/null 2>&1; then

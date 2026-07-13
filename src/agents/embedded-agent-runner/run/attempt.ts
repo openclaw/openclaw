@@ -24,18 +24,9 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
-import {
-  diagnosticErrorCategory,
-  diagnosticErrorMessage,
-} from "../../../infra/diagnostic-error-metadata.js";
-import {
-  emitTrustedDiagnosticEvent,
-  emitTrustedDiagnosticEventWithPrivateData,
-} from "../../../infra/diagnostic-events.js";
+import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
-  createDiagnosticTraceContext,
-  getActiveDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
@@ -47,23 +38,14 @@ import {
 } from "../../../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import { copyPluginToolMeta, getPluginToolMeta } from "../../../plugins/tools.js";
-import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
-import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
-import {
-  applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
-} from "../../../skills/runtime/env-overrides.js";
+import { copyPluginToolMeta } from "../../../plugins/tools.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import {
   createTrajectoryRuntimeRecorder,
   toTrajectoryToolDefinitions,
 } from "../../../trajectory/runtime.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
-import {
-  getOrCreateSessionMcpRuntime,
-  materializeBundleMcpToolsForRun,
-} from "../../agent-bundle-mcp-tools.js";
+import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import {
@@ -72,12 +54,7 @@ import {
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
-import {
-  createClientToolNameConflictError,
-  findClientToolNameConflicts,
-  toClientToolDefinitions,
-  toToolDefinitions,
-} from "../../agent-tool-definition-adapter.js";
+import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import {
   copyBeforeToolCallHookMarker,
   recordStructuredReplayTrustForToolCall,
@@ -89,7 +66,6 @@ import { createCacheTrace } from "../../cache-trace.js";
 import { copyChannelAgentToolMeta } from "../../channel-tools.js";
 import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
 import {
-  addClientToolsToCodeModeCatalog,
   applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -112,10 +88,7 @@ import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
-import {
-  logAgentRuntimeToolDiagnostics,
-  normalizeAgentRuntimeTools,
-} from "../../runtime-plan/tools.js";
+import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   invalidateSessionFileRepairCache,
@@ -131,11 +104,9 @@ import {
   releasePendingAgentSteeringItems,
 } from "../../subagent-registry.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
-import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
-  addClientToolsToToolSearchCatalog,
   applyToolSchemaDirectoryCatalog,
   applyToolSearchCatalog,
   clearToolSearchCatalog,
@@ -150,12 +121,10 @@ import {
 } from "../../tool-search.js";
 import { copyToolTerminalPresentation } from "../../tool-terminal-presentation.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
-import { replaceWithEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
-import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
@@ -174,11 +143,6 @@ import {
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
-import {
-  mapSandboxSkillEntriesForPrompt,
-  mapSandboxSkillUsagePaths,
-  resolveSandboxSkillRuntimeInputs,
-} from "../sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import {
@@ -190,12 +154,6 @@ import {
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import {
-  collectCoreBuiltinToolNames,
-  collectRegisteredToolNames,
-  AGENT_RESERVED_TOOL_NAMES,
-  toSessionToolAllowlist,
-} from "../tool-name-allowlist.js";
-import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
 } from "../tool-result-context-guard.js";
@@ -205,36 +163,34 @@ import {
   truncateOversizedToolResultsInMessages,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
-import { splitSdkTools } from "../tool-split.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
+import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { snapshotRecentMessages, summarizeSessionContext } from "./attempt-context-summary.js";
 import {
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-assembly.js";
-import {
-  completeEmbeddedAttemptResult,
-  type EmbeddedAttemptClientToolCallSlot,
-} from "./attempt-result.js";
+import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
+import {
+  prepareEmbeddedAttemptSkills,
+  startEmbeddedAttemptDiagnostics,
+  type EmitDiagnosticRunCompleted,
+} from "./attempt-startup.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-transport.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
-import {
-  applyEmbeddedAttemptToolsAllow,
-  shouldCreateBundleLspRuntimeForAttempt,
-  shouldCreateBundleMcpRuntimeForAttempt,
-} from "./attempt-tool-construction-plan.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
 import {
   cloneHookMessages,
@@ -395,13 +351,7 @@ export async function runEmbeddedAttempt(
   let timedOutDuringToolExecution = false;
   let timedOutByRunBudget = false;
   let promptError: unknown = null;
-  let emitDiagnosticRunCompleted:
-    | ((
-        outcome: "completed" | "aborted" | "blocked" | "error",
-        err?: unknown,
-        extra?: { blockedBy?: string },
-      ) => void)
-    | undefined;
+  let emitDiagnosticRunCompleted: EmitDiagnosticRunCompleted | undefined;
   let beforeAgentRunBlocked = false;
   let beforeAgentRunBlockedBy: string | undefined;
   // Releases the eager session lock if post-prompt code exits before cleanup.
@@ -518,53 +468,14 @@ export async function runEmbeddedAttempt(
     }
   };
   try {
-    const {
-      skillsEligibility,
-      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
-      skillsSnapshot: skillsSnapshotForRun,
-      skillsWorkspaceDir: effectiveSkillsWorkspace,
-      workspaceOnly: loadSkillsWorkspaceOnly,
-    } = resolveSandboxSkillRuntimeInputs({
-      sandbox,
+    const preparedSkills = prepareEmbeddedAttemptSkills({
+      attempt: params,
       effectiveWorkspace,
-      skillsSnapshot: params.skillsSnapshot,
+      sandbox,
+      sessionAgentId,
     });
-    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveSkillsWorkspace,
-      config: params.config,
-      agentId: sessionAgentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot: skillsSnapshotForRun,
-      workspaceOnly: loadSkillsWorkspaceOnly,
-    });
-    restoreSkillEnv = skillsSnapshotForRun
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: skillsSnapshotForRun,
-          config: params.config,
-        })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
-          config: params.config,
-        });
-    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      skillsWorkspaceDir: effectiveSkillsWorkspace,
-      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
-    });
-    const skillUsagePaths = mapSandboxSkillUsagePaths({
-      paths: sandbox?.skillUsagePaths,
-      skillsWorkspaceDir: effectiveSkillsWorkspace,
-      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
-    });
-
-    const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: skillsSnapshotForRun,
-      entries: promptSkillEntries,
-      config: params.config,
-      workspaceDir: effectiveSkillsPromptWorkspace,
-      agentId: sessionAgentId,
-      eligibility: skillsEligibility,
-    });
+    restoreSkillEnv = preparedSkills.restoreSkillEnv;
+    const { skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
     prepStages.mark("skills");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -585,49 +496,8 @@ export async function runEmbeddedAttempt(
     const resolveActiveContextEnginePluginId = () =>
       resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
-    const diagnosticTrace = freezeDiagnosticTraceContext(
-      getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
-    );
-    const runTrace = freezeDiagnosticTraceContext(
-      createChildDiagnosticTraceContext(diagnosticTrace),
-    );
-    const diagnosticRunBase = {
-      runId: params.runId,
-      ...(params.sessionKey && { sessionKey: params.sessionKey }),
-      ...(params.sessionId && { sessionId: params.sessionId }),
-      provider: params.provider,
-      model: params.modelId,
-      trigger: params.trigger,
-      ...((params.messageChannel ?? params.messageProvider)
-        ? { channel: params.messageChannel ?? params.messageProvider }
-        : {}),
-      trace: runTrace,
-    };
-    emitTrustedDiagnosticEvent({
-      type: "run.started",
-      ...diagnosticRunBase,
-    });
-    const diagnosticRunStartedAt = Date.now();
-    let diagnosticRunCompleted = false;
-    emitDiagnosticRunCompleted = (outcome, err, extra) => {
-      if (diagnosticRunCompleted) {
-        return;
-      }
-      diagnosticRunCompleted = true;
-      const failed = err != null && outcome !== "blocked";
-      const errorMessage = failed ? diagnosticErrorMessage(err) : undefined;
-      emitTrustedDiagnosticEventWithPrivateData(
-        {
-          type: "run.completed",
-          ...diagnosticRunBase,
-          durationMs: Date.now() - diagnosticRunStartedAt,
-          outcome,
-          ...(extra?.blockedBy ? { blockedBy: extra.blockedBy } : {}),
-          ...(failed ? { errorCategory: diagnosticErrorCategory(err) } : {}),
-        },
-        errorMessage ? { errorMessage } : undefined,
-      );
-    };
+    const { diagnosticTrace, runTrace, emitCompleted } = startEmbeddedAttemptDiagnostics(params);
+    emitDiagnosticRunCompleted = emitCompleted;
     const corePluginToolStages = createEmbeddedRunStageTracker();
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
     const preparedToolBase = prepareEmbeddedAttemptToolBase({
@@ -662,8 +532,6 @@ export async function runEmbeddedAttempt(
     const {
       codeModeControlsEnabledForRun,
       computerContextEpoch,
-      cronCreatorToolAllowlist,
-      effectiveToolsAllow,
       localModelLeanEnabled,
       localModelLeanPreserveToolNames,
       replaySafetyOptions,
@@ -706,171 +574,19 @@ export async function runEmbeddedAttempt(
       modelApi: params.model.api,
       model: params.model,
     };
-    const tools = normalizeAgentRuntimeTools({
-      runtimePlan: params.runtimePlan,
-      tools: toolsEnabled ? toolsRaw : [],
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: effectiveWorkspace,
-      env: process.env,
-      modelId: params.modelId,
-      modelApi: params.model.api,
-      model: params.model,
-      runtimeHandle: getProviderRuntimeHandle(),
-      onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
-        logRuntimeToolSchemaQuarantine({
-          diagnostics,
-          tools: sourceTools,
-          runId: params.runId,
-          agentId: sessionAgentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-        }),
+    const preparedBundleTools = await prepareEmbeddedAttemptBundleTools({
+      agentDir,
+      attempt: params,
+      effectiveWorkspace,
+      getCurrentAttemptPluginMetadataSnapshot,
+      getProviderRuntimeHandle,
+      isRawModelRun,
+      preparedToolBase,
+      sessionAgentId,
     });
-    const clientTools =
-      toolsEnabled && !isRawModelRun && !params.forceRestartSafeTools
-        ? params.clientTools
-        : undefined;
-    const bundleMcpEnabled =
-      !params.forceRestartSafeTools &&
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled,
-        disableTools: params.disableTools || isRawModelRun,
-        toolsAllow: params.toolsAllow,
-      });
-    const bundleMetadataSnapshot = getCurrentAttemptPluginMetadataSnapshot();
-    // Scoped registries are partial views. Bundle discovery can skip its own scan only when
-    // the attempt snapshot covers every plugin; otherwise MCP/LSP bundles can disappear.
-    const bundleManifestRegistry =
-      bundleMetadataSnapshot?.pluginIds === undefined
-        ? bundleMetadataSnapshot?.manifestRegistry
-        : undefined;
-    const bundleMcpSessionRuntime = bundleMcpEnabled
-      ? await getOrCreateSessionMcpRuntime({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          workspaceDir: effectiveWorkspace,
-          agentDir,
-          cfg: params.config,
-          manifestRegistry: bundleManifestRegistry,
-        })
-      : undefined;
-    bundleMcpRuntime = bundleMcpSessionRuntime
-      ? await materializeBundleMcpToolsForRun({
-          runtime: bundleMcpSessionRuntime,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-          ],
-        })
-      : undefined;
-    const bundleLspEnabled =
-      !params.forceRestartSafeTools &&
-      shouldCreateBundleLspRuntimeForAttempt({
-        toolsEnabled,
-        disableTools: params.disableTools || isRawModelRun,
-        toolsAllow: params.toolsAllow,
-      });
-    bundleLspRuntime = bundleLspEnabled
-      ? await createBundleLspToolRuntime({
-          workspaceDir: effectiveWorkspace,
-          cfg: params.config,
-          manifestRegistry: bundleManifestRegistry,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
-          ],
-        })
-      : undefined;
-    const allowedBundleMcpTools = applyEmbeddedAttemptToolsAllow(
-      bundleMcpRuntime?.tools ?? [],
-      effectiveToolsAllow,
-      {
-        toolMeta: (tool) => getPluginToolMeta(tool),
-      },
-    );
-    const allowedBundleLspTools = applyEmbeddedAttemptToolsAllow(
-      bundleLspRuntime?.tools ?? [],
-      effectiveToolsAllow,
-      {
-        toolMeta: (tool) => getPluginToolMeta(tool),
-      },
-    );
-    const allowedBundledTools = [...allowedBundleMcpTools, ...allowedBundleLspTools];
-    const filteredBundledTools = applyFinalEffectiveToolPolicy({
-      bundledTools: allowedBundledTools,
-      config: params.config,
-      conversationCapabilityProfile: runtimeCapabilityProfile,
-      warn: (message) => log.warn(message),
-    });
-    if (bundleMcpRuntime?.restrictAppTools) {
-      const runtimeAllowedAppTools = applyEmbeddedAttemptToolsAllow(
-        bundleMcpRuntime.appTools ?? bundleMcpRuntime.tools,
-        effectiveToolsAllow,
-        { toolMeta: (tool) => getPluginToolMeta(tool) },
-      );
-      const allowedAppTools = applyFinalEffectiveToolPolicy({
-        bundledTools: runtimeAllowedAppTools,
-        config: params.config,
-        conversationCapabilityProfile: runtimeCapabilityProfile,
-        warn: (message) => log.warn(message),
-      });
-      // The view outlives this attempt. Capture policy against the complete MCP
-      // catalog now, including App-only tools that never enter the model surface.
-      bundleMcpRuntime.restrictAppTools(allowedAppTools);
-    }
-    const normalizedBundledTools =
-      filteredBundledTools.length > 0
-        ? normalizeAgentRuntimeTools({
-            runtimePlan: params.runtimePlan,
-            tools: filteredBundledTools,
-            provider: params.provider,
-            config: params.config,
-            workspaceDir: effectiveWorkspace,
-            env: process.env,
-            modelId: params.modelId,
-            modelApi: params.model.api,
-            model: params.model,
-            runtimeHandle: getProviderRuntimeHandle(),
-            onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
-              logRuntimeToolSchemaQuarantine({
-                diagnostics,
-                tools: sourceTools,
-                runId: params.runId,
-                agentId: sessionAgentId,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-              }),
-          })
-        : filteredBundledTools;
-    const projectedUncompactedEffectiveTools = filterLocalModelLeanTools({
-      tools: [...tools, ...normalizedBundledTools],
-      config: params.config,
-      agentId: sessionAgentId,
-      preserveToolNames: localModelLeanPreserveToolNames,
-    });
-    if (cronCreatorToolAllowlist.length > 0) {
-      // Cron is constructed before bundled MCP/LSP tools are appended; refresh
-      // the shared cap so scheduled turns preserve the creator's full surface.
-      replaceWithEffectiveCronCreatorToolAllowlist(
-        cronCreatorToolAllowlist,
-        projectedUncompactedEffectiveTools,
-        (tool) => getPluginToolMeta(tool),
-      );
-    }
-    const uncompactedToolSchemaProjection = filterRuntimeCompatibleTools(
-      projectedUncompactedEffectiveTools,
-    );
-    logRuntimeToolSchemaQuarantine({
-      diagnostics: uncompactedToolSchemaProjection.diagnostics,
-      tools: projectedUncompactedEffectiveTools,
-      runId: params.runId,
-      agentId: sessionAgentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-    });
-    const uncompactedEffectiveTools = [...uncompactedToolSchemaProjection.tools];
+    bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
+    bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
+    const { clientTools, tools, uncompactedEffectiveTools } = preparedBundleTools;
     let effectiveTools = uncompactedEffectiveTools;
     const catalogToolHookContext = {
       agentId: sessionAgentId,
@@ -1334,145 +1050,30 @@ export async function runEmbeddedAttempt(
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
 
-      const { customTools } = splitSdkTools({
-        tools: effectiveTools,
-        sandboxEnabled: Boolean(sandbox?.enabled),
-        toolHookContext: catalogToolHookContext,
-      });
-
-      // Add client tools (OpenResponses hosted tools) to customTools.
-      // Reserve slots synchronously at tool execution entry, before async
-      // before_tool_call hooks run, so parallel client-tool batches preserve
-      // assistant source order even when later hooks finish first.
-      const clientToolCallSlots: EmbeddedAttemptClientToolCallSlot[] = [];
-      const clientToolCallSlotIndexes = new Map<string, number>();
-      const reserveClientToolCallSlot = (toolCallId: string, toolName: string) => {
-        if (clientToolCallSlotIndexes.has(toolCallId)) {
-          return;
-        }
-        clientToolCallSlotIndexes.set(toolCallId, clientToolCallSlots.length);
-        clientToolCallSlots.push({
-          toolCallId,
-          name: toolName,
-          completed: false,
-        });
-      };
-      const clientToolLoopDetection = resolveToolLoopDetectionConfig({
-        cfg: params.config,
-        agentId: sessionAgentId,
-      });
-      // Exact raw names of every tool registered for this run, including
-      // bundled/plugin tools. Used as the raw-name set for the trusted local
-      // media passthrough gate: a normalized alias is not sufficient — the
-      // emitted tool name must match an exact registration of this run.
-      const builtinToolNames = new Set(
-        uncompactedEffectiveTools.flatMap((tool) => {
-          const name = (tool.name ?? "").trim();
-          return name ? [name] : [];
-        }),
-      );
-      const coreBuiltinToolNames = collectCoreBuiltinToolNames(uncompactedEffectiveTools, {
-        isPluginTool: (tool) =>
-          Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
-      });
-      const isReplaySafeTool = (tool: { name?: string }) =>
-        isAgentToolReplaySafe(tool, replaySafetyOptions);
-      const replaySafeTools = new Set(uncompactedEffectiveTools.filter(isReplaySafeTool));
-      const replaySafeToolNames = collectReplaySafeToolNames(
-        uncompactedEffectiveTools,
+      const {
+        allCustomTools,
+        builtinToolNames,
+        clientToolCallSlots,
+        clientToolDefs,
+        clientToolLoopDetection,
+        replaySafeToolNames,
+        replaySafeTools,
+        sessionToolAllowlist,
+      } = prepareEmbeddedAttemptClientTools({
+        attempt: params,
+        catalogToolHookContext,
+        clientTools,
+        codeModeControlsEnabledForRun,
+        deferredDirectoryToolsCallable,
+        effectiveTools,
         replaySafetyOptions,
-      );
-      // Directory exact-name hydration cannot distinguish a hidden catalog tool
-      // from a visible client tool that shadows it. Other modes preserve the
-      // existing client/plugin coexistence behavior and use core conflicts only.
-      const clientConflictToolNames = deferredDirectoryToolsCallable
-        ? builtinToolNames
-        : coreBuiltinToolNames;
-      const clientToolNameConflicts = findClientToolNameConflicts({
-        tools: clientTools ?? [],
-        existingToolNames: [...clientConflictToolNames, ...AGENT_RESERVED_TOOL_NAMES],
+        sandboxEnabled: Boolean(sandbox?.enabled),
+        sandboxSessionKey,
+        sessionAgentId,
+        toolSearchCatalogRef,
+        toolSearchRuntimeConfig,
+        uncompactedEffectiveTools,
       });
-      if (clientToolNameConflicts.length > 0) {
-        throw createClientToolNameConflictError(clientToolNameConflicts);
-      }
-      let clientToolDefs = clientTools
-        ? toClientToolDefinitions(
-            clientTools,
-            {
-              reserve: reserveClientToolCallSlot,
-              complete: (toolCallId, toolName, toolParams) => {
-                reserveClientToolCallSlot(toolCallId, toolName);
-                const slotIndex = clientToolCallSlotIndexes.get(toolCallId);
-                if (slotIndex === undefined) {
-                  return;
-                }
-                const slot = clientToolCallSlots[slotIndex];
-                if (!slot) {
-                  return;
-                }
-                slot.name = toolName;
-                slot.params = toolParams;
-                slot.completed = true;
-              },
-              discard: (toolCallId) => {
-                const slotIndex = clientToolCallSlotIndexes.get(toolCallId);
-                if (slotIndex === undefined) {
-                  return;
-                }
-                const slot = clientToolCallSlots[slotIndex];
-                if (slot) {
-                  slot.completed = false;
-                  slot.params = undefined;
-                }
-              },
-            },
-            {
-              agentId: sessionAgentId,
-              sessionKey: sandboxSessionKey,
-              config: toolSearchRuntimeConfig,
-              sessionId: params.sessionId,
-              runId: params.runId,
-              loopDetection: clientToolLoopDetection,
-              onToolOutcome: params.onToolOutcome,
-              allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
-            },
-          )
-        : [];
-      const clientToolSearch = codeModeControlsEnabledForRun
-        ? addClientToolsToCodeModeCatalog({
-            tools: clientToolDefs,
-            config: params.config,
-            sessionId: params.sessionId,
-            sessionKey: sandboxSessionKey,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-          })
-        : addClientToolsToToolSearchCatalog({
-            tools: clientToolDefs,
-            config: toolSearchRuntimeConfig,
-            sessionId: params.sessionId,
-            sessionKey: sandboxSessionKey,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-          });
-      clientToolDefs = clientToolSearch.tools;
-      if (clientToolSearch.compacted) {
-        log.info(
-          codeModeControlsEnabledForRun
-            ? `code-mode: cataloged ${clientToolSearch.catalogToolCount} client tools behind exec/wait`
-            : `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
-        );
-      }
-
-      const allCustomTools = [...customTools, ...clientToolDefs];
-      // The session runtime treats `tools` as a name allowlist during session creation. Pass the
-      // exact OpenClaw-managed registrations so custom tools survive startup and
-      // client-provided names do not broaden the prompt/runtime boundary.
-      const sessionToolAllowlist = toSessionToolAllowlist(
-        collectRegisteredToolNames(allCustomTools),
-      );
 
       const createdSession = await createEmbeddedAgentSessionWithResourceLoader<
         Awaited<ReturnType<typeof createAgentSession>>
