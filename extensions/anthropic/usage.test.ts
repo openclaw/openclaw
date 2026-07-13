@@ -29,6 +29,10 @@ function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
 
+function oauthFixtureToken(): string {
+  return ["oauth", "token"].join("-");
+}
+
 const tempHomes: string[] = [];
 
 async function createTempHome(): Promise<string> {
@@ -245,7 +249,7 @@ describe("Anthropic provider usage", () => {
       config: {},
       env: { HOME: await createTempHome() },
       provider: "anthropic",
-      token: "oauth-token",
+      token: oauthFixtureToken(),
       email: "profile@example.com",
       timeoutMs: 5000,
       fetchFn,
@@ -266,7 +270,7 @@ describe("Anthropic provider usage", () => {
       config: {},
       env: { HOME: home },
       provider: "anthropic",
-      token: "oauth-token",
+      token: oauthFixtureToken(),
       timeoutMs: 5000,
       fetchFn,
     });

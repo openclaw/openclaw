@@ -440,8 +440,9 @@ export async function fetchOpenAIUsage(
     }
     // ChatGPT access tokens carry the account email as a JWT claim; the auth
     // profile stores no email for these logins.
+    const { token: accessToken, email: profileEmail } = ctx;
     const accountEmail =
-      resolveCodexAuthIdentity({ accessToken: ctx.token, email: ctx.email }).email ?? ctx.email;
+      resolveCodexAuthIdentity({ accessToken, email: profileEmail }).email ?? profileEmail;
     return accountEmail ? { ...snapshot, accountEmail } : snapshot;
   }
   return await fetchOpenAIAdminUsage({
