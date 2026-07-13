@@ -958,7 +958,6 @@ describe("parseCliJsonl", () => {
       terminalFailure: {
         reason: "max_turns",
         limit: 1,
-        toolActionsMayHaveRun: true,
       },
     });
     expect(
@@ -974,7 +973,7 @@ describe("parseCliJsonl", () => {
     );
   });
 
-  it("keeps terminal_reason-only max-turn results actionable without a tool warning", () => {
+  it("warns that terminal_reason-only max-turn results may have run tools", () => {
     const result = parseCliJsonl(
       JSON.stringify({
         type: "result",
@@ -999,6 +998,7 @@ describe("parseCliJsonl", () => {
     expect(formatCliOutputError(result!)).toBe(
       "Claude CLI stopped after reaching the maximum number of turns. " +
         "Claude session: session-terminal-reason-only. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
         "Retry with a higher --max-turns value or a narrower task.",
     );
   });

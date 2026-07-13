@@ -37,7 +37,6 @@ type CliProcessDiagnostics = {
 export type CliTerminalFailure = {
   reason: "max_turns";
   limit?: number;
-  toolActionsMayHaveRun?: true;
 };
 
 /** Normalized result from a CLI-backed model provider turn. */
@@ -86,9 +85,7 @@ export function formatCliOutputError(
   return [
     `Claude CLI stopped after reaching the maximum number of turns${limit ? ` (limit: ${limit})` : ""}.`,
     ...context,
-    ...(output.terminalFailure.toolActionsMayHaveRun
-      ? ["Tool actions may already have run; verify their effects before retrying."]
-      : []),
+    "Tool actions may already have run; verify their effects before retrying.",
     "Retry with a higher --max-turns value or a narrower task.",
   ].join(" ");
 }
@@ -437,7 +434,6 @@ function readClaudeMaxTurnsFailure(
   if (subtype !== "error_max_turns" && terminalReason !== "max_turns") {
     return undefined;
   }
-  const toolActionsMayHaveRun = parsed.stop_reason === "tool_use" ? true : undefined;
   const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
   for (const error of errors) {
     if (typeof error !== "string") {
@@ -450,15 +446,11 @@ function readClaudeMaxTurnsFailure(
         return {
           reason: "max_turns",
           limit,
-          ...(toolActionsMayHaveRun ? { toolActionsMayHaveRun } : {}),
         };
       }
     }
   }
-  return {
-    reason: "max_turns",
-    ...(toolActionsMayHaveRun ? { toolActionsMayHaveRun } : {}),
-  };
+  return { reason: "max_turns" };
 }
 
 function readClaudeMaxTurnsErrorText(parsed: Record<string, unknown>): string | undefined {
