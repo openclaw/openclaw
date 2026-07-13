@@ -130,6 +130,42 @@ describe("readResponseBodySnippet", () => {
       maxChars: 10,
     });
 
-    expect(result).toBe("a" + "🦞".repeat(4));
+    expect(result).toBe("a" + "\u{1F99E}".repeat(4));
+  });
+});
+
+describe("readResponseBodySnippet error visibility", () => {
+  it("logs a warning and returns empty string when response.text() rejects", async () => {
+    const error = new Error("body already consumed");
+    const badResponse = {
+      body: null,
+      text: async () => {
+        throw error;
+      },
+    } as unknown as Response;
+
+    const result = await readResponseBodySnippet(badResponse, {
+      maxBytes: 1024,
+      maxChars: 50,
+    });
+
+    expect(result).toBe("");
+  });
+
+  it("logs a warning and returns empty string when body stream throws", async () => {
+    const badStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("partial"));
+        controller.error(new Error("stream aborted"));
+      },
+    });
+    const badResponse = new Response(badStream);
+
+    const result = await readResponseBodySnippet(badResponse, {
+      maxBytes: 1024,
+      maxChars: 50,
+    });
+
+    expect(result).toBe("");
   });
 });
