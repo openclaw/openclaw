@@ -89,6 +89,10 @@ export function createChatSendDispatchErrorLifecycle(params: {
     const abortedAtDispatchReject = activeRunAbort.controller.signal.aborted;
     const abortMarkerAtDispatchReject = context.chatAbortedRuns.get(clientRunId);
     const abortStopReasonAtDispatchReject = activeRunAbort.entry?.abortStopReason ?? "rpc";
+    const agentTerminalPersistenceOwnedAtDispatchReject =
+      activeRunAbort.entry?.projectSessionTerminalPending === true ||
+      activeRunAbort.entry?.projectSessionTerminalPersistence !== undefined ||
+      activeRunAbort.entry?.projectSessionTerminalPersisted === true;
     const persistAbortTranscript = async () => {
       if (userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()) {
         return;
@@ -170,7 +174,11 @@ export function createChatSendDispatchErrorLifecycle(params: {
         : async () => {
             await persistUserTurnTranscript();
           };
-    if (!restartSafeDispatchFailureTerminalized && abortMarkerAtDispatchReject === undefined) {
+    if (
+      !restartSafeDispatchFailureTerminalized &&
+      abortMarkerAtDispatchReject === undefined &&
+      !agentTerminalPersistenceOwnedAtDispatchReject
+    ) {
       pendingDispatchLifecycleError = {
         endedAt: Date.now(),
         error: errorMessage,
