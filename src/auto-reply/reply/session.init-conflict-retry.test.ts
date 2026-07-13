@@ -1,5 +1,45 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ReplySessionInitConflictError, runWithSessionInitConflictRetry } from "./session.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  initSessionState,
+  ReplySessionInitConflictError,
+  runWithSessionInitConflictRetry,
+} from "./session.js";
+
+const commitConflictControl = vi.hoisted(() => ({
+  abortController: undefined as AbortController | undefined,
+  commitCalls: 0,
+  remainingFailures: 0,
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    commitReplySessionInitialization: async (
+      ...args: Parameters<typeof actual.commitReplySessionInitialization>
+    ) => {
+      commitConflictControl.commitCalls += 1;
+      if (commitConflictControl.remainingFailures > 0) {
+        commitConflictControl.remainingFailures -= 1;
+        if (commitConflictControl.remainingFailures === 0) {
+          setImmediate(() =>
+            commitConflictControl.abortController?.abort(new Error("cancel session init")),
+          );
+        }
+        return {
+          ok: false as const,
+          reason: "stale-snapshot" as const,
+          revision: `forced-conflict-${commitConflictControl.commitCalls}`,
+        };
+      }
+      return await actual.commitReplySessionInitialization(...args);
+    },
+  };
+});
 
 const SESSION_KEY = "agent:main:dashboard:test";
 
@@ -121,6 +161,35 @@ describe("runWithSessionInitConflictRetry", () => {
       expect(delays).toEqual([250, 500, 1_000, 2_000]);
     } finally {
       randomSpy.mockRestore();
+    }
+  });
+});
+
+describe("initSessionState conflict retry wiring", () => {
+  it("cancels the production backoff through the initializer signal", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-conflict-abort-"));
+    const controller = new AbortController();
+    commitConflictControl.abortController = controller;
+    commitConflictControl.commitCalls = 0;
+    commitConflictControl.remainingFailures = 2;
+
+    try {
+      const initializing = initSessionState({
+        cfg: { session: { store: path.join(root, "sessions.json") } } as OpenClawConfig,
+        commandAuthorized: true,
+        ctx: {
+          Body: "hello",
+          SessionKey: SESSION_KEY,
+        },
+        signal: controller.signal,
+      });
+
+      await expect(initializing).rejects.toThrow("aborted");
+      expect(commitConflictControl.commitCalls).toBe(2);
+    } finally {
+      commitConflictControl.abortController = undefined;
+      commitConflictControl.remainingFailures = 0;
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

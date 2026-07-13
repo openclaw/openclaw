@@ -175,7 +175,6 @@ export type SessionInitResult = {
 };
 
 type InitSessionStateParams = {
-  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
   ctx: MsgContext;
@@ -1035,7 +1034,7 @@ async function initSessionStateAttemptLocked(
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
-  if (params.abortSignal?.aborted === true) {
+  if (params.signal?.aborted === true) {
     throw new Error("reply session initialization aborted");
   }
   if (isNewSession) {
@@ -1097,7 +1096,7 @@ async function initSessionStateAttemptLocked(
         warning,
       }),
     prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
-      if (params.abortSignal?.aborted === true) {
+      if (params.signal?.aborted === true) {
         throw new Error("reply session initialization aborted");
       }
       return await prepareReplySessionParentFork({
