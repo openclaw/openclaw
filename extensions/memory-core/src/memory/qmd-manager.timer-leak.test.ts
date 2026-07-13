@@ -24,7 +24,9 @@ describe("QmdMemoryManager.waitForPendingUpdateBeforeSearch timer cleanup", () =
     }
 
     // Let any ambient timers settle before taking the baseline.
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     const baseline = countPendingTimeouts();
 
     const iterations = 20;
@@ -38,7 +40,9 @@ describe("QmdMemoryManager.waitForPendingUpdateBeforeSearch timer cleanup", () =
 
     // The race settles on a microtask; let it drain before measuring. This is far
     // faster than the 500ms wait timeout, so any leaked timer would still be pending.
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     const after = countPendingTimeouts();
 
     expect(after - baseline).toBe(0);
