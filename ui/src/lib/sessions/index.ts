@@ -240,8 +240,8 @@ export type SessionCapability = {
   ) => Promise<SessionsCompactionRestoreResult>;
   /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
   groupsLoad: () => Promise<void>;
-  /** Replaces the gateway-owned group catalog (order included). */
-  groupsPut: (names: readonly string[]) => Promise<void>;
+  /** Replaces the group catalog; stale means the initiating connection retired. */
+  groupsPut: (names: readonly string[]) => Promise<SessionGroupMutationResult>;
   /** Renames a group; stale means the initiating connection retired before reconciliation. */
   groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
   /** Deletes a group; stale means the initiating connection retired before reconciliation. */
@@ -985,14 +985,24 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     await loadGroups(scope, generation, advertised);
   };
 
-  const groupsPut = async (names: readonly string[]) => {
+  const groupsPut = async (names: readonly string[]): Promise<SessionGroupMutationResult> => {
     const scope = captureConnection();
     if (!scope) {
-      return;
+      return "stale";
     }
-    const result = await scope.client.request("sessions.groups.put", { names: [...names] });
-    if (isCurrentConnection(scope)) {
+    try {
+      const result = await scope.client.request("sessions.groups.put", { names: [...names] });
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
       publishGroups(readGroupNames(result));
+      return "completed";
+    } catch (error) {
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publish({ ...state, error: String(error) });
+      throw error;
     }
   };
 

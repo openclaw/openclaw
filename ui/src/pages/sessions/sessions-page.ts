@@ -711,10 +711,21 @@ class SessionsPage extends OpenClawLightDomElement {
     saveStoredGroupBy(mode);
   }
 
-  private rememberCustomGroup(name: string) {
+  private async rememberCustomGroup(name: string) {
     const known = this.knownCategories();
-    if (!known.includes(name)) {
-      void this.context?.sessions.groupsPut([...this.customGroups(), name]);
+    if (known.includes(name)) {
+      return;
+    }
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      return;
+    }
+    try {
+      await scope.sessions.groupsPut([...(scope.sessions.state.groups ?? []), name]);
+    } catch (error) {
+      if (this.isRequestScopeCurrent(scope)) {
+        this.error = String(error);
+      }
     }
   }
 
@@ -731,7 +742,7 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     if (category) {
-      this.rememberCustomGroup(category);
+      void this.rememberCustomGroup(category);
     }
     void this.patchSession(key, { category });
   }
@@ -742,7 +753,7 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!name) {
       return;
     }
-    this.rememberCustomGroup(name);
+    void this.rememberCustomGroup(name);
     if (sessionKey) {
       void this.patchSession(sessionKey, { category: name });
     }
