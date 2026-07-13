@@ -89,7 +89,7 @@ describe("xai speech provider", () => {
     delete process.env.XAI_BASE_URL;
   });
 
-  it("streams mp3 audio for textToSpeechStream callers such as Discord voice", async () => {
+  it("forces self-describing mp3 for voice-note streaming", async () => {
     const provider = buildXaiSpeechProvider();
     const result = await provider.streamSynthesize?.({
       text: "hello",
@@ -103,9 +103,9 @@ describe("xai speech provider", () => {
       providerConfig: {
         apiKey: "xai-key",
         voiceId: "eve",
-        responseFormat: "mp3",
+        responseFormat: "pcm",
       },
-      target: "audio-file",
+      target: "voice-note",
       timeoutMs: 5_000,
     });
 
@@ -126,7 +126,7 @@ describe("xai speech provider", () => {
     await result?.release?.();
   });
 
-  it.each(["wav", "pcm", "mulaw", "alaw"] as const)(
+  it.each(["mp3", "wav", "pcm", "mulaw", "alaw"] as const)(
     "streams %s when requested by a compatible caller",
     async (responseFormat) => {
       const provider = buildXaiSpeechProvider();
@@ -164,6 +164,7 @@ describe("xai speech provider", () => {
       providerConfig: {
         apiKey: "xai-key",
         voiceId: "eve",
+        responseFormat: "pcm",
       },
       target: "voice-note",
       timeoutMs: 5_000,

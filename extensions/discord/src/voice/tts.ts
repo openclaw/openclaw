@@ -110,11 +110,10 @@ export async function synthesizeVoiceReplyAudio(params: {
     cfg: params.cfg,
     override: params.override,
   });
-  const preferredProviderId = getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig));
   const directive = parseTtsDirectives(params.replyText, ttsConfig.modelOverrides, {
     cfg: ttsCfg,
     providerConfigs: ttsConfig.providerConfigs,
-    preferredProviderId,
+    preferredProviderId: getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig)),
   });
   const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
   const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, params.speakerLabel);
@@ -123,26 +122,11 @@ export async function synthesizeVoiceReplyAudio(params: {
   }
 
   const runtime = getDiscordRuntime();
-  const configuredProviderId = ttsCfg.messages?.tts?.provider;
-  const streamProviderId = directive.overrides.provider ?? preferredProviderId;
-  const streamOverrides =
-    streamProviderId === "xai" || configuredProviderId === "xai"
-      ? {
-          ...directive.overrides,
-          providerOverrides: {
-            ...directive.overrides.providerOverrides,
-            xai: {
-              ...directive.overrides.providerOverrides?.xai,
-              responseFormat: "mp3",
-            },
-          },
-        }
-      : directive.overrides;
   const streamResult = await runtime.tts.textToSpeechStream?.({
     text: speakText,
     cfg: ttsCfg,
     channel: "discord",
-    overrides: streamOverrides,
+    overrides: directive.overrides,
     disableFallback: true,
   });
   if (streamResult?.success && streamResult.audioStream) {

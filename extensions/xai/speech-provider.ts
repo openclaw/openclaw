@@ -46,7 +46,6 @@ type XaiTtsProviderOverrides = {
   voiceId?: string;
   language?: string;
   speed?: number;
-  responseFormat?: XaiSpeechResponseFormat;
 };
 
 function normalizeXaiSpeechSpeed(value: unknown): number | undefined {
@@ -65,13 +64,15 @@ function normalizeXaiSpeechResponseFormat(value: unknown): XaiSpeechResponseForm
 }
 
 function resolveSpeechResponseFormat(
-  _target: SpeechSynthesisTarget,
+  target: SpeechSynthesisTarget,
   configuredFormat?: XaiSpeechResponseFormat,
 ): XaiSpeechResponseFormat {
-  if (configuredFormat) {
-    return configuredFormat;
+  // Voice-note consumers may transcode without raw codec/rate metadata.
+  // Keep streamed output and buffered fallback self-describing.
+  if (target === "voice-note") {
+    return "mp3";
   }
-  return "mp3";
+  return configuredFormat ?? "mp3";
 }
 
 function responseFormatToFileExtension(
@@ -132,7 +133,6 @@ function readXaiOverrides(overrides: SpeechProviderOverrides | undefined): XaiTt
     voiceId: trimToUndefined(overrides.voiceId ?? overrides.voice),
     language: normalizeXaiLanguageCode(trimToUndefined(overrides.language)),
     speed: normalizeXaiSpeechSpeed(overrides.speed),
-    responseFormat: normalizeXaiSpeechResponseFormat(overrides.responseFormat),
   };
 }
 
@@ -246,10 +246,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
       const config = readXaiProviderConfig(req.providerConfig);
       const overrides = readXaiOverrides(req.providerOverrides);
       const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
-      const responseFormat = resolveSpeechResponseFormat(
-        req.target,
-        overrides.responseFormat ?? config.responseFormat,
-      );
+      const responseFormat = resolveSpeechResponseFormat(req.target, config.responseFormat);
       const audioBuffer = await xaiTTS({
         text: req.text,
         apiKey,
@@ -271,10 +268,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
     streamSynthesize: async (req) => {
       const config = readXaiProviderConfig(req.providerConfig);
       const overrides = readXaiOverrides(req.providerOverrides);
-      const responseFormat = resolveSpeechResponseFormat(
-        req.target,
-        overrides.responseFormat ?? config.responseFormat,
-      );
+      const responseFormat = resolveSpeechResponseFormat(req.target, config.responseFormat);
       const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
       const stream = await xaiTTSStream({
         text: req.text,

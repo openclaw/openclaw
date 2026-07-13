@@ -534,22 +534,6 @@ describe("DiscordVoiceManager", () => {
       "tts stream args",
     );
 
-  const readXaiResponseFormat = (args: Record<string, unknown>): unknown => {
-    const overrides = requireRecord(args.overrides, "tts overrides");
-    const providers = requireRecord(overrides.providerOverrides, "tts provider overrides");
-    const xai = requireRecord(providers.xai, "xai tts overrides");
-    return xai.responseFormat;
-  };
-
-  const readConfiguredXaiResponseFormat = (args: Record<string, unknown>): unknown => {
-    const cfg = requireRecord(args.cfg, "tts cfg");
-    const messages = requireRecord(cfg.messages, "tts messages");
-    const tts = requireRecord(messages.tts, "tts config");
-    const providers = requireRecord(tts.providers, "tts providers");
-    const xai = requireRecord(providers.xai, "xai tts config");
-    return xai.responseFormat;
-  };
-
   const sentUserMessages = () =>
     Array.from(realtimeSessionMock.sendUserMessage.mock.calls).map(([message]) => String(message));
 
@@ -5978,51 +5962,6 @@ describe("DiscordVoiceManager", () => {
       throw new Error("expected Discord audio resource input");
     }
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
-  });
-
-  it("forces MP3 for xAI streaming while preserving the buffered fallback format", async () => {
-    textToSpeechStreamMock.mockResolvedValue({
-      success: false,
-      error: "stream unavailable",
-    });
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello back" }],
-    } as never);
-
-    const client = createClient();
-    client.fetchMember.mockResolvedValue({
-      nickname: "Guest Nick",
-      user: {
-        id: "u-guest",
-        username: "guest",
-        globalName: "Guest",
-        discriminator: "4321",
-      },
-    });
-    const manager = createManager({ groupPolicy: "open" }, client, {
-      commands: { useAccessGroups: false },
-      messages: {
-        tts: {
-          provider: "xai",
-          persona: "narrator",
-          providers: { xai: { responseFormat: "pcm" } },
-          personas: {
-            narrator: {
-              providers: { xai: { responseFormat: "pcm" } },
-            },
-          },
-        },
-      },
-    });
-    await processVoiceSegment(manager, "u-guest");
-
-    expect(lastTtsStreamArgs().disableFallback).toBe(true);
-    expect(lastTtsStreamArgs().text).toBe("hello back");
-    expect(readXaiResponseFormat(lastTtsStreamArgs())).toBe("mp3");
-    expect(lastTtsArgs().text).toBe("hello back");
-    expect(lastTtsArgs().channel).toBe("discord");
-    expect(readConfiguredXaiResponseFormat(lastTtsArgs())).toBe("pcm");
-    expect(textToSpeechMock).toHaveBeenCalledTimes(1);
   });
 
   it("passes per-channel system prompt context to voice agent runs", async () => {
