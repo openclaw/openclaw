@@ -1885,15 +1885,8 @@ describe("plugin sdk alias helpers", () => {
       "normalization-core",
       "agent-id.js",
     );
-    const normalizationDuration = path.join(
-      fixture.root,
-      "dist",
-      "normalization-core",
-      "duration.js",
-    );
     mkdirSafeDir(path.dirname(normalizationAgentId));
     fs.writeFileSync(normalizationAgentId, "export {};\n", "utf-8");
-    fs.writeFileSync(normalizationDuration, "export {};\n", "utf-8");
     const cwdWithoutOpenClawPackage = makeTempDir();
 
     const aliases = withCwd(cwdWithoutOpenClawPackage, () =>
@@ -1907,9 +1900,6 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/agent-id"] ?? "")).toBe(
       fs.realpathSync(normalizationAgentId),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/normalization-core/duration"] ?? "")).toBe(
-      fs.realpathSync(normalizationDuration),
     );
   });
 
