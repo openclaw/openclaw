@@ -3,18 +3,18 @@
  *
  * Executes local shell commands with streaming output accumulation and TUI renderers.
  */
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { toErrorObject } from "../../../infra/errors.js";
+import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { spawnCommand } from "../../../process/exec.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { getBashShellConfig, getShellEnv, killProcessTree } from "../../shell-utils.js";
-import { waitForChildProcess } from "../../utils/child-process.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
@@ -59,13 +59,16 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           );
           return;
         }
-        const child = spawn(shell, [...args, command], {
+        const child = spawnCommand([shell, ...args, command], {
+          baseEnv: {},
+          buffer: false,
           cwd,
           detached: process.platform !== "win32",
           env: env ?? getShellEnv(),
+          reject: false,
           stdio: ["ignore", "pipe", "pipe"],
-          windowsHide: true,
         });
+        const releaseOutput = releaseChildProcessOutputAfterExit(child);
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutMs = resolveBashTimeoutMs(timeout);
@@ -93,10 +96,11 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             signal.addEventListener("abort", onAbort, { once: true });
           }
         }
-        // Handle shell spawn errors and wait for the process to terminate without hanging
-        // on inherited stdio handles held by detached descendants.
-        waitForChildProcess(child)
-          .then((code) => {
+        void child
+          .then((result) => {
+            if (result.failed && result.exitCode === undefined && result.signal === undefined) {
+              throw result;
+            }
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
@@ -111,7 +115,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
               reject(new Error(`timeout:${timeout}`));
               return;
             }
-            resolve({ exitCode: code });
+            resolve({ exitCode: result.exitCode ?? (result.failed ? 1 : 0) });
           })
           .catch((err: unknown) => {
             if (timeoutHandle) {
@@ -121,7 +125,8 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
               signal.removeEventListener("abort", onAbort);
             }
             reject(toErrorObject(err, "Non-Error rejection"));
-          });
+          })
+          .finally(releaseOutput);
       });
     },
   };

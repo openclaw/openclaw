@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { spawnCommand } from "../../../process/exec.js";
 /**
  * Built-in find session tool.
  *
@@ -275,7 +276,12 @@ export function createFindToolDefinition(
             }
             args.push("--", effectivePattern, searchPath);
 
-            const child = spawn(fdPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+            const child = spawnCommand([fdPath, ...args], {
+              buffer: false,
+              reject: false,
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            releaseChildProcessOutputAfterExit(child);
             const rl = createInterface({ input: child.stdout });
             let stderr = "";
             const lines: string[] = [];
