@@ -1091,7 +1091,9 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
 }
 
 function deleteOwnedWebSocketSession(sessionId: string, entry: CachedWebSocketConnection): void {
-  if (websocketSessionCache.get(sessionId) === entry) websocketSessionCache.delete(sessionId);
+  if (websocketSessionCache.get(sessionId) === entry) {
+    websocketSessionCache.delete(sessionId);
+  }
 }
 function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
   if (entry.idleTimer) {
