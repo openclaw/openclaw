@@ -156,6 +156,7 @@ describe("renderMemoryImport", () => {
 
   it("disables confirmation actions while an import is running", () => {
     const onConfirmImport = vi.fn();
+    const onCancelImport = vi.fn();
     const container = document.createElement("div");
     render(
       renderMemoryImport(
@@ -163,6 +164,7 @@ describe("renderMemoryImport", () => {
           pendingProviderId: "codex",
           applyingProviderId: "codex",
           onConfirmImport,
+          onCancelImport,
         }),
       ),
       container,
@@ -175,6 +177,23 @@ describe("renderMemoryImport", () => {
     expect(buttons.every((button) => button.disabled)).toBe(true);
     buttons[0]?.click();
     expect(onConfirmImport).not.toHaveBeenCalled();
+    container
+      .querySelector("openclaw-modal-dialog")
+      ?.dispatchEvent(new CustomEvent("modal-cancel", { bubbles: true }));
+    expect(onCancelImport).not.toHaveBeenCalled();
+
+    const refresh = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Refresh",
+    );
+    expect(refresh?.disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
+        ?.disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector<HTMLInputElement>(".memory-import__collection-choice input")
+        ?.disabled,
+    ).toBe(true);
   });
 
   it("shows partial import failures with the saved report", () => {

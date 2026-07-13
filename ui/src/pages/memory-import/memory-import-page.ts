@@ -139,7 +139,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       );
     } catch (error) {
       if (epoch === this.refreshEpoch) {
-        this.plan = null;
         this.error = toErrorMessage(error);
         // Record the attempted key so reactive updates keep the stable error.
         // The Refresh action explicitly retries with force=true.
@@ -190,7 +189,12 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private requestImport(providerId: string) {
-    if ((this.selectedByProvider[providerId]?.length ?? 0) === 0) {
+    if (
+      this.loading ||
+      this.error !== null ||
+      this.applyingProviderId !== null ||
+      (this.selectedByProvider[providerId]?.length ?? 0) === 0
+    ) {
       return;
     }
     this.applyError = null;
@@ -264,7 +268,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       onRequestImport: (providerId) => this.requestImport(providerId),
       onConfirmImport: () => void this.confirmImport(),
       onCancelImport: () => {
-        this.pendingProviderId = null;
+        if (this.applyingProviderId === null) {
+          this.pendingProviderId = null;
+        }
       },
     });
     return html`

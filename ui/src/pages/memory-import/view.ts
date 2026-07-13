@@ -94,6 +94,7 @@ function renderCollection(
   collection: MemoryCollection,
   selectedIds: ReadonlySet<string>,
   onToggle: MemoryImportViewProps["onToggleCollection"],
+  disabled: boolean,
 ) {
   const selectable = collection.items.filter((item) => item.status === "planned");
   const selectableIds = selectable.map((item) => item.id);
@@ -106,7 +107,7 @@ function renderCollection(
           <input
             type="checkbox"
             .checked=${checked}
-            ?disabled=${selectableIds.length === 0}
+            ?disabled=${selectableIds.length === 0 || disabled}
             @change=${(event: Event) =>
               onToggle(
                 provider.providerId,
@@ -272,7 +273,13 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
               </dl>
               <div class="memory-import__collections">
                 ${groups.map((group) =>
-                  renderCollection(provider, group, selectedIds, props.onToggleCollection),
+                  renderCollection(
+                    provider,
+                    group,
+                    selectedIds,
+                    props.onToggleCollection,
+                    props.loading || props.applyingProviderId !== null || props.error !== null,
+                  ),
                 )}
               </div>
               ${renderResult(props.lastResults[provider.providerId])}
@@ -285,7 +292,10 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
                 <button
                   class="btn primary"
                   data-test-id="memory-import-provider-button"
-                  ?disabled=${selectedIds.size === 0 || applying || props.loading}
+                  ?disabled=${selectedIds.size === 0 ||
+                  props.applyingProviderId !== null ||
+                  props.loading ||
+                  props.error !== null}
                   @click=${() => props.onRequestImport(provider.providerId)}
                 >
                   ${applying ? t("common.importing") : t("memoryImport.importSelected")}
@@ -310,7 +320,11 @@ function renderConfirmation(props: MemoryImportViewProps) {
     <openclaw-modal-dialog
       label=${title}
       description=${description}
-      @modal-cancel=${props.onCancelImport}
+      @modal-cancel=${() => {
+        if (props.applyingProviderId === null) {
+          props.onCancelImport();
+        }
+      }}
     >
       <div class="exec-approval-card memory-import__confirm">
         <div class="exec-approval-header">
@@ -392,7 +406,11 @@ export function renderMemoryImport(props: MemoryImportViewProps) {
               <small>${t("memoryImport.replaceHint")}</small>
             </span>
           </label>
-          <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
+          <button
+            class="btn btn--sm"
+            ?disabled=${props.loading || props.applyingProviderId !== null}
+            @click=${props.onRefresh}
+          >
             ${props.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
