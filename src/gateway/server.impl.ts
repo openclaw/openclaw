@@ -1680,7 +1680,8 @@ export async function startGatewayServer(
         workspaceDir: defaultWorkspaceDir,
         env: params.env,
         activationSourceConfig: params.nextConfig,
-        workerProviderIds: workerEnvironmentStartup?.durableProviderIds ?? [],
+        // Workers can be created after startup; reload planning needs the live durable set.
+        workerProviderIds: workerEnvironmentStartup?.listDurableProviderIds() ?? [],
       });
       const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
       const nextStartupChannelIds = new Set<ChannelId>();
@@ -2220,8 +2221,8 @@ export async function startGatewayServer(
         },
       });
       // The loop closes the previous server before this generation starts, so retired
-      // plugin installs are safe to remove. Wait for an idle window and preserve paths
-      // from the startup snapshot so cleanup cannot remove active code or delay a turn.
+      // plugin installs are safe to remove. Wait for an idle window and resolve current
+      // install paths at execution time so cleanup cannot remove active code or delay a turn.
       retainedPluginCleanupHandle = gatewayRuntimeServices.scheduleGatewayIdleTask({
         delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
         retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
@@ -2230,10 +2231,7 @@ export async function startGatewayServer(
         run: async () => {
           const { cleanupRetainedPluginInstallGenerations } =
             await import("./server-retained-plugin-cleanup.js");
-          await cleanupRetainedPluginInstallGenerations({
-            installRecords: startupConfigLoad.pluginMetadataSnapshot?.index.installRecords,
-            log,
-          });
+          await cleanupRetainedPluginInstallGenerations({ log });
         },
         log,
         errorMessage: "retained npm generation cleanup failed",

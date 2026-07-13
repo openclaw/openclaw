@@ -86,9 +86,10 @@ describe("gateway startup import boundaries", () => {
     expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
     expect(postReadyStart).toBeGreaterThan(serverStart);
     expect(cleanupCall).toBeGreaterThan(postReadyStart);
-    expect(serverImpl.slice(postReadyStart, cleanupCall + 300)).toContain(
+    expect(serverImpl.slice(postReadyStart, cleanupCall + 300)).not.toContain(
       "startupConfigLoad.pluginMetadataSnapshot?.index.installRecords",
     );
+    expect(cleanup).toContain("loadInstalledPluginIndexInstallRecordsSync()");
   });
 
   it("loads the worker bootstrap runtime only when an operation needs it", () => {

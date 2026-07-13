@@ -4,15 +4,14 @@ type RetainedPluginCleanupLogger = {
 };
 
 export async function cleanupRetainedPluginInstallGenerations(params: {
-  installRecords?: Readonly<Record<string, { installPath?: string }>>;
   log: RetainedPluginCleanupLogger;
 }): Promise<void> {
   try {
-    const records =
-      params.installRecords ??
-      (
-        await import("../plugins/installed-plugin-index-records.js")
-      ).loadInstalledPluginIndexInstallRecordsSync();
+    // The idle delay spans plugin installs and reloads; protect the current paths,
+    // not the startup snapshot, before deleting any retained generation.
+    const records = (
+      await import("../plugins/installed-plugin-index-records.js")
+    ).loadInstalledPluginIndexInstallRecordsSync();
     const { cleanupRetainedManagedNpmInstallGenerations } =
       await import("../plugins/managed-npm-retention.js");
     const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({

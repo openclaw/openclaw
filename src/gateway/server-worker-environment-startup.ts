@@ -21,6 +21,7 @@ type WorkerEnvironmentLogger = {
 
 export type GatewayWorkerEnvironmentStartupState = {
   durableProviderIds: string[];
+  listDurableProviderIds: () => string[];
   records: WorkerEnvironmentRecord[];
   store: WorkerEnvironmentStore;
 };
@@ -48,7 +49,9 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
         : [record.providerId],
     ),
   );
-  return { durableProviderIds, records, store };
+  const listDurableProviderIds = () =>
+    uniqueStrings(store.listForReconcile().map((record) => record.providerId));
+  return { durableProviderIds, listDurableProviderIds, records, store };
 }
 
 export async function createGatewayWorkerEnvironmentRuntime(params: {
