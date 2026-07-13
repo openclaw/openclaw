@@ -20,9 +20,10 @@ import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
+import * as catalog from "./catalog-target.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
-
-type NewSessionRouteData = { agentId?: string };
+import type { NewSessionRouteData } from "./location.ts";
+import { folderDisplayName, isAbsolutePath } from "./path.ts";
 
 type DraftBranches = {
   repoRoot: string;
@@ -42,19 +43,11 @@ type DraftNode = {
 type BrowserTarget = { nodeId: string; label: string };
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
-
-/** Last path segment for the label; raw-path fallback keeps filesystem roots visible. */
-function folderDisplayName(path: string): string {
-  return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
-}
+const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
 /** Focusable rows for the menu keyboard contract (menu items + browser rows). */
 const MENU_ITEM_SELECTOR =
   ".session-menu__item:not(:disabled), .new-session-page__browser-entry:not(:disabled)";
-
-function isAbsolutePath(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
-}
 
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
@@ -74,6 +67,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private message = "";
   @state() private submitting = false;
   @state() private error: string | null = null;
+  @state() private catalogRetrying = false;
   @state() private browserOpen = false;
   @state() private browserLoading = false;
   @state() private browserError: string | null = null;
@@ -87,10 +81,21 @@ class NewSessionPage extends OpenClawLightDomElement {
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
+  private gatewaySource: ApplicationContext["gateway"] | null = null;
+  private gatewayConnected = false;
+  private gatewayConnectionEpoch = 0;
+  private catalogRetryScope = "";
+  private catalogRetryAttempt = 0;
+  private catalogRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   // Re-render when agents/sessions hydrate so the hero identity and the
   // recent-chats list appear without a route change.
   private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) => this.synchronizeGateway(gateway),
+    )
     .watch(
       () => this.context?.agents,
       (agents, notify) => agents.subscribe(notify),
@@ -99,6 +104,68 @@ class NewSessionPage extends OpenClawLightDomElement {
       () => this.context?.sessions,
       (sessions, notify) => sessions.subscribe(notify),
     );
+
+  private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
+    if (this.gatewaySource !== gateway) {
+      this.gatewaySource = gateway;
+      this.gatewayConnected = false;
+    }
+    const connected = gateway.snapshot.connected;
+    const becameConnected = connected && !this.gatewayConnected;
+    this.gatewayConnected = connected;
+    if (becameConnected) {
+      this.gatewayConnectionEpoch += 1;
+      this.retryPendingCatalogTarget();
+    }
+  }
+
+  private retryPendingCatalogTarget() {
+    if (this.catalogRetrying) {
+      return;
+    }
+    if (
+      !this.gatewayConnected ||
+      !catalog.isTarget(this.data) ||
+      catalog.isResolvedTarget(this.data)
+    ) {
+      globalThis.clearTimeout(this.catalogRetryTimer);
+      this.catalogRetryTimer = undefined;
+      this.catalogRetryScope = "";
+      this.catalogRetryAttempt = 0;
+      return;
+    }
+    const retryScope = `${this.gatewayConnectionEpoch}:${catalog.routeKey(this.data)}`;
+    if (this.catalogRetryScope !== retryScope) {
+      globalThis.clearTimeout(this.catalogRetryTimer);
+      this.catalogRetryTimer = undefined;
+      this.catalogRetryScope = retryScope;
+      this.catalogRetryAttempt = 0;
+    }
+    if (this.catalogRetryTimer || this.catalogRetryAttempt >= CATALOG_RETRY_DELAYS_MS.length) {
+      return;
+    }
+    const delayMs = CATALOG_RETRY_DELAYS_MS[this.catalogRetryAttempt];
+    this.catalogRetryAttempt += 1;
+    this.catalogRetryTimer = globalThis.setTimeout(() => {
+      this.catalogRetryTimer = undefined;
+      if (
+        this.catalogRetryScope !== retryScope ||
+        !this.gatewayConnected ||
+        !catalog.isTarget(this.data) ||
+        catalog.isResolvedTarget(this.data)
+      ) {
+        return;
+      }
+      const revalidation = this.context?.revalidate("new-session");
+      if (!revalidation) {
+        return;
+      }
+      void revalidation
+        .catch(() => undefined)
+        .then(() => this.updateComplete)
+        .then(() => this.retryPendingCatalogTarget());
+    }, delayMs);
+  }
 
   override connectedCallback() {
     super.connectedCallback();
@@ -110,6 +177,13 @@ class NewSessionPage extends OpenClawLightDomElement {
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.subscriptions.clear();
+    this.gatewaySource = null;
+    this.gatewayConnected = false;
+    this.gatewayConnectionEpoch = 0;
+    this.catalogRetryScope = "";
+    this.catalogRetryAttempt = 0;
+    globalThis.clearTimeout(this.catalogRetryTimer);
+    this.catalogRetryTimer = undefined;
     super.disconnectedCallback();
   }
 
@@ -203,8 +277,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   };
 
   override updated() {
+    this.retryPendingCatalogTarget();
     const agentsReady = this.agents().length > 0;
-    const openKey = this.data?.agentId ?? "";
+    const openKey = catalog.routeKey(this.data);
     if (this.openedFor !== openKey) {
       this.openedFor = openKey;
       this.agentsHydrated = agentsReady;
@@ -216,9 +291,34 @@ class NewSessionPage extends OpenClawLightDomElement {
     // anything the user already typed while the list was loading.
     if (!this.agentsHydrated && agentsReady) {
       this.agentsHydrated = true;
-      this.adoptAgentDefaults();
+      this.adoptAgentDefaults({ preserveTypedFolder: true });
     }
   }
+
+  private readonly handleCatalogRetry = () => {
+    if (
+      this.catalogRetrying ||
+      !this.gatewayConnected ||
+      !catalog.isTarget(this.data) ||
+      catalog.isResolvedTarget(this.data)
+    ) {
+      return;
+    }
+    const revalidation = this.context?.revalidate("new-session");
+    if (!revalidation) {
+      return;
+    }
+    globalThis.clearTimeout(this.catalogRetryTimer);
+    this.catalogRetryTimer = undefined;
+    this.catalogRetrying = true;
+    void revalidation
+      .catch(() => undefined)
+      .then(() => this.updateComplete)
+      .finally(() => {
+        this.catalogRetrying = false;
+        this.retryPendingCatalogTarget();
+      });
+  };
 
   private agents() {
     return this.context?.agents.state.agentsList?.agents ?? [];
@@ -246,15 +346,11 @@ class NewSessionPage extends OpenClawLightDomElement {
     return Boolean(folder) && folder !== this.workspacePath();
   }
 
-  /** Resolves the agent selection and workspace-derived fields; keeps user input. */
-  private adoptAgentDefaults() {
+  private adoptAgentDefaults(options: { preserveTypedFolder?: boolean } = {}) {
     const agents = this.agents();
-    const requested = normalizeAgentId(this.data?.agentId || "");
     const fallback = this.context?.agents.state.agentsList?.defaultId ?? agents[0]?.id ?? "main";
-    this.agentId = agents.some((agent) => normalizeAgentId(agent.id) === requested)
-      ? requested
-      : normalizeAgentId(fallback);
-    if (!this.folder.trim()) {
+    this.agentId = catalog.resolveAgentId(this.data, agents, fallback);
+    if (!options.preserveTypedFolder || !this.folder.trim()) {
       this.folder = this.workspacePath();
     }
     void this.loadNodes();
@@ -392,6 +488,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.agents().length === 0) {
       return false;
     }
+    if (!catalog.allowsSelectedAgent(this.data, this.selectedAgent())) {
+      return false;
+    }
     if (this.usesCustomFolder() && (!this.isAdmin() || (!this.execNode && !this.worktree))) {
       return false;
     }
@@ -433,6 +532,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           cwd: this.folder,
           workspace: this.workspacePath(),
           execNode: this.execNode,
+          catalogId: this.data?.catalogId,
         }),
       );
       if (!result) {
@@ -477,7 +577,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private selectAgentId(agentId: string) {
-    if (this.submitting) {
+    if (this.submitting || catalog.isTarget(this.data)) {
       return;
     }
     // Re-picking the checked agent must not reset the draft (the native
@@ -1053,12 +1153,14 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private renderTargetBar() {
     const agents = this.agents();
-    return html`
-      <div class="new-session-page__triggers">
-        ${agents.length > 1 ? this.renderAgentSelect(agents) : nothing} ${this.renderFolderSelect()}
-        ${this.renderWhereSelect()}
-      </div>
-    `;
+    return catalog.renderBar({
+      data: this.data,
+      agentSelect: agents.length > 1 ? this.renderAgentSelect(agents) : nothing,
+      folderSelect: this.renderFolderSelect(),
+      whereSelect: this.renderWhereSelect(),
+      retrying: this.catalogRetrying,
+      onRetry: this.handleCatalogRetry,
+    });
   }
 
   /** Target row + composer, rendered mid-screen between the hero and recents. */

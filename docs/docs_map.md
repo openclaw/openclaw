@@ -807,6 +807,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: References
 
+## channels/reef.md
+
+- Route: /channels/reef
+- Headings:
+  - H2: Quick start
+  - H2: Configuration
+  - H2: Adding a friend
+  - H2: Sending and receiving
+  - H2: Guards and owner review
+  - H2: Troubleshooting
+
 ## channels/signal.md
 
 - Route: /channels/signal
@@ -6872,6 +6883,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/raft
 - Headings:
   - H1: Raft plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/reef.md
+
+- Route: /plugins/reference/reef
+- Headings:
+  - H1: Reef plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs

@@ -232,6 +232,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.invoke", scope: "operator.write" },
   { name: "node.pending.pull", scope: "node" },
   { name: "node.pending.ack", scope: "node" },
+  { name: "node.invoke.progress", scope: "node" },
   { name: "node.invoke.result", scope: "node" },
   { name: "node.event", scope: "node" },
   { name: "cron.get", scope: "operator.read" },
@@ -344,6 +345,12 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "approval.get", scope: "operator.approvals" },
   { name: "approval.resolve", scope: "operator.approvals" },
   { name: "sessions.search", scope: "operator.read" },
+  {
+    name: "sessions.dispatch",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

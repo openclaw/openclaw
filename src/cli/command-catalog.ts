@@ -338,6 +338,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       bypassConfigGuard: true,
       hideBanner: true,
       loadPlugins: "never",
+      ownsProtocolStdout: true,
       networkProxy: "bypass",
     },
   },

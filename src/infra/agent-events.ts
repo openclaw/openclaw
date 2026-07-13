@@ -300,6 +300,8 @@ export function claimAgentRunContext(
   runId: string,
   context: AgentRunContext,
   options: {
+    /** Adopt a same-generation context only when no tracked execution owns it. */
+    adoptExistingUnowned?: boolean;
     trackOwner?: boolean;
     ownsContext?: boolean;
     exclusive?: boolean;
@@ -316,11 +318,16 @@ export function claimAgentRunContext(
   const existingOwners = ownersById.get(runId);
   const currentOwners =
     existingOwners?.lifecycleGeneration === lifecycleGeneration ? existingOwners : undefined;
+  const adoptsExistingUnowned =
+    options.exclusive === true &&
+    options.adoptExistingUnowned === true &&
+    existing?.lifecycleGeneration === lifecycleGeneration &&
+    currentOwners === undefined;
   if (
     currentOwners?.exclusiveClaimId ||
     (options.exclusive &&
-      (existing?.lifecycleGeneration === lifecycleGeneration ||
-        (currentOwners?.claimIds.size ?? 0) > 0))
+      ((existing?.lifecycleGeneration === lifecycleGeneration && !adoptsExistingUnowned) ||
+        currentOwners !== undefined))
   ) {
     return undefined;
   }

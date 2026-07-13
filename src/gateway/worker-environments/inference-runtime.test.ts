@@ -73,6 +73,7 @@ const identity: WorkerConnectionIdentity = {
   credentialHash: ["credential", "hash", "runtime", "test"].join("-"),
   bundleHash: "bundle-hash-runtime-test",
   sessionId: SESSION_ID,
+  runId: "run-runtime-test",
   ownerEpoch: 3,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],

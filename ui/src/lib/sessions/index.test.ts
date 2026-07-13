@@ -176,6 +176,22 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
+  it("publishes state.error when replacing the group catalog is rejected", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.put") {
+        throw new Error("group catalog rejected");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, ["sessions.groups.put"]);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.groupsPut(["Alpha"])).rejects.toThrow("group catalog rejected");
+    expect(sessions.state.error).toBe("Error: group catalog rejected");
+    sessions.dispose();
+  });
+
   it("publishes state.error when group delete is rejected", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.groups.delete") {
@@ -217,6 +233,35 @@ describe("createSessionCapability", () => {
 
     await expect(operation).resolves.toBe("stale");
     expect(sessions.state.groups).toEqual([]);
+    sessions.dispose();
+  });
+
+  it("reports a group catalog replacement as stale after a same-client reconnect", async () => {
+    const replaced = deferred<{ groups: Array<{ name: string }> }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.put") {
+        return await replaced.promise;
+      }
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client, ["sessions.groups.put"]);
+    const sessions = createSessionCapability(gateway);
+
+    const operation = sessions.groupsPut(["Alpha"]);
+    publish(false);
+    publish(true);
+    replaced.resolve({ groups: [{ name: "Alpha" }] });
+
+    await expect(operation).resolves.toBe("stale");
+    expect(sessions.state.groups).toEqual([]);
+    expect(sessions.state.error).toBeNull();
     sessions.dispose();
   });
 

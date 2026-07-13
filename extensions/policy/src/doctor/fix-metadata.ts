@@ -3,7 +3,7 @@ import { CHECK_IDS, POLICY_CHECK_IDS } from "./metadata.js";
 
 type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "validateOnly" | "unsupported";
 
-export type PolicyFixMetadata = {
+type PolicyFixMetadata = {
   readonly checkId: (typeof POLICY_CHECK_IDS)[number];
   readonly fixClass: PolicyFixClass;
   readonly policyPath?: readonly string[];
@@ -23,7 +23,7 @@ const m = (
   ...options,
 });
 
-export const POLICY_FIX_METADATA = [
+const POLICY_FIX_METADATA = [
   m(CHECK_IDS.policyMissingFile, "manual", "Restore or author the approved policy artifact."),
   m(CHECK_IDS.policyInvalidFile, "manual", "Repair the policy JSONC syntax or schema."),
   m(

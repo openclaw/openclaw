@@ -740,7 +740,7 @@ describe("PluginsPage", () => {
     );
 
     const addButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".plugins-group__actions .btn"),
+      ...page.querySelectorAll<HTMLButtonElement>(".settings-section__actions .btn"),
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;
@@ -856,7 +856,7 @@ describe("PluginsPage", () => {
     await page.updateComplete;
     page
       .querySelector<HTMLButtonElement>(
-        '[data-connector-id="context7"] .plugins-card__footer button',
+        '[data-connector-id="context7"] .settings-row__control button',
       )
       ?.click();
 
@@ -866,7 +866,7 @@ describe("PluginsPage", () => {
       ).toContain("rate limit exceeded"),
     );
     // The MCP-section message stays clear; the failure belongs to the card.
-    expect(page.querySelector("#plugins-group-mcp")).toBeNull();
+    expect(page.querySelector(".plugins-group-message")).toBeNull();
   });
 
   it("rejects invalid MCP server names before touching config", async () => {
@@ -893,7 +893,7 @@ describe("PluginsPage", () => {
     );
 
     const addButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".plugins-group__actions .btn"),
+      ...page.querySelectorAll<HTMLButtonElement>(".settings-section__actions .btn"),
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;

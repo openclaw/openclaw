@@ -168,6 +168,7 @@ import {
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { withSessionPlacementTurnAdmission } from "../session-placement-admission.js";
 import {
   resolveSessionSuspensionReason,
   resolveSessionSuspensionTarget,
@@ -889,12 +890,15 @@ async function runEmbeddedAgentInternal(
       });
     }
   };
-  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+  const enqueueGlobal = (
+    task: () => Promise<EmbeddedAgentRunResult>,
+    opts?: CommandQueueEnqueueOptions,
+  ) => {
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
     };
-    const taskWithCurrentLifecycle = () => {
+    const taskWithCurrentLifecycle = async () => {
       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       throwIfAborted();
       const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -914,16 +918,29 @@ async function runEmbeddedAgentInternal(
         lifecycleGeneration = currentLifecycleGeneration;
         params = { ...params, lifecycleGeneration };
       }
-      // Queue waits can outlive the durable harness binding that admitted a run.
-      // Recheck only after lifecycle admission, before any run context or hook can execute.
+      // Queue waits can outlive durable harness and placement bindings.
+      // Recheck and claim only after lifecycle admission, before context or hooks execute.
       assertAgentHarnessRunAdmission(params);
-      claimAgentRunContext(params.runId, {
-        ...existingContext,
-        sessionKey: params.sessionKey ?? existingContext?.sessionKey,
-        sessionId: params.sessionId ?? existingContext?.sessionId,
-        lifecycleGeneration,
-      });
-      return withAgentRunLifecycleGeneration(lifecycleGeneration, task);
+      return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+        withSessionPlacementTurnAdmission(
+          {
+            sessionId: params.sessionId,
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            runId: params.runId,
+          },
+          params,
+          () => {
+            claimAgentRunContext(params.runId, {
+              ...existingContext,
+              sessionKey: params.sessionKey ?? existingContext?.sessionKey,
+              sessionId: params.sessionId ?? existingContext?.sessionId,
+              lifecycleGeneration,
+            });
+            return task();
+          },
+        ),
+      );
     };
     if (params.enqueue) {
       return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));

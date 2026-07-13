@@ -39,8 +39,9 @@ import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts"
 import { searchForSession } from "../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import "../pages/approval/approval-page.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
+import "../pages/approval/approval-page.ts";
+import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
@@ -1296,10 +1297,9 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
-                .onOpenNewSession=${(agentId: string) => {
-                  this.navigate("new-session", {
-                    search: agentId ? `?agent=${encodeURIComponent(agentId)}` : "",
-                  });
+                .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
+                  const search = newSessionSearch(agentId, target);
+                  this.navigate("new-session", { search });
                 }}
                 .draftSessionAgentId=${this.draftSessionAgentId()}
                 .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>

@@ -93,6 +93,15 @@ const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) 
   new WorkerEnvironmentServiceError(code, message);
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
 
+function workerEnvironmentIdempotencyDigest(idempotencyKey: string): string {
+  return createHash("sha256").update(idempotencyKey).digest("hex");
+}
+
+export function workerEnvironmentIdForIdempotencyKey(idempotencyKey: string): string {
+  const digest = workerEnvironmentIdempotencyDigest(idempotencyKey);
+  return `worker:${digest.slice(0, 32)}`;
+}
+
 type WorkerEnvironmentServiceOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
@@ -131,6 +140,42 @@ type WorkerEnvironmentServiceOptions = {
   >;
   executeInference: WorkerInferenceExecutor;
   inferenceStore?: WorkerInferenceStore;
+  placementStore?: WorkerSessionPlacementGate;
+};
+
+export type WorkerPlacementTurnBinding = Readonly<{
+  sessionId: string;
+  environmentId: string;
+  ownerEpoch: number;
+  runId: string;
+}>;
+
+type WorkerProcessTurnBinding = WorkerPlacementTurnBinding & {
+  credentialHash: string;
+};
+
+type WorkerTerminalTurnFence = WorkerProcessTurnBinding & {
+  transcriptSeq: number;
+  liveSeq: number;
+};
+
+type WorkerPendingTerminalTurnFence = WorkerProcessTurnBinding & {
+  terminalLiveSeq: number;
+};
+
+type WorkerTurnRequest =
+  | { kind: "inference" }
+  | { kind: "live"; seq: number }
+  | { kind: "transcript"; seq: number };
+
+export type WorkerSessionPlacementGate = {
+  validateWorkerTurn(binding: WorkerPlacementTurnBinding): boolean;
+  updateAckCursors(
+    binding: WorkerPlacementTurnBinding & {
+      transcriptSeq?: number;
+      liveSeq?: number;
+    },
+  ): void;
 };
 
 type WorkerTranscriptCommitApplicationResult =
@@ -211,6 +256,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const operations = new KeyedAsyncQueue();
   const activeOperations = new Set<Promise<unknown>>();
   const pendingCredentials = new Map<string, MintedWorkerCredential>();
+  const observedAckCursors = new Map<string, WorkerTerminalTurnFence>();
+  const pendingTerminalTurnFences = new Map<string, WorkerPendingTerminalTurnFence>();
+  const terminalTurnFences = new Map<string, WorkerTerminalTurnFence>();
   const now = options.now ?? Date.now;
   const inference = createWorkerInferenceManager({
     execute: options.executeInference,
@@ -222,6 +270,86 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   let interval: ReturnType<typeof setInterval> | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
   let stopping = false;
+
+  const placementBinding = (
+    identity: WorkerConnectionIdentity,
+  ): WorkerPlacementTurnBinding | undefined => {
+    if (!identity.sessionId || !identity.runId) {
+      return undefined;
+    }
+    return {
+      sessionId: identity.sessionId,
+      environmentId: identity.environmentId,
+      ownerEpoch: identity.ownerEpoch,
+      runId: identity.runId,
+    };
+  };
+
+  const processTurnBinding = (
+    identity: WorkerConnectionIdentity,
+  ): WorkerProcessTurnBinding | undefined => {
+    const placement = placementBinding(identity);
+    return placement ? { ...placement, credentialHash: identity.credentialHash } : undefined;
+  };
+
+  const matchesTurnBinding = (
+    left: WorkerProcessTurnBinding,
+    right: WorkerProcessTurnBinding,
+  ): boolean =>
+    left.sessionId === right.sessionId &&
+    left.environmentId === right.environmentId &&
+    left.ownerEpoch === right.ownerEpoch &&
+    left.runId === right.runId &&
+    safeEqualSecret(left.credentialHash, right.credentialHash);
+
+  const recordAckCursor = (
+    binding: WorkerProcessTurnBinding,
+    cursor: { transcriptSeq: number } | { liveSeq: number },
+  ): WorkerTerminalTurnFence => {
+    const current = observedAckCursors.get(binding.sessionId);
+    const currentTurn = current && matchesTurnBinding(current, binding) ? current : undefined;
+    const next: WorkerTerminalTurnFence = {
+      ...binding,
+      transcriptSeq:
+        "transcriptSeq" in cursor
+          ? Math.max(currentTurn?.transcriptSeq ?? 0, cursor.transcriptSeq)
+          : (currentTurn?.transcriptSeq ?? 0),
+      liveSeq:
+        "liveSeq" in cursor
+          ? Math.max(currentTurn?.liveSeq ?? 0, cursor.liveSeq)
+          : (currentTurn?.liveSeq ?? 0),
+    };
+    observedAckCursors.set(binding.sessionId, next);
+    return next;
+  };
+
+  const observedAckCursorFor = (
+    binding: WorkerProcessTurnBinding,
+  ): WorkerTerminalTurnFence | undefined => {
+    const observed = observedAckCursors.get(binding.sessionId);
+    return observed && matchesTurnBinding(observed, binding) ? observed : undefined;
+  };
+
+  const validateWorkerPlacement = (
+    identity: WorkerConnectionIdentity,
+  ): { durableClaim: boolean; valid: boolean } => {
+    if (!options.placementStore) {
+      return { durableClaim: false, valid: true };
+    }
+    if (identity.sessionId === null && identity.runId === null) {
+      return { durableClaim: false, valid: true };
+    }
+    const binding = placementBinding(identity);
+    const valid = binding ? options.placementStore.validateWorkerTurn(binding) : false;
+    return { durableClaim: valid, valid };
+  };
+
+  const isTerminalLiveEvent = (request: WorkerLiveEventParams): boolean =>
+    request.event.kind === "lifecycle" &&
+    (request.event.payload.phase === "end" ||
+      (request.event.payload.phase === "error" &&
+        (request.event.payload.aborted === true ||
+          request.event.payload.fallbackExhaustedFailure === true)));
 
   const project = (record: WorkerEnvironmentRecord) => ({
     ...record,
@@ -753,7 +881,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (!normalizedProfileId || normalizedProfileId !== profileId) {
       throw serviceError("invalid_profile", "Worker profile id must be non-empty and trimmed");
     }
-    const digest = createHash("sha256").update(idempotencyKey).digest("hex");
+    const digest = workerEnvironmentIdempotencyDigest(idempotencyKey);
     const environmentId = `worker:${digest.slice(0, 32)}`;
     return withLock(environmentId, async () => {
       if (stopping) {
@@ -1038,6 +1166,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       await Promise.allSettled(activeOperations);
     }
     pendingCredentials.clear();
+    observedAckCursors.clear();
+    pendingTerminalTurnFences.clear();
+    terminalTurnFences.clear();
     options.liveEvents?.clear();
   };
 
@@ -1077,6 +1208,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const validateAttachedWorkerRequest = (
     identity: WorkerConnectionIdentity,
     runEpoch: number,
+    request: WorkerTurnRequest,
   ):
     | { ok: true }
     | { ok: false; closeReason: WorkerProtocolCloseReason }
@@ -1084,11 +1216,29 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (stopping) {
       return { ok: false, closeReason: "environment-unavailable" };
     }
+    const placement = validateWorkerPlacement(identity);
+    if (!placement.valid) {
+      return { ok: false, closeReason: "placement-mismatch" };
+    }
+    const turnBinding = processTurnBinding(identity);
+    const terminalFence = identity.sessionId
+      ? terminalTurnFences.get(identity.sessionId)
+      : undefined;
+    if (turnBinding && terminalFence && matchesTurnBinding(terminalFence, turnBinding)) {
+      const isReplay =
+        (request.kind === "transcript" && request.seq <= terminalFence.transcriptSeq) ||
+        (request.kind === "live" && request.seq <= terminalFence.liveSeq);
+      if (!isReplay) {
+        return { ok: false, closeReason: "placement-mismatch" };
+      }
+    }
     const credential = store.getCredential(identity.environmentId);
     if (!credential || !safeEqualSecret(credential.credentialHash, identity.credentialHash)) {
       return { ok: false, closeReason: "credential-replaced" };
     }
-    if (now() >= credential.expiresAtMs) {
+    // TTL limits admission and reconnect. An already-admitted exact durable
+    // turn stays usable until its terminal ACK or placement fence.
+    if (now() >= credential.expiresAtMs && !placement.durableClaim) {
       return { ok: false, closeReason: "credential-expired" };
     }
     const environment = store.get(identity.environmentId);
@@ -1111,6 +1261,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ) {
       return { ok: false, reason: "session-not-attached" };
     }
+    if (turnBinding && terminalFence && !matchesTurnBinding(terminalFence, turnBinding)) {
+      // Credential rotation identifies a new process turn even when a caller
+      // intentionally reuses its durable run id (for example, cron sessions).
+      terminalTurnFences.delete(turnBinding.sessionId);
+    }
     return { ok: true };
   };
 
@@ -1119,32 +1274,118 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     request: WorkerTranscriptCommitParams,
   ): Promise<WorkerTranscriptCommitServiceResult> =>
     withLock(identity.environmentId, async () => {
-      const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+      const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
+        kind: "transcript",
+        seq: request.seq,
+      });
       if (!binding.ok) {
         return binding;
       }
       if (!options.applyTranscriptCommit) {
         return { ok: false, closeReason: "gateway-unavailable" };
       }
-      return await options.applyTranscriptCommit({ identity, request });
+      const result = await options.applyTranscriptCommit({ identity, request });
+      // Transcript persistence awaits outside the placement transaction. Revalidate the durable
+      // claim before exposing an ACK so reclamation cannot admit both owners for one session.
+      const currentBinding = validateAttachedWorkerRequest(identity, request.runEpoch, {
+        kind: "transcript",
+        seq: request.seq,
+      });
+      if (!currentBinding.ok) {
+        return currentBinding;
+      }
+      // Stale base is a terminal sequenced outcome. Advance its durable cursor
+      // so the next worker commit cannot reuse the consumed sequence number.
+      if (result.ok || result.reason === "stale-base-leaf") {
+        const placement = placementBinding(identity);
+        const processTurn = processTurnBinding(identity);
+        if (!placement || !processTurn) {
+          return { ok: false, closeReason: "placement-mismatch" };
+        }
+        options.placementStore?.updateAckCursors({ ...placement, transcriptSeq: request.seq });
+        recordAckCursor(processTurn, { transcriptSeq: request.seq });
+      }
+      return result;
     });
 
-  const pushLiveEvent = (
+  const applyLiveEvent = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerLiveEventParams,
+  ): WorkerLiveEventServiceResult => {
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
+      kind: "live",
+      seq: request.seq,
+    });
+    if (!binding.ok) {
+      if ("closeReason" in binding) {
+        return binding;
+      }
+      return { ok: false, details: { reason: binding.reason } };
+    }
+    if (request.runId !== identity.runId) {
+      return { ok: false, closeReason: "placement-mismatch" };
+    }
+    if (!options.liveEvents) {
+      return { ok: false, closeReason: "gateway-unavailable" };
+    }
+    // The caller holds the environment lock, preserving order with transcript
+    // commits and the terminal mutation fence while this synchronous receiver runs.
+    const result = options.liveEvents.apply({ identity, request });
+    if (result.ok) {
+      const placement = placementBinding(identity);
+      const processTurn = processTurnBinding(identity);
+      if (!placement || !processTurn) {
+        return { ok: false, closeReason: "placement-mismatch" };
+      }
+      options.placementStore?.updateAckCursors({
+        ...placement,
+        liveSeq: result.result.ackedSeq,
+      });
+      recordAckCursor(processTurn, { liveSeq: result.result.ackedSeq });
+    }
+    return result;
+  };
+
+  const pushLiveEvent = async (
     identity: WorkerConnectionIdentity,
     request: WorkerLiveEventParams,
   ): Promise<WorkerLiveEventServiceResult> => {
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
-    if (!binding.ok) {
-      if ("closeReason" in binding) {
-        return Promise.resolve(binding);
+    return await withLock(identity.environmentId, async () => {
+      const placement = placementBinding(identity);
+      const processTurn = processTurnBinding(identity);
+      const observed = processTurn ? observedAckCursorFor(processTurn) : undefined;
+      const wasNewSequence = request.seq > (observed?.liveSeq ?? 0);
+      const result = applyLiveEvent(identity, request);
+      if (!result.ok || !placement || !processTurn) {
+        return result;
       }
-      return Promise.resolve({ ok: false, details: { reason: binding.reason } });
-    }
-    if (!options.liveEvents) {
-      return Promise.resolve({ ok: false, closeReason: "gateway-unavailable" });
-    }
-    // Publish after authoritative validation without blocking on lifecycle work.
-    return Promise.resolve(options.liveEvents.apply({ identity, request }));
+      const pending = pendingTerminalTurnFences.get(placement.sessionId);
+      if (pending && !matchesTurnBinding(pending, processTurn)) {
+        pendingTerminalTurnFences.delete(placement.sessionId);
+      }
+      if (isTerminalLiveEvent(request) && wasNewSequence) {
+        pendingTerminalTurnFences.set(placement.sessionId, {
+          ...processTurn,
+          terminalLiveSeq: request.seq,
+        });
+      }
+      const terminal = pendingTerminalTurnFences.get(placement.sessionId);
+      if (
+        terminal &&
+        matchesTurnBinding(terminal, processTurn) &&
+        result.result.ackedSeq >= terminal.terminalLiveSeq
+      ) {
+        // A gap fill can ACK a previously buffered terminal event. Fence from
+        // the observed high-water marks, not only from the request carrying it.
+        terminalTurnFences.set(
+          placement.sessionId,
+          observedAckCursorFor(processTurn) ??
+            recordAckCursor(processTurn, { liveSeq: result.result.ackedSeq }),
+        );
+        pendingTerminalTurnFences.delete(placement.sessionId);
+      }
+      return result;
+    });
   };
 
   const revalidateInference = (
@@ -1154,7 +1395,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (request.sessionId !== identity.sessionId) {
       return "session-not-attached";
     }
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
+      kind: "inference",
+    });
     return binding.ok ? null : "reason" in binding ? binding.reason : "session-not-attached";
   };
 
@@ -1163,10 +1406,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     request: WorkerInferenceStartParams,
     sink: WorkerInferenceSink,
   ): WorkerInferenceStartServiceResult => {
-    if (request.sessionId !== identity.sessionId) {
+    if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
       return { ok: false, reason: "session-not-attached" };
     }
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
+      kind: "inference",
+    });
     if (!binding.ok) {
       return binding;
     }
@@ -1182,10 +1427,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     identity: WorkerConnectionIdentity,
     request: WorkerInferenceCancelParams,
   ): WorkerInferenceCancelServiceResult => {
-    if (request.sessionId !== identity.sessionId) {
+    if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
       return { ok: false, reason: "session-not-attached" };
     }
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
+      kind: "inference",
+    });
     if (!binding.ok) {
       return binding;
     }
@@ -1227,12 +1474,41 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (stopping) {
         return { ok: false, reason: "environment-unavailable" } as const;
       }
-      return admitWorkerConnection({ store, admission, expectedBuild, nowMs: now() });
+      const admitted = admitWorkerConnection({ store, admission, expectedBuild, nowMs: now() });
+      if (
+        !admitted.ok ||
+        !options.placementStore ||
+        (admitted.identity.sessionId === null && admitted.identity.runId === null)
+      ) {
+        return admitted;
+      }
+      const placement = placementBinding(admitted.identity);
+      if (!placement || !options.placementStore.validateWorkerTurn(placement)) {
+        return { ok: false, reason: "placement-mismatch" } as const;
+      }
+      return admitted;
     },
-    validateWorkerConnection: (identity: WorkerConnectionIdentity) =>
-      stopping
-        ? ("environment-unavailable" as const)
-        : validateWorkerConnectionIdentity({ store, identity, nowMs: now() }),
+    validateWorkerConnection: (identity: WorkerConnectionIdentity) => {
+      if (stopping) {
+        return "environment-unavailable" as const;
+      }
+      const placement = validateWorkerPlacement(identity);
+      if (!placement.valid) {
+        return "placement-mismatch" as const;
+      }
+      const environmentFailure = validateWorkerConnectionIdentity({
+        store,
+        identity,
+        nowMs: now(),
+      });
+      if (
+        environmentFailure &&
+        !(environmentFailure === "credential-expired" && placement.durableClaim)
+      ) {
+        return environmentFailure;
+      }
+      return null;
+    },
     commitTranscript,
     pushLiveEvent,
     startInference,
@@ -1246,6 +1522,36 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     attachSession,
     takeMintedCredential: (binding: WorkerCredentialBinding) =>
       readPendingCredential(binding)?.grant,
+    acquireTurnCredential: (binding: WorkerCredentialBinding & { sessionId: string }) =>
+      withLock(binding.environmentId, async () => {
+        const pending = readPendingCredential(binding)?.grant;
+        if (pending) {
+          return pending;
+        }
+        const environment = store.get(binding.environmentId);
+        if (
+          !environment ||
+          environment.state !== "attached" ||
+          environment.ownerEpoch !== binding.ownerEpoch ||
+          environment.attachedSessionIds.length !== 1 ||
+          environment.attachedSessionIds[0] !== binding.sessionId
+        ) {
+          throw serviceError("invalid_state", "Worker session credential owner is not attached");
+        }
+        const previous = store.getCredential(binding.environmentId);
+        const minted = mintCredentialLocked(binding);
+        const grant = stageCredential(minted.grant);
+        if (previous?.sessionId === binding.sessionId) {
+          options.liveEvents?.rotateCredential({
+            credentialHash: minted.credentialHash,
+            environmentId: binding.environmentId,
+            previousCredentialHash: previous.credentialHash,
+            runEpoch: binding.ownerEpoch,
+            sessionId: binding.sessionId,
+          });
+        }
+        return grant;
+      }),
     acknowledgeCredentialDelivery: (claim: WorkerCredentialDeliveryClaim): boolean => {
       const pending = readPendingCredential(claim);
       if (!pending || pending.grant.deliveryId !== claim.deliveryId) {

@@ -3929,11 +3929,6 @@
       "translated": "Cron ジョブを読み込み中…"
     },
     {
-      "id": "native.android.6da97c8c6e1a3d3a",
-      "source": "Agents",
-      "translated": "エージェント"
-    },
-    {
       "id": "native.android.0f33ca43db97b2a9",
       "source": "Choose and inspect the assistants available on this gateway.",
       "translated": "この Gateway で利用可能なアシスタントを選択して確認します。"
@@ -4434,6 +4429,31 @@
       "translated": "アドレス"
     },
     {
+      "id": "native.android.7f63838c1aaa496a",
+      "source": "Discovered",
+      "translated": "検出済み"
+    },
+    {
+      "id": "native.android.b1c378e882375bba",
+      "source": "Default Agent",
+      "translated": "デフォルトのエージェント"
+    },
+    {
+      "id": "native.android.6da97c8c6e1a3d3a",
+      "source": "Agents",
+      "translated": "エージェント"
+    },
+    {
+      "id": "native.android.f2c8ad44786cc3b8",
+      "source": "Instance ID",
+      "translated": "インスタンス ID"
+    },
+    {
+      "id": "native.android.27b4b0e04eca357c",
+      "source": "Scan QR to Pair",
+      "translated": "QR コードをスキャンしてペアリング"
+    },
+    {
       "id": "native.android.6926684139f297b5",
       "source": "Limited Gateway access",
       "translated": "Gateway アクセスが制限されています"
@@ -4447,6 +4467,51 @@
       "id": "native.android.e11f54696b376155",
       "source": "Disconnect",
       "translated": "切断"
+    },
+    {
+      "id": "native.android.4dd409fe93b28258",
+      "source": "Diagnose",
+      "translated": "診断"
+    },
+    {
+      "id": "native.android.3901b9fb63225af4",
+      "source": "Add Gateway",
+      "translated": "Gateway を追加"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "セットアップコードをスキャンするか貼り付けて、別のGatewayを追加します。"
+    },
+    {
+      "id": "native.android.d869cbfce570d83c",
+      "source": "Scan QR",
+      "translated": "QR コードをスキャン"
+    },
+    {
+      "id": "native.android.1fcfa6e7f5daac35",
+      "source": "Setup code",
+      "translated": "セットアップコード"
+    },
+    {
+      "id": "native.android.c73418c6ff187c8e",
+      "source": "Where do I get a setup code?",
+      "translated": "セットアップコードはどこで入手できますか？"
+    },
+    {
+      "id": "native.android.de12fd162a566974",
+      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+      "translated": "Android では既存のセットアップコードをスキャンまたは貼り付けできますが、この Gateway はまだアプリにセットアップコード生成機能を公開していません。Gateway ホストで openclaw qr を使用して QR/code を生成し、ここでスキャンするか、下にセットアップコードを貼り付けてください。"
+    },
+    {
+      "id": "native.android.ac1032dabe06ab02",
+      "source": "No gateways found yet. Use manual setup if discovery is blocked.",
+      "translated": "Gateway がまだ見つかっていません。検出がブロックされている場合は、手動セットアップを使用してください。"
+    },
+    {
+      "id": "native.android.bb6a50133b74967d",
+      "source": "Connect",
+      "translated": "接続"
     },
     {
       "id": "native.android.87eee1e2bafbf13b",
@@ -4464,39 +4529,9 @@
       "translated": "削除"
     },
     {
-      "id": "native.android.56e98811c4e9b027",
-      "source": "Gateway setup",
-      "translated": "Gatewayのセットアップ"
-    },
-    {
-      "id": "native.android.c040d4ee72a810e0",
-      "source": "Scan or paste a setup code to add another gateway.",
-      "translated": "セットアップコードをスキャンするか貼り付けて、別のGatewayを追加します。"
-    },
-    {
-      "id": "native.android.a7c243ff3f1d6447",
-      "source": "Add gateway",
-      "translated": "Gatewayを追加"
-    },
-    {
-      "id": "native.android.77a03c8c22155ec5",
-      "source": "Setup Code",
-      "translated": "セットアップコード"
-    },
-    {
-      "id": "native.android.de12fd162a566974",
-      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
-      "translated": "Android では既存のセットアップコードをスキャンまたは貼り付けできますが、この Gateway はまだアプリにセットアップコード生成機能を公開していません。Gateway ホストで openclaw qr を使用して QR/code を生成し、ここでスキャンするか、下にセットアップコードを貼り付けてください。"
-    },
-    {
-      "id": "native.android.0e8f4c02f7aa20e9",
-      "source": "Connection Setup",
-      "translated": "接続設定"
-    },
-    {
-      "id": "native.android.1fcfa6e7f5daac35",
-      "source": "Setup code",
-      "translated": "セットアップコード"
+      "id": "native.android.ec5f17e1a1fa0515",
+      "source": "Manual Gateway",
+      "translated": "手動 Gateway"
     },
     {
       "id": "native.android.29fe804ebbaed339",
@@ -5007,6 +5042,11 @@
       "id": "native.android.b3185067fb7fa30e",
       "source": "Default",
       "translated": "デフォルト"
+    },
+    {
+      "id": "native.android.66baf6f63dafa213",
+      "source": "${endpoint.host}:${endpoint.port}",
+      "translated": "${endpoint.host}:${endpoint.port}"
     },
     {
       "id": "native.android.f154617fd2233082",

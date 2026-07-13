@@ -28,6 +28,7 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { NODE_PAIR_GATEWAY_METHODS } from "./server-methods-node-methods.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -683,6 +684,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.put",
       "sessions.groups.rename",
       "sessions.groups.delete",
+      "sessions.dispatch",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -703,9 +705,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "node.pair.list",
-      "node.pair.approve",
-      "node.pair.reject",
+      ...NODE_PAIR_GATEWAY_METHODS,
       "node.pair.remove",
       "node.rename",
       "node.list",
@@ -716,6 +716,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",
+      "node.invoke.progress",
       "node.invoke.result",
       "node.event",
     ],

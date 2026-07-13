@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
@@ -112,12 +113,6 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
       return { activeSection: null, activeSubsection: null };
   }
   throw new Error("Unknown config page");
-}
-
-function asConfigRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function normalizeConfigSelection(
@@ -965,7 +960,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     ] as const;
     return html`
       <div
-        class="config-view-toggle qs-segmented"
+        class="config-view-toggle settings-segmented"
         role="tablist"
         aria-label=${t("configPage.settingsView")}
       >
@@ -973,8 +968,8 @@ export class ConfigPage extends OpenClawLightDomElement {
           ([mode, label]) => html`
             <button
               type="button"
-              class="qs-segmented__btn ${this.settingsMode === mode
-                ? "qs-segmented__btn--active"
+              class="settings-segmented__btn ${this.settingsMode === mode
+                ? "settings-segmented__btn--active"
                 : ""}"
               role="tab"
               aria-selected=${this.settingsMode === mode}

@@ -1726,7 +1726,6 @@ export const zh_TW: TranslationMap = {
     filterAll: "全部",
     filterIssues: "問題",
     filterLabel: "篩選已安裝的外掛",
-    pulseLabel: "{enabled} 個已啟用，{disabled} 個已停用，{issues} 個有問題",
     categoryChannels: "頻道",
     categoryProviders: "模型供應商",
     categoryMemory: "記憶體",

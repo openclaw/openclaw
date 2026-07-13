@@ -1723,7 +1723,6 @@ export const zh_CN: TranslationMap = {
     filterAll: "全部",
     filterIssues: "问题",
     filterLabel: "筛选已安装插件",
-    pulseLabel: "{enabled} 个已启用，{disabled} 个已禁用，{issues} 个存在问题",
     categoryChannels: "渠道",
     categoryProviders: "模型提供商",
     categoryMemory: "记忆",

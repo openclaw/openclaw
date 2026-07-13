@@ -1767,7 +1767,6 @@ export const tr: TranslationMap = {
     filterAll: "Tümü",
     filterIssues: "Sorunlar",
     filterLabel: "Yüklü eklentileri filtrele",
-    pulseLabel: "{enabled} etkin, {disabled} devre dışı, {issues} sorunlu",
     categoryChannels: "Kanallar",
     categoryProviders: "Model sağlayıcıları",
     categoryMemory: "Bellek",

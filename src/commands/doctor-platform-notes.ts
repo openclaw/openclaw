@@ -20,7 +20,7 @@ function resolveHomeDir(): string {
 }
 
 /** Returns the macOS marker warning when LaunchAgent writes are locally disabled. */
-export function collectMacLaunchAgentOverrideWarning(deps?: {
+function collectMacLaunchAgentOverrideWarning(deps?: {
   platform?: NodeJS.Platform;
   homeDir?: string;
   exists?: (candidate: string) => boolean;
@@ -53,7 +53,7 @@ export async function noteMacLaunchAgentOverrides() {
 }
 
 /** Returns a warning for stale OpenClaw updater launchd jobs left after interrupted updates. */
-export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
+async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
   env?: NodeJS.ProcessEnv;
@@ -128,7 +128,7 @@ function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
 }
 
 /** Returns a warning for host-wide launchctl gateway auth env overrides. */
-export async function collectMacLaunchctlGatewayEnvOverrideWarning(
+async function collectMacLaunchctlGatewayEnvOverrideWarning(
   cfg: OpenClawConfig,
   deps?: {
     platform?: NodeJS.Platform;
