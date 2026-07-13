@@ -143,7 +143,7 @@ function finalMessage(): AssistantMessage {
   };
 }
 
-function providerStream(message = finalMessage()) {
+function providerStream(message = finalMessage(), options: { omitToolEnd?: boolean } = {}) {
   const stream = createAssistantMessageEventStream();
   const fragmented = {
     ...message,
@@ -152,7 +152,9 @@ function providerStream(message = finalMessage()) {
   stream.push({ type: "text_delta", contentIndex: 0, delta: "Gateway response" });
   stream.push({ type: "toolcall_start", contentIndex: 1, partial: fragmented });
   stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: message });
-  stream.push({ type: "toolcall_end", contentIndex: 1, toolCall: TOOL_CALL, partial: message });
+  if (!options.omitToolEnd) {
+    stream.push({ type: "toolcall_end", contentIndex: 1, toolCall: TOOL_CALL, partial: message });
+  }
   stream.push({ type: "done", reason: "stop", message });
   return stream;
 }
@@ -335,6 +337,227 @@ describe("worker inference provider runtime", () => {
         model: MODEL,
       }),
     ]);
+  });
+
+  it("closes provider tool calls from the authoritative terminal message", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => providerStream(finalMessage(), { omitToolEnd: true }));
+    const emitted: Parameters<Execution["emit"]>[0][] = [];
+
+    await expect(
+      runtime.executor(params(request(), (event) => emitted.push(event))),
+    ).resolves.toMatchObject({
+      type: "done",
+    });
+    expect(emitted.map((event) => event.type)).toEqual([
+      "text_delta",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+    ]);
+  });
+
+  it("rejects an incomplete final argument stream", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      const message = finalMessage();
+      const completeToolCall = { ...TOOL_CALL, arguments: { query: "alpha" } };
+      message.content = [...message.content.slice(0, -1), completeToolCall];
+      stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
+      stream.push({
+        type: "toolcall_delta",
+        contentIndex: 1,
+        delta: '{"query":',
+        partial: message,
+      });
+      stream.push({ type: "done", reason: "toolUse", message });
+      return stream;
+    });
+    const emitted: Parameters<Execution["emit"]>[0][] = [];
+
+    await expect(
+      runtime.executor(params(request(), (event) => emitted.push(event))),
+    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
+    expect(
+      emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
+    ).toEqual(['{"query":']);
+    expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
+  });
+
+  it("rejects a terminal tool call whose identity changed", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      const partial = finalMessage();
+      const terminal = finalMessage();
+      terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
+      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
+      stream.push({ type: "done", reason: "toolUse", message: terminal });
+      return stream;
+    });
+    const emitted: Parameters<Execution["emit"]>[0][] = [];
+
+    await expect(
+      runtime.executor(params(request(), (event) => emitted.push(event))),
+    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
+    expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
+  });
+
+  it("revalidates a normally ended tool call against the terminal message", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      const partial = finalMessage();
+      const terminal = finalMessage();
+      terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
+      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
+      stream.push({
+        type: "toolcall_end",
+        contentIndex: 1,
+        toolCall: TOOL_CALL,
+        partial,
+      });
+      stream.push({ type: "done", reason: "toolUse", message: terminal });
+      return stream;
+    });
+
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "error",
+      reason: "provider-error",
+    });
+  });
+
+  it("rejects a normally ended tool call omitted from the terminal message", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      const partial = finalMessage();
+      const terminal = finalMessage();
+      terminal.content = terminal.content.slice(0, 1);
+      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
+      stream.push({
+        type: "toolcall_end",
+        contentIndex: 1,
+        toolCall: TOOL_CALL,
+        partial,
+      });
+      stream.push({ type: "done", reason: "stop", message: terminal });
+      return stream;
+    });
+
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "error",
+      reason: "provider-error",
+    });
+  });
+
+  it("rejects retained tool arguments above the stream bound", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      const partial = finalMessage();
+      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+      stream.push({
+        type: "toolcall_delta",
+        contentIndex: 1,
+        delta: "x".repeat(1024 * 1024 + 1),
+        partial,
+      });
+      stream.push({ type: "done", reason: "toolUse", message: partial });
+      return stream;
+    });
+    const emitted: Parameters<Execution["emit"]>[0][] = [];
+
+    await expect(
+      runtime.executor(params(request(), (event) => emitted.push(event))),
+    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
+    expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
+  });
+
+  it("fences terminal tool-call synthesis after owner rotation", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => providerStream(finalMessage(), { omitToolEnd: true }));
+    const emitted: Parameters<Execution["emit"]>[0][] = [];
+    let current = true;
+    const execution = params(request(), (event) => {
+      emitted.push(event);
+      if (event.type === "toolcall_delta") {
+        current = false;
+      }
+    });
+    execution.isCurrent = () => current;
+
+    await expect(runtime.executor(execution)).resolves.toMatchObject({
+      type: "error",
+      reason: "cancelled",
+    });
+    expect(emitted.map((event) => event.type)).toEqual([
+      "text_delta",
+      "toolcall_start",
+      "toolcall_delta",
+    ]);
+  });
+
+  it("stops terminal synthesis when its start event rotates ownership", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      const message = finalMessage();
+      const fragmented = {
+        ...message,
+        content: [...message.content.slice(0, -1), { ...TOOL_CALL, id: "", name: "" }],
+      } satisfies AssistantMessage;
+      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: fragmented });
+      stream.push({ type: "done", reason: "stop", message });
+      return stream;
+    });
+    const emitted: Parameters<Execution["emit"]>[0][] = [];
+    let current = true;
+    const execution = params(request(), (event) => {
+      emitted.push(event);
+      if (event.type === "toolcall_start") {
+        current = false;
+      }
+    });
+    execution.isCurrent = () => current;
+
+    await expect(runtime.executor(execution)).resolves.toMatchObject({
+      type: "error",
+      reason: "cancelled",
+    });
+    expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
+  });
+
+  it("records usage before rejecting a dangling streamed tool call", async () => {
+    const runtime = setup();
+    const terminal = finalMessage();
+    terminal.content = terminal.content.slice(0, 1);
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      const partial = finalMessage();
+      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
+      stream.push({ type: "done", reason: "stop", message: terminal });
+      return stream;
+    });
+    const usageEvents: unknown[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "model.usage" && event.sessionId === SESSION_ID) {
+        usageEvents.push(event);
+      }
+    });
+
+    await expect(
+      runtime.executor(params(request(), vi.fn())).finally(unsubscribe),
+    ).resolves.toMatchObject({
+      type: "error",
+      reason: "provider-error",
+    });
+    expect(usageEvents).toHaveLength(1);
   });
 
   it("rejects unknown, unapproved, and profile-qualified refs", async () => {

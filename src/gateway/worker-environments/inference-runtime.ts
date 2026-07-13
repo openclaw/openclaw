@@ -64,6 +64,7 @@ import type {
 } from "../../llm/types.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
@@ -72,9 +73,6 @@ type WorkerInferenceModelIdentity = {
   provider: string;
   model: string;
 };
-const MAX_PENDING_TOOL_DELTA_BYTES = 1024 * 1024;
-const MAX_PENDING_TOOL_DELTAS = 4096;
-
 export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
 export type WorkerInferenceExecutionParams = Parameters<WorkerInferenceExecutor>[0];
 
@@ -675,28 +673,11 @@ export function createWorkerInferenceExecutor(
         trace,
       });
     };
-    const pendingToolDeltas = new Map<number, string[]>();
-    let pendingToolDeltaBytes = 0;
-    let pendingToolDeltaCount = 0;
-    const startedToolCalls = new Set<number>();
-    const startToolCall = (contentIndex: number, partial: AssistantMessage): boolean => {
-      if (startedToolCalls.has(contentIndex)) {
-        return true;
-      }
-      const content = contentAt(partial, contentIndex);
-      if (content?.type !== "toolCall" || !content.id || !content.name) {
-        return false;
-      }
-      params.emit({ type: "toolcall_start", contentIndex, id: content.id, toolName: content.name });
-      startedToolCalls.add(contentIndex);
-      for (const delta of pendingToolDeltas.get(contentIndex) ?? []) {
-        params.emit({ type: "toolcall_delta", contentIndex, delta });
-        pendingToolDeltaBytes -= Buffer.byteLength(delta, "utf8");
-        pendingToolDeltaCount -= 1;
-      }
-      pendingToolDeltas.delete(contentIndex);
-      return true;
-    };
+    const executionIsCurrent = () => !signal.aborted && params.isCurrent();
+    const toolCalls = createWorkerToolCallStream({
+      emit: params.emit,
+      isCurrent: executionIsCurrent,
+    });
 
     const providerAbort = new AbortController();
     const providerSignal = AbortSignal.any([signal, providerAbort.signal]);
@@ -715,6 +696,20 @@ export function createWorkerInferenceExecutor(
           recordUsage(event.message.usage);
           if (signal.aborted || !params.isCurrent()) {
             return inferenceError("cancelled", event.message.usage);
+          }
+          for (const [contentIndex, content] of event.message.content.entries()) {
+            if (content.type === "toolCall") {
+              const endResult = toolCalls.end(contentIndex, event.message, content);
+              if (endResult === "cancelled") {
+                return inferenceError("cancelled", event.message.usage);
+              }
+              if (endResult === "invalid") {
+                return inferenceError("provider-error");
+              }
+            }
+          }
+          if (!toolCalls.matchesTerminal(event.message)) {
+            return inferenceError("provider-error");
           }
           return {
             type: "done",
@@ -736,33 +731,29 @@ export function createWorkerInferenceExecutor(
           return inferenceError("cancelled");
         }
         if (event.type === "toolcall_start") {
-          startToolCall(event.contentIndex, event.partial);
+          if (toolCalls.start(event.contentIndex, event.partial) === "cancelled") {
+            return inferenceError("cancelled");
+          }
           continue;
         }
         if (event.type === "toolcall_delta") {
-          if (startedToolCalls.has(event.contentIndex)) {
-            params.emit({ type: event.type, contentIndex: event.contentIndex, delta: event.delta });
-          } else {
-            const pending = pendingToolDeltas.get(event.contentIndex) ?? [];
-            pendingToolDeltaBytes += Buffer.byteLength(event.delta, "utf8");
-            pendingToolDeltaCount += 1;
-            if (
-              pendingToolDeltaBytes > MAX_PENDING_TOOL_DELTA_BYTES ||
-              pendingToolDeltaCount > MAX_PENDING_TOOL_DELTAS
-            ) {
-              return inferenceError("provider-error");
-            }
-            pending.push(event.delta);
-            pendingToolDeltas.set(event.contentIndex, pending);
-            startToolCall(event.contentIndex, event.partial);
+          const deltaResult = toolCalls.delta(event.contentIndex, event.delta, event.partial);
+          if (deltaResult === "cancelled") {
+            return inferenceError("cancelled");
+          }
+          if (deltaResult === "invalid") {
+            return inferenceError("provider-error");
           }
           continue;
         }
         if (event.type === "toolcall_end") {
-          if (!startToolCall(event.contentIndex, event.partial)) {
+          const endResult = toolCalls.end(event.contentIndex, event.partial, event.toolCall);
+          if (endResult === "cancelled") {
+            return inferenceError("cancelled");
+          }
+          if (endResult === "invalid") {
             return inferenceError("provider-error");
           }
-          params.emit({ type: event.type, contentIndex: event.contentIndex });
           continue;
         }
         const workerEvent = toWorkerStreamEvent(event, modelIdentity);
