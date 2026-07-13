@@ -673,7 +673,7 @@ async function initSessionStateAttemptLocked(
       recoverTerminalVisibleEntry ||
       (entryFreshness?.fresh ?? false) ||
       (softResetAllowed && canReuseExistingEntry)) &&
-      !terminalMainTranscriptNewerThanRegistry);
+      !(terminalMainTranscriptNewerThanRegistry && entryFreshness?.fresh !== true));
   const activeReplyOperation = replyRunRegistry.get(sessionKey);
   const deferImplicitRolloverForActiveRun =
     !resetTriggered &&
