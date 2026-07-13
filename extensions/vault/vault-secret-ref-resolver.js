@@ -5,6 +5,44 @@ import { parseVaultSecretId } from "./vault-secret-id.js";
 
 const KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token";
 const VAULT_FETCH_TIMEOUT_MS = 5000;
+// Vault KV and auth responses contain short strings; 1 MiB is far beyond any
+// legitimate payload. Cap here so a hostile or misconfigured endpoint cannot
+// OOM the resolver process by streaming an unbounded JSON body.
+const VAULT_JSON_RESPONSE_LIMIT_BYTES = 1 * 1024 * 1024;
+
+async function readJsonWithLimit(response) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Vault response has no readable body.");
+  }
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      totalBytes += value.byteLength;
+      if (totalBytes > VAULT_JSON_RESPONSE_LIMIT_BYTES) {
+        reader.cancel().catch(() => {});
+        throw new Error(
+          `Vault response body exceeds ${VAULT_JSON_RESPONSE_LIMIT_BYTES}-byte limit.`,
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const buffer = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(buffer));
+}
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -130,16 +168,22 @@ function assertVaultRequestUrl(baseUrl, requestUrl) {
   }
 }
 
-async function fetchVault(baseUrl, url, init) {
+/**
+ * Keep the request-lifetime abort deadline active through `onResponse`, including
+ * bounded body reads. Clearing the timer when headers arrive would let a
+ * headers-first stalled stream hang forever under the byte cap.
+ */
+async function fetchVault(baseUrl, url, init, onResponse) {
   assertVaultRequestUrl(baseUrl, url);
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), VAULT_FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       ...init,
       redirect: "manual",
       signal: abortController.signal,
     });
+    return await onResponse(response);
   } finally {
     clearTimeout(timeout);
   }
@@ -192,18 +236,24 @@ async function resolveVaultTokenFromJwt(baseUrl, method) {
     "Content-Type": "application/json",
   };
   addVaultNamespaceHeader(headers);
-  const response = await fetchVault(baseUrl, `${baseUrl}/v1/auth/${mount}/login`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      role: resolveVaultAuthRole(method),
-      jwt: await resolveVaultJwt(method),
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(`Vault ${method} login failed (${response.status}).`);
-  }
-  return readVaultLoginToken(await response.json(), method);
+  return await fetchVault(
+    baseUrl,
+    `${baseUrl}/v1/auth/${mount}/login`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        role: resolveVaultAuthRole(method),
+        jwt: await resolveVaultJwt(method),
+      }),
+    },
+    async (response) => {
+      if (!response.ok) {
+        throw new Error(`Vault ${method} login failed (${response.status}).`);
+      }
+      return readVaultLoginToken(await readJsonWithLimit(response), method);
+    },
+  );
 }
 
 async function resolveVaultClientToken(baseUrl) {
@@ -238,11 +288,17 @@ async function readVaultSecret(baseUrl, vaultToken, id) {
     "X-Vault-Token": vaultToken,
   };
   addVaultNamespaceHeader(headers);
-  const response = await fetchVault(baseUrl, buildVaultUrl(baseUrl, parsedId), { headers });
-  if (!response.ok) {
-    throw new Error(`Vault read failed for "${id}" (${response.status}).`);
-  }
-  return readStringField(await response.json(), parsedId);
+  return await fetchVault(
+    baseUrl,
+    buildVaultUrl(baseUrl, parsedId),
+    { headers },
+    async (response) => {
+      if (!response.ok) {
+        throw new Error(`Vault read failed for "${id}" (${response.status}).`);
+      }
+      return readStringField(await readJsonWithLimit(response), parsedId);
+    },
+  );
 }
 
 async function resolveFromVault(ids) {

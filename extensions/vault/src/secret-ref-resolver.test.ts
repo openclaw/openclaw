@@ -207,6 +207,63 @@ async function startVaultJwtFixture() {
   };
 }
 
+async function startVaultHugeResponseFixture() {
+  const server = createServer((_request, response) => {
+    response.statusCode = 200;
+    response.setHeader("content-type", "application/json");
+    // Stream 2 MiB — well above the 1 MiB resolver limit — without Content-Length.
+    const prefix = Buffer.from('{"data":{"data":{"apiKey":"');
+    const suffix = Buffer.from('"}}}');
+    const fill = Buffer.alloc(2 * 1024 * 1024, "x");
+    response.write(prefix);
+    response.write(fill);
+    response.end(suffix);
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  servers.push({
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("fixture server did not bind to a TCP port");
+  }
+  return {
+    vaultAddr: `http://127.0.0.1:${address.port}`,
+  };
+}
+
+async function startVaultStalledBodyFixture() {
+  const server = createServer((_request, response) => {
+    response.statusCode = 200;
+    response.setHeader("content-type", "application/json");
+    // Headers + partial body, then stall: never end the response so a
+    // headers-cleared timeout would hang under the byte cap forever.
+    response.write('{"data":{"data":{"apiKey":"not-a-real-stalled-secret');
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  servers.push({
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("fixture server did not bind to a TCP port");
+  }
+  return {
+    vaultAddr: `http://127.0.0.1:${address.port}`,
+  };
+}
+
 async function startVaultJwtErrorFixture() {
   const server = createServer((request, response) => {
     void readRequestBody(request)
@@ -622,4 +679,60 @@ describe("vault SecretRef resolver", () => {
     });
     expect(result.stdout).not.toContain("not-a-real-sensitive-jwt");
   });
+
+  it("rejects a Vault KV response body that exceeds the 1 MiB limit", async () => {
+    const fixture = await startVaultHugeResponseFixture();
+    const result = await runResolver({
+      request: {
+        protocolVersion: 1,
+        provider: "vault",
+        ids: ["providers/openai/apiKey"],
+      },
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+    });
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    const parsed = JSON.parse(result.stdout) as {
+      protocolVersion: number;
+      values: Record<string, string>;
+      errors: Record<string, { message: string }>;
+    };
+    expect(parsed.protocolVersion).toBe(1);
+    expect(parsed.values).toEqual({});
+    expect(parsed.errors["providers/openai/apiKey"]?.message).toMatch(/exceeds.*limit/u);
+  });
+
+  it("aborts when Vault sends headers then stalls the body", async () => {
+    const fixture = await startVaultStalledBodyFixture();
+    const startedAt = Date.now();
+    const result = await runResolver({
+      request: {
+        protocolVersion: 1,
+        provider: "vault",
+        ids: ["providers/openai/apiKey"],
+      },
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    const parsed = JSON.parse(result.stdout) as {
+      protocolVersion: number;
+      values: Record<string, string>;
+      errors: Record<string, { message: string }>;
+    };
+    expect(parsed.protocolVersion).toBe(1);
+    expect(parsed.values).toEqual({});
+    expect(parsed.errors["providers/openai/apiKey"]?.message).toMatch(/abort/iu);
+    expect(result.stdout).not.toContain("not-a-real-stalled-secret");
+    // Request-lifetime deadline is 5s; prove we did not hang past it.
+    expect(elapsedMs).toBeGreaterThanOrEqual(4_000);
+    expect(elapsedMs).toBeLessThan(12_000);
+  }, 20_000);
 });
