@@ -50,6 +50,10 @@ import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversatio
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import {
+  renderBackgroundTasksStatusRow,
+  type BackgroundTasksProps,
+} from "./chat-background-tasks.ts";
+import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
@@ -87,9 +91,8 @@ type ChatThreadState = {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
-  relativeTimeTimer: ReturnType<typeof setInterval> | null;
-  relativeTimeRequestUpdate: (() => void) | null;
-  relativeTimeVersion: number;
+  transcriptRenderDependencies: readonly unknown[];
+  transcriptRenderContext: object;
 };
 
 type ChatThreadProps = {
@@ -148,6 +151,8 @@ type ChatThreadProps = {
   /** Sends a detached /btw side question built from the selection popup. */
   onSideQuestion?: (command: string) => void;
   onOpenSession?: (sessionKey: string) => void;
+  /** Tasks-rail snapshot backing the post-turn running-tasks status row. */
+  backgroundTasks?: BackgroundTasksProps;
 };
 
 type ChatPinnedMessagesProps = Pick<
@@ -168,24 +173,9 @@ function createChatThreadState(): ChatThreadState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
-    relativeTimeTimer: null,
-    relativeTimeRequestUpdate: null,
-    relativeTimeVersion: 0,
+    transcriptRenderDependencies: [],
+    transcriptRenderContext: {},
   };
-}
-
-const RELATIVE_TIME_REFRESH_MS = 60_000;
-
-// Footer timestamps render relative labels ("5m ago") that go stale on idle
-// panes; one per-pane minute tick keeps them fresh without per-message timers.
-// The version bump must accompany requestUpdate: the message subtree is
-// memoized by guard(), so a tick only re-renders it via this dependency.
-function ensureRelativeTimeRefresh(state: ChatThreadState, requestUpdate: () => void) {
-  state.relativeTimeRequestUpdate = requestUpdate;
-  state.relativeTimeTimer ??= setInterval(() => {
-    state.relativeTimeVersion = (state.relativeTimeVersion + 1) % Number.MAX_SAFE_INTEGER;
-    state.relativeTimeRequestUpdate?.();
-  }, RELATIVE_TIME_REFRESH_MS);
 }
 
 const threadStates = new Map<string, ChatThreadState>();
@@ -234,11 +224,6 @@ export function resetChatThreadPresentationState(paneId?: string) {
     }
     if (state.historyRenderAnchorFrame != null) {
       cancelAnimationFrame(state.historyRenderAnchorFrame);
-    }
-    if (state.relativeTimeTimer != null) {
-      clearInterval(state.relativeTimeTimer);
-      state.relativeTimeTimer = null;
-      state.relativeTimeRequestUpdate = null;
     }
   }
   if (paneId) {
@@ -735,10 +720,50 @@ function renderLoadingSkeleton() {
   `;
 }
 
+function chatRenderItemGuardDependencies(
+  item: ReturnType<typeof collapseCompletedTurnWork>[number],
+): readonly unknown[] {
+  if (item.kind === "stream-run") {
+    return [item.key, ...item.parts];
+  }
+  if (item.kind === "work-group") {
+    return [item.key, item.durationMs, item.hasError, ...item.groups];
+  }
+  return [item];
+}
+
+function trackTranscriptRenderDependencies(
+  state: ChatThreadState,
+  dependencies: unknown[],
+): unknown[] {
+  const previous = state.transcriptRenderDependencies;
+  const nextLength = dependencies.length - 1;
+  let changed = previous.length !== nextLength;
+  for (let index = 0; !changed && index < nextLength; index += 1) {
+    changed = !Object.is(previous[index], dependencies[index + 1]);
+  }
+  if (changed) {
+    // The first dependency is chatItems. Keep the shared context stable when
+    // only the live row changes, but invalidate every row for presentation changes.
+    state.transcriptRenderDependencies = dependencies.slice(1);
+    state.transcriptRenderContext = {};
+  }
+  return dependencies;
+}
+
+function guardChatRenderItems(
+  state: ChatThreadState,
+  render: (item: ReturnType<typeof collapseCompletedTurnWork>[number]) => unknown,
+) {
+  return (item: ReturnType<typeof collapseCompletedTurnWork>[number]) =>
+    guard([...chatRenderItemGuardDependencies(item), state.transcriptRenderContext], () =>
+      render(item),
+    );
+}
+
 export function renderChatThread(props: ChatThreadProps) {
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  ensureRelativeTimeRefresh(state, requestUpdate);
   const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
   // Equivalence, not exact match: the default session travels under alias
@@ -872,13 +897,14 @@ export function renderChatThread(props: ChatThreadProps) {
           ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
           : nothing}
         ${guard(
-          [
+          trackTranscriptRenderDependencies(state, [
             chatItems,
             locale,
             deletedChatItemsSignature(deleted, chatItems),
             stableBooleanMapSignature(expandedToolCards),
             getAssistantAttachmentAvailabilityRenderVersion(),
-            state.relativeTimeVersion,
+            // The host minute poll requests an update; this key crosses guard() memoization.
+            Math.floor(Date.now() / 60_000),
             getToolTitlesVersion(),
             props.sessionKey,
             props.fullMessageAgentId,
@@ -898,7 +924,7 @@ export function renderChatThread(props: ChatThreadProps) {
             props.embedSandboxMode ?? "scripts",
             props.allowExternalEmbedUrls ?? false,
             threadContextWindow,
-          ],
+          ]),
           () => {
             const renderGroupItem = (item: MessageGroup) => {
               if (deleted.has(item.key)) {
@@ -948,7 +974,7 @@ export function renderChatThread(props: ChatThreadProps) {
                 searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
               }),
               (item) => item.key,
-              (item) => {
+              guardChatRenderItems(state, (item) => {
                 if (item.kind === "divider") {
                   return html`
                     <div class="chat-divider" data-ts=${String(item.timestamp)}>
@@ -1008,11 +1034,14 @@ export function renderChatThread(props: ChatThreadProps) {
                   return renderGroupItem(item);
                 }
                 return nothing;
-              },
+              }),
             );
           },
         )}
         ${renderRealtimeTalkConversation(props)}
+        ${!props.runWorking && !isEmpty && !showLoadingSkeleton
+          ? renderBackgroundTasksStatusRow(props.backgroundTasks)
+          : nothing}
       </div>
     </div>
   `;

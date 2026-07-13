@@ -29,6 +29,18 @@ describe("sidebar pinned routes", () => {
     expect(normalizeSidebarPinnedRoutes(["activity", "usage"])).toEqual(["usage"]);
   });
 
+  it("moves session management into settings and drops stale pinned entries", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("sessions");
+    expect(SETTINGS_NAVIGATION_ROUTES).toContain("sessions");
+    expect(normalizeSidebarPinnedRoutes(["sessions", "usage"])).toEqual(["usage"]);
+  });
+
+  it("moves devices into system settings and drops stale pinned entries", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("nodes");
+    expect(SETTINGS_NAVIGATION_ROUTES).toContain("nodes");
+    expect(normalizeSidebarPinnedRoutes(["nodes", "usage"])).toEqual(["usage"]);
+  });
+
   it("keeps channel management and settings slices out of the customizable sidebar", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("channels");
     expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
@@ -40,8 +52,8 @@ describe("sidebar pinned routes", () => {
 
   it("normalizes persisted pinned routes, dropping unknown and duplicate entries", () => {
     expect(
-      normalizeSidebarPinnedRoutes(["usage", "sessions", "usage", "worktrees", "instances", 7]),
-    ).toEqual(["usage", "sessions"]);
+      normalizeSidebarPinnedRoutes(["usage", "tasks", "usage", "worktrees", "instances", 7]),
+    ).toEqual(["usage", "tasks"]);
     expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
   });
 
@@ -61,9 +73,9 @@ describe("sidebar pinned routes", () => {
   });
 
   it("puts every unpinned nav route into the More section", () => {
-    const pinned = ["sessions", "usage"] as const;
+    const pinned = ["tasks", "usage"] as const;
     const more = sidebarMoreRoutes(pinned);
-    expect(more).not.toContain("sessions");
+    expect(more).not.toContain("tasks");
     expect(more).not.toContain("usage");
     expect(new Set([...pinned, ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
   });

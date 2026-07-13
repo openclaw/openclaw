@@ -4,12 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
 import { getFreeGatewayPort } from "./test-helpers.e2e.js";
@@ -53,7 +52,6 @@ describe("gateway network runtime", () => {
     clearConfigCache();
     clearSessionStoreCacheForTest();
     resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
     clearGatewaySubagentRuntime();
   });
 
@@ -62,7 +60,6 @@ describe("gateway network runtime", () => {
     clearConfigCache();
     clearSessionStoreCacheForTest();
     resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
     clearGatewaySubagentRuntime();
   });
 

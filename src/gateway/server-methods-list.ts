@@ -63,6 +63,7 @@ export const GATEWAY_EVENTS = [
   "node.pair.requested",
   "node.pair.resolved",
   "node.presence",
+  "node.invoke.cancel",
   "node.invoke.request",
   "device.pair.requested",
   "device.pair.resolved",

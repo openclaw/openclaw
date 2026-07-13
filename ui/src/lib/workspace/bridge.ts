@@ -17,6 +17,7 @@
 // - Parent→child posts always use targetOrigin "*" (opaque origin), carrying only
 //   binding data / theme tokens the widget is entitled to — never secrets.
 
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WidgetManifestView } from "./types.ts";
 
 export const BRIDGE_ENVELOPE_VERSION = 1;
@@ -114,10 +115,6 @@ const INBOUND_TYPES = new Set<WidgetInboundType>([
   "workspace:getTheme",
   "workspace:sendPrompt",
 ]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /**
  * Well-formedness filter: a valid inbound message is an object with `v === 1` and

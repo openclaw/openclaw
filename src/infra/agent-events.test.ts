@@ -223,6 +223,45 @@ describe("agent-events sequencing", () => {
     expect(seen).toEqual(["worker"]);
   });
 
+  test("explicitly adopts only an unowned same-generation context", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext("adopted-run", {
+      agentId: "main",
+      isControlUiVisible: false,
+      lifecycleGeneration,
+      sessionId: "session-adopted",
+      sessionKey: "agent:main:adopted",
+    });
+
+    const claimId = claimAgentRunContext(
+      "adopted-run",
+      {
+        agentId: "main",
+        isControlUiVisible: false,
+        lifecycleGeneration,
+        sessionId: "session-adopted",
+        sessionKey: "agent:main:adopted",
+      },
+      {
+        adoptExistingUnowned: true,
+        exclusive: true,
+        ownsContext: true,
+        trackOwner: true,
+      },
+    );
+    expect(claimId).toBeDefined();
+    expect(
+      claimAgentRunContext(
+        "adopted-run",
+        { lifecycleGeneration, sessionKey: "agent:main:adopted" },
+        { adoptExistingUnowned: true, exclusive: true, trackOwner: true },
+      ),
+    ).toBeUndefined();
+
+    releaseAgentRunContext("adopted-run", claimId);
+    expect(getAgentRunContext("adopted-run")).toBeUndefined();
+  });
+
   test("full event reset clears tracked ownership", () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     claimAgentRunContext(

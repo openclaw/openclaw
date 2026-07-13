@@ -339,7 +339,9 @@ function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAc
     appId: `app-${scenario}-${traceState.setupCount}`,
     appSecret: "test-secret",
     domain: "feishu",
-    config: FeishuConfigSchema.parse({ renderMode: "auto", streaming: true }),
+    // Nested streaming.mode "partial" matches the retired `streaming: true`
+    // boolean, so the recorded wire goldens stay byte-identical.
+    config: FeishuConfigSchema.parse({ renderMode: "auto", streaming: { mode: "partial" } }),
   };
 }
 

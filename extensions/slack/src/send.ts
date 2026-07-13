@@ -1,5 +1,5 @@
 // Slack plugin module implements send behavior.
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {
@@ -22,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalString as normalizeSlackApiString,
@@ -568,13 +569,6 @@ function createSlackDeliveryMetadataSignature(params: {
     .digest("base64url");
 }
 
-function matchesSlackDeliveryMetadataSignature(actual: unknown, expected: string): boolean {
-  if (typeof actual !== "string" || actual.length !== expected.length) {
-    return false;
-  }
-  return timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
-}
-
 function withSlackDeliveryMetadata(
   metadata: MessageMetadata | undefined,
   params: {
@@ -695,11 +689,10 @@ function findSlackConversationDeliveryParts(params: {
       partIndex,
       partCount,
     });
+    const actualSignature = marker[SLACK_DELIVERY_METADATA_SIGNATURE_KEY];
     if (
-      !matchesSlackDeliveryMetadataSignature(
-        marker[SLACK_DELIVERY_METADATA_SIGNATURE_KEY],
-        expectedSignature,
-      )
+      typeof actualSignature !== "string" ||
+      !safeEqualSecret(actualSignature, expectedSignature)
     ) {
       continue;
     }

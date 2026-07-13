@@ -503,6 +503,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ctx: prepared.ctxPayload,
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+  const suppressRoomEventTyping = prepared.ctxPayload.InboundEventKind === "room_event";
 
   // Shared context for the `message_sent` plugin hook emitted on each delivered
   // reply (both the `deliverReplies` paths and the native-streaming finalizer).
@@ -1904,6 +1905,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyOptions: {
         skillFilter: prepared.channelConfig?.skills,
         sourceReplyDeliveryMode,
+        // Room events are observe-style turns; Slack status indicators imply an
+        // automatic visible reply and can auto-open assistant threads.
+        suppressTyping: suppressRoomEventTyping ? true : undefined,
         hasRepliedRef,
         disableBlockStreaming,
         onModelSelected,

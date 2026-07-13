@@ -306,6 +306,7 @@ export function renderChat(props: ChatProps) {
     // withholding the callback keeps the popup from rendering at all.
     onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
     onOpenSession: props.onSessionSelect,
+    backgroundTasks: props.backgroundTasks,
     onFocusComposer: () =>
       chatSection
         ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")

@@ -32,7 +32,7 @@ import {
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
 } from "../infra/agent-events.js";
-import type { PluginProviderRegistration } from "../plugins/registry.js";
+import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";

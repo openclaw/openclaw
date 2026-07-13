@@ -82,6 +82,7 @@ export const tr: TranslationMap = {
     relink: "Yeniden bağla",
     waitForScan: "Tarama için bekle",
     logout: "Çıkış yap",
+    skipToMainContent: "Ana içeriğe geç",
   },
   nativeLinkMenu: {
     label: "Bağlantı eylemleri",
@@ -125,6 +126,7 @@ export const tr: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, {author} tarafından",
   },
   channels: {
+    lastError: "Son hata",
     refreshingStaleSnapshot:
       "Kanal durumu arka planda yenileniyor; son başarılı anlık görüntü gösteriliyor.",
     config: {
@@ -219,10 +221,10 @@ export const tr: TranslationMap = {
   lazyView: {
     loadingTitle: "Panel yükleniyor",
     errorTitle: "Panel yüklenemedi",
-    errorSubtitle:
-      "En son Control UI paketini yüklemek için sayfayı yeniden yükleyin veya ağ isteği başarısız olduysa tekrar deneyin.",
+    genericSubtitle: "Bu panel yüklenirken bir sorun oluştu.",
+    staleTitle: "Yeni bir sürüm mevcut",
+    staleSubtitle: "OpenClaw arka planda güncellendi. En son paneli almak için yeniden yükleyin.",
     retry: "Tekrar dene",
-    unknownError: "Bilinmeyen modül yükleme hatası.",
   },
   nodes: {
     pairing: {
@@ -231,6 +233,15 @@ export const tr: TranslationMap = {
       title: "OpenClaw mobil",
       subtitle: "Yeni bir telefonu bağlamak için mobil uygulamada bu QR kodunu tarayın.",
       generating: "Güvenli bir kurulum kodu oluşturuluyor…",
+      accessTitle: "Mobil erişim",
+      fullAccess: "Tam erişim (önerilen)",
+      fullAccessHint: "Ayarlar ve yükseltmeler dâhil olmak üzere düğüm ve tüm Gateway kontrolleri.",
+      limitedAccess: "Sınırlı erişim",
+      limitedAccessHint: "Yönetim kontrolleri olmadan düğüm, sohbet ve onaylar.",
+      generateCode: "Kurulum kodu oluştur",
+      transportLimitedTitle: "Ağ güvenliği için sınırlandırıldı",
+      transportLimitedHint:
+        "Bu Gateway URL'si düz metin ws:// kullanıyor. Tam erişim için wss:// veya Tailscale Serve kullanın, ardından yeni bir kod oluşturun.",
       failed: "Kurulum kodu oluşturulamadı.",
       qrAlt: "OpenClaw mobil eşleştirme QR kodu",
       qrUnavailable: "QR kullanılamıyor. Bunun yerine kurulum kodunu kopyalayın.",
@@ -265,7 +276,8 @@ export const tr: TranslationMap = {
     },
     inventory: {
       title: "Cihazlar",
-      subtitle: "Eşleştirilen her istemci için bir satır: durum, roller, belirteçler.",
+      summaryConnected: "{total} cihazdan {connected} tanesi bağlı",
+      summaryPending: "{count} onay bekliyor",
       cleanupStale: "{count} eski öğeyi temizle",
       pendingApproval: "Onay bekliyor",
       paired: "Eşleştirildi",
@@ -374,25 +386,50 @@ export const tr: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Yeni worktree",
-    owner: "Sahip",
     ownerManual: "Manuel",
     ownerSession: "Oturum",
     ownerWorkboard: "Workboard",
     title: "Yönetilen Worktree'ler",
     subtitle: "OpenClaw tarafından sahip olunan yalıtılmış depo checkout'ları.",
     cleanNow: "Şimdi temizle",
+    cleanupTitle: "Temizleme",
+    cleanupSubtitle:
+      "OpenClaw, disk alanı açmak için eski worktree'leri düzenli olarak kaldırır. Temizlemenin ne kadar yoğun yapılacağını ayarlayın.",
+    cleanupMaxCount: "Maksimum worktree sayısı",
+    cleanupMaxCountHelp:
+      "Tüm depolarda tutulacak maksimum yönetilen worktree sayısı. Önce eski worktree'lerin anlık görüntüsü alınır ve ardından bunlar kaldırılır. Sayı sınırını devre dışı bırakmak için 0 olarak ayarlayın.",
+    cleanupMaxSize: "Maksimum toplam boyut (GB)",
+    cleanupMaxSizeHelp:
+      "Tüm yönetilen worktree'lerin GB cinsinden maksimum toplam boyutu. Boyut sınırını devre dışı bırakmak için 0 olarak ayarlayın.",
+    cleanupDecrease: "{label} değerini azalt",
+    cleanupIncrease: "{label} değerini artır",
+    cleanupSaveFailed: "Temizleme sınırları kaydedilemedi.",
     name: "Ad",
     repo: "Depo",
-    branch: "Dal",
-    status: "Durum",
-    lastActive: "Son etkinlik",
-    actions: "Eylemler",
     empty: "Yönetilen worktree yok.",
     restorable: "Geri yüklenebilir",
     restore: "Geri yükle",
     confirmDelete: "{name} için anlık görüntü alınıp silinsin mi?",
     confirmForceDelete:
       "Anlık görüntü başarısız oldu: {error}\n\nAnlık görüntü olmadan silinsin mi?",
+  },
+  agentChip: {
+    menuLabel: "Ajan menüsü",
+    agents: "Ajanlar",
+    working: "Çalışıyor…",
+    ready: "Sohbete hazır",
+    whatCanAgentDo: "{name} neler yapabilir?",
+    help: "Yardım",
+    getHelp: "Yardım alın",
+    discord: "Discord topluluğu",
+    viewChangelog: "Değişiklik günlüğünü görüntüleyin",
+    agentSettings: "Agent ayarları",
+    filterAgents: "Agent bul…",
+    noAgentMatches: "Eşleşen agent yok",
+  },
+  agentScope: {
+    label: "Ajan kapsamı",
+    allAgents: "Tüm ajanlar",
   },
   newSession: {
     title: "Yeni oturum",
@@ -422,6 +459,7 @@ export const tr: TranslationMap = {
     start: "Oturumu başlat",
     starting: "Başlatılıyor…",
     createFailed: "Oturum oluşturulamadı.",
+    catalogUnavailable: "Bu oturum hedefi kullanılamıyor.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -562,6 +600,7 @@ export const tr: TranslationMap = {
     groupBy: "Grupla",
     groupByNone: "Yok",
     groupByCategory: "Özel gruplar",
+    showCronSessions: "Cron oturumlarını göster",
     groupByChannel: "Kanal",
     groupByKind: "Tür",
     groupByAgent: "Aracı",
@@ -601,6 +640,8 @@ export const tr: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Değiştiriciye sabitle",
+    unpinFromSwitcher: "Değiştiriciden kaldır",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -625,6 +666,18 @@ export const tr: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Kimlik",
+      subtitle: "Sohbetlerde ve kenar çubuğunda gösterilen ad, emoji ve avatar.",
+      name: "Görünen ad",
+      namePlaceholder: "Agent adı",
+      emoji: "Emoji",
+      chooseImage: "Görsel seç…",
+      replaceImage: "Görseli değiştir…",
+      imageUnusable: "Bu görsel kullanılamıyor. En fazla 2 MB boyutunda bir görsel dosyası seçin.",
+      fileHint:
+        "Agent'lar, çalışma alanlarındaki IDENTITY.md dosyasını düzenleyerek bunu kendileri ayarlayabilir.",
     },
     overview: {
       title: "Genel Bakış",
@@ -772,6 +825,7 @@ export const tr: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "Çağrı başarısız oldu",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1071,6 +1125,7 @@ export const tr: TranslationMap = {
     settingsView: "Ayarlar görünümü",
     simple: "Basit",
     advanced: "Gelişmiş",
+    content: "Ayarlar içeriği",
     themeImported: "{name} içe aktarıldı.",
     themeRemoved: "Özel tema kaldırıldı.",
     channels: {
@@ -1198,6 +1253,10 @@ export const tr: TranslationMap = {
       inlineHintAfter:
         "bir tarayıcı yerel tweakcn teması eklemek için. tweakcn'de Share'i kullanın ve kopyalanan bağlantıyı buraya yapıştırın.",
       textSize: "Metin boyutu",
+    },
+    chatPrefs: {
+      title: "Sohbet",
+      hint: "Tarayıcıya özel yerel sohbet tercihleri.",
     },
     connection: {
       title: "Bağlantı",
@@ -1356,6 +1415,7 @@ export const tr: TranslationMap = {
     moreLiveTitle: "Aşağıdaki gruplarda {count} canlı araç daha kullanılabilir.",
     moreLive: "+{count} canlı araç daha",
     quickPresets: "Hızlı Ön Ayarlar",
+    catalogTitle: "Araç Kataloğu",
     inherit: "Devral",
     profile: "Profil",
     source: "Kaynak",
@@ -1420,6 +1480,8 @@ export const tr: TranslationMap = {
     platforms: "Platformlar: {platforms}",
     installNamed: "{name} yükle",
     notFound: "Beceri bulunamadı.",
+    openDetails: "{name} ayrıntılarını aç",
+    enabledNamed: "{name} etkin",
     invalidLink: "ClawHub bağlantısı geçersiz",
     overview: "Genel bakış",
     skillCard: "Skill Card",
@@ -1452,6 +1514,8 @@ export const tr: TranslationMap = {
     blockedAgentFilter: "aracı filtresi tarafından engellendi",
   },
   nav: {
+    back: "Geri",
+    forward: "İleri",
     chat: "Sohbet",
     settings: "Ayarlar",
     settingsGeneral: "Genel",
@@ -1702,7 +1766,6 @@ export const tr: TranslationMap = {
     filterAll: "Tümü",
     filterIssues: "Sorunlar",
     filterLabel: "Yüklü eklentileri filtrele",
-    pulseLabel: "{enabled} etkin, {disabled} devre dışı, {issues} sorunlu",
     categoryChannels: "Kanallar",
     categoryProviders: "Model sağlayıcıları",
     categoryMemory: "Bellek",
@@ -1735,8 +1798,6 @@ export const tr: TranslationMap = {
     removedRestart:
       "{name} kaldırıldı. Değişikliği uygulamak için Gateway yeniden başlatılmalıdır.",
     verifiedSource: "Doğrulanmış kaynak",
-    menuLabel: "{name} eylemleri",
-    menuDetails: "Ayrıntıları görüntüle",
     enableAction: "Etkinleştir",
     disableAction: "Devre dışı bırak",
     working: "Çalışıyor…",
@@ -1874,6 +1935,10 @@ export const tr: TranslationMap = {
       useCurrentChatAria: "Revizyon istekleri için mevcut sohbeti kullan",
       useCurrentChatTooltip:
         "Revizyon isteklerini önerinin çalışma alanı oturumu yerine mevcut sohbet oturumuna gönder.",
+      selfLearning: "Kendi kendine öğrenme",
+      selfLearningAria: "Kendi kendine öğrenen beceri önerilerini aç veya kapat",
+      selfLearningTooltip:
+        "Düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceleyerek bekleyen beceri önerilerine dönüştürür. Arka planda ek token harcar; taslaklar bu panoya bekleyen öneriler olarak eklenir.",
       view: "Atölye görünümü",
       board: "Pano",
       today: "Bugün",
@@ -1953,6 +2018,14 @@ export const tr: TranslationMap = {
       noProposalsTitle: "Henüz öneri yok",
       noProposalsBody: "{agent} henüz herhangi bir skill önerisi hazırlamadı.",
       noProposalsFooter: "Yeni öneriler inceleme için burada görünecek.",
+    },
+    selfLearning: {
+      pitchTitle: "Kendi kendine öğrenmeyi aç",
+      pitchBody:
+        "OpenClaw, düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceler, ardından bu pano için beceri önerileri taslakları oluşturur. Arka planda ek token harcar ve taslaklar bekleyen öneriler olarak eklenir.",
+      enable: "Kendi kendine öğrenmeyi etkinleştir",
+      enabling: "Etkinleştiriliyor…",
+      updateError: "Kendi kendine öğrenme ayarı güncellenemedi.",
     },
     today: {
       emptyTitle: "Bugün bekleyen bir şey yok",
@@ -2439,6 +2512,7 @@ export const tr: TranslationMap = {
       uptime: "Çalışma Süresi",
       tickInterval: "Tik Aralığı",
       lastChannelsRefresh: "Son Kanal Yenileme",
+      lastError: "Son hata",
     },
     help: {
       title: "Nasıl bağlanılır",
@@ -3085,24 +3159,16 @@ export const tr: TranslationMap = {
       rateLimited:
         "GitHub API hız sınırına ulaşıldı. Pull request durumu, sınır sıfırlanana kadar güncel olmayabilir.",
     },
-    refreshTitle: "Sohbet verilerini yenile",
-    settings: "Sohbet ayarları",
     usageRemaining: "Kalan kullanım",
-    voiceSettings: "Ses",
-    thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
-    toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
-    commentaryToggle: "Nihai yanıttan sonra yorumu koru",
-    commentaryLabel: "Yorum",
-    autoScrollMode: "Otomatik kaydırma modu",
-    autoScrollAlways: "Her zaman",
-    autoScrollNearBottom: "Alta yakın",
-    autoScrollOff: "Kapalı",
+    view: {
+      menu: "Görünüm",
+      reasoning: "Akıl yürütme",
+      toolCalls: "Araç çağrıları",
+      commentary: "Açıklamaları koru",
+    },
     sendShortcut: "Gönderme kısayolu",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Cron oturumlarını gizle",
-    showCronSessions: "Cron oturumlarını göster",
-    showCronSessionsHidden: "Cron oturumlarını göster ({count} gizli)",
     onboardingDisabled: "Kurulum sırasında devre dışı",
     gatewayStatus: "Gateway durumu: {status}",
     commandPaletteTitle: "Ara veya şuraya git… (⌘K)",
@@ -3292,7 +3358,6 @@ export const tr: TranslationMap = {
       },
       takePhoto: "Fotoğraf çek",
       dismissVoiceInputError: "Ses girişi hatasını kapat",
-      loadingMicrophones: "Mikrofonlar yükleniyor…",
       microphoneAccessFailed: "Mikrofon girişlerine erişilemiyor.",
       microphoneBusy: "Mikrofon girişleri meşgul veya tarayıcı tarafından kullanılamıyor.",
       microphoneFallback: "Mikrofon {number}",
@@ -3311,19 +3376,6 @@ export const tr: TranslationMap = {
       stillListening: "Hâlâ dinliyor",
       stopVoiceInput: "Ses girişini durdur",
       systemDefaultMicrophone: "Sistem varsayılanı",
-      talkAdvancedSettingsRequiresAdmin: "Gelişmiş ayarlar yönetici erişimi gerektirir",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Gelişmiş Talk ayarları operator.admin erişimi gerektirir.",
-      talkDefault: "Varsayılan",
-      talkModel: "Model",
-      talkModelAuto: "Otomatik",
-      talkMoreInSettings: "Ayarlarda daha fazlası",
-      talkSensitivity: "Hassasiyet",
-      talkSensitivityHigh: "Yüksek",
-      talkSensitivityLow: "Düşük",
-      talkSensitivityMedium: "Orta",
-      talkVoice: "Ses",
-      voiceOptions: "Ses seçenekleri",
       voiceTranscript: "Ses dökümü",
     },
     selectors: {
@@ -3408,6 +3460,8 @@ export const tr: TranslationMap = {
       empty: "Bu aracı için henüz arka plan görevi yok.",
       running: "Çalışıyor ({count})",
       finished: "Tamamlandı ({count})",
+      statusRunningOne: "1 görev çalışıyor",
+      statusRunningMany: "{count} görev çalışıyor",
       stopTask: "{title} öğesini durdur",
       viewTranscript: "Transkripti görüntüle",
       toolUseOne: "1 araç kullanımı",
@@ -3496,11 +3550,13 @@ export const tr: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Otomasyon durumu",
       all: "Tümü",
       active: "Etkin",
       paused: "Duraklatıldı",
     },
     list: {
+      viewLabel: "Otomasyon görünümleri",
       searchPlaceholder: "Zamanlanmış görevleri ara",
       newTask: "Yeni görev",
       filters: "Filtreler",
@@ -3567,12 +3623,12 @@ export const tr: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Zamanlayıcı",
       tasks: "Görevler",
       failing: "Başarısız",
       nextWake: "Sonraki uyanma",
     },
     detail: {
+      tabsLabel: "Otomasyon ayrıntıları",
       newTitle: "Yeni zamanlanmış görev",
       newSubtitle:
         "OpenClaw'ın ne yapması gerektiğini açıklayın, ardından ne zaman çalışacağını seçin.",
@@ -3593,7 +3649,14 @@ export const tr: TranslationMap = {
       clone: "Çoğalt",
       remove: "Kaldır",
       more: "Diğer işlemler",
-      history: "Geçmiş",
+    },
+    runNotStarted: {
+      notDue: "Bu otomasyonun çalışma zamanı henüz gelmedi.",
+      alreadyRunning: "Bu otomasyon zaten çalışıyor.",
+      recoveryPending: "Zamanlayıcı kurtarma işlemi hâlâ devam ediyor.",
+      invalidSpec: "Bu otomasyonun zamanlaması veya yükü geçersiz.",
+      stopped: "Zamanlayıcı durduruldu.",
+      unknown: "Bu otomasyon başlatılamadı.",
     },
     jobs: {
       schedule: "Zamanlama",

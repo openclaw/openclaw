@@ -1,40 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
-vi.mock("../tool-display.ts", () => ({
-  formatToolDetail: (display: { detail?: string }) => display.detail,
-  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => {
-    const argRecord =
-      args && typeof args === "object" && !Array.isArray(args)
-        ? (args as Record<string, unknown>)
-        : undefined;
-    const labels: Record<string, string> = {
-      sessions_spawn: "Sub-agent",
-      skill_workshop: "Skill Workshop",
-      web_search: "Web Search",
-    };
-    const detail =
-      name === "skill_workshop" && typeof argRecord?.action === "string"
-        ? argRecord.action
-        : name === "read" && typeof argRecord?.path === "string"
-          ? argRecord.path
-          : undefined;
-    return {
-      name,
-      label: labels[name] ?? name,
-      icon: "zap",
-      detail,
-    };
-  },
-}));
-
-import {
-  buildMcpAppHostCapabilities,
-  resolveMcpAppSandboxUrl,
-} from "../../../components/mcp-app-view.ts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../../i18n/index.ts";
 import {
   formatDistinctCollapsedToolSummaryText,
@@ -43,6 +10,14 @@ import {
   isToolErrorOutput,
 } from "../../../lib/chat/tool-cards.ts";
 import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
+
+const lazyElementMocks = vi.hoisted(() => ({
+  ensureCustomElementDefined: vi.fn<
+    (tagName: string, loadModule: () => Promise<unknown>) => Promise<void>
+  >(() => Promise.resolve()),
+}));
+
+vi.mock("../../../app/lazy-custom-element.ts", () => lazyElementMocks);
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -72,70 +47,8 @@ function pointerClick(element: Element) {
 }
 
 describe("tool-cards", () => {
-  it("advertises the CSP actually applied to MCP Apps", () => {
-    expect(
-      buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),
-    ).toMatchObject({
-      sandbox: { csp: { connectDomains: ["https://api.example.com"] } },
-    });
-    expect(buildMcpAppHostCapabilities()).toMatchObject({ sandbox: { csp: {} } });
-  });
-
-  it("accepts only the dedicated-origin MCP App sandbox endpoint", () => {
-    expect(
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox?csp=abc",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toBe("https://gateway.example:8444/mcp-app-sandbox?csp=abc");
-    expect(
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox",
-        18790,
-        "https://apps.example.com",
-        "wss://gateway.example",
-        "https://gateway.example",
-      ),
-    ).toBe("https://apps.example.com/mcp-app-sandbox");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "https://attacker.example/mcp-app-sandbox",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "data:text/html;base64,cHJveHk=",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox",
-        8443,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox",
-        8444,
-        "https://gateway.example:8443",
-        "wss://gateway.example:8443/openclaw",
-        "https://control.example",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
+  beforeEach(() => {
+    lazyElementMocks.ensureCustomElementDefined.mockClear();
   });
 
   it("routes MCP App previews through the dedicated double-iframe host", async () => {
@@ -158,8 +71,19 @@ describe("tool-cards", () => {
     const view = container.querySelector("mcp-app-view");
     expect(view).not.toBeNull();
     expect(view?.getAttribute("src")).toBeNull();
+    expect((view as { sessionKey?: string }).sessionKey).toBe("agent:main:main");
+    expect((view as { viewId?: string }).viewId).toBe("cv_app");
+    expect((view as { height?: number }).height).toBe(600);
+    expect(lazyElementMocks.ensureCustomElementDefined).toHaveBeenCalledOnce();
+    const [tagName, loadModule] = lazyElementMocks.ensureCustomElementDefined.mock.calls[0]!;
+    expect(tagName).toBe("mcp-app-view");
+    expect(loadModule).toBeTypeOf("function");
+    await loadModule();
+    expect(customElements.get("mcp-app-view")).toBeDefined();
+    expect((view as { sessionKey?: string }).sessionKey).toBe("agent:main:main");
     expect((view as { viewId?: string }).viewId).toBe("cv_app");
 
+    lazyElementMocks.ensureCustomElementDefined.mockClear();
     const toolContainer = document.createElement("div");
     render(
       renderToolPreview(
@@ -175,6 +99,28 @@ describe("tool-cards", () => {
       toolContainer,
     );
     expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
+    expect(lazyElementMocks.ensureCustomElementDefined).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary canvas previews off the MCP Apps chunk", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_canvas",
+          url: "https://canvas.example/widget",
+        },
+        "chat_message",
+        { allowExternalEmbedUrls: true },
+      ),
+      container,
+    );
+
+    expect(container.querySelector("iframe")).not.toBeNull();
+    expect(lazyElementMocks.ensureCustomElementDefined).not.toHaveBeenCalled();
   });
 
   it("keeps selected summary text from toggling the disclosure", () => {

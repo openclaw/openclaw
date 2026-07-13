@@ -7,13 +7,13 @@ export type ConfigSearchCriteria = {
   tags: string[];
 };
 
-export type ConfigFieldMeta = {
+type ConfigFieldMeta = {
   label: string;
   help?: string;
   tags: string[];
 };
 
-export type ConfigSearchTextMatcher = (value: string, query: string) => boolean;
+type ConfigSearchTextMatcher = (value: string, query: string) => boolean;
 
 export function hasConfigSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
   return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));

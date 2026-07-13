@@ -3,11 +3,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  formatWindowsAclSummary,
+  inspectWindowsAcl,
+  parseIcaclsOutput,
+  resolveWindowsUserPrincipal,
+  summarizeWindowsAcl,
+  type WindowsAclEntry,
+  type WindowsAclSummary,
+} from "../infra/permissions.js";
+import {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
   resetWindowsInstallRootsForTests,
 } from "../infra/windows-install-roots.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
 const mockUserInfo = () => ({ username: MOCK_USERNAME });
@@ -17,22 +25,9 @@ const DEFAULT_WHOAMI = `${DEFAULT_WINDOWS_SYSTEM_ROOT}\\System32\\whoami.exe`;
 
 let createIcaclsResetCommand: typeof import("./windows-acl.js").createIcaclsResetCommand;
 let formatIcaclsResetCommand: typeof import("./windows-acl.js").formatIcaclsResetCommand;
-let formatWindowsAclSummary: typeof import("./windows-acl.js").formatWindowsAclSummary;
-let inspectWindowsAcl: typeof import("./windows-acl.js").inspectWindowsAcl;
-let parseIcaclsOutput: typeof import("./windows-acl.js").parseIcaclsOutput;
-let resolveWindowsUserPrincipal: typeof import("./windows-acl.js").resolveWindowsUserPrincipal;
-let summarizeWindowsAcl: typeof import("./windows-acl.js").summarizeWindowsAcl;
 
 beforeAll(async () => {
-  ({
-    createIcaclsResetCommand,
-    formatIcaclsResetCommand,
-    formatWindowsAclSummary,
-    inspectWindowsAcl,
-    parseIcaclsOutput,
-    resolveWindowsUserPrincipal,
-    summarizeWindowsAcl,
-  } = await import("./windows-acl.js"));
+  ({ createIcaclsResetCommand, formatIcaclsResetCommand } = await import("./windows-acl.js"));
 });
 
 beforeEach(() => {

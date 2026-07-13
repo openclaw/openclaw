@@ -82,6 +82,7 @@ export const vi: TranslationMap = {
     relink: "Liên kết lại",
     waitForScan: "Chờ quét",
     logout: "Đăng xuất",
+    skipToMainContent: "Chuyển đến nội dung chính",
   },
   nativeLinkMenu: {
     label: "Hành động liên kết",
@@ -125,6 +126,7 @@ export const vi: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, bởi {author}",
   },
   channels: {
+    lastError: "Lỗi gần nhất",
     refreshingStaleSnapshot:
       "Đang làm mới trạng thái kênh ở chế độ nền; hiển thị ảnh chụp thành công gần nhất.",
     config: {
@@ -218,10 +220,11 @@ export const vi: TranslationMap = {
   lazyView: {
     loadingTitle: "Đang tải bảng điều khiển",
     errorTitle: "Không tải được bảng điều khiển",
-    errorSubtitle:
-      "Tải lại trang để tải gói Control UI mới nhất, hoặc thử lại nếu yêu cầu mạng thất bại.",
+    genericSubtitle: "Đã xảy ra lỗi khi tải bảng điều khiển này.",
+    staleTitle: "Đã có phiên bản mới",
+    staleSubtitle:
+      "OpenClaw đã được cập nhật trong nền. Hãy tải lại để xem bảng điều khiển mới nhất.",
     retry: "Thử lại",
-    unknownError: "Lỗi tải mô-đun không xác định.",
   },
   nodes: {
     pairing: {
@@ -230,6 +233,17 @@ export const vi: TranslationMap = {
       title: "OpenClaw di động",
       subtitle: "Quét mã QR này trong ứng dụng di động để kết nối điện thoại mới.",
       generating: "Đang tạo mã thiết lập bảo mật…",
+      accessTitle: "Truy cập trên thiết bị di động",
+      fullAccess: "Toàn quyền truy cập (khuyên dùng)",
+      fullAccessHint:
+        "Quyền truy cập Node cùng toàn bộ tính năng điều khiển Gateway, bao gồm cài đặt và nâng cấp.",
+      limitedAccess: "Quyền truy cập hạn chế",
+      limitedAccessHint:
+        "Quyền truy cập Node, trò chuyện và phê duyệt, không bao gồm các tính năng quản trị.",
+      generateCode: "Tạo mã thiết lập",
+      transportLimitedTitle: "Bị giới hạn để đảm bảo an toàn mạng",
+      transportLimitedHint:
+        "URL Gateway này sử dụng ws:// dạng văn bản thuần. Hãy sử dụng wss:// hoặc Tailscale Serve, sau đó tạo mã mới để có toàn quyền truy cập.",
       failed: "Không thể tạo mã thiết lập.",
       qrAlt: "Mã QR ghép nối OpenClaw di động",
       qrUnavailable: "Không có mã QR. Hãy sao chép mã thiết lập thay thế.",
@@ -263,7 +277,8 @@ export const vi: TranslationMap = {
     },
     inventory: {
       title: "Thiết bị",
-      subtitle: "Mỗi hàng là một client đã ghép nối: trạng thái, vai trò, token.",
+      summaryConnected: "{connected} trong tổng số {total} đã kết nối",
+      summaryPending: "{count} đang chờ phê duyệt",
       cleanupStale: "Dọn dẹp {count} mục cũ",
       pendingApproval: "Chờ phê duyệt",
       paired: "Đã ghép nối",
@@ -371,24 +386,49 @@ export const vi: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Worktree mới",
-    owner: "Chủ sở hữu",
     ownerManual: "Thủ công",
     ownerSession: "Phiên",
     ownerWorkboard: "Workboard",
     title: "Worktree được quản lý",
     subtitle: "Các bản checkout kho lưu trữ được cô lập do OpenClaw sở hữu.",
     cleanNow: "Dọn dẹp ngay",
+    cleanupTitle: "Dọn dẹp",
+    cleanupSubtitle:
+      "OpenClaw định kỳ xóa các worktree cũ để giải phóng dung lượng ổ đĩa. Điều chỉnh mức độ dọn dẹp.",
+    cleanupMaxCount: "Số worktree tối đa",
+    cleanupMaxCountHelp:
+      "Số lượng worktree được quản lý tối đa cần giữ lại trên tất cả kho lưu trữ. Các worktree cũ hơn sẽ được tạo bản chụp nhanh và xóa trước. Đặt thành 0 để tắt giới hạn số lượng.",
+    cleanupMaxSize: "Tổng kích thước tối đa (GB)",
+    cleanupMaxSizeHelp:
+      "Tổng kích thước tối đa tính bằng GB trên tất cả worktree được quản lý. Đặt thành 0 để tắt giới hạn kích thước.",
+    cleanupDecrease: "Giảm {label}",
+    cleanupIncrease: "Tăng {label}",
+    cleanupSaveFailed: "Không thể lưu các giới hạn dọn dẹp.",
     name: "Tên",
     repo: "Kho lưu trữ",
-    branch: "Nhánh",
-    status: "Trạng thái",
-    lastActive: "Hoạt động lần cuối",
-    actions: "Hành động",
     empty: "Không có worktree được quản lý.",
     restorable: "Có thể khôi phục",
     restore: "Khôi phục",
     confirmDelete: "Tạo snapshot và xóa {name}?",
     confirmForceDelete: "Tạo snapshot thất bại: {error}\n\nXóa mà không có snapshot?",
+  },
+  agentChip: {
+    menuLabel: "Menu tác nhân",
+    agents: "Tác nhân",
+    working: "Đang làm việc…",
+    ready: "Sẵn sàng trò chuyện",
+    whatCanAgentDo: "{name} có thể làm gì?",
+    help: "Trợ giúp",
+    getHelp: "Nhận trợ giúp",
+    discord: "Cộng đồng Discord",
+    viewChangelog: "Xem nhật ký thay đổi",
+    agentSettings: "Cài đặt agent",
+    filterAgents: "Tìm agent…",
+    noAgentMatches: "Không có agent phù hợp",
+  },
+  agentScope: {
+    label: "Phạm vi agent",
+    allAgents: "Tất cả agent",
   },
   newSession: {
     title: "Phiên mới",
@@ -418,6 +458,7 @@ export const vi: TranslationMap = {
     start: "Bắt đầu phiên",
     starting: "Đang bắt đầu…",
     createFailed: "Không thể tạo phiên.",
+    catalogUnavailable: "Đích của phiên này hiện không khả dụng.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -557,6 +598,7 @@ export const vi: TranslationMap = {
     groupBy: "Nhóm theo",
     groupByNone: "Không",
     groupByCategory: "Nhóm tùy chỉnh",
+    showCronSessions: "Hiển thị các phiên cron",
     groupByChannel: "Kênh",
     groupByKind: "Loại",
     groupByAgent: "Tác nhân",
@@ -596,6 +638,8 @@ export const vi: TranslationMap = {
     setDefault: "Đặt làm mặc định",
     alreadyDefaultTitle: "Đã là agent mặc định",
     setDefaultTitle: "Đặt làm agent mặc định",
+    pinToSwitcher: "Ghim vào trình chuyển đổi",
+    unpinFromSwitcher: "Bỏ ghim khỏi trình chuyển đổi",
     selectTitle: "Chọn một agent",
     selectSubtitle: "Chọn một agent để kiểm tra workspace và công cụ của agent đó.",
     tabs: {
@@ -620,6 +664,19 @@ export const vi: TranslationMap = {
       default: "Mặc định",
       configurationSubtitle: "Cấu hình workspace, danh tính và mô hình.",
       schedulingSubtitle: "Workspace và mục tiêu lập lịch.",
+    },
+    identity: {
+      title: "Danh tính",
+      subtitle: "Tên, emoji và ảnh đại diện hiển thị trong cuộc trò chuyện và thanh bên.",
+      name: "Tên hiển thị",
+      namePlaceholder: "Tên agent",
+      emoji: "Emoji",
+      chooseImage: "Chọn hình ảnh…",
+      replaceImage: "Thay thế hình ảnh…",
+      imageUnusable:
+        "Không thể sử dụng hình ảnh đó. Hãy chọn tệp hình ảnh có dung lượng tối đa 2 MB.",
+      fileHint:
+        "Agent có thể tự thiết lập bằng cách chỉnh sửa IDENTITY.md trong workspace của mình.",
     },
     overview: {
       title: "Tổng quan",
@@ -766,6 +823,7 @@ export const vi: TranslationMap = {
     },
     manualRpcTitle: "RPC thủ công",
     manualRpcSubtitle: "Gửi phương thức gateway thô với tham số JSON.",
+    callFailed: "Cuộc gọi thất bại",
     method: "Phương thức",
     selectMethod: "Chọn một phương thức…",
     paramsJson: "Tham số (JSON)",
@@ -1063,6 +1121,7 @@ export const vi: TranslationMap = {
     settingsView: "Chế độ xem cài đặt",
     simple: "Đơn giản",
     advanced: "Nâng cao",
+    content: "Nội dung cài đặt",
     themeImported: "Đã nhập {name}.",
     themeRemoved: "Đã xóa chủ đề tùy chỉnh.",
     channels: {
@@ -1190,6 +1249,10 @@ export const vi: TranslationMap = {
       inlineHintAfter:
         "để thêm một chủ đề tweakcn cục bộ trong trình duyệt. Trong tweakcn, dùng Share và dán liên kết đã sao chép vào đây.",
       textSize: "Cỡ chữ",
+    },
+    chatPrefs: {
+      title: "Trò chuyện",
+      hint: "Tùy chọn trò chuyện cục bộ trên trình duyệt.",
     },
     connection: {
       title: "Kết nối",
@@ -1349,6 +1412,7 @@ export const vi: TranslationMap = {
     moreLiveTitle: "{count} công cụ trực tiếp khác có sẵn trong các nhóm bên dưới.",
     moreLive: "+{count} công cụ trực tiếp khác",
     quickPresets: "Cài đặt sẵn nhanh",
+    catalogTitle: "Danh mục công cụ",
     inherit: "Kế thừa",
     profile: "Hồ sơ",
     source: "Nguồn",
@@ -1413,6 +1477,8 @@ export const vi: TranslationMap = {
     platforms: "Nền tảng: {platforms}",
     installNamed: "Cài đặt {name}",
     notFound: "Không tìm thấy skill.",
+    openDetails: "Mở thông tin chi tiết về {name}",
+    enabledNamed: "Đã bật {name}",
     invalidLink: "Liên kết ClawHub không hợp lệ",
     overview: "Tổng quan",
     skillCard: "Thẻ Skill",
@@ -1445,6 +1511,8 @@ export const vi: TranslationMap = {
     blockedAgentFilter: "bị chặn bởi bộ lọc agent",
   },
   nav: {
+    back: "Quay lại",
+    forward: "Tiến",
     chat: "Trò chuyện",
     settings: "Cài đặt",
     settingsGeneral: "Chung",
@@ -1685,7 +1753,6 @@ export const vi: TranslationMap = {
     filterAll: "Tất cả",
     filterIssues: "Sự cố",
     filterLabel: "Lọc plugin đã cài đặt",
-    pulseLabel: "{enabled} đã bật, {disabled} đã tắt, {issues} có sự cố",
     categoryChannels: "Kênh",
     categoryProviders: "Nhà cung cấp mô hình",
     categoryMemory: "Bộ nhớ",
@@ -1716,8 +1783,6 @@ export const vi: TranslationMap = {
     cancel: "Hủy",
     removedRestart: "Đã gỡ bỏ {name}. Cần khởi động lại Gateway để áp dụng thay đổi.",
     verifiedSource: "Nguồn đã xác minh",
-    menuLabel: "Thao tác {name}",
-    menuDetails: "Xem chi tiết",
     enableAction: "Bật",
     disableAction: "Tắt",
     working: "Đang xử lý…",
@@ -1852,6 +1917,10 @@ export const vi: TranslationMap = {
       useCurrentChatAria: "Dùng cuộc trò chuyện hiện tại cho yêu cầu chỉnh sửa",
       useCurrentChatTooltip:
         "Gửi yêu cầu chỉnh sửa đến phiên trò chuyện hiện tại thay vì phiên workshop của đề xuất.",
+      selfLearning: "Tự học",
+      selfLearningAria: "Bật hoặc tắt đề xuất Skills tự học",
+      selfLearningTooltip:
+        "Ghi nhận các chỉnh sửa và xem xét những công việc quan trọng đã hoàn thành để tạo thành các đề xuất kỹ năng đang chờ xử lý. Tính năng này sử dụng thêm token nền; các bản nháp sẽ xuất hiện trên bảng này dưới dạng đề xuất đang chờ xử lý.",
       view: "Chế độ xem Workshop",
       board: "Bảng",
       today: "Hôm nay",
@@ -1933,6 +2002,14 @@ export const vi: TranslationMap = {
       noProposalsTitle: "Chưa có đề xuất nào",
       noProposalsBody: "{agent} chưa soạn thảo đề xuất skill nào.",
       noProposalsFooter: "Các đề xuất mới sẽ xuất hiện ở đây để xem xét.",
+    },
+    selfLearning: {
+      pitchTitle: "Bật tính năng tự học",
+      pitchBody:
+        "OpenClaw xem xét các chỉnh sửa và những lượt chạy quan trọng đã hoàn thành, sau đó soạn thảo các đề xuất kỹ năng cho bảng này. Tính năng này sử dụng thêm token nền và các bản nháp sẽ xuất hiện dưới dạng đề xuất đang chờ xử lý.",
+      enable: "Bật tính năng tự học",
+      enabling: "Đang bật…",
+      updateError: "Không thể cập nhật cài đặt tự học.",
     },
     today: {
       emptyTitle: "Hôm nay không có gì đang chờ",
@@ -2419,6 +2496,7 @@ export const vi: TranslationMap = {
       uptime: "Thời gian hoạt động",
       tickInterval: "Khoảng thời gian cập nhật",
       lastChannelsRefresh: "Lần làm mới kênh gần nhất",
+      lastError: "Lỗi gần nhất",
     },
     help: {
       title: "Cách kết nối",
@@ -3057,24 +3135,16 @@ export const vi: TranslationMap = {
       rateLimited:
         "Đã đạt giới hạn tốc độ GitHub API. Trạng thái pull request có thể không còn mới nhất cho đến khi giới hạn được đặt lại.",
     },
-    refreshTitle: "Làm mới dữ liệu trò chuyện",
-    settings: "Cài đặt trò chuyện",
     usageRemaining: "Mức sử dụng còn lại",
-    voiceSettings: "Giọng nói",
-    thinkingToggle: "Bật/tắt đầu ra suy nghĩ/đang xử lý của trợ lý",
-    toolCallsToggle: "Bật/tắt lượt gọi công cụ và kết quả công cụ",
-    commentaryToggle: "Giữ lại bình luận sau câu trả lời cuối cùng",
-    commentaryLabel: "Bình luận",
-    autoScrollMode: "Chế độ tự động cuộn",
-    autoScrollAlways: "Luôn luôn",
-    autoScrollNearBottom: "Gần cuối",
-    autoScrollOff: "Tắt",
+    view: {
+      menu: "Chế độ xem",
+      reasoning: "Lập luận",
+      toolCalls: "Lệnh gọi công cụ",
+      commentary: "Giữ lại phần bình luận",
+    },
     sendShortcut: "Phím tắt gửi",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Ẩn phiên cron",
-    showCronSessions: "Hiển thị phiên cron",
-    showCronSessionsHidden: "Hiển thị phiên cron ({count} bị ẩn)",
     onboardingDisabled: "Đã tắt trong quá trình thiết lập",
     gatewayStatus: "Trạng thái Gateway: {status}",
     commandPaletteTitle: "Tìm kiếm hoặc chuyển đến… (⌘K)",
@@ -3264,7 +3334,6 @@ export const vi: TranslationMap = {
       },
       takePhoto: "Chụp ảnh",
       dismissVoiceInputError: "Đóng lỗi nhập bằng giọng nói",
-      loadingMicrophones: "Đang tải micrô…",
       microphoneAccessFailed: "Không thể truy cập đầu vào micrô.",
       microphoneBusy: "Đầu vào micrô đang bận hoặc không khả dụng với trình duyệt.",
       microphoneFallback: "Micrô {number}",
@@ -3283,18 +3352,6 @@ export const vi: TranslationMap = {
       stillListening: "Vẫn đang nghe",
       stopVoiceInput: "Dừng nhập bằng giọng nói",
       systemDefaultMicrophone: "Mặc định hệ thống",
-      talkAdvancedSettingsRequiresAdmin: "Cài đặt nâng cao yêu cầu quyền quản trị viên",
-      talkAdvancedSettingsRequiresAdminTitle: "Cài đặt Talk nâng cao yêu cầu quyền operator.admin.",
-      talkDefault: "Mặc định",
-      talkModel: "Mô hình",
-      talkModelAuto: "Tự động",
-      talkMoreInSettings: "Thêm trong phần Cài đặt",
-      talkSensitivity: "Độ nhạy",
-      talkSensitivityHigh: "Cao",
-      talkSensitivityLow: "Thấp",
-      talkSensitivityMedium: "Trung bình",
-      talkVoice: "Giọng nói",
-      voiceOptions: "Tùy chọn giọng nói",
       voiceTranscript: "Bản chép lời giọng nói",
     },
     selectors: {
@@ -3379,6 +3436,8 @@ export const vi: TranslationMap = {
       empty: "Chưa có tác vụ nền nào cho tác nhân này.",
       running: "Đang chạy ({count})",
       finished: "Đã hoàn tất ({count})",
+      statusRunningOne: "1 tác vụ đang chạy",
+      statusRunningMany: "{count} tác vụ đang chạy",
       stopTask: "Dừng {title}",
       viewTranscript: "Xem bản ghi",
       toolUseOne: "1 lần sử dụng công cụ",
@@ -3466,11 +3525,13 @@ export const vi: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Trạng thái tự động hóa",
       all: "Tất cả",
       active: "Đang hoạt động",
       paused: "Đã tạm dừng",
     },
     list: {
+      viewLabel: "Chế độ xem tự động hóa",
       searchPlaceholder: "Tìm kiếm tác vụ theo lịch",
       newTask: "Tác vụ mới",
       filters: "Bộ lọc",
@@ -3536,12 +3597,12 @@ export const vi: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Bộ lập lịch",
       tasks: "Tác vụ",
       failing: "Đang lỗi",
       nextWake: "Lần chạy tiếp theo",
     },
     detail: {
+      tabsLabel: "Chi tiết tự động hóa",
       newTitle: "Tác vụ theo lịch mới",
       newSubtitle: "Mô tả những gì OpenClaw nên làm, sau đó chọn thời điểm chạy.",
       back: "Tất cả tác vụ tự động",
@@ -3561,7 +3622,14 @@ export const vi: TranslationMap = {
       clone: "Nhân bản",
       remove: "Xóa",
       more: "Thêm hành động",
-      history: "Lịch sử",
+    },
+    runNotStarted: {
+      notDue: "Chưa đến thời điểm chạy tác vụ tự động này.",
+      alreadyRunning: "Tác vụ tự động này đang chạy.",
+      recoveryPending: "Quá trình khôi phục trình lập lịch vẫn đang diễn ra.",
+      invalidSpec: "Tác vụ tự động này có lịch biểu hoặc tải trọng không hợp lệ.",
+      stopped: "Trình lập lịch đã dừng.",
+      unknown: "Không thể khởi chạy tác vụ tự động này.",
     },
     jobs: {
       schedule: "Lịch",

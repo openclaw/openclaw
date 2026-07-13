@@ -1,4 +1,5 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -131,12 +132,6 @@ function appendCanvasBlockToAssistantMessage(
   };
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
   if (!asRecord(message)) {
     return null;
@@ -157,13 +152,36 @@ function messageMatchesSearchQuery(message: unknown, query: string): boolean {
   return text.includes(normalizedQuery);
 }
 
-function extractChatMessagePreview(toolMessage: unknown): {
+function turnHasMatchingAssistant(
+  messages: unknown[],
+  sourceIndex: number,
+  searchQuery: string,
+): boolean {
+  for (let index = sourceIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index];
+    const normalized = safeNormalizeMessage(message);
+    if (!normalized) {
+      continue;
+    }
+    const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+    if (role === "user" || role === "system") {
+      return false;
+    }
+    if (role === "assistant" && messageMatchesSearchQuery(message, searchQuery)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+type ChatMessagePreview = {
   preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
   text: string | null;
   timestamp: number | null;
-} | null {
-  const normalized = safeNormalizeMessage(toolMessage);
-  if (!normalized) {
+};
+
+function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | null {
+  if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
   const cards = extractToolCardsCached(toolMessage, "preview");
@@ -173,7 +191,7 @@ function extractChatMessagePreview(toolMessage: unknown): {
       return {
         preview: card.preview,
         text: card.outputText ?? null,
-        timestamp: normalized.timestamp ?? null,
+        timestamp: rawMessageTimestamp(toolMessage),
       };
     }
   }
@@ -189,16 +207,88 @@ function extractChatMessagePreview(toolMessage: unknown): {
   if (preview?.kind !== "canvas") {
     return null;
   }
-  return { preview, text: text ?? null, timestamp: normalized.timestamp ?? null };
+  return { preview, text: text ?? null, timestamp: rawMessageTimestamp(toolMessage) };
+}
+
+function canvasPreviewBaseIdentity(message: unknown, source: ChatMessagePreview): string | null {
+  const toolCallId = resolveMessageToolUseId(asRecord(message) ?? {});
+  const previewId = source.preview.viewId ?? source.preview.url;
+  return toolCallId && previewId ? JSON.stringify([toolCallId, previewId]) : null;
+}
+
+function createCanvasAssistantMessage(
+  source: ChatMessagePreview,
+  timestamp = source.timestamp,
+): unknown {
+  return appendCanvasBlockToAssistantMessage(
+    {
+      role: "assistant",
+      content: [],
+      ...(timestamp != null ? { timestamp } : {}),
+    },
+    source.preview,
+    source.text,
+  );
+}
+
+function transcriptPositionTimestamp(messages: unknown[], sourceIndex: number): number | null {
+  let previous: number | null = null;
+  for (let index = sourceIndex - 1; index >= 0; index -= 1) {
+    previous = rawMessageTimestamp(messages[index]);
+    if (previous != null) {
+      break;
+    }
+  }
+  let next: number | null = null;
+  for (let index = sourceIndex + 1; index < messages.length; index += 1) {
+    next = rawMessageTimestamp(messages[index]);
+    if (next != null) {
+      break;
+    }
+  }
+  if (previous != null && next != null) {
+    return previous < next ? Math.min(previous + 1, next) : next;
+  }
+  if (previous != null) {
+    return previous + 1;
+  }
+  return next;
 }
 
 function findNearestAssistantMessageIndex(
   items: ChatItem[],
   toolTimestamp: number | null,
 ): number | null {
+  let currentTurnStart = 0;
+  let currentTurnEnd = items.length;
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item?.kind !== "message") {
+      continue;
+    }
+    const normalized = safeNormalizeMessage(item.message);
+    if (!normalized || normalizeRoleForGrouping(normalized.role).toLowerCase() !== "user") {
+      continue;
+    }
+    if (
+      toolTimestamp != null &&
+      normalized.timestamp != null &&
+      normalized.timestamp > toolTimestamp
+    ) {
+      currentTurnEnd = index;
+      break;
+    }
+    if (
+      toolTimestamp == null ||
+      normalized.timestamp == null ||
+      normalized.timestamp <= toolTimestamp
+    ) {
+      currentTurnStart = index + 1;
+    }
+  }
   const assistantEntries = items
     .map((item, index) => {
-      if (item.kind !== "message") {
+      if (index < currentTurnStart || index >= currentTurnEnd || item.kind !== "message") {
         return null;
       }
       const message = item.message as Record<string, unknown>;
@@ -243,6 +333,28 @@ function findNearestAssistantMessageIndex(
     return next.index;
   }
   return assistantEntries[assistantEntries.length - 1]?.index ?? null;
+}
+
+function findCanvasInsertionIndex(items: ChatItem[], toolTimestamp: number | null): number {
+  if (toolTimestamp == null) {
+    return items.length;
+  }
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item?.kind !== "message") {
+      continue;
+    }
+    const normalized = safeNormalizeMessage(item.message);
+    if (
+      normalized &&
+      normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" &&
+      normalized.timestamp != null &&
+      normalized.timestamp > toolTimestamp
+    ) {
+      return index;
+    }
+  }
+  return items.length;
 }
 
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
@@ -628,7 +740,12 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
 }
 
 function assistantGroupHasReplyText(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
+  return group.messages.some(({ message }) => {
+    if (extractTextCached(message)?.trim()) {
+      return true;
+    }
+    return safeNormalizeMessage(message)?.content.some((block) => block.type === "canvas") ?? false;
+  });
 }
 
 function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
@@ -862,13 +979,13 @@ function sanitizeStreamText(text: string): string {
 }
 
 function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
-  if (typeof item.sendSubmittedAtMs !== "number" || item.sendState === "failed") {
-    return false;
-  }
+  // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
+  const sendStarted = typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
   return (
-    item.sendState === "waiting-model" ||
-    item.sendState === "sending" ||
-    item.sendState === "waiting-reconnect"
+    sendStarted &&
+    (item.sendState === "waiting-model" ||
+      item.sendState === "sending" ||
+      item.sendState === "waiting-reconnect")
   );
 }
 
@@ -1108,6 +1225,34 @@ function resolveHistoryStartIndex(
   return startIndex;
 }
 
+function expandHistoryStartForPersistedPreviews(messages: unknown[], historyStart: number): number {
+  const firstVisible = safeNormalizeMessage(messages[historyStart]);
+  if (!firstVisible || normalizeRoleForGrouping(firstVisible.role).toLowerCase() !== "assistant") {
+    return historyStart;
+  }
+  let expandedStart = historyStart;
+  for (let index = historyStart - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const normalized = safeNormalizeMessage(message);
+    if (!normalized) {
+      continue;
+    }
+    const normalizedRole = normalized.role.toLowerCase();
+    const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+    if (role === "user" || role === "system") {
+      break;
+    }
+    if (normalizedRole === "toolresult" && extractChatMessagePreview(message)) {
+      expandedStart = index;
+      continue;
+    }
+    if (role === "assistant" && hasRenderableNormalizedMessage(message)) {
+      break;
+    }
+  }
+  return expandedStart;
+}
+
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const historyRenderLimit = resolveHistoryRenderLimit(
@@ -1118,20 +1263,32 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const liftedCanvasSources = tools
-    .map((tool) => extractChatMessagePreview(tool))
-    .filter((entry) => Boolean(entry)) as Array<{
-    preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
-    text: string | null;
-    timestamp: number | null;
-  }>;
+  const liftedCanvasSources = tools.flatMap((message, index) => {
+    const source = extractChatMessagePreview(message);
+    return source ? [{ ...source, message, index }] : [];
+  });
+  const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
+  const persistedCanvasIdentities = new Set<string>();
+  for (const message of history) {
+    const source = extractChatMessagePreview(message);
+    if (!source) {
+      continue;
+    }
+    const baseIdentity = canvasPreviewBaseIdentity(message, source);
+    if (baseIdentity) {
+      // fetchMcpAppView assigns a fresh viewId to every invocation. Matching the call and
+      // view therefore identifies the same preview while still tolerating a reused call ID.
+      persistedCanvasIdentities.add(baseIdentity);
+    }
+  }
   const historyStart = resolveHistoryStartIndex(history, props.showToolCalls, historyRenderLimit);
+  const previewHistoryStart = expandHistoryStartForPersistedPreviews(history, historyStart);
   const hiddenHistoryCount = countVisibleHistoryMessages(
-    history.slice(0, historyStart),
+    history.slice(0, previewHistoryStart),
     props.showToolCalls,
   );
   const visibleHistoryCount = countVisibleHistoryMessages(
-    history.slice(historyStart),
+    history.slice(previewHistoryStart),
     props.showToolCalls,
   );
   if (hiddenHistoryCount > 0) {
@@ -1145,7 +1302,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       },
     });
   }
-  for (let i = historyStart; i < history.length; i++) {
+  for (let i = previewHistoryStart; i < history.length; i++) {
     const msg = history[i];
     const normalized = safeNormalizeMessage(msg);
     if (!normalized) {
@@ -1171,7 +1328,23 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
-    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+    const isToolResult = normalized.role.toLowerCase() === "toolresult";
+    const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
+    const renderPersistedPreview =
+      persistedCanvasSource != null &&
+      (!searchFiltering || turnHasMatchingAssistant(history, i, props.searchQuery ?? ""));
+    if (persistedCanvasSource && renderPersistedPreview) {
+      items.push({
+        kind: "message",
+        key: `${messageKey(msg, i)}:canvas`,
+        message: createCanvasAssistantMessage(
+          persistedCanvasSource,
+          persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
+        ),
+      });
+    }
+
+    if (!props.showToolCalls && isToolResult) {
       continue;
     }
 
@@ -1190,13 +1363,20 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     });
   }
   const queuedSends = Array.isArray(props.queue) ? props.queue : [];
-  for (const queued of queuedSends) {
+  const activeRunQueuedSends = queuedSends.filter((queued) => queued.sendState === "waiting-model");
+  const futureQueuedSends = queuedSends.filter((queued) => !activeRunQueuedSends.includes(queued));
+  const futureQueuedTimestamp = futureQueuedSends.reduce<number | null>(
+    (earliest, queued) =>
+      earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
+    null,
+  );
+  const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
-      continue;
+      return;
     }
     const message = queuedSendThreadMessage(queued);
     if (!message) {
-      continue;
+      return;
     }
     const searchQuery = props.searchQuery ?? "";
     if (
@@ -1204,17 +1384,46 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       searchQuery.trim() &&
       !messageMatchesSearchQuery(message, searchQuery)
     ) {
-      continue;
+      return;
     }
     items.push({
       kind: "message",
       key: `pending-send:${queued.id}`,
       message,
     });
+  };
+  for (const queued of activeRunQueuedSends) {
+    appendQueuedSend(queued);
   }
   for (const liftedCanvasSource of liftedCanvasSources) {
+    const baseIdentity = canvasPreviewBaseIdentity(liftedCanvasSource.message, liftedCanvasSource);
+    if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
+      continue;
+    }
     const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
     if (assistantIndex == null) {
+      if (searchFiltering) {
+        continue;
+      }
+      const insertionIndex = findCanvasInsertionIndex(items, liftedCanvasSource.timestamp);
+      const nextItem = items[insertionIndex];
+      const nextTimestamp =
+        nextItem?.kind === "message" ? rawMessageTimestamp(nextItem.message) : null;
+      const boundaryTimestamp =
+        nextTimestamp == null
+          ? futureQueuedTimestamp
+          : futureQueuedTimestamp == null
+            ? nextTimestamp
+            : Math.min(nextTimestamp, futureQueuedTimestamp);
+      const timestamp =
+        liftedCanvasSource.timestamp != null && boundaryTimestamp != null
+          ? Math.min(liftedCanvasSource.timestamp, boundaryTimestamp)
+          : liftedCanvasSource.timestamp;
+      items.splice(insertionIndex, 0, {
+        kind: "message",
+        key: `${messageKey(liftedCanvasSource.message, liftedCanvasSource.index + history.length)}:canvas`,
+        message: createCanvasAssistantMessage(liftedCanvasSource, timestamp),
+      });
       continue;
     }
     const item = items[assistantIndex];
@@ -1229,6 +1438,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         liftedCanvasSource.text,
       ),
     };
+  }
+  for (const queued of futureQueuedSends) {
+    appendQueuedSend(queued);
   }
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
@@ -1378,6 +1590,80 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
 }
 
+function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
+  // Source message identity owns the row timestamp too: normalization supplies
+  // Date.now() for missing timestamps, which must not churn stable rows.
+  return (
+    previous.role === next.role &&
+    previous.senderLabel === next.senderLabel &&
+    previous.isStreaming === next.isStreaming &&
+    previous.turnSucceeded === next.turnSucceeded &&
+    previous.messages.length === next.messages.length &&
+    previous.messages.every((entry, index) => {
+      const candidate = next.messages[index];
+      return (
+        candidate !== undefined &&
+        entry.key === candidate.key &&
+        entry.message === candidate.message &&
+        entry.duplicateCount === candidate.duplicateCount
+      );
+    })
+  );
+}
+
+function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
+  if (previous.kind !== next.kind || previous.key !== next.key) {
+    return false;
+  }
+  switch (next.kind) {
+    case "group":
+      return previous.kind === "group" && sameMessageGroup(previous, next);
+    case "message":
+      return (
+        previous.kind === "message" &&
+        previous.message === next.message &&
+        previous.duplicateCount === next.duplicateCount
+      );
+    case "divider":
+      return (
+        previous.kind === "divider" &&
+        previous.label === next.label &&
+        previous.description === next.description &&
+        previous.timestamp === next.timestamp &&
+        previous.action?.kind === next.action?.kind &&
+        previous.action?.label === next.action?.label
+      );
+    case "stream":
+      return (
+        previous.kind === "stream" &&
+        previous.text === next.text &&
+        previous.startedAt === next.startedAt &&
+        previous.isStreaming === next.isStreaming
+      );
+    case "reading-indicator":
+      return previous.kind === "reading-indicator";
+  }
+  return false;
+}
+
+function stabilizeChatItems(
+  previous: ReturnType<typeof buildChatItems>,
+  next: ReturnType<typeof buildChatItems>,
+): ReturnType<typeof buildChatItems> {
+  if (previous.length === 0 || next.length === 0) {
+    return next;
+  }
+  const previousByKey = new Map(previous.map((item) => [`${item.kind}\u0000${item.key}`, item]));
+  const stabilized = next.map((item) => {
+    const prior = previousByKey.get(`${item.kind}\u0000${item.key}`);
+    return prior && sameChatItem(prior, item) ? prior : item;
+  });
+  return stabilized.length === previous.length &&
+    stabilized.every((item, index) => item === previous[index])
+    ? previous
+    : stabilized;
+}
+
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
@@ -1408,7 +1694,7 @@ export function buildCachedChatItems(
   if (cached.input && sameChatItemsInput(cached.input, input)) {
     return cached.items;
   }
-  const items = buildChatItems(input);
+  const items = stabilizeChatItems(cached.items, buildChatItems(input));
   cached.input = input;
   cached.items = items;
   return items;

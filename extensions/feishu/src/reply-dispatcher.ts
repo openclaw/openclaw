@@ -5,6 +5,8 @@ import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-o
 import {
   formatChannelProgressDraftLineForEntry,
   isChannelProgressDraftWorkToolName,
+  resolveChannelPreviewStreamMode,
+  resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveSendableOutboundReplyParts,
@@ -256,11 +258,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(cfg, "feishu", accountId, {
     fallbackLimit: 4000,
   });
-  const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
+  const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu", accountId);
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
-  const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
-  const coreBlockStreamingEnabled = account.config?.blockStreaming === true;
+  // Streaming cards default to enabled: only streaming.mode "off" (or raw
+  // render mode) disables them, matching the legacy `streaming: false` boolean.
+  const streamingEnabled =
+    resolveChannelPreviewStreamMode(account.config, "partial") !== "off" && renderMode !== "raw";
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
+  const coreBlockStreamingEnabled = blockStreamingEnabled === true;
   const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
 
   let streaming: FeishuStreamingSession | null = null;
@@ -864,7 +870,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
       disableBlockStreaming:
-        typeof account.config?.blockStreaming === "boolean" ? !account.config.blockStreaming : true,
+        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : true,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {

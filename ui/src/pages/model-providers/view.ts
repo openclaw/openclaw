@@ -2,8 +2,18 @@
 import { html, nothing } from "lit";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsGroup,
+  renderSettingsPage,
+  renderSettingsSection,
+  renderSettingsStatus,
+  renderSettingsValue,
+} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
+import "../../styles/model-providers.css";
+import "../../styles/usage.css";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
 export type ModelProvidersViewProps = {
@@ -25,7 +35,15 @@ const AUTH_KIND_I18N: Record<ModelProviderAuthKind, string> = {
   "api-key": "modelProviders.status.apiKey",
 };
 
-function renderAuthBadge(card: ModelProviderCard) {
+const AUTH_KIND_STATUS: Record<ModelProviderAuthKind, "ok" | "warn" | "danger" | "muted"> = {
+  ok: "ok",
+  expiring: "warn",
+  expired: "danger",
+  missing: "danger",
+  "api-key": "muted",
+};
+
+function renderAuthStatus(card: ModelProviderCard) {
   const auth = card.auth;
   if (!auth) {
     return nothing;
@@ -35,29 +53,24 @@ function renderAuthBadge(card: ModelProviderCard) {
     ? t("modelProviders.expiresIn", { time: auth.expiryLabel })
     : undefined;
   return html`
-    <span
-      class="model-providers__status model-providers__status--${auth.kind}"
-      title=${detail ?? label}
-    >
-      ${label}
+    <span title=${detail ?? label}>
+      ${renderSettingsStatus({ kind: AUTH_KIND_STATUS[auth.kind], label })}
     </span>
   `;
 }
 
-function renderModelsLine(card: ModelProviderCard) {
+function modelsText(card: ModelProviderCard): string | null {
   if (card.modelCount === 0) {
-    return nothing;
+    return null;
   }
-  const text =
-    card.availableModelCount < card.modelCount
-      ? t("modelProviders.modelsAvailable", {
-          available: String(card.availableModelCount),
-          count: String(card.modelCount),
-        })
-      : card.modelCount === 1
-        ? t("modelProviders.modelOne")
-        : t("modelProviders.models", { count: String(card.modelCount) });
-  return html`<div class="model-providers__models">${text}</div>`;
+  return card.availableModelCount < card.modelCount
+    ? t("modelProviders.modelsAvailable", {
+        available: String(card.availableModelCount),
+        count: String(card.modelCount),
+      })
+    : card.modelCount === 1
+      ? t("modelProviders.modelOne")
+      : t("modelProviders.models", { count: String(card.modelCount) });
 }
 
 // formatTokens tops out at "M"; month-scale provider totals can cross a
@@ -91,62 +104,73 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
   `;
 }
 
-function renderCard(card: ModelProviderCard, costDays: number) {
+function renderProviderRow(card: ModelProviderCard, costDays: number) {
+  const models = modelsText(card);
   return html`
-    <article class="provider-usage-card model-providers__card">
-      <div class="provider-usage-card__header">
+    <div class="settings-row settings-row--stacked model-providers__row">
+      <div class="model-providers__head">
         <div class="model-providers__identity">
           ${renderProviderBrandIcon(card.id, { className: "model-providers__icon" })}
-          <div>
-            <div class="provider-usage-card__name">${card.displayName}</div>
-            <div class="provider-usage-card__id">${card.id}</div>
+          <div class="settings-row__text">
+            <span class="settings-row__title">${card.displayName}</span>
+            <span class="settings-row__desc"
+              >${card.id}${models ? html` · ${models}` : nothing}</span
+            >
           </div>
         </div>
-        <div class="model-providers__badges">
-          ${card.usage?.plan
-            ? html`<span class="provider-usage-plan">${card.usage.plan}</span>`
-            : nothing}
-          ${renderAuthBadge(card)}
+        <div class="settings-row__control">
+          ${card.usage?.plan ? renderSettingsValue(card.usage.plan) : nothing}
+          ${renderAuthStatus(card)}
         </div>
       </div>
-      ${renderModelsLine(card)}
       ${card.usage
         ? renderProviderUsageDetails(card.usage)
         : html`<div class="model-providers__no-stats">${t("modelProviders.noStats")}</div>`}
       ${renderLocalCost(card, costDays)}
-    </article>
+    </div>
   `;
 }
 
 export function renderModelProviders(props: ModelProvidersViewProps) {
   if (!props.connected) {
-    return html`
-      <section class="card">
-        <div class="card-sub">${t("modelProviders.disconnected")}</div>
-      </section>
-    `;
+    return renderSettingsPage(
+      renderSettingsGroup(renderSettingsEmpty(t("modelProviders.disconnected"))),
+    );
   }
   if (props.loading) {
-    return html`
-      <section class="card provider-usage-section" aria-busy="true">
-        <div class="usage-skeleton-block"></div>
-        <div class="usage-skeleton-block"></div>
-      </section>
-    `;
+    return renderSettingsPage(
+      html`<div aria-busy="true">
+        ${renderSettingsGroup(renderSettingsEmpty(t("common.loading")))}
+      </div>`,
+    );
   }
-  return html`
-    <section class="card provider-usage-section model-providers">
-      <div class="provider-usage-heading">
-        <div>
-          <div class="card-title usage-section-title">${t("modelProviders.title")}</div>
-          <div class="card-sub">
-            ${props.updatedAt
-              ? t("modelProviders.updated", { time: formatTimeMs(props.updatedAt) })
-              : t("modelProviders.subtitle")}
+  const rows = html`
+    ${props.error
+      ? html`
+          <div class="settings-row">
+            <div class="settings-row__text">
+              <span class="settings-row__desc provider-usage-error">${props.error}</span>
+            </div>
           </div>
-        </div>
-        <div class="model-providers__actions">
-          <span class="provider-usage-count">${props.cards.length}</span>
+        `
+      : nothing}
+    ${props.cards.length === 0
+      ? renderSettingsEmpty(
+          html`<strong>${t("modelProviders.emptyTitle")}</strong><br />${t(
+              "modelProviders.emptySubtitle",
+            )}`,
+        )
+      : props.cards.map((card) => renderProviderRow(card, props.costDays))}
+  `;
+  return renderSettingsPage(
+    renderSettingsSection(
+      {
+        title: t("modelProviders.title"),
+        description: props.updatedAt
+          ? t("modelProviders.updated", { time: formatTimeMs(props.updatedAt) })
+          : t("modelProviders.subtitle"),
+        count: props.cards.length,
+        actions: html`
           <button
             class="btn btn--sm"
             ?disabled=${props.refreshing}
@@ -154,19 +178,9 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           >
             ${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
           </button>
-        </div>
-      </div>
-      ${props.error ? html`<div class="provider-usage-error">${props.error}</div>` : nothing}
-      ${props.cards.length === 0
-        ? html`
-            <div class="usage-empty-state__title">${t("modelProviders.emptyTitle")}</div>
-            <div class="card-sub">${t("modelProviders.emptySubtitle")}</div>
-          `
-        : html`
-            <div class="provider-usage-grid">
-              ${props.cards.map((card) => renderCard(card, props.costDays))}
-            </div>
-          `}
-    </section>
-  `;
+        `,
+      },
+      rows,
+    ),
+  );
 }

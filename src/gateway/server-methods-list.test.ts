@@ -3,11 +3,11 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  CORE_GATEWAY_METHOD_SPECS,
   createCoreGatewayMethodDescriptors,
   listCoreGatewayMethodNames,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-descriptors.js";
+import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
@@ -51,34 +51,6 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("controlUi.githubPreview");
   });
 
-  it("advertises Crestodian setup methods with their dispatch policy", () => {
-    const methods = listGatewayMethods();
-    expect(methods).toContain("crestodian.setup.verify");
-    expect(methods).toContain("crestodian.setup.auth.start");
-    expect(coreGatewayHandlers["crestodian.setup.verify"]).toEqual(expect.any(Function));
-    expect(coreGatewayHandlers["crestodian.setup.auth.start"]).toEqual(expect.any(Function));
-    expect(
-      CORE_GATEWAY_METHOD_SPECS.find((spec) => spec.name === "crestodian.setup.verify")
-        ?.controlPlaneWrite,
-    ).toBeUndefined();
-    // Candidate activation is an admin-only probe that persists only on
-    // success. The generic three-write budget would strand the automatic
-    // fallback ladder before its fourth candidate or a manual retry.
-    expect(
-      CORE_GATEWAY_METHOD_SPECS.find((spec) => spec.name === "crestodian.setup.activate")
-        ?.controlPlaneWrite,
-    ).toBeUndefined();
-    expect(methods.indexOf("crestodian.setup.verify")).toBeGreaterThan(
-      methods.indexOf("tts.speak"),
-    );
-    expect(methods.indexOf("crestodian.setup.auth.start")).toBe(
-      methods.indexOf("crestodian.setup.activate") + 1,
-    );
-    expect(methods.indexOf("wizard.start")).toBe(
-      methods.indexOf("crestodian.setup.auth.start") + 1,
-    );
-  });
-
   it("advertises Control UI session pull request detection", () => {
     expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
   });
@@ -115,11 +87,11 @@ describe("listGatewayMethods", () => {
     ]);
     expect(methods).toContain("tts.speak");
     expect(coreMethods.slice(-5)).toEqual([
-      "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
       "approval.resolve",
       "sessions.search",
+      "sessions.dispatch",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -137,6 +109,7 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.endTurn");
     expect(methods).toContain("talk.session.cancelTurn");
     expect(methods).toContain("talk.session.cancelOutput");
+    expect(methods).toContain("talk.session.acknowledgeMark");
     expect(methods).toContain("talk.session.submitToolResult");
     expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");
@@ -160,13 +133,15 @@ describe("listGatewayMethods", () => {
     }
   });
 
-  it("wires a dispatchable handler for every terminal.* descriptor", () => {
+  it("wires a dispatchable handler for every core descriptor", () => {
     // A descriptor without a matching entry in the lazy handler routing table
     // advertises a method that then dispatches as "unknown method" — exactly
-    // how terminal.attach/list/text first shipped broken. (Approval methods
-    // are excluded: they are injected per-request via extraHandlers.)
+    // how terminal.attach/list/text and later sessions.dispatch first shipped
+    // broken. Aux methods are injected at server construction; assistant media
+    // is served by the control-ui handler.
+    const injectedElsewhere = new Set<string>([...GATEWAY_AUX_METHODS, "assistant.media.get"]);
     const missing = listCoreGatewayMethodNames()
-      .filter((method) => method.startsWith("terminal."))
+      .filter((method) => !injectedElsewhere.has(method))
       .filter((method) => typeof coreGatewayHandlers[method] !== "function");
     expect(missing).toEqual([]);
   });
