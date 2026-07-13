@@ -17,9 +17,10 @@ vi.mock("../../config/config.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
-vi.mock("../../gateway/auth-token-resolution.js", () => ({
-  resolveGatewayAuthToken: mocks.resolveGatewayAuthToken,
-}));
+vi.mock("../../gateway/auth-token-resolution.js", () => {
+  const { resolveGatewayAuthToken } = mocks;
+  return { resolveGatewayAuthToken };
+});
 
 vi.mock("../onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(),
