@@ -12,7 +12,7 @@ type GatewayRequestContextClient = GatewayClient & {
   invalidatedReason?: string;
 };
 
-export type GatewayRequestContextParams = {
+type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
@@ -48,6 +48,8 @@ export type GatewayRequestContextParams = {
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
+  workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
+  workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
@@ -210,6 +212,12 @@ export function createGatewayRequestContext(
     nodeRegistry: params.nodeRegistry,
     ...(params.workerEnvironmentService
       ? { workerEnvironmentService: params.workerEnvironmentService }
+      : {}),
+    ...(params.workerSessionPlacementService
+      ? { workerSessionPlacementService: params.workerSessionPlacementService }
+      : {}),
+    ...(params.workerPlacementDispatchService
+      ? { workerPlacementDispatchService: params.workerPlacementDispatchService }
       : {}),
     terminalSessions: params.terminalSessions,
     agentRunSeq: params.agentRunSeq,

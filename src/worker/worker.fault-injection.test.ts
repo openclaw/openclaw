@@ -34,7 +34,6 @@ import {
 import {
   createWorkerEnvironmentService,
   type WorkerEnvironmentService,
-  type WorkerEnvironmentServiceOptions,
 } from "../gateway/worker-environments/service.js";
 import {
   createWorkerEnvironmentStore,
@@ -84,6 +83,7 @@ const HANDSHAKE = {
   openclawVersion: "fault-test",
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
+type WorkerEnvironmentServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
 const BUNDLE_ARTIFACT = {
   install: "bundle" as const,
   bundleHash: BUNDLE_HASH,
@@ -320,6 +320,7 @@ class ComposedGatewayHarness {
       baseLeafId?: string | null;
       initialSeq?: number;
       initialAckedSeq?: number;
+      runId?: string;
     } = {},
   ): WorkerClients {
     const epoch = params.epoch ?? this.epoch;
@@ -336,12 +337,13 @@ class ComposedGatewayHarness {
         handshake: HANDSHAKE,
       },
       assignment: {
-        runId: RUN_ID,
+        runId: params.runId ?? RUN_ID,
         turnId: "fault-turn",
         prompt: "fault injection",
         workspaceDir: this.root,
         modelRef: MODEL_REF,
         inferenceOptions: {},
+        suppressPromptTranscript: false,
         initialMessages: [],
         transcript: { baseLeafId: params.baseLeafId ?? null, nextSeq: params.initialSeq ?? 1 },
         liveEvents: {
@@ -857,10 +859,13 @@ describe("cloud worker milestone 2 fault injection", () => {
     await oldInferenceRejected;
 
     harness.providerPlan = { kind: "immediate", text: "new owner reply" };
+    // Milestone-3 admission binds the worker to a single run; the fresh owner
+    // must be admitted for the run it executes.
     const fresh = harness.createClients({
       admissionProof: REPLACEMENT_CREDENTIAL,
       epoch: newEpoch,
       baseLeafId: oldCommit.newLeafId,
+      runId: "fresh-run",
     });
     clients.push(fresh);
     await fresh.connection.start();

@@ -82,6 +82,7 @@ export const ar: TranslationMap = {
     relink: "إعادة الربط",
     waitForScan: "انتظار المسح",
     logout: "تسجيل الخروج",
+    skipToMainContent: "تخطَّ إلى المحتوى الرئيسي",
   },
   nativeLinkMenu: {
     label: "إجراءات الرابط",
@@ -387,6 +388,18 @@ export const ar: TranslationMap = {
     title: "مساحات العمل المُدارة",
     subtitle: "نسخ مستودعات معزولة مملوكة لـ OpenClaw.",
     cleanNow: "تنظيف الآن",
+    cleanupTitle: "التنظيف",
+    cleanupSubtitle:
+      "يزيل OpenClaw دوريًا أشجار العمل القديمة لتوفير مساحة على القرص. اضبط مدى صرامة عملية التنظيف.",
+    cleanupMaxCount: "الحد الأقصى لأشجار العمل",
+    cleanupMaxCountHelp:
+      "الحد الأقصى لعدد أشجار العمل المُدارة التي سيتم الاحتفاظ بها عبر جميع المستودعات. تُؤخذ لقطات لأشجار العمل الأقدم وتُزال أولًا. اضبطه على 0 لتعطيل حد العدد.",
+    cleanupMaxSize: "الحد الأقصى للحجم الإجمالي (GB)",
+    cleanupMaxSizeHelp:
+      "الحد الأقصى للحجم الإجمالي بوحدة GB عبر جميع أشجار العمل المُدارة. اضبطه على 0 لتعطيل حد الحجم.",
+    cleanupDecrease: "تقليل {label}",
+    cleanupIncrease: "زيادة {label}",
+    cleanupSaveFailed: "فشل حفظ حدود التنظيف.",
     name: "الاسم",
     repo: "المستودع",
     branch: "الفرع",
@@ -405,6 +418,7 @@ export const ar: TranslationMap = {
     working: "جارٍ العمل…",
     ready: "جاهز للدردشة",
     whatCanAgentDo: "ما الذي يمكن لـ {name} فعله؟",
+    help: "مساعدة",
     getHelp: "الحصول على المساعدة",
     discord: "مجتمع Discord",
     viewChangelog: "عرض سجل التغييرات",
@@ -1103,6 +1117,7 @@ export const ar: TranslationMap = {
     settingsView: "عرض الإعدادات",
     simple: "بسيط",
     advanced: "متقدم",
+    content: "محتوى الإعدادات",
     themeImported: "تم استيراد {name}.",
     themeRemoved: "تمت إزالة السمة المخصصة.",
     channels: {
@@ -1454,6 +1469,8 @@ export const ar: TranslationMap = {
     platforms: "المنصات: {platforms}",
     installNamed: "تثبيت {name}",
     notFound: "لم يتم العثور على المهارة.",
+    openDetails: "فتح تفاصيل {name}",
+    enabledNamed: "تم تفعيل {name}",
     invalidLink: "رابط ClawHub غير صالح",
     overview: "نظرة عامة",
     skillCard: "بطاقة المهارة",
@@ -1725,7 +1742,6 @@ export const ar: TranslationMap = {
     filterAll: "الكل",
     filterIssues: "المشكلات",
     filterLabel: "تصفية المكونات الإضافية المثبتة",
-    pulseLabel: "{enabled} مفعّل، {disabled} معطّل، {issues} به مشكلات",
     categoryChannels: "القنوات",
     categoryProviders: "موفرو النماذج",
     categoryMemory: "الذاكرة",
@@ -3487,11 +3503,13 @@ export const ar: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "حالة الأتمتة",
       all: "الكل",
       active: "نشط",
       paused: "متوقفة مؤقتًا",
     },
     list: {
+      viewLabel: "عروض الأتمتة",
       searchPlaceholder: "البحث في المهام المجدولة",
       newTask: "مهمة جديدة",
       filters: "عوامل التصفية",
@@ -3562,6 +3580,7 @@ export const ar: TranslationMap = {
       nextWake: "التشغيل التالي",
     },
     detail: {
+      tabsLabel: "تفاصيل الأتمتة",
       newTitle: "مهمة مجدولة جديدة",
       newSubtitle: "صِف ما ينبغي أن يفعله OpenClaw، ثم اختر وقت تشغيله.",
       back: "كل عمليات الأتمتة",

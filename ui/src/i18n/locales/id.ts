@@ -82,6 +82,7 @@ export const id: TranslationMap = {
     relink: "Tautkan ulang",
     waitForScan: "Tunggu pemindaian",
     logout: "Keluar",
+    skipToMainContent: "Lewati ke konten utama",
   },
   nativeLinkMenu: {
     label: "Tindakan tautan",
@@ -389,6 +390,18 @@ export const id: TranslationMap = {
     title: "Worktree Terkelola",
     subtitle: "Checkout repositori terisolasi yang dimiliki oleh OpenClaw.",
     cleanNow: "Bersihkan sekarang",
+    cleanupTitle: "Pembersihan",
+    cleanupSubtitle:
+      "OpenClaw secara berkala menghapus worktree lama untuk mengosongkan ruang disk. Atur seberapa agresif pembersihan dijalankan.",
+    cleanupMaxCount: "Worktree maksimum",
+    cleanupMaxCountHelp:
+      "Jumlah maksimum worktree terkelola yang dipertahankan di seluruh repositori. Worktree yang lebih lama dibuatkan snapshot dan dihapus terlebih dahulu. Atur ke 0 untuk menonaktifkan batas jumlah.",
+    cleanupMaxSize: "Ukuran total maksimum (GB)",
+    cleanupMaxSizeHelp:
+      "Ukuran total maksimum dalam GB di seluruh worktree terkelola. Atur ke 0 untuk menonaktifkan batas ukuran.",
+    cleanupDecrease: "Kurangi {label}",
+    cleanupIncrease: "Tambah {label}",
+    cleanupSaveFailed: "Gagal menyimpan batas pembersihan.",
     name: "Nama",
     repo: "Repositori",
     branch: "Branch",
@@ -407,6 +420,7 @@ export const id: TranslationMap = {
     working: "Sedang bekerja…",
     ready: "Siap mengobrol",
     whatCanAgentDo: "Apa yang dapat dilakukan {name}?",
+    help: "Bantuan",
     getHelp: "Dapatkan bantuan",
     discord: "Komunitas Discord",
     viewChangelog: "Lihat log perubahan",
@@ -1108,6 +1122,7 @@ export const id: TranslationMap = {
     settingsView: "Tampilan pengaturan",
     simple: "Sederhana",
     advanced: "Lanjutan",
+    content: "Konten pengaturan",
     themeImported: "Mengimpor {name}.",
     themeRemoved: "Tema kustom dihapus.",
     channels: {
@@ -1463,6 +1478,8 @@ export const id: TranslationMap = {
     platforms: "Platform: {platforms}",
     installNamed: "Pasang {name}",
     notFound: "Skill tidak ditemukan.",
+    openDetails: "Buka detail {name}",
+    enabledNamed: "{name} diaktifkan",
     invalidLink: "Tautan ClawHub tidak valid",
     overview: "Ikhtisar",
     skillCard: "Kartu Skill",
@@ -1735,7 +1752,6 @@ export const id: TranslationMap = {
     filterAll: "Semua",
     filterIssues: "Masalah",
     filterLabel: "Filter plugin terinstal",
-    pulseLabel: "{enabled} diaktifkan, {disabled} dinonaktifkan, {issues} bermasalah",
     categoryChannels: "Saluran",
     categoryProviders: "Penyedia model",
     categoryMemory: "Memori",
@@ -3517,11 +3533,13 @@ export const id: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Status otomatisasi",
       all: "Semua",
       active: "Aktif",
       paused: "Dijeda",
     },
     list: {
+      viewLabel: "Tampilan otomatisasi",
       searchPlaceholder: "Cari tugas terjadwal",
       newTask: "Tugas baru",
       filters: "Filter",
@@ -3593,6 +3611,7 @@ export const id: TranslationMap = {
       nextWake: "Bangun berikutnya",
     },
     detail: {
+      tabsLabel: "Detail otomatisasi",
       newTitle: "Tugas terjadwal baru",
       newSubtitle: "Jelaskan apa yang harus dilakukan OpenClaw, lalu pilih kapan ia berjalan.",
       back: "Semua otomatisasi",

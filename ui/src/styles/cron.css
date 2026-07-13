@@ -111,6 +111,13 @@
   align-self: flex-start;
 }
 
+.cron-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
 .cron-tab {
   border: 0;
   background: transparent;

@@ -1534,7 +1534,7 @@ function cancelChatStreamRenderFrame(state: Pick<ChatPageHost, "chatStreamRender
   }
 }
 
-export function requestChatPageUpdate(
+function requestChatPageUpdate(
   state: Pick<ChatPageHost, "chatStreamRenderFrame" | "requestUpdate">,
   mode: ChatPageUpdateMode = "immediate",
 ): void {

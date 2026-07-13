@@ -65,6 +65,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "mcp.apps.sandboxPort": ["network", "advanced"],
   "gateway.nodes.pluginTools.enabled": ["tools", "security", "access", "network", "advanced"],
   "gateway.nodes.skills.enabled": ["tools", "security", "access", "network", "advanced"],
+  "nodeHost.agentRuns.claude.enabled": ["tools", "security", "access", "network", "advanced"],
   "nodeHost.mcp.servers": ["tools", "network", "advanced"],
   "nodeHost.skills.enabled": ["tools", "network", "advanced"],
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],

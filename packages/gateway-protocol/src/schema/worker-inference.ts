@@ -1,5 +1,6 @@
 import { Type, type TProperties, type TSchema } from "typebox";
 import { Value } from "typebox/value";
+import { closedObject } from "./closed-object.js";
 import {
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
@@ -30,18 +31,15 @@ const WorkerFrameIdSchema = Type.String({
   minLength: 1,
   maxLength: WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
 });
-const WorkerErrorResponseFrameSchema = Type.Object(
-  {
-    type: Type.Literal("res"),
-    id: WorkerFrameIdSchema,
-    ok: Type.Literal(false),
-    error: WorkerErrorShapeSchema,
-  },
-  { additionalProperties: false },
-);
+const WorkerErrorResponseFrameSchema = closedObject({
+  type: Type.Literal("res"),
+  id: WorkerFrameIdSchema,
+  ok: Type.Literal(false),
+  error: WorkerErrorShapeSchema,
+});
 
 function workerInferenceObject<const Properties extends TProperties>(properties: Properties) {
-  return Type.Object(properties, { additionalProperties: false });
+  return closedObject(properties);
 }
 
 const LiveTextSchema = Type.String({
@@ -60,62 +58,47 @@ const LiveSequenceSchema = Type.Integer({
   maximum: Number.MAX_SAFE_INTEGER,
 });
 
-const WorkerTranscriptUsageSchema = Type.Object(
-  {
+const WorkerTranscriptUsageSchema = closedObject({
+  input: Type.Number({ minimum: 0 }),
+  output: Type.Number({ minimum: 0 }),
+  cacheRead: Type.Number({ minimum: 0 }),
+  cacheWrite: Type.Number({ minimum: 0 }),
+  contextUsage: Type.Optional(
+    Type.Union([
+      closedObject({
+        state: Type.Literal("available"),
+        promptTokens: Type.Number({ minimum: 0 }),
+        totalTokens: Type.Number({ minimum: 0 }),
+      }),
+      closedObject({ state: Type.Literal("unavailable") }),
+    ]),
+  ),
+  totalTokens: Type.Number({ minimum: 0 }),
+  cost: closedObject({
     input: Type.Number({ minimum: 0 }),
     output: Type.Number({ minimum: 0 }),
     cacheRead: Type.Number({ minimum: 0 }),
     cacheWrite: Type.Number({ minimum: 0 }),
-    contextUsage: Type.Optional(
-      Type.Union([
-        Type.Object(
-          {
-            state: Type.Literal("available"),
-            promptTokens: Type.Number({ minimum: 0 }),
-            totalTokens: Type.Number({ minimum: 0 }),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object({ state: Type.Literal("unavailable") }, { additionalProperties: false }),
-      ]),
-    ),
-    totalTokens: Type.Number({ minimum: 0 }),
-    cost: Type.Object(
-      {
-        input: Type.Number({ minimum: 0 }),
-        output: Type.Number({ minimum: 0 }),
-        cacheRead: Type.Number({ minimum: 0 }),
-        cacheWrite: Type.Number({ minimum: 0 }),
-        total: Type.Number({ minimum: 0 }),
-        totalOrigin: Type.Optional(Type.Literal("provider-billed")),
-      },
-      { additionalProperties: false },
-    ),
-  },
-  { additionalProperties: false },
-);
+    total: Type.Number({ minimum: 0 }),
+    totalOrigin: Type.Optional(Type.Literal("provider-billed")),
+  }),
+});
 
-const WorkerTranscriptAssistantDiagnosticSchema = Type.Object(
-  {
-    type: WorkerIdentifierSchema,
-    timestamp: Type.Integer({ minimum: 0 }),
-    error: Type.Optional(
-      Type.Object(
-        {
-          name: Type.Optional(Type.String({ maxLength: 256 })),
-          message: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-          stack: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
-          code: Type.Optional(Type.Union([Type.String({ maxLength: 256 }), Type.Number()])),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-    details: Type.Optional(
-      Type.Record(Type.String({ minLength: 1, maxLength: 256 }), Type.Unknown()),
-    ),
-  },
-  { additionalProperties: false },
-);
+const WorkerTranscriptAssistantDiagnosticSchema = closedObject({
+  type: WorkerIdentifierSchema,
+  timestamp: Type.Integer({ minimum: 0 }),
+  error: Type.Optional(
+    closedObject({
+      name: Type.Optional(Type.String({ maxLength: 256 })),
+      message: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+      stack: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
+      code: Type.Optional(Type.Union([Type.String({ maxLength: 256 }), Type.Number()])),
+    }),
+  ),
+  details: Type.Optional(
+    Type.Record(Type.String({ minLength: 1, maxLength: 256 }), Type.Unknown()),
+  ),
+});
 
 const WorkerInferenceTextContentSchema = workerInferenceObject({
   type: Type.Literal("text"),

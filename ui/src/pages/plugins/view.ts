@@ -496,72 +496,37 @@ function renderCatalogActions(
 
 /* ---------------------------------- installed tab ---------------------------------- */
 
-/**
- * One compact strip instead of stat cards: a segmented distribution meter and
- * filter chips that double as the legend and the counts.
- */
-function renderInventoryPulse(props: PluginsViewProps) {
+/** Filter chips that double as the inventory legend and the counts. */
+function renderInstalledFilters(props: PluginsViewProps) {
   const installed = (props.result?.plugins ?? []).filter((plugin) => plugin.installed);
   const issues = installed.filter((plugin) => plugin.state === "error").length;
   const enabled = installed.filter((plugin) => plugin.enabled && plugin.state !== "error").length;
-  const disabled = installed.length - enabled - issues;
   const counts: Record<InstalledFilter, number> = {
     all: installed.length,
     enabled,
-    disabled,
+    disabled: installed.length - enabled - issues,
     issues,
   };
-  const segments = (
-    [
-      ["enabled", enabled],
-      ["disabled", disabled],
-      ["issues", issues],
-    ] as const
-  ).filter(([, value]) => value > 0);
   return html`
-    <div class="plugins-pulse">
-      ${segments.length > 0
-        ? html`
-            <div
-              class="plugins-pulse__meter"
-              role="img"
-              aria-label=${t("pluginsPage.pulseLabel", {
-                enabled: String(enabled),
-                disabled: String(disabled),
-                issues: String(issues),
-              })}
-            >
-              ${segments.map(
-                ([key, value]) => html`
-                  <span
-                    class="plugins-pulse__segment plugins-pulse__segment--${key}"
-                    style=${`flex-grow:${value}`}
-                  ></span>
-                `,
-              )}
-            </div>
-          `
-        : nothing}
-      <div class="plugins-filters" role="group" aria-label=${t("pluginsPage.filterLabel")}>
-        ${INSTALLED_FILTERS.map(
-          (filter) => html`
-            <button
-              type="button"
-              class=${props.installedFilter === filter ? "active" : ""}
-              @click=${() => props.onFilterChange(filter)}
-            >
-              ${filter === "all"
-                ? nothing
-                : html`<span
-                    class="plugins-filters__dot plugins-filters__dot--${filter}"
-                    aria-hidden="true"
-                  ></span>`}
-              ${filterLabel(filter)}
-              <span class="plugins-filters__count">${counts[filter]}</span>
-            </button>
-          `,
-        )}
-      </div>
+    <div class="plugins-filters" role="group" aria-label=${t("pluginsPage.filterLabel")}>
+      ${INSTALLED_FILTERS.map(
+        (filter) => html`
+          <button
+            type="button"
+            class=${props.installedFilter === filter ? "active" : ""}
+            @click=${() => props.onFilterChange(filter)}
+          >
+            ${filter === "all"
+              ? nothing
+              : html`<span
+                  class="plugins-filters__dot plugins-filters__dot--${filter}"
+                  aria-hidden="true"
+                ></span>`}
+            ${filterLabel(filter)}
+            <span class="plugins-filters__count">${counts[filter]}</span>
+          </button>
+        `,
+      )}
     </div>
   `;
 }
@@ -741,7 +706,7 @@ function renderInstalled(props: PluginsViewProps) {
   const plugins = installedPlugins(props.result?.plugins ?? [], props.query, props.installedFilter);
   const groups = groupInstalledByCategory(plugins);
   return html`
-    ${renderInventoryPulse(props)}
+    ${renderInstalledFilters(props)}
     ${groups.length === 0
       ? renderEmpty(
           props.query || props.installedFilter !== "all"
