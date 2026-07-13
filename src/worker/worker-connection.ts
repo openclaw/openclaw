@@ -51,6 +51,7 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
 };
 
 const DEFAULT_ADMISSION_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
+const DEFAULT_ADMISSION_DEADLINE_MS = 120_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 const RETRYABLE_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
@@ -91,6 +92,13 @@ export class WorkerConnectionInterruptedError extends Error {
   }
 }
 
+export class WorkerConnectionStoppedError extends Error {
+  constructor(message = "worker connection stopped") {
+    super(message);
+    this.name = "WorkerConnectionStoppedError";
+  }
+}
+
 export class WorkerAdmissionError extends Error {
   constructor(
     readonly reason: WorkerProtocolCloseReason,
@@ -98,6 +106,13 @@ export class WorkerAdmissionError extends Error {
   ) {
     super(`worker admission rejected: ${reason}`);
     this.name = "WorkerAdmissionError";
+  }
+}
+
+export class WorkerAdmissionDeadlineExceededError extends Error {
+  constructor() {
+    super("worker admission deadline exceeded");
+    this.name = "WorkerAdmissionDeadlineExceededError";
   }
 }
 
@@ -159,6 +174,7 @@ export type WorkerConnectionOptions = {
   connectParams: WorkerConnectParams;
   reconnectBackoff?: BackoffPolicy;
   admissionTimeoutMs?: number;
+  admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
   createSocket?: (url: string) => WebSocket;
   heartbeatStatus?: () => WorkerHeartbeatParams["status"];
@@ -221,12 +237,17 @@ export class WorkerConnection {
   private reconnectPromise: Promise<void> | undefined;
   private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly admissionTimeoutMs: number;
+  private readonly admissionDeadlineMs: number;
   private readonly requestTimeoutMs: number;
 
   constructor(private readonly options: WorkerConnectionOptions) {
     this.admissionTimeoutMs = resolvePositiveTimeout(
       options.admissionTimeoutMs,
       DEFAULT_ADMISSION_TIMEOUT_MS,
+    );
+    this.admissionDeadlineMs = resolvePositiveTimeout(
+      options.admissionDeadlineMs,
+      DEFAULT_ADMISSION_DEADLINE_MS,
     );
     this.requestTimeoutMs = resolvePositiveTimeout(
       options.requestTimeoutMs,
@@ -297,9 +318,9 @@ export class WorkerConnection {
     }
     this.reconnectAbort.abort(new Error("worker connection stopped"));
     this.stopHeartbeat();
-    const interrupted = new WorkerConnectionInterruptedError("worker connection stopped");
-    this.rejectPending(interrupted);
-    this.rejectReadyWaiters(interrupted);
+    const stopped = new WorkerConnectionStoppedError();
+    this.rejectPending(stopped);
+    this.rejectReadyWaiters(stopped);
     this.socket?.close(1000, "worker stopped");
     this.socket = undefined;
     this.transition({ kind: "stopped" });
@@ -390,21 +411,33 @@ export class WorkerConnection {
   }
 
   private async connectUntilReady(): Promise<WorkerHelloOk> {
+    const startedAt = Date.now();
     let attempt = 0;
     while (!this.isTerminal()) {
+      let remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        throw this.failAdmissionDeadline();
+      }
       if (attempt > 0) {
         this.transition({ kind: "reconnecting", attempt });
         try {
           await sleepWithAbort(
-            computeBackoff(this.options.reconnectBackoff ?? DEFAULT_RECONNECT_BACKOFF, attempt),
+            Math.min(
+              computeBackoff(this.options.reconnectBackoff ?? DEFAULT_RECONNECT_BACKOFF, attempt),
+              remainingMs,
+            ),
             this.reconnectAbort.signal,
           );
         } catch (error) {
           throw this.isTerminal() ? this.terminalError() : toError(error);
         }
+        remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
+        if (remainingMs <= 0) {
+          throw this.failAdmissionDeadline();
+        }
       }
       try {
-        return await this.connectOnce(attempt);
+        return await this.connectOnce(attempt, Math.min(this.admissionTimeoutMs, remainingMs));
       } catch (error) {
         if (error instanceof WorkerAdmissionError) {
           if (error.retryable) {
@@ -423,7 +456,7 @@ export class WorkerConnection {
     throw this.terminalError();
   }
 
-  private connectOnce(attempt: number): Promise<WorkerHelloOk> {
+  private connectOnce(attempt: number, attemptTimeoutMs: number): Promise<WorkerHelloOk> {
     const generation = ++this.generation;
     this.transition({ kind: "connecting", attempt });
     const socket = this.options.createSocket
@@ -452,7 +485,7 @@ export class WorkerConnection {
       attemptTimeout = setTimeout(() => {
         rejectAttempt(new WorkerConnectionInterruptedError("worker admission timed out"));
         socket.terminate();
-      }, this.admissionTimeoutMs);
+      }, attemptTimeoutMs);
       attemptTimeout.unref?.();
 
       socket.on("error", (error) => {
@@ -673,7 +706,11 @@ export class WorkerConnection {
       !this.socket ||
       this.socket.readyState !== WebSocket.OPEN
     ) {
-      pending.reject(new WorkerConnectionInterruptedError("worker connection is not ready"));
+      pending.reject(
+        this.isTerminal()
+          ? this.terminalError()
+          : new WorkerConnectionInterruptedError("worker connection is not ready"),
+      );
       return;
     }
     if (this.pending.has(id)) {
@@ -899,6 +936,15 @@ export class WorkerConnection {
     this.resolveExit(exit);
   }
 
+  private failAdmissionDeadline(): Error {
+    if (this.isTerminal()) {
+      return this.terminalError();
+    }
+    const error = new WorkerAdmissionDeadlineExceededError();
+    this.finishFailed(error);
+    return error;
+  }
+
   private isTerminal(): boolean {
     return (
       this.stateValue.kind === "failed" ||
@@ -914,7 +960,10 @@ export class WorkerConnection {
     if (this.stateValue.kind === "fenced") {
       return new WorkerFencedError(this.stateValue.reason);
     }
-    return new WorkerConnectionInterruptedError("worker connection stopped");
+    if (this.stateValue.kind === "stopped") {
+      return new WorkerConnectionStoppedError();
+    }
+    return new WorkerConnectionInterruptedError("worker connection terminated");
   }
 }
 

@@ -22,6 +22,7 @@ import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
   type WorkerConnection,
   WorkerConnectionInterruptedError,
+  WorkerConnectionStoppedError,
   WorkerFencedError,
 } from "./worker-connection.js";
 
@@ -40,6 +41,14 @@ function fenceForOwnershipError(
   } else if (reason === "credential-replaced") {
     connection.fence("credential-replaced");
   }
+}
+
+function isTerminalConnection(connection: WorkerConnection): boolean {
+  return (
+    connection.state.kind === "fenced" ||
+    connection.state.kind === "failed" ||
+    connection.state.kind === "stopped"
+  );
 }
 
 export class WorkerTranscriptCommitError extends Error {
@@ -209,7 +218,10 @@ export class WorkerTranscriptCommitClient {
         fenceForOwnershipError(this.connection, response.error);
         throw new WorkerTranscriptCommitError(response.error);
       } catch (error) {
-        if (error instanceof WorkerConnectionInterruptedError) {
+        if (
+          error instanceof WorkerConnectionInterruptedError &&
+          !isTerminalConnection(this.connection)
+        ) {
           continue;
         }
         throw error;
@@ -265,7 +277,7 @@ export class WorkerLiveEventClient {
         } else if (state.kind === "failed") {
           this.rejectAll(state.error);
         } else if (state.kind === "stopped") {
-          this.rejectAll(new Error("worker connection stopped"));
+          this.rejectAll(new WorkerConnectionStoppedError());
         }
       }),
     ];
@@ -315,12 +327,16 @@ export class WorkerLiveEventClient {
       return;
     }
     this.draining = true;
-    void this.drain().finally(() => {
-      this.draining = false;
-      if (!this.disposed && this.buffered.length > 0) {
-        this.scheduleDrain();
-      }
-    });
+    void this.drain()
+      .catch((error: unknown) => {
+        this.rejectAll(error instanceof Error ? error : new Error(String(error)));
+      })
+      .finally(() => {
+        this.draining = false;
+        if (!this.disposed && this.buffered.length > 0) {
+          this.scheduleDrain();
+        }
+      });
   }
 
   private async drain(): Promise<void> {
@@ -366,11 +382,13 @@ export class WorkerLiveEventClient {
         this.rejectAll(new WorkerLiveEventError(response.error));
         return;
       } catch (error) {
-        if (error instanceof WorkerConnectionInterruptedError) {
+        if (
+          error instanceof WorkerConnectionInterruptedError &&
+          !isTerminalConnection(this.connection)
+        ) {
           return;
         }
-        this.rejectAll(error instanceof Error ? error : new Error(String(error)));
-        return;
+        throw error;
       }
     }
   }
@@ -460,7 +478,7 @@ export class WorkerInferenceProxyClient {
         } else if (state.kind === "failed") {
           this.rejectAllOperations(state.error);
         } else if (state.kind === "stopped") {
-          this.rejectAllOperations(new Error("worker connection stopped"));
+          this.rejectAllOperations(new WorkerConnectionStoppedError());
         }
       }),
       connection.onInferenceEvent((frame) => this.handleEvent(frame.payload)),

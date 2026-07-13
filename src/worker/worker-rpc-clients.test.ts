@@ -11,7 +11,11 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { WorkerConnection, WorkerConnectionState } from "./worker-connection.js";
-import { WorkerConnectionInterruptedError, WorkerFencedError } from "./worker-connection.js";
+import {
+  WorkerConnectionInterruptedError,
+  WorkerConnectionStoppedError,
+  WorkerFencedError,
+} from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
@@ -31,6 +35,7 @@ const HELLO: WorkerHelloOk = {
 };
 
 function connectionHarness() {
+  let state: WorkerConnectionState = { kind: "ready", hello: HELLO };
   const readyListeners = new Set<Parameters<WorkerConnection["onReady"]>[0]>();
   const stateListeners = new Set<Parameters<WorkerConnection["onStateChange"]>[0]>();
   const inferenceEventListeners = new Set<Parameters<WorkerConnection["onInferenceEvent"]>[0]>();
@@ -43,6 +48,9 @@ function connectionHarness() {
   const requestInferenceStart = vi.fn<WorkerConnection["requestInferenceStart"]>();
   const requestInferenceCancel = vi.fn<WorkerConnection["requestInferenceCancel"]>();
   const connection = {
+    get state() {
+      return state;
+    },
     waitForReady,
     requestTranscriptCommit,
     requestLiveEvent,
@@ -85,9 +93,10 @@ function connectionHarness() {
         listener(HELLO);
       }
     },
-    emitState: (state: WorkerConnectionState) => {
+    emitState: (nextState: WorkerConnectionState) => {
+      state = nextState;
       for (const listener of stateListeners) {
-        listener(state);
+        listener(nextState);
       }
     },
     emitInferenceEvent: (frame: WorkerInferenceEventFrame) => {

@@ -34,7 +34,11 @@ import {
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { rawDataToString } from "../infra/ws.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
-import { createWorkerConnection } from "./worker-connection.js";
+import {
+  createWorkerConnection,
+  WorkerAdmissionDeadlineExceededError,
+  WorkerConnectionStoppedError,
+} from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
@@ -64,7 +68,7 @@ type InferencePlan =
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
 
 type FakeGatewayOptions = {
-  admissionFailure?: "invalid-credential" | "owner-epoch-mismatch";
+  admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
   ignoreFirstAdmission?: boolean;
@@ -959,6 +963,31 @@ describe("worker runtime", () => {
 });
 
 describe("worker reconnect clients", () => {
+  it("fails closed when the overall admission deadline expires", async () => {
+    const { gateway, launch } = await setup({ admissionFailure: "gateway-unavailable" });
+    const connection = createWorkerConnection({
+      socketPath: gateway.socketPath,
+      connectParams: buildWorkerConnectParams(launch),
+      admissionTimeoutMs: 25,
+      admissionDeadlineMs: 250,
+      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+    });
+    try {
+      await expect(connection.start()).rejects.toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
+      expect(gateway.connectionCount).toBeGreaterThan(1);
+      expect(connection.state).toMatchObject({
+        kind: "failed",
+        error: expect.any(WorkerAdmissionDeadlineExceededError),
+      });
+      await expect(connection.waitForExit()).resolves.toMatchObject({
+        kind: "failed",
+        error: expect.any(WorkerAdmissionDeadlineExceededError),
+      });
+    } finally {
+      await connection.stop();
+    }
+  });
+
   it("times out a silent admission attempt and admits on reconnect", async () => {
     const { gateway, launch } = await setup({ ignoreFirstAdmission: true });
     const connection = createWorkerConnection({
@@ -1050,4 +1079,53 @@ describe("worker reconnect clients", () => {
     }
   });
 
+  it("settles an in-flight commit and a later live emit after stop", async () => {
+    const { gateway, launch } = await setup({ silenceFirstTranscript: true });
+    const connection = createWorkerConnection({
+      socketPath: gateway.socketPath,
+      connectParams: buildWorkerConnectParams(launch),
+      requestTimeoutMs: 5_000,
+      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+    });
+    const originalWaitForReady = connection.waitForReady.bind(connection);
+    const waitForReady = vi.spyOn(connection, "waitForReady").mockImplementation(() => {
+      if (waitForReady.mock.calls.length > 4) {
+        throw new Error("worker client retried after terminal stop");
+      }
+      return originalWaitForReady();
+    });
+    const transcript = new WorkerTranscriptCommitClient(connection, {
+      runEpoch: OWNER_EPOCH,
+      baseLeafId: "leaf-base",
+      initialSeq: 8,
+    });
+    let live: WorkerLiveEventClient | undefined;
+    try {
+      await connection.start();
+      const commit = transcript.commit([
+        {
+          role: "user",
+          content: [{ type: "text", text: "commit interrupted by stop" }],
+          timestamp: 1,
+        },
+      ]);
+      await vi.waitFor(() => expect(gateway.transcriptRequests).toHaveLength(1));
+
+      await connection.stop();
+      await expect(commit).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
+
+      live = new WorkerLiveEventClient(connection, { runEpoch: OWNER_EPOCH });
+      await expect(
+        live.emit(RUN_ID, {
+          kind: "assistant",
+          payload: { text: "late live event", delta: "late live event" },
+        }),
+      ).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
+      expect(waitForReady.mock.calls.length).toBeLessThanOrEqual(2);
+      expect(gateway.liveEventRequests).toHaveLength(0);
+    } finally {
+      live?.dispose();
+      await connection.stop();
+    }
+  });
 });
