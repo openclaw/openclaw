@@ -1819,10 +1819,11 @@ class ChatPane extends OpenClawLightDomElement {
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
     const disabledReason = selectedSessionArchived ? t("chat.archivedSessionDisabled") : null;
-    // Claim view-only only once loaded catalog metadata proves it, so a
-    // continuable session never flashes a wrong "view-only" banner.
+    // Never flash "view-only" while metadata loads; after loading, anything
+    // short of a continuable session (including a failed lookup) explains the
+    // disabled composer instead of leaving it silently inert.
     const catalogDisabledReason =
-      catalogKey && !this.catalogLoading && this.catalogSession?.canContinue === false
+      catalogKey && !this.catalogLoading && this.catalogSession?.canContinue !== true
         ? this.catalogHost?.kind === "node"
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
