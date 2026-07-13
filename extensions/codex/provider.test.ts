@@ -698,6 +698,53 @@ describe("codex provider", () => {
     });
   });
 
+  it("returns the rate-limit windows when the account identity read hangs", async () => {
+    const scopedRequest = vi.fn(({ method }: { method: string }) =>
+      method === "account/rateLimits/read"
+        ? Promise.resolve({
+            rateLimitsByLimitId: {
+              codex: {
+                limitId: "codex",
+                primary: { usedPercent: 7, windowDurationMins: 300 },
+              },
+            },
+          })
+        : // account/read never settles; the best-effort bound must win.
+          new Promise<never>(() => {}),
+    );
+    const withCodexAppServerJsonClient = vi.fn(
+      async (
+        _params: unknown,
+        run: (request: typeof scopedRequest) => Promise<unknown>,
+      ): Promise<unknown> => await run(scopedRequest),
+    );
+    vi.doMock("./src/app-server/request.js", () => ({
+      withCodexAppServerJsonClient,
+    }));
+    try {
+      const provider = buildCodexProvider();
+      // A tiny usage budget drives the identity bound to a few real
+      // milliseconds so the hung account read is dropped promptly.
+      await expect(
+        provider.fetchUsageSnapshot?.({
+          provider: "openai",
+          token: appServerMarkerToken(),
+          timeoutMs: 30,
+          config: {},
+          env: {},
+          fetchFn: fetch,
+        } as never),
+      ).resolves.toEqual({
+        provider: "openai",
+        displayName: "OpenAI",
+        windows: [{ label: "5h", usedPercent: 7 }],
+        plan: undefined,
+      });
+    } finally {
+      vi.doUnmock("./src/app-server/request.js");
+    }
+  });
+
   it("exposes a setup auth choice for installing Codex as an external provider", async () => {
     const provider = buildCodexProvider();
 

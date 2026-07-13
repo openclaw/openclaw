@@ -303,14 +303,48 @@ async function requestCodexAppServerUsageLazy(options: {
     },
     async (request) => {
       const rateLimits = await request({ method: "account/rateLimits/read" });
-      // Identity is best-effort: rate limits stay useful without it.
-      const accountEmail = await request({ method: "account/read" }).then(
-        (account) => extractCodexAccountEmail(account),
-        () => undefined,
-      );
+      // Identity is best-effort: rate limits stay useful without it, and a slow
+      // or hung account read must never turn a successful window fetch into a
+      // usage-snapshot timeout.
+      const accountEmail = await readCodexAccountEmailBestEffort(request, options.timeoutMs);
       return { rateLimits, ...(accountEmail ? { accountEmail } : {}) };
     },
   );
+}
+
+// Cap the best-effort identity read so it stays well inside the shared usage
+// deadline; a fraction of the total budget keeps it below the outer timeout
+// even when the rate-limit read was near-instant.
+const CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS = 4_000;
+
+async function readCodexAccountEmailBestEffort(
+  request: (params: { method: string }) => Promise<unknown>,
+  usageTimeoutMs: number,
+): Promise<string | undefined> {
+  const boundMs = Math.max(
+    1,
+    Math.min(CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS, Math.floor(usageTimeoutMs / 3)),
+  );
+  // Resolves, never rejects: a failing account read yields undefined so the
+  // caller still returns the rate-limit windows.
+  const read = request({ method: "account/read" }).then(
+    (account) => extractCodexAccountEmail(account),
+    () => undefined,
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), boundMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([read, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    // When the timer wins, the still-pending read settles after the client
+    // closes; it already swallows rejections, so there is nothing to leak.
+  }
 }
 
 function normalizeTimeoutMs(value: unknown): number {
