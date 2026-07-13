@@ -1026,7 +1026,7 @@
   "src/media-understanding/attachments.cache.ts": 523,
   "src/media-understanding/image.ts": 678,
   "src/media-understanding/runner.entries.ts": 1122,
-  "src/media-understanding/runner.ts": 1117,
+  "src/media-understanding/runner.ts": 1106,
   "src/media-understanding/shared.ts": 689,
   "src/media/fetch.ts": 689,
   "src/media/parse.ts": 725,
