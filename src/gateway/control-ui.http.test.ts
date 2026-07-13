@@ -689,6 +689,15 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(media.handled).toBe(true);
         expect(media.res.statusCode).toBe(200);
+
+        const shortenedTicket = payload.mediaTicket?.slice(0, -1) ?? "";
+        const rejected = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&mediaTicket=${encodeURIComponent(shortenedTicket)}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-auth-token", allowTailscale: false },
+        });
+        expect(rejected.handled).toBe(true);
+        expect(rejected.res.statusCode).toBe(401);
       },
     });
   });

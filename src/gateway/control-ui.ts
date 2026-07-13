@@ -1,6 +1,6 @@
 // Gateway Control UI HTTP handler.
 // Serves bundled UI assets, bootstrap config, avatars, assistant media, and auth checks.
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -33,6 +33,7 @@ import {
   resolveMediaReferenceLocalPathInfo,
 } from "../media/media-reference.js";
 import { extractOriginalFilename } from "../media/store.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -494,9 +495,7 @@ function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs
     return false;
   }
   const expectedSig = signAssistantMediaTicketPayload(encodedPayload);
-  const sigBuffer = Buffer.from(sig, "base64url");
-  const expectedBuffer = Buffer.from(expectedSig, "base64url");
-  if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
+  if (!safeEqualSecret(sig, expectedSig)) {
     return false;
   }
   try {
