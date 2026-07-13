@@ -589,6 +589,60 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
+  it("shows catalog errors as warnings instead of empty counts", async () => {
+    vi.useFakeTimers();
+    try {
+      const hostError = catalogErrorPage("Claude host unavailable", "claude").catalogs[0];
+      const request = vi.fn().mockResolvedValue({
+        catalogs: [
+          {
+            id: "codex",
+            label: "Codex",
+            capabilities: { continueSession: true, archive: true },
+            hosts: [],
+            error: { code: "unavailable", message: "Codex provider unavailable" },
+          },
+          hostError,
+        ],
+      });
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      const codexSection = sidebar.querySelector('[data-session-section="catalog:codex"]');
+      const claudeSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+      expect(codexSection).not.toBeNull();
+      expect(claudeSection).not.toBeNull();
+      expect(codexSection?.querySelector(".sidebar-session-group-count")?.textContent).not.toBe(
+        "0",
+      );
+      expect(claudeSection?.querySelector(".sidebar-session-group-count")?.textContent).not.toBe(
+        "0",
+      );
+      expect(
+        codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+      ).toContain("Codex provider unavailable");
+      expect(
+        claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+      ).toContain("Claude host unavailable");
+      expect(codexSection?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
+      expect(claudeSection?.querySelector('[data-session-catalog-error="claude"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps an empty catalog reachable while a later page remains", async () => {
     vi.useFakeTimers();
     try {
