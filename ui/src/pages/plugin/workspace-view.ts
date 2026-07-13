@@ -35,6 +35,7 @@ import {
   customWidgetStatus,
   findTab,
   getWorkspaceState,
+  groupTabsByActor,
   hiddenTabs,
   hideWidget,
   loadWorkspace,
@@ -108,6 +109,8 @@ type WorkspaceViewState = {
   dialog: WorkspaceDialogState | null;
   /** First-visit onboarding banner dismissed this session (#5); mirrors localStorage. */
   onboardingDismissed: boolean;
+  /** Transient presentation state; authority remains in the server document. */
+  collapsedTabGroups: Set<string>;
 };
 
 /** localStorage flag so the first-visit onboarding banner (#5) stays dismissed across reloads. */
@@ -227,6 +230,7 @@ function getViewState(host: object): WorkspaceViewState {
       dataVersion: 0,
       dialog: null,
       onboardingDismissed: isOnboardingDismissed(),
+      collapsedTabGroups: new Set(),
     };
     workspaceViewStates.set(host, state);
   }
@@ -400,32 +404,87 @@ function renderOnboardingBanner(
   `;
 }
 
-function renderTabStrip(state: WorkspaceUiState, workspace: WorkspaceDocument): TemplateResult {
+function renderTabButton(tab: WorkspaceTab, active: boolean): TemplateResult {
+  return html`
+    <button
+      class="workspace-tab ${active ? "workspace-tab--active" : ""}"
+      type="button"
+      role="tab"
+      aria-selected=${active ? "true" : "false"}
+      data-test-id="workspace-tab"
+      data-ws=${tab.slug}
+      @click=${() => navigateToWorkspaceTab(tab.slug)}
+    >
+      ${tab.icon && Object.hasOwn(icons, tab.icon)
+        ? html`<span class="workspace-tab__icon" aria-hidden="true"
+            >${icons[tab.icon as keyof typeof icons]}</span
+          >`
+        : nothing}
+      <span class="workspace-tab__label">${tab.title}</span>
+    </button>
+  `;
+}
+
+function tabGroupLabel(group: ReturnType<typeof groupTabsByActor>[number]): string {
+  if (group.kind === "agent") {
+    return t("workspaces.tabs.groupAgent", { agent: group.agentId ?? "agent" });
+  }
+  return group.kind === "system"
+    ? t("workspaces.tabs.groupSystem")
+    : t("workspaces.tabs.groupUser");
+}
+
+function renderTabStrip(
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument,
+  requestUpdate: () => void,
+): TemplateResult {
   const tabs = visibleTabs(workspace);
+  const groups = groupTabsByActor(tabs);
   const hidden = hiddenTabs(workspace);
+  const grouped = groups.length > 1;
   return html`
     <nav class="workspace-tabs" role="tablist" aria-label=${t("workspaces.tabs.label")}>
-      ${tabs.map((tab) => {
-        const active = tab.slug === state.activeSlug;
-        return html`
-          <button
-            class="workspace-tab ${active ? "workspace-tab--active" : ""}"
-            type="button"
-            role="tab"
-            aria-selected=${active ? "true" : "false"}
-            data-test-id="workspace-tab"
-            data-ws=${tab.slug}
-            @click=${() => navigateToWorkspaceTab(tab.slug)}
-          >
-            ${tab.icon && Object.hasOwn(icons, tab.icon)
-              ? html`<span class="workspace-tab__icon" aria-hidden="true"
-                  >${icons[tab.icon as keyof typeof icons]}</span
-                >`
-              : nothing}
-            <span class="workspace-tab__label">${tab.title}</span>
-          </button>
-        `;
-      })}
+      ${grouped
+        ? groups.map((group) => {
+            const collapsed = viewState.collapsedTabGroups.has(group.key);
+            const label = tabGroupLabel(group);
+            return html`<div
+              class="workspace-tab-group ${collapsed ? "workspace-tab-group--collapsed" : ""}"
+              data-test-id="workspace-tab-group"
+              data-group=${group.key}
+              role="group"
+              aria-label=${label}
+            >
+              <button
+                class="workspace-tab-group__toggle"
+                type="button"
+                data-test-id="workspace-tab-group-toggle"
+                aria-expanded=${collapsed ? "false" : "true"}
+                aria-label=${collapsed
+                  ? t("workspaces.tabs.expandGroup", { group: label })
+                  : t("workspaces.tabs.collapseGroup", { group: label })}
+                @click=${() => {
+                  if (collapsed) {
+                    viewState.collapsedTabGroups.delete(group.key);
+                  } else {
+                    viewState.collapsedTabGroups.add(group.key);
+                  }
+                  requestUpdate();
+                }}
+              >
+                <span aria-hidden="true"
+                  >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                >
+                <span>${label}</span><span>${group.tabs.length}</span>
+              </button>
+              ${collapsed
+                ? nothing
+                : group.tabs.map((tab) => renderTabButton(tab, tab.slug === state.activeSlug))}
+            </div>`;
+          })
+        : tabs.map((tab) => renderTabButton(tab, tab.slug === state.activeSlug))}
       ${hidden.length > 0
         ? html`
             <details
@@ -969,7 +1028,8 @@ function renderBody(
   return html`
     ${renderWorkspacesHeader(tab)}
     ${renderOnboardingBanner(viewState, () => props.onRequestUpdate?.())}
-    ${renderTabStrip(state, workspace)} ${renderGrid(props, state, viewState, workspace, tab)}
+    ${renderTabStrip(state, viewState, workspace, () => props.onRequestUpdate?.())}
+    ${renderGrid(props, state, viewState, workspace, tab)}
   `;
 }
 
