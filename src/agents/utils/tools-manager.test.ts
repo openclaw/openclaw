@@ -161,11 +161,12 @@ describe("ensureTool", () => {
     expect(existsSync(destination)).toBe(false);
   });
 
-  it("rejects Content-Length above Number.MAX_SAFE_INTEGER that would be rounded down to the cap", async () => {
-    // "9007199254740993" (2^53 + 1) rounds to 9007199254740992 (2^53) via Number().
-    // Old code: passes because the rounded value equals maxBytes.
-    // BigInt fix: correctly rejects because 9007199254740993 > 9007199254740992.
-    const maxBytes = 9_007_199_254_740_992; // 2^53 — a safe integer
+  it("rejects Content-Length values above Number.MAX_SAFE_INTEGER via BigInt comparison", async () => {
+    // "9007199254740993" (2^53 + 1) is > Number.MAX_SAFE_INTEGER.
+    // Number() loses precision (rounds to 9007199254740992, which is not a safe integer),
+    // while BigInt() preserves the exact value for comparison against maxBytes.
+    // Both old and new code reject this, but BigInt expresses the intent directly
+    // and guards against edge cases where precision loss could matter.
     const response = new Response("body", {
       status: 200,
       headers: { "content-length": "9007199254740993" },
@@ -181,8 +182,8 @@ describe("ensureTool", () => {
     const { testing } = await import("./tools-manager.js");
 
     await expect(
-      testing.downloadFile("https://example.com/archive.tar.gz", destination, maxBytes),
-    ).rejects.toThrow("Download exceeds the");
+      testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
+    ).rejects.toThrow("Download exceeds the 10-byte archive limit");
 
     expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
