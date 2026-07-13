@@ -6,6 +6,7 @@ type GatewayRequestClient = {
 };
 
 export type DevicePairSetup = DevicePairSetupCodeResult;
+export type DevicePairSetupAccess = "full" | "limited";
 
 export type DevicePairSetupState = {
   client: GatewayRequestClient | null;
@@ -14,6 +15,7 @@ export type DevicePairSetupState = {
   devicePairSetupLoading: boolean;
   devicePairSetupError: string | null;
   devicePairSetup: DevicePairSetup | null;
+  devicePairSetupAccess: DevicePairSetupAccess;
 };
 
 const devicePairSetupRequests = new WeakMap<DevicePairSetupState, object>();
@@ -33,7 +35,10 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   state.devicePairSetupLoading = true;
   state.devicePairSetupError = null;
   try {
-    const result = await client.request<DevicePairSetup>("device.pair.setupCode", {});
+    const result = await client.request<DevicePairSetup>(
+      "device.pair.setupCode",
+      state.devicePairSetupAccess === "limited" ? { bootstrapProfile: "limited" } : {},
+    );
     if (
       devicePairSetupRequests.get(state) !== requestToken ||
       state.client !== client ||
@@ -60,10 +65,27 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   }
 }
 
+export async function setDevicePairSetupAccess(
+  state: DevicePairSetupState,
+  access: DevicePairSetupAccess,
+) {
+  if (state.devicePairSetupAccess === access) {
+    return;
+  }
+  // Retire the old request result before issuing one with the new access profile.
+  devicePairSetupRequests.delete(state);
+  state.devicePairSetupAccess = access;
+  state.devicePairSetupLoading = false;
+  state.devicePairSetupError = null;
+  state.devicePairSetup = null;
+  await refreshDevicePairSetup(state);
+}
+
 export function closeDevicePairSetup(state: DevicePairSetupState) {
   devicePairSetupRequests.delete(state);
   state.devicePairSetupOpen = false;
   state.devicePairSetupLoading = false;
   state.devicePairSetupError = null;
   state.devicePairSetup = null;
+  state.devicePairSetupAccess = "full";
 }

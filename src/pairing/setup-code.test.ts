@@ -113,7 +113,7 @@ describe("pairing setup code", () => {
       url?: string;
       urls?: string[];
       urlSource?: string;
-      bootstrapProfile?: { roles: string[]; scopes: string[] };
+      bootstrapProfile?: { roles: string[]; scopes: string[]; purpose?: string };
     },
   ) {
     expect(resolved.ok).toBe(true);
@@ -126,7 +126,14 @@ describe("pairing setup code", () => {
       baseDir: undefined,
       profile: params.bootstrapProfile ?? {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+        purpose: "mobile-full",
       },
     });
     if (params.url) {
@@ -156,7 +163,7 @@ describe("pairing setup code", () => {
       url: string;
       urls?: string[];
       urlSource: string;
-      bootstrapProfile?: { roles: string[]; scopes: string[] };
+      bootstrapProfile?: { roles: string[]; scopes: string[]; purpose?: string };
     };
     runCommandWithTimeout?: ReturnType<typeof vi.fn>;
     expectedRunCommandCalls?: number;

@@ -1182,8 +1182,10 @@ class OpenClawShell extends OpenClawLightDomElement {
           loading: overlaySnapshot.devicePairSetupLoading,
           error: overlaySnapshot.devicePairSetupError,
           setup: overlaySnapshot.devicePairSetup,
+          access: overlaySnapshot.devicePairSetupAccess,
           pendingCount: overlaySnapshot.devicePairPendingCount,
           onRefresh: () => void context.overlays.refreshDevicePairSetup(),
+          onAccessChange: (access) => void context.overlays.setDevicePairSetupAccess(access),
           onClose: () => context.overlays.closeDevicePairSetup(),
           onCopy: (setupCode) => void copyToClipboard(setupCode),
           onManageDevices: () => {

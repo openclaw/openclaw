@@ -1,4 +1,6 @@
 // Control UI tests cover mobile pairing setup through the mocked Gateway.
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import qrcode from "qrcode";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -14,6 +16,7 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/mobile-pairing");
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -34,7 +37,7 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("opens pairing from the app shell and Quick Settings", async () => {
+  it("defaults to full access, regenerates profiles, and resets when reopened", async () => {
     const setupCode = Buffer.from(
       JSON.stringify({
         url: "wss://gateway.example.test",
@@ -43,8 +46,10 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       "utf8",
     ).toString("base64url");
     const qrDataUrl = await qrcode.toDataURL(setupCode, { margin: 2, width: 360 });
+    mkdirSync(artifactDir, { recursive: true });
     const context = await browser.newContext({
       locale: "en-US",
+      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
@@ -103,6 +108,35 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
 
       const firstRequest = await gateway.waitForRequest("device.pair.setupCode");
       expect(firstRequest.params).toEqual({});
+      await page.screenshot({ path: path.join(artifactDir, "01-full-access.png") });
+      // modal-dialog renders its content in light DOM outside the native dialog element.
+      const accessRadios = page.locator('input[name="device-pair-access"]');
+      await expect.poll(async () => accessRadios.count()).toBe(2);
+      const fullAccess = accessRadios.nth(0);
+      const limitedAccess = accessRadios.nth(1);
+      expect(await fullAccess.isChecked()).toBe(true);
+
+      await limitedAccess.check();
+      await expect
+        .poll(async () => (await gateway.getRequests("device.pair.setupCode")).at(-1)?.params)
+        .toEqual({ bootstrapProfile: "limited" });
+      expect(await limitedAccess.isChecked()).toBe(true);
+      await page.screenshot({ path: path.join(artifactDir, "02-limited-access.png") });
+
+      await fullAccess.check();
+      await expect
+        .poll(async () => (await gateway.getRequests("device.pair.setupCode")).at(-1)?.params)
+        .toEqual({});
+      const accessSequenceBeforeClose = (await gateway.getRequests("device.pair.setupCode")).map(
+        (request) =>
+          request.params &&
+          typeof request.params === "object" &&
+          "bootstrapProfile" in request.params &&
+          request.params.bootstrapProfile === "limited"
+            ? "limited"
+            : "full",
+      );
+      expect(accessSequenceBeforeClose).toEqual(["full", "limited", "full"]);
       await expect.poll(async () => (await gateway.getRequests("device.pair.list")).length).toBe(1);
 
       await gateway.emitGatewayEvent("device.pair.requested", { requestId: "request-2" });
@@ -124,6 +158,32 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("device.pair.setupCode")).length)
         .toBe(setupRequestsBeforeQuickSettings + 1);
+      expect(await page.locator('input[name="device-pair-access"]').nth(0).isChecked()).toBe(true);
+      const reopenedAccessSequence = (await gateway.getRequests("device.pair.setupCode"))
+        .slice(setupRequestsBeforeQuickSettings)
+        .map((request) =>
+          request.params &&
+          typeof request.params === "object" &&
+          "bootstrapProfile" in request.params &&
+          request.params.bootstrapProfile === "limited"
+            ? "limited"
+            : "full",
+        );
+      expect(reopenedAccessSequence).toEqual(["full"]);
+      const accessSequence = [...accessSequenceBeforeClose, ...reopenedAccessSequence];
+      expect(accessSequence).toEqual(["full", "limited", "full", "full"]);
+      writeFileSync(
+        path.join(artifactDir, "behavior-summary.json"),
+        `${JSON.stringify(
+          {
+            accessSequence,
+            reopenedDefault: "full",
+            setupRequestsIssued: accessSequence.length,
+          },
+          null,
+          2,
+        )}\n`,
+      );
 
       await page.getByRole("button", { name: "New code" }).click();
       await expect

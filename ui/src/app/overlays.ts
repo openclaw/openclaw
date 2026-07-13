@@ -8,7 +8,9 @@ import {
   closeDevicePairSetup as closeDevicePairSetupState,
   openDevicePairSetup as openDevicePairSetupState,
   refreshDevicePairSetup as refreshDevicePairSetupState,
+  setDevicePairSetupAccess as setDevicePairSetupAccessState,
   type DevicePairSetup,
+  type DevicePairSetupAccess,
   type DevicePairSetupState,
 } from "../lib/device-pair-setup.ts";
 import {
@@ -43,6 +45,7 @@ export type ApplicationOverlaySnapshot = {
   devicePairSetupLoading: boolean;
   devicePairSetupError: string | null;
   devicePairSetup: DevicePairSetup | null;
+  devicePairSetupAccess: DevicePairSetupAccess;
   devicePairPendingCount: number;
 };
 
@@ -53,6 +56,7 @@ export type ApplicationOverlays = {
   decideApproval: (decision: ExecApprovalDecision) => Promise<void>;
   openDevicePairSetup: () => Promise<void>;
   refreshDevicePairSetup: () => Promise<void>;
+  setDevicePairSetupAccess: (access: DevicePairSetupAccess) => Promise<void>;
   closeDevicePairSetup: () => void;
   dispose: () => void;
 };
@@ -212,6 +216,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     devicePairSetupLoading: false,
     devicePairSetupError: null,
     devicePairSetup: null,
+    devicePairSetupAccess: "full",
     devicePairPendingCount: 0,
   };
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
@@ -239,6 +244,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     devicePairSetupLoading: false,
     devicePairSetupError: null,
     devicePairSetup: null,
+    devicePairSetupAccess: "full",
     pendingCount: 0,
   };
   const promptState: ExecApprovalPromptState = {
@@ -264,6 +270,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       devicePairSetupLoading: devicePairSetupState.devicePairSetupLoading,
       devicePairSetupError: devicePairSetupState.devicePairSetupError,
       devicePairSetup: devicePairSetupState.devicePairSetup,
+      devicePairSetupAccess: devicePairSetupState.devicePairSetupAccess,
       devicePairPendingCount: devicePairSetupState.pendingCount,
     };
     for (const listener of listeners) {
@@ -683,6 +690,17 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
         return;
       }
       const operation = refreshDevicePairSetupState(devicePairSetupState);
+      publish();
+      await operation;
+      if (!disposed) {
+        publish();
+      }
+    },
+    async setDevicePairSetupAccess(access) {
+      if (disposed) {
+        return;
+      }
+      const operation = setDevicePairSetupAccessState(devicePairSetupState, access);
       publish();
       await operation;
       if (!disposed) {

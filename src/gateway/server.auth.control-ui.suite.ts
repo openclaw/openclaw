@@ -110,13 +110,18 @@ export function registerControlUiAndPairingSuite(): void {
       mode: "node";
       deviceFamily: string;
     };
+    limited?: boolean;
   }) => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+      await import("../shared/device-bootstrap-profile.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
     const { identityPath, identity } = await createOperatorIdentityFixture(params.identityPrefix);
     const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
     try {
-      const issued = await issueDeviceBootstrapToken();
+      const issued = await issueDeviceBootstrapToken(
+        params.limited ? { profile: LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE } : {},
+      );
       const initial = await connectReq(wsBootstrap, {
         skipDefaultAuth: true,
         bootstrapToken: issued.token,
@@ -1128,7 +1133,7 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
-  test("qr setup code returns node token plus bounded operator handoff", async () => {
+  test("qr setup code returns node token plus full operator handoff", async () => {
     const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
@@ -1189,12 +1194,13 @@ export function registerControlUiAndPairingSuite(): void {
         throw new Error("expected handed-off operator device token");
       }
       expect(operatorHandoff?.scopes).toEqual([
+        "operator.admin",
         "operator.approvals",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       ]);
-      expect(operatorHandoff?.scopes).not.toContain("operator.admin");
+      expect(operatorHandoff?.scopes).toContain("operator.admin");
 
       const pendingAfterInitial = await listDevicePairing();
       const pendingForDevice = pendingAfterInitial.pending.filter(
@@ -1210,6 +1216,7 @@ export function registerControlUiAndPairingSuite(): void {
       const paired = await getPairedDevice(identity.deviceId);
       expect(paired?.roles).toEqual(["node", "operator"]);
       expect(paired?.approvedScopes).toEqual([
+        "operator.admin",
         "operator.approvals",
         "operator.read",
         "operator.talk.secrets",
@@ -1219,6 +1226,7 @@ export function registerControlUiAndPairingSuite(): void {
       expect(paired?.tokens?.node?.scopes).toEqual([]);
       expect(paired?.tokens?.operator?.token).toBe(issuedOperatorToken);
       expect(paired?.tokens?.operator?.scopes).toEqual([
+        "operator.admin",
         "operator.approvals",
         "operator.read",
         "operator.talk.secrets",
@@ -1276,6 +1284,7 @@ export function registerControlUiAndPairingSuite(): void {
           token: issuedOperatorToken,
           role: "operator",
           scopes: [
+            "operator.admin",
             "operator.approvals",
             "operator.read",
             "operator.talk.secrets",
@@ -1290,7 +1299,7 @@ export function registerControlUiAndPairingSuite(): void {
           role: "operator",
           scopes: ["operator.admin"],
         }),
-      ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+      ).resolves.toEqual({ ok: true });
       await expect(
         verifyDeviceToken({
           deviceId: identity.deviceId,
@@ -1298,7 +1307,7 @@ export function registerControlUiAndPairingSuite(): void {
           role: "operator",
           scopes: ["operator.pairing"],
         }),
-      ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+      ).resolves.toEqual({ ok: true });
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);
@@ -1357,12 +1366,13 @@ export function registerControlUiAndPairingSuite(): void {
       );
       expect(operatorHandoff?.deviceToken).toBeTruthy();
       expect(operatorHandoff?.scopes).toEqual([
+        "operator.admin",
         "operator.approvals",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       ]);
-      expect(operatorHandoff?.scopes).not.toContain("operator.admin");
+      expect(operatorHandoff?.scopes).toContain("operator.admin");
 
       const pendingAfterInitial = await listDevicePairing();
       expect(
@@ -1371,6 +1381,7 @@ export function registerControlUiAndPairingSuite(): void {
       const paired = await getPairedDevice(identity.deviceId);
       expect(paired?.roles).toEqual(["node", "operator"]);
       expect(paired?.approvedScopes).toEqual([
+        "operator.admin",
         "operator.approvals",
         "operator.read",
         "operator.talk.secrets",
@@ -1378,6 +1389,96 @@ export function registerControlUiAndPairingSuite(): void {
       ]);
     },
   );
+
+  test("limited qr setup keeps the previous bounded operator handoff", async () => {
+    const { identity, initial } = await connectSetupCodeBootstrapNode({
+      identityPrefix: "openclaw-bootstrap-limited-node-",
+      client: {
+        id: "openclaw-ios",
+        version: "2026.7.13",
+        platform: "iOS 26.3.1",
+        mode: "node",
+        deviceFamily: "iPhone",
+      },
+      limited: true,
+    });
+    expect(initial.ok).toBe(true);
+    const payload = initial.payload as
+      | {
+          auth?: {
+            deviceTokens?: Array<{ deviceToken?: string; role?: string; scopes?: string[] }>;
+          };
+        }
+      | undefined;
+    const operatorHandoff = payload?.auth?.deviceTokens?.find((entry) => entry.role === "operator");
+    const operatorToken = operatorHandoff?.deviceToken;
+    if (!operatorToken) {
+      throw new Error("expected handed-off limited operator device token");
+    }
+    expect(operatorHandoff?.scopes).toEqual([
+      "operator.approvals",
+      "operator.read",
+      "operator.talk.secrets",
+      "operator.write",
+    ]);
+    expect(operatorHandoff?.scopes).not.toContain("operator.admin");
+
+    const { getPairedDevice, verifyDeviceToken } = await import("../infra/device-pairing.js");
+    const paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.approvedScopes).not.toContain("operator.admin");
+    expect(paired?.tokens?.operator?.scopes).not.toContain("operator.admin");
+    await expect(
+      verifyDeviceToken({
+        deviceId: identity.deviceId,
+        token: operatorToken,
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    await expect(
+      verifyDeviceToken({
+        deviceId: identity.deviceId,
+        token: operatorToken,
+        role: "operator",
+        scopes: ["operator.pairing"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+  });
+
+  test("full qr setup upgrades an existing limited mobile pairing", async () => {
+    const identityPrefix = "openclaw-bootstrap-limited-upgrade-node-";
+    const client = {
+      id: "openclaw-ios",
+      version: "2026.7.13",
+      platform: "iOS 26.3.1",
+      mode: "node" as const,
+      deviceFamily: "iPhone",
+    };
+    const limited = await connectSetupCodeBootstrapNode({
+      identityPrefix,
+      client,
+      limited: true,
+    });
+    const upgraded = await connectSetupCodeBootstrapNode({ identityPrefix, client });
+    expect(upgraded.identity.deviceId).toBe(limited.identity.deviceId);
+    expect(upgraded.initial.ok).toBe(true);
+
+    const payload = upgraded.initial.payload as
+      | {
+          auth?: {
+            deviceTokens?: Array<{ role?: string; scopes?: string[] }>;
+          };
+        }
+      | undefined;
+    expect(
+      payload?.auth?.deviceTokens?.find((entry) => entry.role === "operator")?.scopes,
+    ).toContain("operator.admin");
+
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
+    const paired = await getPairedDevice(upgraded.identity.deviceId);
+    expect(paired?.approvedScopes).toContain("operator.admin");
+    expect(paired?.tokens?.operator?.scopes).toContain("operator.admin");
+  });
 
   test.each([
     {
@@ -1431,7 +1532,7 @@ export function registerControlUiAndPairingSuite(): void {
     },
   );
 
-  test("qr bootstrap retry keeps bounded operator handoff after paired approval", async () => {
+  test("qr bootstrap retry keeps full operator handoff after paired approval", async () => {
     const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
@@ -1459,7 +1560,13 @@ export function registerControlUiAndPairingSuite(): void {
         publicKey,
         role: "node",
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
         clientId: client.id,
         clientMode: client.mode,
         displayName: client.id,
@@ -1496,12 +1603,13 @@ export function registerControlUiAndPairingSuite(): void {
       );
       expect(operatorHandoff?.deviceToken).toBeTruthy();
       expect(operatorHandoff?.scopes).toEqual([
+        "operator.admin",
         "operator.approvals",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       ]);
-      expect(operatorHandoff?.scopes).not.toContain("operator.admin");
+      expect(operatorHandoff?.scopes).toContain("operator.admin");
       wsRetry.close();
 
       await expect(

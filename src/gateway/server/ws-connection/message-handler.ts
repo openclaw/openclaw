@@ -101,7 +101,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
-  isPairingSetupBootstrapProfile,
+  isMobilePairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
   type DeviceBootstrapProfile,
@@ -1488,6 +1488,29 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 allowedScopes: pairedScopes,
               });
             };
+            const pairingStateAllowsBootstrapProfile = (
+              pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
+              profile: DeviceBootstrapProfile,
+            ): boolean => {
+              if (!pairedCandidate || pairedCandidate.publicKey !== devicePublicKey) {
+                return false;
+              }
+              const pairedScopes = resolvePairedAccessScopes(pairedCandidate);
+              return profile.roles.every((profileRole) => {
+                if (!hasEffectivePairedDeviceRole(pairedCandidate, profileRole)) {
+                  return false;
+                }
+                return roleScopesAllow({
+                  role: profileRole,
+                  requestedScopes: resolveBootstrapProfileScopesForRole(
+                    profileRole,
+                    profile.scopes,
+                    profile.purpose,
+                  ),
+                  allowedScopes: pairedScopes,
+                });
+              });
+            };
             const allowSilentExistingNonOperatorPairing = !(
               existingPairedDevice && role !== "operator"
             );
@@ -1515,18 +1538,24 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
               },
             );
+            const isSetupCodeMobileNodeConnect =
+              role === "node" &&
+              scopes.length === 0 &&
+              !isControlUi &&
+              !isBrowserOperatorUi &&
+              !isWebchat &&
+              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+            const allowBoundBootstrapProfileLookup =
+              (reason === "not-paired" &&
+                !existingPairedDevice &&
+                (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"))) ||
+              (reason === "scope-upgrade" &&
+                Boolean(existingPairedDevice) &&
+                isSetupCodeMobileNodeConnect);
             const boundBootstrapProfile =
               authMethod === "bootstrap-token" &&
               bootstrapTokenCandidate &&
-              reason === "not-paired" &&
-              !existingPairedDevice &&
-              ((role === "node" &&
-                scopes.length === 0 &&
-                !isControlUi &&
-                !isBrowserOperatorUi &&
-                !isWebchat &&
-                connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE) ||
-                (isControlUi && role === "operator"))
+              allowBoundBootstrapProfileLookup
                 ? await getBoundDeviceBootstrapProfile({
                     token: bootstrapTokenCandidate,
                     deviceId: device.id,
@@ -1535,13 +1564,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 : null;
             const allowSetupCodeMobileBootstrapPairing =
               boundBootstrapProfile !== null &&
-              isPairingSetupBootstrapProfile(boundBootstrapProfile) &&
-              role === "node" &&
-              scopes.length === 0 &&
-              !isControlUi &&
-              !isBrowserOperatorUi &&
-              !isWebchat &&
-              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+              isMobilePairingSetupBootstrapProfile(boundBootstrapProfile) &&
+              isSetupCodeMobileNodeConnect &&
               isSetupCodeMobileBootstrapClient(connectParams.client);
             const setupCodeMobileBootstrapProfile = allowSetupCodeMobileBootstrapPairing
               ? boundBootstrapProfile
@@ -1556,7 +1580,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             // This is the native QR/setup-code onboarding seam. Mobile clients
             // must prove their canonical client id and platform/family metadata
             // agree before the Gateway can skip owner approval and hand off the
-            // bounded operator token below. Admin/pairing still require an explicit owner flow.
+            // selected operator profile below. Full mobile setup includes admin;
+            // limited setup retains the previous bounded operator scope set.
             const bootstrapPairingRoles = setupCodeMobileBootstrapProfile
               ? uniqueStrings([role, ...setupCodeMobileBootstrapProfile.roles])
               : controlUiOperatorBootstrapProfile
@@ -1566,11 +1591,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               ? resolveBootstrapProfileScopesForRoles(
                   bootstrapPairingRoles ?? [],
                   setupCodeMobileBootstrapProfile.scopes,
+                  setupCodeMobileBootstrapProfile.purpose,
                 )
               : controlUiOperatorBootstrapProfile
                 ? resolveBootstrapProfileScopesForRole(
                     "operator",
                     controlUiOperatorBootstrapProfile.scopes,
+                    controlUiOperatorBootstrapProfile.purpose,
                   )
                 : undefined;
             const bootstrapApprovalProfile =
@@ -1586,7 +1613,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   }
                 : {}),
               silent:
-                reason === "scope-upgrade"
+                reason === "scope-upgrade" && !allowSetupCodeMobileBootstrapPairing
                   ? false
                   : allowSilentLocalPairing ||
                     allowSilentTrustedCidrsNodePairing ||
@@ -1673,9 +1700,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   }
                 }
               } else {
-                resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
-                  await getPairedDevice(device.id),
-                );
+                const pairedAfterConcurrentApproval = await getPairedDevice(device.id);
+                resolvedByConcurrentApproval = bootstrapApprovalProfile
+                  ? pairingStateAllowsBootstrapProfile(
+                      pairedAfterConcurrentApproval,
+                      bootstrapApprovalProfile,
+                    )
+                  : pairingStateAllowsRequestedAccess(pairedAfterConcurrentApproval);
                 let requestStillPending = false;
                 if (!resolvedByConcurrentApproval) {
                   recoveryRequestId = await resolveLivePendingRequestId();
@@ -1954,8 +1985,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               !isControlUi &&
               !isBrowserOperatorUi &&
               !isWebchat &&
-              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
-              pairedRoles.includes("operator")
+              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE
                 ? await getBoundDeviceBootstrapProfile({
                     token: bootstrapTokenCandidate,
                     deviceId: device.id,
@@ -1966,19 +1996,41 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               const retryBootstrapOperatorScopes = resolveBootstrapProfileScopesForRole(
                 "operator",
                 retryBootstrapHandoffProfile.scopes,
+                retryBootstrapHandoffProfile.purpose,
               );
               if (
-                isPairingSetupBootstrapProfile(retryBootstrapHandoffProfile) &&
-                roleScopesAllow({
-                  role: "operator",
-                  requestedScopes: retryBootstrapOperatorScopes,
-                  allowedScopes: pairedScopes,
-                })
+                isMobilePairingSetupBootstrapProfile(retryBootstrapHandoffProfile) &&
+                isSetupCodeMobileBootstrapClient(connectParams.client)
               ) {
-                // If the first QR bootstrap hello-ok failed to reach mobile, the
-                // bootstrap token is restored while the paired device already has
-                // node+operator grants. Preserve the same bounded handoff on retry.
-                handoffBootstrapProfile = retryBootstrapHandoffProfile;
+                const pairedAllowsHandoff =
+                  pairedRoles.includes("operator") &&
+                  roleScopesAllow({
+                    role: "operator",
+                    requestedScopes: retryBootstrapOperatorScopes,
+                    allowedScopes: pairedScopes,
+                  });
+                if (!pairedAllowsHandoff) {
+                  logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
+                  const upgraded = await requirePairing("scope-upgrade", paired);
+                  if (!upgraded) {
+                    return;
+                  }
+                }
+                const pairedAfterBootstrapUpgrade = await getPairedDevice(device.id);
+                if (
+                  pairedAfterBootstrapUpgrade &&
+                  pairedAfterBootstrapUpgrade.publicKey === devicePublicKey &&
+                  hasEffectivePairedDeviceRole(pairedAfterBootstrapUpgrade, "operator") &&
+                  roleScopesAllow({
+                    role: "operator",
+                    requestedScopes: retryBootstrapOperatorScopes,
+                    allowedScopes: resolvePairedAccessScopes(pairedAfterBootstrapUpgrade),
+                  })
+                ) {
+                  // The setup code is the owner-approved upgrade artifact. Reuse the
+                  // same handoff after retrying or promoting an existing mobile pairing.
+                  handoffBootstrapProfile = retryBootstrapHandoffProfile;
+                }
               }
             }
 
@@ -2035,12 +2087,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             }
             // Extra hello-ok handoff tokens are only emitted for the approved
             // setup-code profile. Operator scopes are filtered through the
-            // documented allowlist so QR bootstrap cannot grant admin/pairing.
+            // closed mobile allowlist selected when the setup code was issued.
             const bootstrapRoleScopes =
               bootstrapRole === "operator"
                 ? resolveBootstrapProfileScopesForRole(
                     bootstrapRole,
                     approvedHandoffBootstrapProfile.scopes,
+                    approvedHandoffBootstrapProfile.purpose,
                   )
                 : [];
             const extraToken = await ensureDeviceToken({

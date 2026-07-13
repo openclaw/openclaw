@@ -928,6 +928,7 @@ export async function approveBootstrapDevicePairing(
   const approvedScopes = resolveBootstrapProfileScopesForRoles(
     approvedRoles,
     bootstrapProfile.scopes,
+    bootstrapProfile.purpose,
   );
   return await withLock(async () => {
     const state = await loadState(baseDir);
@@ -955,7 +956,11 @@ export async function approveBootstrapDevicePairing(
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
     const grantedRoles = requestedRoles;
-    const grantedScopes = resolveBootstrapProfileScopesForRoles(grantedRoles, pending.scopes ?? []);
+    const grantedScopes = resolveBootstrapProfileScopesForRoles(
+      grantedRoles,
+      pending.scopes ?? [],
+      bootstrapProfile.purpose,
+    );
     const grantedRoleSet = new Set(grantedRoles);
     const preservedExistingScopes = (mergeRoles(existing?.roles, existing?.role) ?? []).flatMap(
       (existingRole) =>
@@ -973,7 +978,11 @@ export async function approveBootstrapDevicePairing(
       const existingToken = tokens[roleForToken];
       const tokenScopes =
         roleForToken === OPERATOR_ROLE
-          ? resolveBootstrapProfileScopesForRole(roleForToken, grantedScopes)
+          ? resolveBootstrapProfileScopesForRole(
+              roleForToken,
+              grantedScopes,
+              bootstrapProfile.purpose,
+            )
           : [];
       tokens[roleForToken] = buildDeviceAuthToken({
         role: roleForToken,

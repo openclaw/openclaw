@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
+import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
@@ -12,6 +13,10 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [] as string[],
   })),
   renderTerminal: vi.fn(async () => "ASCII-QR"),
+  issueDeviceBootstrapToken: vi.fn(async () => ({
+    token: "bootstrap-123",
+    expiresAtMs: 123,
+  })),
 }));
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 const runtimeLog = runtime.log;
@@ -36,15 +41,13 @@ vi.mock("./command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
 vi.mock("../infra/device-bootstrap.js", () => ({
-  issueDeviceBootstrapToken: vi.fn(async () => ({
-    token: "bootstrap-123",
-    expiresAtMs: 123,
-  })),
+  issueDeviceBootstrapToken: mocks.issueDeviceBootstrapToken,
 }));
 const loadConfig = mocks.loadConfig;
 const runCommandWithTimeout = mocks.runCommandWithTimeout;
 const resolveCommandSecretRefsViaGateway = mocks.resolveCommandSecretRefsViaGateway;
 const renderTerminal = mocks.renderTerminal;
+const issueDeviceBootstrapToken = mocks.issueDeviceBootstrapToken;
 
 const { registerQrCli } = await import("./qr-cli.js");
 
@@ -198,6 +201,35 @@ describe("registerQrCli", () => {
     expect(runtime.log).toHaveBeenCalledWith(expected);
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
+    );
+  });
+
+  it("uses the bounded bootstrap profile with --limited", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await runQr(["--setup-code-only", "--limited"]);
+
+    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: {
+          roles: ["node", "operator"],
+          scopes: [
+            "operator.approvals",
+            "operator.read",
+            "operator.talk.secrets",
+            "operator.write",
+          ],
+        },
+      }),
+    );
   });
 
   it("renders ASCII QR by default", async () => {
@@ -216,6 +248,8 @@ describe("registerQrCli", () => {
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");
     expect(output).toContain("Gateway:");
+    expect(output).toContain("Access:");
+    expect(output).toContain("full");
     expect(output).toContain("openclaw devices approve <requestId>");
   });
 

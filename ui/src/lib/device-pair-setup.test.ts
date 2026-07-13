@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   closeDevicePairSetup,
   refreshDevicePairSetup,
+  setDevicePairSetupAccess,
   type DevicePairSetup,
   type DevicePairSetupState,
 } from "./device-pair-setup.ts";
@@ -31,6 +32,7 @@ function stateWithClient(client: DevicePairSetupState["client"]): DevicePairSetu
     devicePairSetupLoading: false,
     devicePairSetupError: null,
     devicePairSetup: null,
+    devicePairSetupAccess: "full",
   };
 }
 
@@ -102,5 +104,22 @@ describe("device pairing setup state", () => {
     expect(state.devicePairSetupLoading).toBe(false);
     expect(state.devicePairSetupError).toBeNull();
     expect(state.devicePairSetup).toBeNull();
+    expect(state.devicePairSetupAccess).toBe("full");
+  });
+
+  it("regenerates the setup code with the selected limited profile", async () => {
+    const request = vi.fn().mockResolvedValue(setupResult("LIMITED"));
+    const client = {
+      request,
+    } as unknown as DevicePairSetupState["client"];
+    const state = stateWithClient(client);
+
+    await setDevicePairSetupAccess(state, "limited");
+
+    expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
+      bootstrapProfile: "limited",
+    });
+    expect(state.devicePairSetupAccess).toBe("limited");
+    expect(state.devicePairSetup?.setupCode).toBe("LIMITED");
   });
 });

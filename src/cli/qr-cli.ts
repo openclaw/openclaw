@@ -11,6 +11,7 @@ import { renderQrTerminal } from "../media/qr-terminal.ts";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import { LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getQrRemoteCommandSecretTargetIds } from "./command-secret-targets.js";
 
@@ -23,6 +24,7 @@ type QrCliOptions = {
   publicUrl?: string;
   token?: string;
   password?: string;
+  limited?: boolean;
 };
 
 function renderQrAscii(data: string): Promise<string> {
@@ -108,6 +110,7 @@ export function registerQrCli(program: Command) {
     .option("--public-url <url>", "Override gateway public URL used in the setup payload")
     .option("--token <token>", "Override gateway token for setup payload")
     .option("--password <password>", "Override gateway password for setup payload")
+    .option("--limited", "Pair with limited operator access (omit operator.admin)", false)
     .option("--setup-code-only", "Print only the setup code", false)
     .option("--no-ascii", "Skip ASCII QR rendering")
     .option("--json", "Output JSON", false)
@@ -199,6 +202,7 @@ export function registerQrCli(program: Command) {
         const resolved = await resolvePairingSetupFromConfig(cfg, {
           publicUrl,
           preferRemoteUrl: wantsRemote,
+          ...(opts.limited ? { bootstrapProfile: LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE } : {}),
           runCommandWithTimeout: async (argv, runOpts) =>
             await runCommandWithTimeout(argv, {
               timeoutMs: runOpts.timeoutMs,
@@ -223,6 +227,7 @@ export function registerQrCli(program: Command) {
             ...(resolved.payload.urls ? { gatewayUrls: resolved.payload.urls } : {}),
             auth: resolved.authLabel,
             urlSource: resolved.urlSource,
+            access: opts.limited ? "limited" : "full",
           });
           return;
         }
@@ -244,6 +249,7 @@ export function registerQrCli(program: Command) {
           ...(resolved.payload.urls?.slice(1).map((url) => `${theme.muted("Fallback:")} ${url}`) ??
             []),
           `${theme.muted("Auth:")} ${resolved.authLabel}`,
+          `${theme.muted("Access:")} ${opts.limited ? "limited" : "full"}`,
           `${theme.muted("Source:")} ${resolved.urlSource}`,
           "",
           "Approve after scan with:",

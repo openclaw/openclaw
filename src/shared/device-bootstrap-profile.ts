@@ -2,7 +2,7 @@
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
 
 /** Closed purpose codes carried by specialized bootstrap tokens. */
-export type DeviceBootstrapPurpose = "control-ui";
+export type DeviceBootstrapPurpose = "control-ui" | "mobile-full";
 
 /** Normalized roles/scopes carried by a bootstrap token during device handoff. */
 export type DeviceBootstrapProfile = {
@@ -28,11 +28,26 @@ export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
 
 const BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET = new Set<string>(BOOTSTRAP_HANDOFF_OPERATOR_SCOPES);
 
+/** Full native-mobile operator scopes allowed only by the closed mobile setup profile. */
+export const MOBILE_FULL_ACCESS_OPERATOR_SCOPES = [
+  "operator.admin",
+  ...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+] as const;
+
+const MOBILE_FULL_ACCESS_OPERATOR_SCOPE_SET = new Set<string>(MOBILE_FULL_ACCESS_OPERATOR_SCOPES);
+
 /** Default setup-code/QR bootstrap profile for native onboarding handoff. */
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   // QR/setup-code bootstrap must hand off both tokens for native onboarding:
   // iOS/Android suppress the operator loop while bootstrap auth is active and
   // only start it after persisting this bounded operator token.
+  roles: ["node", "operator"],
+  scopes: [...MOBILE_FULL_ACCESS_OPERATOR_SCOPES],
+  purpose: "mobile-full",
+};
+
+/** Explicit least-privilege mobile setup profile. */
+export const LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   roles: ["node", "operator"],
   scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
 };
@@ -49,11 +64,26 @@ function matchesBootstrapProfile(
 ): boolean {
   const profile = normalizeDeviceBootstrapProfile(input);
   return (
+    profile.purpose === expected.purpose &&
     profile.roles.length === expected.roles.length &&
     profile.scopes.length === expected.scopes.length &&
     profile.roles.every((role, index) => role === expected.roles[index]) &&
     profile.scopes.every((scope, index) => scope === expected.scopes[index])
   );
+}
+
+/** Return whether an input exactly matches the limited mobile setup profile. */
+export function isLimitedPairingSetupBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): boolean {
+  return matchesBootstrapProfile(input, LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE);
+}
+
+/** Return whether an input matches either supported native-mobile setup profile. */
+export function isMobilePairingSetupBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): boolean {
+  return isPairingSetupBootstrapProfile(input) || isLimitedPairingSetupBootstrapProfile(input);
 }
 
 /** Return whether an input exactly matches the current setup-code bootstrap profile. */
@@ -74,11 +104,16 @@ export function isNodePairingSetupBootstrapProfile(
 export function resolveBootstrapProfileScopesForRole(
   role: string,
   scopes: readonly string[],
+  purpose?: DeviceBootstrapPurpose,
 ): string[] {
   const normalizedRole = normalizeDeviceAuthRole(role);
   const normalizedScopes = normalizeDeviceAuthScopes(Array.from(scopes));
   if (normalizedRole === "operator") {
-    return normalizedScopes.filter((scope) => BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET.has(scope));
+    const allowedScopes =
+      purpose === "mobile-full"
+        ? MOBILE_FULL_ACCESS_OPERATOR_SCOPE_SET
+        : BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET;
+    return normalizedScopes.filter((scope) => allowedScopes.has(scope));
   }
   return [];
 }
@@ -87,9 +122,10 @@ export function resolveBootstrapProfileScopesForRole(
 export function resolveBootstrapProfileScopesForRoles(
   roles: readonly string[],
   scopes: readonly string[],
+  purpose?: DeviceBootstrapPurpose,
 ): string[] {
   return normalizeDeviceAuthScopes(
-    roles.flatMap((role) => resolveBootstrapProfileScopesForRole(role, scopes)),
+    roles.flatMap((role) => resolveBootstrapProfileScopesForRole(role, scopes, purpose)),
   );
 }
 
@@ -101,7 +137,7 @@ export function normalizeDeviceBootstrapHandoffProfile(
   // Bootstrap handoff profiles can only carry the documented handoff allowlist.
   return {
     roles: profile.roles,
-    scopes: resolveBootstrapProfileScopesForRoles(profile.roles, profile.scopes),
+    scopes: resolveBootstrapProfileScopesForRoles(profile.roles, profile.scopes, profile.purpose),
     ...(profile.purpose ? { purpose: profile.purpose } : {}),
   };
 }
@@ -124,7 +160,8 @@ function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[]
 export function normalizeDeviceBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): DeviceBootstrapProfile {
-  const purpose = input?.purpose === "control-ui" ? input.purpose : undefined;
+  const purpose =
+    input?.purpose === "control-ui" || input?.purpose === "mobile-full" ? input.purpose : undefined;
   return {
     roles: normalizeBootstrapRoles(input?.roles),
     scopes: normalizeDeviceAuthScopes(input?.scopes ? [...input.scopes] : []),

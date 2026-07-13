@@ -218,6 +218,13 @@ In the Android app:
 
 After the first successful pairing, Android auto-reconnects on launch to the active paired gateway (best-effort for discovered gateways, which must be visible on the network).
 
+Official setup codes connect Android as a node and grant full Gateway operator
+access by default. **Settings → Gateway** shows **Full** or **Limited** access.
+For a limited connection, generate a new full-access code in Control UI or with
+`openclaw qr`, then scan or paste it on that page and reconnect. Operators who
+want the reduced profile can select **Limited access** in Control UI or run
+`openclaw qr --limited`.
+
 ### Multiple gateways
 
 The app keeps a registry of every gateway it has paired with, so you can switch between them without pairing again:

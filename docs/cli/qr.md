@@ -15,6 +15,7 @@ openclaw qr
 openclaw qr --setup-code-only
 openclaw qr --json
 openclaw qr --remote
+openclaw qr --limited
 openclaw qr --url wss://gateway.example/ws
 ```
 
@@ -34,20 +35,21 @@ openclaw devices approve <requestId>
 - `--public-url <url>`: override the public URL used in the payload
 - `--token <token>`: override the gateway token the bootstrap flow authenticates against
 - `--password <password>`: override the gateway password the bootstrap flow authenticates against
+- `--limited`: omit administrative Gateway access from the handed-off operator token
 - `--setup-code-only`: print only the setup code
 - `--no-ascii`: skip ASCII QR rendering
-- `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `urlSource`)
+- `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, `urlSource`)
 
 `--token` and `--password` are mutually exclusive.
 
 ## Setup code contents
 
-The setup code carries an opaque, short-lived `bootstrapToken`, not the shared gateway token/password. The built-in bootstrap flow issues:
+The setup code carries an opaque, short-lived `bootstrapToken`, not the shared gateway token/password. By default, the built-in bootstrap flow issues:
 
 - a primary `node` token with `scopes: []`
-- a bounded `operator` handoff token limited to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`
+- a full native-mobile `operator` handoff token with `operator.admin`, `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`
 
-Pairing-mutation scopes and `operator.admin` still require a separate approved operator pairing or token flow.
+Use `--limited` to keep the same node token while omitting `operator.admin` from the operator handoff. Pairing-mutation scope is never handed off by a setup code.
 
 ## Gateway URL resolution
 

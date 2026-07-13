@@ -32,8 +32,15 @@ const pluginApiMocks = vi.hoisted(() => ({
 vi.mock("./api.js", () => {
   return {
     PAIRING_SETUP_BOOTSTRAP_PROFILE: {
-      roles: ["node"],
-      scopes: [],
+      roles: ["node", "operator"],
+      scopes: [
+        "operator.admin",
+        "operator.approvals",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ],
+      purpose: "mobile-full",
     },
     approveDevicePairing: vi.fn(),
     clearDeviceBootstrapTokens: pluginApiMocks.clearDeviceBootstrapTokens,
@@ -307,8 +314,15 @@ describe("device-pair /pair qr", () => {
     expect(pluginApiMocks.renderQrPngDataUrl).toHaveBeenCalledTimes(1);
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
-        roles: ["node"],
-        scopes: [],
+        roles: ["node", "operator"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+        purpose: "mobile-full",
       },
     });
     expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");

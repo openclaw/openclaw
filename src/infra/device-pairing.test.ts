@@ -1405,7 +1405,7 @@ describe("device pairing tokens", () => {
     });
   });
 
-  test("baseline bootstrap pairing issues bounded operator token when requested by QR handoff", async () => {
+  test("baseline bootstrap pairing issues full operator token when requested by QR handoff", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(
       {
@@ -1413,7 +1413,13 @@ describe("device pairing tokens", () => {
         publicKey: "bootstrap-public-key-operator-default",
         role: "node",
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
         silent: true,
       },
       baseDir,
@@ -1430,6 +1436,7 @@ describe("device pairing tokens", () => {
     const operatorToken = requireToken(paired?.tokens?.operator?.token);
     expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
     expect(paired?.tokens?.operator?.scopes).toStrictEqual([
+      "operator.admin",
       "operator.approvals",
       "operator.read",
       "operator.talk.secrets",
@@ -1440,7 +1447,13 @@ describe("device pairing tokens", () => {
         deviceId: "bootstrap-device-operator-default",
         token: operatorToken,
         role: "operator",
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
         baseDir,
       }),
     ).resolves.toEqual({ ok: true });
@@ -1452,7 +1465,7 @@ describe("device pairing tokens", () => {
         scopes: ["operator.admin"],
         baseDir,
       }),
-    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    ).resolves.toEqual({ ok: true });
     await expect(
       verifyDeviceToken({
         deviceId: "bootstrap-device-operator-default",
@@ -1461,7 +1474,7 @@ describe("device pairing tokens", () => {
         scopes: ["operator.pairing"],
         baseDir,
       }),
-    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    ).resolves.toEqual({ ok: true });
   });
 
   test("bootstrap node approval preserves existing operator token scopes", async () => {
