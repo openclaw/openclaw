@@ -166,7 +166,7 @@ describe("Teams portal store", () => {
 
   it("syncs owner sharing before loading the exact tab and selects that tab by default", async () => {
     const gateway = {
-      request: vi.fn(async (method: string, params?: unknown) => {
+      request: vi.fn(async (method: string, _params?: unknown) => {
         if (method === "workspaces.sharing.sync") {
           return {
             tabs: [
