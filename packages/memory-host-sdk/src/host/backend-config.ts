@@ -18,7 +18,7 @@ import {
   type OpenClawConfig,
   normalizeAgentId,
   resolveAgentWorkspaceDir,
-  resolveUserPath,
+  resolveMemoryHostUserPath,
   type SessionSendPolicyConfig,
   splitShellArgs,
 } from "./config-utils.js";
@@ -209,7 +209,7 @@ function resolvePath(raw: string, workspaceDir: string): string {
     throw new Error("path required");
   }
   if (trimmed.startsWith("~") || path.isAbsolute(trimmed)) {
-    return path.normalize(resolveUserPath(trimmed));
+    return path.normalize(resolveMemoryHostUserPath(trimmed));
   }
   return path.normalize(path.resolve(workspaceDir, trimmed));
 }

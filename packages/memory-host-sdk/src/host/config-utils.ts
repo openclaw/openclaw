@@ -204,8 +204,8 @@ function resolveRequiredHomeDir(
   return rawHome ? path.resolve(rawHome) : path.resolve(process.cwd());
 }
 
-/** Resolve absolute user paths, including "~" against the effective OpenClaw home. */
-export function resolveUserPath(
+/** Resolve standalone memory-host paths without importing core home-directory policy. */
+export function resolveMemoryHostUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -232,7 +232,7 @@ function resolveStateDir(
 ): string {
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
-    return resolveUserPath(override, env, homedir);
+    return resolveMemoryHostUserPath(override, env, homedir);
   }
   const effectiveHome = () => resolveRequiredHomeDir(env, homedir);
   const nextDir = path.join(effectiveHome(), NEW_STATE_DIRNAME);
@@ -297,16 +297,16 @@ export function resolveAgentWorkspaceDir(
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
-    return stripNullBytes(resolveUserPath(configured, env));
+    return stripNullBytes(resolveMemoryHostUserPath(configured, env));
   }
   const fallback = cfg.agents?.defaults?.workspace?.trim();
   if (id === resolveDefaultAgentId(cfg)) {
     return stripNullBytes(
-      fallback ? resolveUserPath(fallback, env) : resolveDefaultAgentWorkspaceDir(env),
+      fallback ? resolveMemoryHostUserPath(fallback, env) : resolveDefaultAgentWorkspaceDir(env),
     );
   }
   if (fallback) {
-    return stripNullBytes(path.join(resolveUserPath(fallback, env), id));
+    return stripNullBytes(path.join(resolveMemoryHostUserPath(fallback, env), id));
   }
   return stripNullBytes(path.join(resolveStateDir(env), `workspace-${id}`));
 }

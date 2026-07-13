@@ -153,6 +153,9 @@ export function resolveUserPath(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
+  if (!input) {
+    return "";
+  }
   return resolveHomeRelativePath(input, { env, homedir });
 }
 
