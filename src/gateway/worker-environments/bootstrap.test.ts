@@ -4,13 +4,12 @@ import { describe, expect, it } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import {
-  bootstrapWorker as bootstrapWorkerCore,
-  type WorkerBootstrapCommandRunner,
-  type WorkerBootstrapDependencies,
-  type WorkerBootstrapRequest,
-} from "./bootstrap.js";
+import { bootstrapWorker as bootstrapWorkerCore } from "./bootstrap.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
+
+type WorkerBootstrapRequest = Parameters<typeof bootstrapWorkerCore>[0];
+type WorkerBootstrapDependencies = Parameters<typeof bootstrapWorkerCore>[1];
+type WorkerBootstrapCommandRunner = NonNullable<WorkerBootstrapDependencies["runCommand"]>;
 
 const BUNDLE_HASH = "a".repeat(64);
 const TARBALL_SHA256 = "b".repeat(64);

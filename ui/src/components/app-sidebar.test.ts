@@ -26,6 +26,8 @@ import {
   type LobsterLogoVisitDetail,
 } from "./lobster-pet.ts";
 
+type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
+
 // Keep the attention widget inert: it fires its own health RPCs (cron.list,
 // models.authStatus) on connect, which would interleave with the nth-call
 // assertions on the shared mocked client below. It has its own test file.
@@ -140,6 +142,8 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const groupsPut = vi.fn(() => Promise.resolve());
+  const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
+  const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const patch = vi.fn(() => Promise.resolve(null));
   const deleteMany = vi.fn(() =>
     Promise.resolve({ deleted: [] as string[], errors: [], preservedWorktrees: [] }),
@@ -158,6 +162,8 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     subscribeCreated: () => () => undefined,
     groupsLoad: () => Promise.resolve(),
     groupsPut,
+    groupsRename,
+    groupsDelete,
     patch,
     deleteMany,
     refresh: () => Promise.resolve(),
@@ -171,6 +177,8 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   return {
     sessions,
     groupsPut,
+    groupsRename,
+    groupsDelete,
     patch,
     deleteMany,
     publish,
@@ -420,15 +428,33 @@ describe("AppSidebar agent chip", () => {
     expect(menu?.querySelector(".sidebar-pair-mobile")).not.toBeNull();
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
-    const linkHrefs = [...(menu?.querySelectorAll('a[role="menuitem"]') ?? [])].map((link) =>
-      link.getAttribute("href"),
-    );
+    // External help links fold into the Help flyout; they only render open.
+    expect(menu?.querySelector('a[role="menuitem"]')).toBeNull();
+    const helpRow = [
+      ...(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []),
+    ].find((row) => row.textContent?.includes("Help"));
+    expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
+    helpRow?.click();
+    await sidebar.updateComplete;
+
+    const linkHrefs = [
+      ...(menu?.querySelectorAll('.sidebar-customize-menu__submenu a[role="menuitem"]') ?? []),
+    ].map((link) => link.getAttribute("href"));
     expect(linkHrefs).toEqual([
       "https://docs.openclaw.ai",
       "https://docs.openclaw.ai/help",
       "https://discord.gg/clawd",
       "https://docs.openclaw.ai/releases",
     ]);
+
+    // Real mouse flow fires pointerenter before the click; the click must not
+    // invert the hover-opened state back to closed.
+    const helpHost = menu?.querySelector(".sidebar-customize-menu__submenu-host");
+    helpHost?.dispatchEvent(Object.assign(new Event("pointerenter"), { pointerType: "mouse" }));
+    await sidebar.updateComplete;
+    helpRow?.click();
+    await sidebar.updateComplete;
+    expect(menu?.querySelector(".sidebar-customize-menu__submenu")).not.toBeNull();
 
     const agentRows = [...(menu?.querySelectorAll('[role="menuitemradio"]') ?? [])];
     expect(agentRows).toHaveLength(2);
@@ -1776,7 +1802,6 @@ describe("AppSidebar custom group reordering", () => {
     expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
   });
 });
-
 describe("AppSidebar catalog session rows", () => {
   const catalogList = (
     sessions: Array<Record<string, unknown>>,
@@ -1959,5 +1984,132 @@ describe("AppSidebar catalog session rows", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+describe("AppSidebar group mutation collapsed state", () => {
+  const COLLAPSED_STORAGE_KEY = "openclaw:sidebar:sessions:collapsed-sections";
+
+  async function mountCollapsedGroup(options: {
+    groupsRename?: () => Promise<SessionGroupMutationResult>;
+    groupsDelete?: () => Promise<SessionGroupMutationResult>;
+  }) {
+    localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(["category:Alpha"]));
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    if (options.groupsRename) {
+      harness.groupsRename.mockImplementation(options.groupsRename);
+    }
+    if (options.groupsDelete) {
+      harness.groupsDelete.mockImplementation(options.groupsDelete);
+    }
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+    sidebar.connected = true;
+    harness.publish({ groups: ["Alpha"] });
+    await sidebar.updateComplete;
+    return { sidebar, harness, gatewayHarness };
+  }
+
+  async function openGroupMenu(sidebar: SidebarLifecycleState) {
+    const actions = sidebar.querySelector<HTMLButtonElement>(
+      '[data-session-section="category:Alpha"] .sidebar-session-group-actions',
+    );
+    if (!actions) {
+      throw new Error("expected group actions trigger");
+    }
+    actions.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector(".sidebar-session-group-menu");
+    if (!menu) {
+      throw new Error("expected group menu");
+    }
+    return menu;
+  }
+
+  it("keeps collapsed keys when group rename is rejected", async () => {
+    const { sidebar, harness } = await mountCollapsedGroup({
+      groupsRename: () => Promise.reject(new Error("rename failed")),
+    });
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
+    const menu = await openGroupMenu(sidebar);
+    const rename = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0];
+    rename?.click();
+    await vi.waitFor(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
+    promptSpy.mockRestore();
+  });
+
+  it("rewrites collapsed keys only after group rename succeeds", async () => {
+    const { sidebar, harness } = await mountCollapsedGroup({
+      groupsRename: () => Promise.resolve("completed"),
+    });
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
+    const menu = await openGroupMenu(sidebar);
+    menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
+    await vi.waitFor(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([
+      "category:Beta",
+    ]);
+    promptSpy.mockRestore();
+  });
+
+  it("ignores a stale group rename after its Gateway reconnects with the same client", async () => {
+    let resolveRename!: (result: SessionGroupMutationResult) => void;
+    const rename = new Promise<SessionGroupMutationResult>((resolve) => {
+      resolveRename = resolve;
+    });
+    const { sidebar, harness, gatewayHarness } = await mountCollapsedGroup({
+      groupsRename: () => rename,
+    });
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
+    const menu = await openGroupMenu(sidebar);
+    menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
+    await vi.waitFor(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
+
+    gatewayHarness.publish({ connected: false });
+    gatewayHarness.publish({ connected: true });
+    resolveRename("stale");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
+    promptSpy.mockRestore();
+  });
+
+  it("keeps collapsed keys when group delete is rejected", async () => {
+    const { sidebar, harness } = await mountCollapsedGroup({
+      groupsDelete: () => Promise.reject(new Error("delete failed")),
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const menu = await openGroupMenu(sidebar);
+    const items = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item");
+    items[items.length - 1]?.click();
+    await vi.waitFor(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
+    confirmSpy.mockRestore();
+  });
+
+  it("drops collapsed keys only after group delete succeeds", async () => {
+    const { sidebar, harness } = await mountCollapsedGroup({
+      groupsDelete: () => Promise.resolve("completed"),
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const menu = await openGroupMenu(sidebar);
+    const items = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item");
+    items[items.length - 1]?.click();
+    await vi.waitFor(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([]);
+    confirmSpy.mockRestore();
   });
 });

@@ -91,6 +91,12 @@ type ClaudeLiveSession = {
   cleanupPromise: Promise<void> | null;
   closing: boolean;
   mcpCaptureKey?: string;
+  /**
+   * Subagent/workflow task ids from the latest background_tasks_changed event.
+   * That event lists all CLI background work, but only local_agent and
+   * local_workflow hold the final result (local_bash is killed at exit).
+   */
+  outstandingBackgroundTaskIds: Set<string>;
 };
 type ClaudeLiveSessionCreate = {
   generation: string;
@@ -426,6 +432,10 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
   }
 }
 
+function clearOutstandingBackgroundTasks(session: ClaudeLiveSession): void {
+  session.outstandingBackgroundTaskIds.clear();
+}
+
 function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
   const turn = session.currentTurn;
   if (!turn) {
@@ -437,6 +447,7 @@ function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
   turn.streamingParser.finish();
   failActiveClaudeLiveTools(turn, new Error("Tool result missing before turn completed"));
   clearTurnTimers(turn);
+  clearOutstandingBackgroundTasks(session);
   session.currentTurn = null;
   turn.resolve(output);
   scheduleIdleClose(session);
@@ -454,6 +465,7 @@ function failTurn(session: ClaudeLiveSession, error: unknown): void {
   turn.streamingParser.finish();
   failActiveClaudeLiveTools(turn, error);
   clearTurnTimers(turn);
+  clearOutstandingBackgroundTasks(session);
   session.currentTurn = null;
   turn.reject(error);
 }
@@ -496,6 +508,8 @@ function closeLiveSession(
   }
   if (error) {
     failTurn(session, error);
+  } else {
+    clearOutstandingBackgroundTasks(session);
   }
   session.managedRun.cancel("manual-cancel");
   void cleanupLiveSession(session);
@@ -731,15 +745,18 @@ function noteClaudeLiveProgress(
 
 // The CLI emits a tool_use line, then nothing until the tool result, so a
 // quiet long-running tool is indistinguishable from a wedged process at the
-// stdout level. While observed tool calls are outstanding, extend the quiet
-// window to the blocked-tool floor instead of killing mid-tool.
+// stdout level. While observed tool calls or CLI-reported background tasks
+// (background_tasks_changed) are outstanding, extend the quiet window to the
+// blocked-tool floor instead of killing mid-work.
 function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, delayMs: number): void {
   if (turn.noOutputTimer) {
     clearTimeout(turn.noOutputTimer);
   }
   turn.noOutputTimer = setTimeout(() => {
     const quietSinceMs = turn.lastOutputAtMs ?? turn.startedAtMs;
-    if (turn.activeTools.size > 0) {
+    const hasOutstandingBackgroundWork =
+      turn.activeTools.size > 0 || session.outstandingBackgroundTaskIds.size > 0;
+    if (hasOutstandingBackgroundWork) {
       const quietBudgetMs = Math.max(session.noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
       const remainingMs = quietSinceMs + quietBudgetMs - Date.now();
       if (remainingMs > 0) {
@@ -758,6 +775,39 @@ function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, dela
       ),
     );
   }, delayMs);
+}
+
+// Claude Code holds its final output for background subagents AND workflows
+// (headless "Background tasks at exit" contract); both continue the parent and
+// emit a post-drain result. Dropping either type here would finalize the turn
+// early and strand that work; the turn timeout stays the explicit hard bound.
+const CLAUDE_LIVE_RESULT_HOLDING_BACKGROUND_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
+
+/** Replace outstanding subagent/workflow task ids from background_tasks_changed. */
+function applyBackgroundTasksChanged(
+  session: ClaudeLiveSession,
+  parsed: Record<string, unknown>,
+): void {
+  if (parsed.type !== "system" || parsed.subtype !== "background_tasks_changed") {
+    return;
+  }
+  // tasks is the full authoritative list (not a delta). Only subagent/workflow
+  // types hold the final result; e.g. local_bash is listed but killed at exit.
+  const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+  session.outstandingBackgroundTaskIds.clear();
+  for (const task of tasks) {
+    if (!isRecord(task)) {
+      continue;
+    }
+    const taskType = typeof task.task_type === "string" ? task.task_type.trim() : "";
+    if (!CLAUDE_LIVE_RESULT_HOLDING_BACKGROUND_TASK_TYPES.has(taskType)) {
+      continue;
+    }
+    const taskId = typeof task.task_id === "string" ? task.task_id.trim() : "";
+    if (taskId) {
+      session.outstandingBackgroundTaskIds.add(taskId);
+    }
+  }
 }
 
 function resetNoOutputTimer(session: ClaudeLiveSession): void {
@@ -930,6 +980,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   turn.rawLines.push(trimmed);
+  applyBackgroundTasksChanged(session, parsed);
   const toolEventCountBefore = turn.toolEventCount;
   turn.streamingParser.push(`${trimmed}\n`);
   turn.sessionId = parsedSessionId ?? turn.sessionId;
@@ -962,6 +1013,13 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
       failTurn(session, error);
     }
     scheduleIdleClose(session);
+    return;
+  }
+  // Interim success result while background_tasks_changed still reports
+  // outstanding subagent/workflow tasks: keep the turn open for the final
+  // post-drain result. Other listed types (e.g. local_bash) do not hold it.
+  if (session.outstandingBackgroundTaskIds.size > 0) {
+    emitClaudeLiveProgress(turn, "cli_live:result_deferred_background_tasks");
     return;
   }
   finishTurn(session, output);
@@ -1157,6 +1215,7 @@ async function createClaudeLiveSession(params: {
     cleanupPromise: null,
     closing: false,
     mcpCaptureKey: params.mcpCaptureKey,
+    outstandingBackgroundTaskIds: new Set(),
   };
   void managedRun.wait().then(
     (exit) => handleClaudeExit(session, exit.exitCode),

@@ -11,18 +11,10 @@ import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
 import {
-  readLatestRecentSessionUsageFromTranscriptAsync,
-  readLatestSessionUsageFromTranscriptAsync,
-  readRecentSessionMessagesWithStats,
-  readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptLines,
-  readRecentSessionUsageFromTranscript,
-  readRecentSessionUsageFromTranscriptAsync,
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
-  readSessionTitleFieldsFromTranscript,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
@@ -97,31 +89,6 @@ describe("session transcript reader facade", () => {
       offset: 0,
       totalMessages: 2,
     });
-  });
-
-  test("reads recent tails with total counts through a scope", () => {
-    const scope = writeTranscript("reader-recent-tail", [
-      { type: "session", version: 1, id: "reader-recent-tail" },
-      { message: { role: "user", content: "old" } },
-      { message: { role: "assistant", content: "middle" } },
-      { message: { role: "user", content: "recent" } },
-      { message: { role: "assistant", content: "latest" } },
-    ]);
-
-    const messages = readRecentSessionMessagesWithStats(scope, {
-      maxMessages: 2,
-      maxBytes: 2048,
-    });
-    const tail = readRecentSessionTranscriptLines({ ...scope, maxLines: 3 });
-
-    expect(messages.totalMessages).toBe(4);
-    expect(messages.messages).toMatchObject([{ content: "recent" }, { content: "latest" }]);
-    expect(tail?.totalLines).toBe(5);
-    expect(tail?.lines.map((line) => JSON.parse(line).message?.content)).toEqual([
-      "middle",
-      "recent",
-      "latest",
-    ]);
   });
 
   test("finds an anchored reset-archive message by historical session id", async () => {
@@ -244,46 +211,6 @@ describe("session transcript reader facade", () => {
     });
   });
 
-  test("reads title fields and recent usage through a scope", async () => {
-    const scope = writeTranscript("reader-title-usage", [
-      { type: "session", version: 1, id: "reader-title-usage" },
-      { message: { role: "user", content: "derive this title" } },
-      {
-        message: {
-          role: "assistant",
-          content: "metered answer",
-          provider: "openai",
-          model: "gpt-5.5",
-          usage: {
-            input: 11,
-            output: 7,
-            contextUsage: { state: "unavailable" },
-          },
-        },
-      },
-    ]);
-
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: "derive this title",
-      lastMessagePreview: "metered answer",
-    });
-    await expect(readLatestSessionUsageFromTranscriptAsync(scope)).resolves.toMatchObject({
-      inputTokens: 11,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      outputTokens: 7,
-    });
-    await expect(
-      readLatestRecentSessionUsageFromTranscriptAsync(scope, 4096),
-    ).resolves.toMatchObject({
-      inputTokens: 11,
-      contextUsage: { state: "unavailable" },
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      outputTokens: 7,
-    });
-  });
-
   test("does not fall back to stored custom transcript paths after SQLite migration", async () => {
     const sessionId = "reader-legacy-custom-path";
     const sessionKey = `agent:main:telegram:group:1:topic:9`;
@@ -331,24 +258,8 @@ describe("session transcript reader facade", () => {
       cwd: tempDir,
       messages: [
         { message: { role: "user", content: "sqlite prompt" } },
-        {
-          message: {
-            role: "assistant",
-            content: "sqlite answer",
-            provider: "openai",
-            model: "gpt-5.5",
-            usage: { input: 3, output: 4, total: 7 },
-          },
-        },
-        {
-          message: {
-            role: "assistant",
-            content: "sqlite follow-up",
-            provider: "openai",
-            model: "gpt-5.5",
-            usage: { input: 5, output: 6, total: 11 },
-          },
-        },
+        { message: { role: "assistant", content: "sqlite answer" } },
+        { message: { role: "assistant", content: "sqlite follow-up" } },
       ],
       touchSessionEntry: false,
     });
@@ -365,42 +276,6 @@ describe("session transcript reader facade", () => {
       readSessionMessagesAsync(scope, { mode: "recent", maxMessages: 1 }),
     ).resolves.toMatchObject([{ content: "sqlite follow-up", __openclaw: { seq: 4 } }]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(3);
-    expect(
-      readRecentSessionMessagesWithStats(scope, {
-        maxMessages: 2,
-        maxBytes: 4096,
-      }).messages.map(
-        (message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq,
-      ),
-    ).toEqual([3, 4]);
-    await expect(
-      readRecentSessionMessagesWithStatsAsync(scope, {
-        maxMessages: 2,
-        maxBytes: 4096,
-      }).then((result) =>
-        result.messages.map(
-          (message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq,
-        ),
-      ),
-    ).resolves.toEqual([3, 4]);
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: "sqlite prompt",
-      lastMessagePreview: "sqlite follow-up",
-    });
-    await expect(readLatestSessionUsageFromTranscriptAsync(scope)).resolves.toMatchObject({
-      inputTokens: 8,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      outputTokens: 10,
-    });
-    await expect(
-      readLatestRecentSessionUsageFromTranscriptAsync(scope, 4096),
-    ).resolves.toMatchObject({
-      inputTokens: 5,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      outputTokens: 6,
-    });
   });
 
   test("uses SQLite marker identity when only sessionFile is provided", async () => {
@@ -494,64 +369,6 @@ describe("session transcript reader facade", () => {
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
 
-  test("bounds SQLite recent message and usage reads", async () => {
-    const sessionId = "reader-sqlite-bounded-recent";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        { message: { role: "user", content: "old prompt" } },
-        {
-          message: {
-            role: "assistant",
-            content: `old answer ${"x".repeat(5000)}`,
-            provider: "openai",
-            model: "gpt-5.5",
-            usage: { input: 100, output: 100 },
-          },
-        },
-        { message: { role: "user", content: "recent prompt" } },
-        {
-          message: {
-            role: "assistant",
-            content: "recent answer",
-            provider: "openai",
-            model: "gpt-5.5",
-            usage: { input: 5, output: 6 },
-          },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-
-    const recentMessages = readRecentSessionMessagesWithStats(scope, {
-      maxMessages: 2,
-      maxBytes: 4096,
-      maxLines: 2,
-    }).messages;
-    expect(recentMessages.map((message) => (message as { content?: string }).content)).toEqual([
-      "recent prompt",
-      "recent answer",
-    ]);
-    expect(
-      recentMessages.map(
-        (message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq,
-      ),
-    ).toEqual([4, 5]);
-    await expect(readRecentSessionUsageFromTranscriptAsync(scope, 1024)).resolves.toMatchObject({
-      inputTokens: 5,
-      outputTokens: 6,
-    });
-    expect(readRecentSessionUsageFromTranscript(scope, 1024)).toMatchObject({
-      inputTokens: 5,
-      outputTokens: 6,
-    });
-  });
-
   test("pages SQLite transcript messages through the reader facade", async () => {
     const sessionId = "reader-sqlite-page";
     const scope = {
@@ -585,49 +402,6 @@ describe("session transcript reader facade", () => {
         (message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq,
       ),
     ).toEqual([3, 4]);
-  });
-
-  test("ignores zero-usage SQLite delivery mirrors for latest usage", async () => {
-    const sessionId = "reader-sqlite-delivery-mirror";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await persistSessionTranscriptTurn(scope, {
-      cwd: tempDir,
-      messages: [
-        {
-          message: {
-            role: "assistant",
-            content: "real model answer",
-            provider: "openai",
-            model: "gpt-5.5",
-            usage: { input: 7, output: 8, total: 15 },
-          },
-        },
-        {
-          message: {
-            role: "assistant",
-            content: "delivered",
-            provider: "openclaw",
-            model: "delivery-mirror",
-            usage: { input: 0, output: 0, total: 0, cost: { total: 0 } },
-          },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-
-    await expect(
-      readLatestRecentSessionUsageFromTranscriptAsync(scope, 4096),
-    ).resolves.toMatchObject({
-      inputTokens: 7,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      outputTokens: 8,
-    });
   });
 
   test("honors agent ids when no store path or session file is provided", async () => {

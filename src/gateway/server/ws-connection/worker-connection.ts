@@ -111,7 +111,7 @@ type WorkerLogger = { warn(message: string): void };
 const MAX_QUEUED_WORKER_FRAMES = 16;
 const MAX_QUEUED_WORKER_BYTES = 32 * 1024 * 1024;
 
-export type WorkerWsMessageHandlerParams = {
+type WorkerWsMessageHandlerParams = {
   socket: WebSocket;
   connId: string;
   service?: WorkerConnectionService;

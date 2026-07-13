@@ -74,7 +74,7 @@ type OutboundPayloadPlanContext = {
 };
 
 /** Text/media projection used to mirror outbound replies into session state. */
-export type OutboundPayloadMirror = {
+type OutboundPayloadMirror = {
   text: string;
   mediaUrls: string[];
 };

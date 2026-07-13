@@ -13,26 +13,17 @@ import {
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
-import { diffConfigPaths } from "./config-diff.js";
+import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
-  resolveConfigReloadMetadata,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 
-export {
-  buildGatewayReloadPlan,
-  diffConfigPaths,
-  listPluginInstallTimestampMetadataPaths,
-  listPluginInstallWholeRecordPaths,
-  resolveConfigReloadMetadata,
-  resolveGatewayReloadSettings,
-};
-export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+export type { GatewayReloadPlan } from "./config-reload-plan.js";
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
 
@@ -76,26 +67,6 @@ function matchesSkillsInvalidationPrefix(path: string): boolean {
 
 function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
   return changedPaths.find(matchesSkillsInvalidationPrefix);
-}
-
-export function diffGatewayReloadPaths(
-  prevConfig: OpenClawConfig,
-  nextConfig: OpenClawConfig,
-): string[] {
-  const changedPaths = diffConfigPaths(prevConfig, nextConfig);
-  if (!changedPaths.includes("mcp")) {
-    return changedPaths;
-  }
-  // Adding or removing the whole `mcp` object collapses to the broad `mcp`
-  // path. Preserve the startup-only Apps boundary so that transition still
-  // restarts the listener instead of only disposing cached MCP runtimes.
-  return [
-    ...changedPaths,
-    ...diffConfigPaths(
-      { mcp: { apps: prevConfig.mcp?.apps } },
-      { mcp: { apps: nextConfig.mcp?.apps } },
-    ),
-  ];
 }
 
 function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {

@@ -61,6 +61,21 @@ describe("plugin compatibility registry", () => {
     }
   });
 
+  it("keeps loaded target compatibility surfaces exported during their removal windows", () => {
+    const source = fs.readFileSync("src/channels/plugins/target-parsing-loaded.ts", "utf8");
+    expect(source).toMatch(/export type \{ ChannelRouteParsedTarget \}/u);
+    for (const symbol of [
+      "ParsedChannelExplicitTarget",
+      "ComparableChannelTarget",
+      "parseExplicitTargetForLoadedChannel",
+      "resolveRouteTargetForLoadedChannel",
+      "resolveComparableTargetForLoadedChannel",
+      "comparableChannelTargetsMatch",
+      "comparableChannelTargetsShareRoute",
+    ]) {
+      expect(source).toMatch(new RegExp(`export (?:type|function) ${symbol}\\b`, "u"));
+    }
+  });
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
     expect(deprecatedTargetParserOffenders).toEqual([]);
   });
