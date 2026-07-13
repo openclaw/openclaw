@@ -3,6 +3,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeTextAtomic } from "@openclaw/fs-safe/atomic";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -149,6 +150,39 @@ async function backupMemoryMigrationTarget(
   const backupPath = path.join(backupDir, path.basename(target));
   await fs.writeFile(backupPath, contents, { flag: "wx", mode: 0o600 });
   return backupPath;
+}
+
+type MemoryMigrationRecoveryStatus = "complete" | "prepared" | "recovery-required" | "safe";
+
+async function persistMemoryMigrationRecoveryRecord(
+  recoveryRecordPath: string,
+  params: {
+    backupPath: string;
+    recoveryPath: string;
+    status: MemoryMigrationRecoveryStatus;
+    target: string;
+  },
+): Promise<void> {
+  await writeTextAtomic(recoveryRecordPath, JSON.stringify({ version: 1, ...params }, null, 2), {
+    mode: 0o600,
+    trailingNewline: true,
+  });
+}
+
+async function writeMemoryMigrationRecoveryRecord(params: {
+  backupPath: string;
+  recoveryPath: string;
+  target: string;
+}): Promise<string> {
+  const recoveryRecordPath = path.join(
+    path.dirname(params.backupPath),
+    `recovery-${crypto.randomUUID()}.json`,
+  );
+  await persistMemoryMigrationRecoveryRecord(recoveryRecordPath, {
+    ...params,
+    status: "prepared",
+  });
+  return recoveryRecordPath;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -304,6 +338,8 @@ export async function copyMemoryMigrationFileItem(
   let stagedRelative: string | undefined;
   let stagingDir: string | undefined;
   let recoveryPath: string | undefined;
+  let recoveryRecordPath: string | undefined;
+  let journalRecoveryPath: string | undefined;
   let relativeTarget: string | undefined;
   let targetCreated = false;
   let safeRoot: Awaited<ReturnType<typeof openMemoryMigrationRoot>> | undefined;
@@ -315,26 +351,56 @@ export async function copyMemoryMigrationFileItem(
       filePath: item.source,
       maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
     });
-    if (opts.overwrite && (await safeRoot.exists(relativeTarget))) {
-      stagingDir = path.join(".openclaw-memory-import-staging", crypto.randomUUID());
-      stagedRelative = path.join(stagingDir, path.basename(relativeTarget));
-      recoveryPath = path.join(safeRoot.rootReal, stagedRelative);
-      await safeRoot.mkdir(stagingDir);
-      // Moving first preserves the exact destination identity that replacement
-      // reviewed; the final create remains no-clobber if another writer races in.
-      await safeRoot.move(relativeTarget, stagedRelative, { overwrite: false });
-      const existing = await safeRoot.read(stagedRelative, {
+    const replaceExisting = opts.overwrite === true && (await safeRoot.exists(relativeTarget));
+    if (replaceExisting) {
+      const existing = await safeRoot.read(relativeTarget, {
         hardlinks: "reject",
         maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
         symlinks: "reject",
       });
       backupPath = await backupMemoryMigrationTarget(item.target, existing.buffer, reportDir);
+      stagingDir = path.join(".openclaw-memory-import-staging", crypto.randomUUID());
+      stagedRelative = path.join(stagingDir, path.basename(relativeTarget));
+      const plannedRecoveryPath = path.join(safeRoot.rootReal, stagedRelative);
+      journalRecoveryPath = plannedRecoveryPath;
+      await safeRoot.mkdir(stagingDir);
+      // Persist the exact staging location before moving the destination. A
+      // crash after the move can then be recovered without filesystem search.
+      recoveryRecordPath = await writeMemoryMigrationRecoveryRecord({
+        backupPath,
+        recoveryPath: plannedRecoveryPath,
+        target: item.target,
+      });
+      recoveryPath = plannedRecoveryPath;
+      await safeRoot.move(relativeTarget, stagedRelative, { overwrite: false });
+      const staged = await safeRoot.read(stagedRelative, {
+        hardlinks: "reject",
+        maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
+        symlinks: "reject",
+      });
+      if (!staged.buffer.equals(existing.buffer)) {
+        backupPath = await backupMemoryMigrationTarget(item.target, staged.buffer, reportDir);
+        await persistMemoryMigrationRecoveryRecord(recoveryRecordPath, {
+          backupPath,
+          recoveryPath: plannedRecoveryPath,
+          status: "prepared",
+          target: item.target,
+        });
+      }
     }
     await safeRoot.write(relativeTarget, sourceBuffer, {
       mkdir: true,
       overwrite: false,
     });
     targetCreated = true;
+    if (recoveryRecordPath && backupPath && journalRecoveryPath) {
+      await persistMemoryMigrationRecoveryRecord(recoveryRecordPath, {
+        backupPath,
+        recoveryPath: journalRecoveryPath,
+        status: "complete",
+        target: item.target,
+      });
+    }
     if (stagedRelative) {
       await safeRoot.remove(stagedRelative);
       stagedRelative = undefined;
@@ -344,27 +410,50 @@ export async function copyMemoryMigrationFileItem(
       await safeRoot.remove(stagingDir);
       await safeRoot.remove(".openclaw-memory-import-staging").catch(() => undefined);
     }
+    if (recoveryRecordPath) {
+      try {
+        await fs.unlink(recoveryRecordPath);
+        recoveryRecordPath = undefined;
+      } catch {
+        // Retained records are already marked complete and returned below.
+      }
+    }
     return {
       ...item,
       status: "migrated",
-      details: { ...item.details, ...(backupPath ? { backupPath } : {}) },
+      details: {
+        ...item.details,
+        ...(backupPath ? { backupPath } : {}),
+        ...(recoveryRecordPath ? { recoveryRecordPath } : {}),
+      },
     };
   } catch (error) {
     if (safeRoot && stagedRelative && relativeTarget && !targetCreated) {
       try {
-        if (!(await safeRoot.exists(relativeTarget))) {
+        if (!(await safeRoot.exists(stagedRelative))) {
+          recoveryPath = undefined;
+        } else if (!(await safeRoot.exists(relativeTarget))) {
           await safeRoot.move(stagedRelative, relativeTarget, { overwrite: false });
           stagedRelative = undefined;
           recoveryPath = undefined;
         }
       } catch {
-        // Leave the staged original in place and report its exact recovery path.
+        // Keep the journal and staged original for operator recovery.
       }
+    }
+    if (recoveryRecordPath && backupPath && journalRecoveryPath) {
+      await persistMemoryMigrationRecoveryRecord(recoveryRecordPath, {
+        backupPath,
+        recoveryPath: journalRecoveryPath,
+        status: targetCreated ? "complete" : recoveryPath ? "recovery-required" : "safe",
+        target: item.target,
+      }).catch(() => undefined);
     }
     const details = {
       ...item.details,
       ...(backupPath ? { backupPath } : {}),
       ...(recoveryPath ? { recoveryPath } : {}),
+      ...(recoveryRecordPath ? { recoveryRecordPath } : {}),
     };
     if (isFileAlreadyExistsError(error) || errorCode(error) === "already-exists") {
       return {

@@ -154,6 +154,12 @@ function renderResult(result: MigrationsMemoryApplyResult | undefined) {
     return nothing;
   }
   const incomplete = result.summary.errors > 0 || result.summary.conflicts > 0;
+  const resultDetailItems = result.items.filter(
+    (item) =>
+      item.status === "error" ||
+      item.status === "conflict" ||
+      detailString(item, "recoveryRecordPath") !== undefined,
+  );
   return html`
     <div
       class="memory-import__result ${incomplete ? "memory-import__result--incomplete" : ""}"
@@ -172,8 +178,45 @@ function renderResult(result: MigrationsMemoryApplyResult | undefined) {
                 migrated: String(result.summary.migrated),
               })
             : t("memoryImport.importedCount", { count: String(result.summary.migrated) })}
-          ${result.reportDir ? html` · ${t("memoryImport.reportSaved")}` : nothing}
         </span>
+        ${result.reportDir
+          ? html`<span class="memory-import__result-path">
+              ${t("memoryImport.reportSaved")}:
+              <code title=${result.reportDir}>${result.reportDir}</code>
+            </span>`
+          : nothing}
+        ${resultDetailItems.length > 0
+          ? html`<ul class="memory-import__result-issues">
+              ${resultDetailItems.map((item) => {
+                const recoveryArtifacts = [
+                  {
+                    label: t("memoryImport.recoveryFile"),
+                    path: detailString(item, "recoveryPath"),
+                  },
+                  {
+                    label: t("memoryImport.recoveryJournal"),
+                    path: detailString(item, "recoveryRecordPath"),
+                  },
+                  {
+                    label: t("memoryImport.itemBackup"),
+                    path: detailString(item, "backupPath"),
+                  },
+                ].filter((artifact): artifact is { label: string; path: string } =>
+                  Boolean(artifact.path),
+                );
+                return html`<li>
+                  <strong>${artifactLabel(item)}</strong>
+                  <span>${item.reason ?? item.message ?? item.status}</span>
+                  ${recoveryArtifacts.map(
+                    (artifact) => html`<span class="memory-import__result-artifact">
+                      <span>${artifact.label}</span>
+                      <code title=${artifact.path}>${artifact.path}</code>
+                    </span>`,
+                  )}
+                </li>`;
+              })}
+            </ul>`
+          : nothing}
       </div>
     </div>
   `;

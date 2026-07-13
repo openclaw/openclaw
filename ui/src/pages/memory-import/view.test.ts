@@ -195,7 +195,27 @@ describe("renderMemoryImport", () => {
                 errors: 1,
                 sensitive: 0,
               },
-              items: [],
+              items: [
+                {
+                  id: "memory:codex:MEMORY.md",
+                  status: "error",
+                  target: "/tmp/workspace/memory/imports/codex/MEMORY.md",
+                  reason: "replacement interrupted",
+                  details: {
+                    recoveryPath: "/tmp/workspace/.openclaw-memory-import-staging/MEMORY.md",
+                    recoveryRecordPath: "/tmp/migration-report/recovery-required.json",
+                    backupPath: "/tmp/migration-report/item-backups/MEMORY.md",
+                  },
+                },
+                {
+                  id: "memory:codex:memory_summary.md",
+                  status: "migrated",
+                  target: "/tmp/workspace/memory/imports/codex/memory_summary.md",
+                  details: {
+                    recoveryRecordPath: "/tmp/migration-report/recovery-complete.json",
+                  },
+                },
+              ],
               reportDir: "/tmp/migration-report",
             },
           },
@@ -209,5 +229,16 @@ describe("renderMemoryImport", () => {
     expect(result?.textContent).toContain("Import incomplete");
     expect(result?.textContent).toContain("1 imported · 1 failed · 0 conflicts");
     expect(result?.textContent).toContain("report saved");
+    expect(result?.textContent).toContain("/tmp/migration-report");
+    expect(result?.textContent).toContain("replacement interrupted");
+    expect(result?.textContent).toContain(
+      "/tmp/workspace/.openclaw-memory-import-staging/MEMORY.md",
+    );
+    expect(result?.textContent).toContain("Recovery file");
+    expect(result?.textContent).toContain("Recovery journal");
+    expect(result?.textContent).toContain("Item backup");
+    expect(result?.textContent).toContain("/tmp/migration-report/recovery-required.json");
+    expect(result?.textContent).toContain("/tmp/migration-report/item-backups/MEMORY.md");
+    expect(result?.textContent).toContain("/tmp/migration-report/recovery-complete.json");
   });
 });
