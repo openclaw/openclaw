@@ -58,6 +58,11 @@ const VALUE_ARGS = new Set([
   "--fallback-model",
   "--prompt-suggestions",
   "--max-budget-usd",
+  // Native tool policy projected from the gateway. --allowedTools stays
+  // rejected: Claude reads it as auto-approval, which must not bypass this
+  // node's own approval surface.
+  "--tools",
+  "--disallowedTools",
 ]);
 
 const ENV_ALLOWLIST = new Set(["FORCE_COLOR", "LANG", "LC_ALL", "LC_CTYPE", "NO_COLOR", "TERM"]);

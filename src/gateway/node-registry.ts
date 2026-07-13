@@ -807,12 +807,16 @@ export class NodeRegistry {
     ) {
       return false;
     }
-    if (
-      params.seq > pending.nextProgressSeq &&
-      !pending.progressChunks.has(params.seq) &&
-      pending.progressChunks.size >= MAX_PENDING_PROGRESS_CHUNKS
-    ) {
-      return false;
+    if (params.seq > pending.nextProgressSeq) {
+      // Duplicate buffered frames are not progress: resetting idle for them
+      // would let a stalled sender extend the deadline forever without ever
+      // delivering the missing chunk.
+      if (pending.progressChunks.has(params.seq)) {
+        return false;
+      }
+      if (pending.progressChunks.size >= MAX_PENDING_PROGRESS_CHUNKS) {
+        return false;
+      }
     }
     pending.progressChunks.set(params.seq, params.chunk);
     this.resetInvokeIdleTimer(params.invokeId, pending);
@@ -830,6 +834,12 @@ export class NodeRegistry {
         this.clearInvokeTimers(pending);
         this.pendingInvokes.delete(params.invokeId);
         pending.reject(error instanceof Error ? error : new Error(String(error)));
+        break;
+      }
+      // onProgress can settle the invoke (e.g. abort); stop draining buffered
+      // chunks once it is terminal so consumers see no output after cancel.
+      if (this.pendingInvokes.get(params.invokeId) !== pending) {
+        pending.progressChunks.clear();
         break;
       }
     }

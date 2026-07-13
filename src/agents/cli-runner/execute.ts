@@ -156,16 +156,12 @@ const NODE_CLI_OMIT_VALUE_ARGS = new Set([
   "--plugin-dir",
   "--plugin-dir-no-mcp",
 ]);
-const NODE_CLI_OMIT_VARIADIC_ARGS = new Set([
-  "--mcp-config",
-  "--allowedTools",
-  "--allowed-tools",
-  "--disallowedTools",
-  "--disallowed-tools",
-  "--tools",
-]);
+// --tools and --disallowedTools stay: they carry the gateway's native tool
+// policy onto the node. --allowedTools is stripped because Claude treats it as
+// auto-approval, which must never cross the node's own approval boundary.
+const NODE_CLI_OMIT_VARIADIC_ARGS = new Set(["--mcp-config", "--allowedTools", "--allowed-tools"]);
 
-/** Remove Gateway-local file, plugin, MCP, and tool-selection arguments. */
+/** Remove Gateway-local file, plugin, MCP, and allow-list arguments. */
 function stripGatewayLocalClaudeArgs(args: readonly string[]): string[] {
   const result: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -663,11 +659,9 @@ export async function executePreparedCliRun(
       ? systemPromptArg
       : undefined;
 
-  const basePrompt = nodePlacement
+  const basePrompt = cliSessionIdToUse
     ? params.prompt
-    : cliSessionIdToUse
-      ? params.prompt
-      : (context.openClawHistoryPrompt ?? params.prompt);
+    : (context.openClawHistoryPrompt ?? params.prompt);
   let prompt = applyPluginTextReplacements(
     appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
       preserveExactPrompt: context.heartbeatPrompt,
@@ -723,11 +717,18 @@ export async function executePreparedCliRun(
     authProfileId: context.effectiveAuthProfileId,
     thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
     executionMode: params.executionMode ?? "agent",
-    toolAvailability: nodePlacement ? undefined : params.cliToolAvailability,
+    // Node runs project the native subset only: gateway-loopback MCP tools do
+    // not exist on the node, and --allowedTools auto-approval must never cross
+    // the node boundary. Dropping availability entirely would let a restricted
+    // session run with the node's full native toolset.
+    toolAvailability:
+      nodePlacement && params.cliToolAvailability
+        ? { native: params.cliToolAvailability.native, mcp: [] }
+        : params.cliToolAvailability,
     useResume,
     baseArgs: baseArgsWithSkills,
   });
-  if (!nodePlacement && params.cliToolAvailability && !resolvedExecutionArgs) {
+  if (params.cliToolAvailability && !resolvedExecutionArgs) {
     throw new Error(
       `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
     );
@@ -1863,6 +1864,7 @@ export async function executePreparedCliRun(
           });
           let managedRunPid: number | undefined;
           let nodeRunAbortSignal: AbortSignal | undefined;
+          let nodeRunTruncated = false;
           let result: RunExit;
           if (nodePlacement) {
             const startedAt = Date.now();
@@ -2024,6 +2026,7 @@ export async function executePreparedCliRun(
               consumeStderr(result.stderr);
             } else {
               const payload = parseNodeClaudeResultPayload(nodeResult);
+              nodeRunTruncated = payload.truncated;
               if (payload.stderrTail) {
                 consumeStderr(payload.stderrTail);
               }
@@ -2115,6 +2118,27 @@ export async function executePreparedCliRun(
               lane: params.lane,
               status: resolveFailoverStatus("format"),
             });
+          }
+          // The node re-injects the terminal result line when its output cap
+          // truncates the stream; if even that is missing, the turn outcome is
+          // unknowable and must not pass as a clean exit.
+          if (
+            nodeRunTruncated &&
+            result.exitCode === 0 &&
+            !result.timedOut &&
+            !streamingParser?.getOutput()
+          ) {
+            throw new FailoverError(
+              "paired node truncated the Claude CLI stream before the terminal result; refusing to accept partial output.",
+              {
+                reason: "format",
+                provider: params.provider,
+                model: context.modelId,
+                sessionId: params.sessionId,
+                lane: params.lane,
+                status: resolveFailoverStatus("format"),
+              },
+            );
           }
 
           const stdout = stdoutParseBuffer.toString("utf8").trim();

@@ -488,7 +488,9 @@ describe("runCliAgent spawn path", () => {
     const output = await executePreparedCliRun(context, "source-node-session");
 
     expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
-    expect(toolAvailability).toBeUndefined();
+    // Node runs keep the gateway's native tool policy; loopback MCP tools do
+    // not exist on the node so the mcp list is projected empty.
+    expect(toolAvailability).toEqual({ native: [], mcp: [] });
     expect(writeSystemPrompt).not.toHaveBeenCalled();
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
     expect(invokeNode).toHaveBeenCalledWith(
@@ -512,6 +514,43 @@ describe("runCliAgent spawn path", () => {
     expect(invokeNode.mock.calls[0]?.[0].stdin).not.toContain("gateway transcript reseed");
     expect(context.params.persistCliSessionForkSuccessor).toHaveBeenCalledWith(
       "forked-node-session",
+    );
+  });
+
+  it("rejects a truncated node stream that lost the terminal result", async () => {
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      params.onProgress(
+        `${JSON.stringify({ type: "system", subtype: "init", session_id: "trunc-node-session" })}\n`,
+      );
+      params.onProgress('{"type":"assistant","message":{"content":[{"type":"te');
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: true }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-claude-truncated",
+      prompt: "current turn",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+      backend: {
+        args: ["-p", "--output-format", "stream-json"],
+        resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
+        forkArg: "--fork-session",
+        liveSession: "claude-stdio",
+        systemPromptWhen: "always",
+      },
+    });
+
+    await expect(executePreparedCliRun(context, undefined)).rejects.toThrow(
+      /truncated the Claude CLI stream before the terminal result/,
     );
   });
 

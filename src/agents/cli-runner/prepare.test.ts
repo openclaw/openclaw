@@ -3876,7 +3876,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         mode: "reuse",
         sessionId: "node-source-session",
       });
-      expect(context.openClawHistoryPrompt).toBeUndefined();
+      // The reseed prompt is gateway-built text, so node placement keeps the
+      // backend's raw-transcript reseed semantics for fresh-retry paths.
+      expect(context.openClawHistoryPrompt).toContain("gateway-only history");
       expect(context.claudeSkillsPluginArgs).toEqual([]);
       expect(context.systemPrompt).not.toContain("GATEWAY_ONLY_SKILL_PATH");
       expect(context.mcpDeliveryCapture).toBeUndefined();

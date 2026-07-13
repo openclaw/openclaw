@@ -617,6 +617,106 @@ describe("gateway/node-registry", () => {
     ).toBe(false);
   });
 
+  it("rejects duplicate buffered progress frames without resetting the idle deadline", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry();
+    try {
+      const frames = registerNode(registry);
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "agent.cli.claude.run.v1",
+        timeoutMs: 10_000,
+        idleTimeoutMs: 50,
+        onProgress: () => {},
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+      const invokeId = request.payload?.id ?? "";
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 0,
+          chunk: "start",
+        }),
+      ).toBe(true);
+      // seq 2 buffers behind the missing seq 1; replaying it forever must not
+      // extend the idle deadline, or a stalled sender could suppress it.
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 2,
+          chunk: "gap",
+        }),
+      ).toBe(true);
+      for (let round = 0; round < 3; round += 1) {
+        await vi.advanceTimersByTimeAsync(20);
+        expect(
+          registry.handleInvokeProgress({
+            invokeId,
+            nodeId: "node-1",
+            connId: "conn-1",
+            seq: 2,
+            chunk: "gap",
+          }),
+        ).toBe(false);
+      }
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops draining buffered progress once onProgress aborts the invoke", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const abortController = new AbortController();
+    const chunks: string[] = [];
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "agent.cli.claude.run.v1",
+      timeoutMs: 1_000,
+      idleTimeoutMs: 100,
+      signal: abortController.signal,
+      onProgress: (chunk) => {
+        chunks.push(chunk);
+        abortController.abort();
+      },
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 1,
+        chunk: "buffered",
+      }),
+    ).toBe(true);
+    // seq 0 drains and aborts the invoke; the buffered seq 1 must not reach
+    // the consumer after cancellation.
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 0,
+        chunk: "first",
+      }),
+    ).toBe(true);
+    expect(chunks).toEqual(["first"]);
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: { code: "ABORTED", message: "node invoke cancelled" },
+    });
+  });
+
   it("resets streamed invoke idle timeout on progress", async () => {
     vi.useFakeTimers();
     const registry = new NodeRegistry();

@@ -1323,10 +1323,11 @@ export async function prepareCliRunContext(
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const rawTranscriptReseedReason = reusableCliSessionId ? "session-expired" : invalidatedReason;
+    // Node placement keeps this: the history prompt is built from the
+    // gateway-side OpenClaw transcript, so a fresh remote CLI session still
+    // receives prior conversation context via stdin.
     const shouldPrepareOpenClawHistoryPrompt =
-      !nodeClaudePlacement &&
-      !isSideQuestion &&
-      (!reusableCliSessionId || allowRawTranscriptReseed);
+      !isSideQuestion && (!reusableCliSessionId || allowRawTranscriptReseed);
     const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
           messages: await loadCliSessionReseedMessages({
