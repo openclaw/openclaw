@@ -2,10 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertGatewayAuthNotKnownWeak } from "../gateway/known-weak-gateway-secrets.js";
 
 const INSTALL_DOCS_DIR = path.join(process.cwd(), "docs", "install");
 const CLOUD_DOCKER_VM_INSTALL_DOCS = new Set(["gcp.md", "hetzner.md"]);
+const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
+  "change-me-to-a-long-random-token",
+  "change-me-now",
+] as const;
+const KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS = ["change-me-to-a-strong-password"] as const;
 
 async function readInstallDocs(): Promise<Array<{ docName: string; markdown: string }>> {
   const entries = await fs.readdir(INSTALL_DOCS_DIR, { withFileTypes: true });
@@ -23,27 +27,11 @@ async function readInstallDocs(): Promise<Array<{ docName: string; markdown: str
 describe("cloud install docs", () => {
   it("does not publish a copy-paste gateway token placeholder", async () => {
     for (const { docName, markdown } of await readInstallDocs()) {
-      for (const match of markdown.matchAll(/^\s*OPENCLAW_GATEWAY_TOKEN=(\S+)\s*$/gm)) {
-        expect(
-          () =>
-            assertGatewayAuthNotKnownWeak({
-              mode: "token",
-              token: match[1],
-              allowTailscale: false,
-            }),
-          docName,
-        ).not.toThrow();
+      for (const token of KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS) {
+        expect(markdown, docName).not.toContain(`OPENCLAW_GATEWAY_TOKEN=${token}`);
       }
-      for (const match of markdown.matchAll(/^\s*OPENCLAW_GATEWAY_PASSWORD=(\S+)\s*$/gm)) {
-        expect(
-          () =>
-            assertGatewayAuthNotKnownWeak({
-              mode: "password",
-              password: match[1],
-              allowTailscale: false,
-            }),
-          docName,
-        ).not.toThrow();
+      for (const password of KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS) {
+        expect(markdown, docName).not.toContain(`OPENCLAW_GATEWAY_PASSWORD=${password}`);
       }
       expect(markdown, docName).not.toMatch(/^ {4}GOG_KEYRING_PASSWORD=change-me-now$/m);
       if (CLOUD_DOCKER_VM_INSTALL_DOCS.has(docName)) {
