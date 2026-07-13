@@ -1,3 +1,4 @@
+/* oxlint-disable eslint/prefer-const, eslint/no-promise-executor-return -- process-lifecycle tests retain timer initialization and callback expressions matching the exercised script. */
 import {
   execFileSync,
   spawn,
@@ -16,8 +17,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -32,17 +34,40 @@ const lockRef = "refs/openclaw/pr-operation-locks/42";
 const detachedChildren = new WeakSet<ChildProcess>();
 const goneProcessGroups = new Set<number>();
 
+// Direct preload affects only the supervisor; operation fixtures keep real clocks.
+// The source assertions below pin the production safety durations being accelerated.
+function createProcessGroupTimingPreload() {
+  const dir = tempDirs.make("openclaw-pr-operation-lock-timing-");
+  const preloadPath = join(dir, "preload.cjs");
+  writeFileSync(
+    preloadPath,
+    [
+      "const realNow = Date.now.bind(Date);",
+      "const startedAt = realNow();",
+      "Date.now = () => startedAt + (realNow() - startedAt) * 100;",
+      "const realSetTimeout = globalThis.setTimeout;",
+      "globalThis.setTimeout = (callback, delay, ...args) =>",
+      "  realSetTimeout(callback, delay === 5000 ? 50 : delay, ...args);",
+    ].join("\n"),
+  );
+  return preloadPath;
+}
+
 function spawnDetached(command: string, args: readonly string[], options: SpawnOptions = {}) {
   const child = spawn(command, args, { ...options, detached: true });
   detachedChildren.add(child);
-  if (child.pid) goneProcessGroups.delete(child.pid);
+  if (child.pid) {
+    goneProcessGroups.delete(child.pid);
+  }
   return child;
 }
 
 function createRepo(nestedName?: string) {
   const tempRoot = tempDirs.make("openclaw-pr-operation-lock-");
   const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
-  if (nestedName) mkdirSync(dir);
+  if (nestedName) {
+    mkdirSync(dir);
+  }
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   execFileSync("git", ["config", "user.name", "OpenClaw Test"], { cwd: dir });
   execFileSync("git", ["config", "user.email", "test@openclaw.invalid"], { cwd: dir });
@@ -107,11 +132,25 @@ function installPrCliFixture(repoDir: string) {
   return { binDir, cli };
 }
 
-async function runSupervisedFixture(repoDir: string, fixture: string) {
-  const controller = spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
-    cwd: repoDir,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+async function runSupervisedFixture(
+  repoDir: string,
+  fixture: string,
+  options: { accelerateTimeouts?: boolean; env?: NodeJS.ProcessEnv } = {},
+) {
+  const controller = spawn(
+    process.execPath,
+    [
+      ...(options.accelerateTimeouts ? ["--require", createProcessGroupTimingPreload()] : []),
+      processGroupRunner,
+      repoDir,
+      fixture,
+    ],
+    {
+      cwd: repoDir,
+      env: { ...process.env, ...options.env },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   let stdout = "";
   let stderr = "";
   controller.stdout!.setEncoding("utf8");
@@ -163,7 +202,7 @@ function runLockShell(repoDir: string, commands: string[]) {
     detached: true,
     encoding: "utf8",
     timeout: 10_000,
-  });
+  } as { cwd: string; encoding: "utf8"; timeout: number });
 }
 
 function spawnHolder(repoDir: string, statusFile: string, pr = 42, trapTerm = true) {
@@ -217,7 +256,7 @@ function spawnHolderWithChild(repoDir: string, statusFile: string, childPidFile:
         "acquire_pr_operation_lock 42",
         `printf 'held\n' >'${statusFile}'`,
         "sleep 30 &",
-        `printf '%s\n' \"$!\" >'${childPidFile}'`,
+        `printf '%s\n' "$!" >'${childPidFile}'`,
         'wait "$!"',
       ].join("\n"),
     ],
@@ -228,7 +267,9 @@ function spawnHolderWithChild(repoDir: string, statusFile: string, childPidFile:
 async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return true;
+    if (predicate()) {
+      return true;
+    }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return false;
@@ -239,7 +280,9 @@ function validProcessId(value: unknown): value is number {
 }
 
 function readProcessIdFile(path: string) {
-  if (!existsSync(path)) return undefined;
+  if (!existsSync(path)) {
+    return undefined;
+  }
   const value = Number(readFileSync(path, "utf8").trim());
   return validProcessId(value) ? value : undefined;
 }
@@ -262,7 +305,9 @@ function childStatus(child: ChildProcess) {
 }
 
 async function waitForExit(child: ChildProcess, timeoutMs = 5000) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
   await new Promise<void>((resolve, reject) => {
     let timeout: NodeJS.Timeout;
     const onExit = () => {
@@ -283,13 +328,17 @@ async function waitForExit(child: ChildProcess, timeoutMs = 5000) {
 }
 
 async function stopChild(child: ChildProcess, signal: NodeJS.Signals) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
   signalTestChild(child, signal);
   await waitForExit(child);
 }
 
 async function stopChildLeader(child: ChildProcess, signal: NodeJS.Signals) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
   child.kill(signal);
   await waitForExit(child);
 }
@@ -297,7 +346,9 @@ async function stopChildLeader(child: ChildProcess, signal: NodeJS.Signals) {
 async function cleanupChildren(...children: Array<ChildProcess | undefined>) {
   const failures: unknown[] = [];
   for (const child of children) {
-    if (!child) continue;
+    if (!child) {
+      continue;
+    }
     try {
       if (child.exitCode === null && child.signalCode === null) {
         signalTestChild(child, "SIGKILL");
@@ -319,19 +370,25 @@ function signalTestChild(child: ChildProcess, signal: NodeJS.Signals) {
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ESRCH" && code !== "EPERM") throw error;
+      if (code !== "ESRCH" && code !== "EPERM") {
+        throw error;
+      }
     }
   }
   child.kill(signal);
 }
 
 async function cleanupProcessGroup(pgid: number) {
-  if (!processGroupExists(pgid)) return;
+  if (!processGroupExists(pgid)) {
+    return;
+  }
   try {
     killProcessGroup(pgid, "SIGKILL");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ESRCH" || code === "EPERM") return;
+    if (code === "ESRCH" || code === "EPERM") {
+      return;
+    }
     throw error;
   }
   if (!(await waitFor(() => !processGroupExists(pgid), 2000))) {
@@ -340,7 +397,9 @@ async function cleanupProcessGroup(pgid: number) {
 }
 
 function readOperationProcessGroup(repoDir: string) {
-  if (!refExists(repoDir)) return undefined;
+  if (!refExists(repoDir)) {
+    return undefined;
+  }
   try {
     const payload = execFileSync("git", ["cat-file", "blob", refOid(repoDir)], {
       cwd: repoDir,
@@ -360,12 +419,16 @@ async function cleanupController(
 ) {
   let pgid = operationPgidFile ? readProcessIdFile(operationPgidFile) : undefined;
   pgid ??= readOperationProcessGroup(repoDir);
-  if (pgid) await cleanupProcessGroup(pgid);
+  if (pgid) {
+    await cleanupProcessGroup(pgid);
+  }
   await cleanupChildren(controller);
 
   pgid = operationPgidFile ? readProcessIdFile(operationPgidFile) : undefined;
   pgid ??= readOperationProcessGroup(repoDir);
-  if (pgid) await cleanupProcessGroup(pgid);
+  if (pgid) {
+    await cleanupProcessGroup(pgid);
+  }
 }
 
 function refOid(repoDir: string, ref = lockRef) {
@@ -384,7 +447,9 @@ function processGroupExists(pgid: number) {
   if (!validProcessId(pgid)) {
     throw new Error(`refusing to probe invalid process group ${String(pgid)}`);
   }
-  if (goneProcessGroups.has(pgid)) return false;
+  if (goneProcessGroups.has(pgid)) {
+    return false;
+  }
   try {
     process.kill(-pgid, 0);
     return true;
@@ -404,7 +469,9 @@ function killProcessGroup(pgid: number, signal: NodeJS.Signals) {
   if (!validProcessId(pgid)) {
     throw new Error(`refusing to signal invalid process group ${String(pgid)}`);
   }
-  if (!goneProcessGroups.has(pgid)) process.kill(-pgid, signal);
+  if (!goneProcessGroups.has(pgid)) {
+    process.kill(-pgid, signal);
+  }
 }
 
 describe("scripts/pr process-group platform guard", () => {
@@ -412,7 +479,11 @@ describe("scripts/pr process-group platform guard", () => {
     const source = readFileSync(processGroupRunner, "utf8");
     expect(source).toContain('process.platform === "win32"');
     expect(source).toContain("use WSL on Windows");
-    if (process.platform !== "win32") return;
+    expect(source).toContain("const SIGNAL_GRACE_MS = 5000;");
+    expect(source).toContain("const KILL_DRAIN_MS = 5000;");
+    if (process.platform !== "win32") {
+      return;
+    }
 
     const result = spawnSync(process.execPath, [processGroupRunner, repoRoot, "unused"], {
       encoding: "utf8",
@@ -682,7 +753,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       writeFileSync(stub, "#!/bin/sh\nexit 0\n");
       chmodSync(stub, 0o755);
     }
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -733,8 +804,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ]);
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      const [blockedLine] = result.stdout.trim().split("\n");
-      const [, ownerOid] = blockedLine.split("\t");
+      const blockedLine = expectDefined(
+        result.stdout.trim().split("\n")[0],
+        "blocked PR operation lock output",
+      );
+      const ownerOid = expectDefined(blockedLine.split("\t")[1], "blocked PR operation owner oid");
       expect(blockedLine).toMatch(/^2\t[0-9a-f]{40}$/u);
       expect(result.stderr).toContain("operation lock is orphaned");
       expect(result.stderr).toContain(
@@ -861,6 +935,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       "  fi",
       '  command git "$@"',
       "}",
+      "sleep() { :; }",
       "release_pr_operation_lock",
       `if command git show-ref --verify --quiet '${lockRef}'; then ref_status=present; else ref_status=absent; fi`,
       'printf "%s\t%s\n" "$delete_attempts" "$ref_status"',
@@ -875,19 +950,24 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const result = runLockShell(repoDir, [
       "acquire_pr_operation_lock 42",
       "owner_oid=$PR_OPERATION_LOCK_OWNER_OID",
+      "delete_attempts=0",
       "git() {",
-      `  if [ "$*" = "-C ${repoDir} update-ref --no-deref -d ${lockRef} $owner_oid" ]; then return 1; fi`,
+      `  if [ "$*" = "-C ${repoDir} update-ref --no-deref -d ${lockRef} $owner_oid" ]; then`,
+      "    delete_attempts=$((delete_attempts + 1))",
+      "    return 1",
+      "  fi",
       '  command git "$@"',
       "}",
+      "sleep() { :; }",
       "set +e",
       "release_pr_operation_lock",
       "release_status=$?",
       "set -e",
-      'printf "%s\t%s\n" "$release_status" "$PR_OPERATION_LOCK_OWNER_OID"',
+      'printf "%s\t%s\t%s\n" "$release_status" "$PR_OPERATION_LOCK_OWNER_OID" "$delete_attempts"',
     ]);
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(`1\t${refOid(repoDir)}`);
+    expect(result.stdout.trim()).toBe(`1\t${refOid(repoDir)}\t20`);
     expect(result.stderr).toContain("Unable to release the operation lock for 42");
   });
 
@@ -904,12 +984,21 @@ describePosix("scripts/pr per-PR operation lock", () => {
 
   it("retains the exact owner when supervisor release cannot take the ref lock", async () => {
     const repoDir = createRepo();
+    // Retry counts are covered above; this integration case only needs the real ref-lock failure.
+    execFileSync("git", ["config", "core.filesRefLockTimeout", "0"], { cwd: repoDir });
+    const binDir = join(repoDir, "fast-release-bin");
+    mkdirSync(binDir);
+    const sleepPath = join(binDir, "sleep");
+    writeFileSync(sleepPath, "#!/bin/sh\nexit 0\n");
+    chmodSync(sleepPath, 0o755);
     const refLock = join(repoDir, ".git/refs/openclaw/pr-operation-locks/42.lock");
     const fixture = writeOperationFixture(repoDir, "blocked-release.sh", [
       "acquire_pr_operation_lock 42",
       `: >'${refLock}'`,
     ]);
-    const result = await runSupervisedFixture(repoDir, fixture);
+    const result = await runSupervisedFixture(repoDir, fixture, {
+      env: { PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+    });
     const ownerOid = refOid(repoDir);
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
@@ -1063,7 +1152,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       daemonPgid ??= readProcessIdFile(daemonPidFile);
-      if (daemonPgid) await cleanupProcessGroup(daemonPgid);
+      if (daemonPgid) {
+        await cleanupProcessGroup(daemonPgid);
+      }
     }
   });
 
@@ -1123,7 +1214,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       nestedPgid ??= readProcessIdFile(nestedPidFile);
-      if (nestedPgid) await cleanupProcessGroup(nestedPgid);
+      if (nestedPgid) {
+        await cleanupProcessGroup(nestedPgid);
+      }
     }
   });
 
@@ -1153,7 +1246,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     let nestedPgid: number | undefined;
     try {
       const startedAt = Date.now();
-      const result = await runSupervisedFixture(repoDir, fixture);
+      const result = await runSupervisedFixture(repoDir, fixture, { accelerateTimeouts: true });
       const elapsed = Date.now() - startedAt;
       nestedPgid = await waitForProcessId(nestedPidFile);
 
@@ -1172,7 +1265,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       nestedPgid ??= readProcessIdFile(nestedPidFile);
-      if (nestedPgid) await cleanupProcessGroup(nestedPgid);
+      if (nestedPgid) {
+        await cleanupProcessGroup(nestedPgid);
+      }
     }
   }, 15_000);
 
@@ -1183,7 +1278,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const acquiredFile = join(repoDir, "finishing-waiter-acquired");
     const holderScript = join(repoDir, "finishing-holder.mjs");
     const launcherScript = join(repoDir, "finishing-launcher.mjs");
-    writeFileSync(holderScript, "setTimeout(() => {}, 1500);\n");
+    writeFileSync(holderScript, "setInterval(() => {}, 1000);\n");
     writeFileSync(
       launcherScript,
       [
@@ -1235,11 +1330,23 @@ describePosix("scripts/pr per-PR operation lock", () => {
             "release_pr_operation_lock",
           ].join("\n"),
         ],
-        { cwd: repoDir, stdio: "ignore" },
+        { cwd: repoDir, stdio: ["ignore", "ignore", "pipe"] },
       );
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      let waiterStderr = "";
+      waiter.stderr?.setEncoding("utf8");
+      waiter.stderr?.on("data", (chunk) => (waiterStderr += chunk));
+      expect(
+        await waitFor(() =>
+          waiterStderr.includes(
+            "Waiting for the active scripts/pr operation on PR #42 to finish...",
+          ),
+        ),
+      ).toBe(true);
       expect(existsSync(acquiredFile)).toBe(false);
+      expect(controller.exitCode).toBeNull();
+      expect(processGroupExists(holderPgid)).toBe(true);
 
+      killProcessGroup(holderPgid, "SIGTERM");
       await waitForExit(controller, 5000);
       await waitForExit(waiter, 5000);
       expect(controller.exitCode).toBe(0);
@@ -1248,7 +1355,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       holderPgid ??= readProcessIdFile(holderPidFile);
-      if (holderPgid) await cleanupProcessGroup(holderPgid);
+      if (holderPgid) {
+        await cleanupProcessGroup(holderPgid);
+      }
       await cleanupChildren(waiter);
       await cleanupController(repoDir, controller, operationPgidFile);
     }
@@ -1286,7 +1395,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       operationPgid ??= readProcessIdFile(operationPgidFile);
-      if (operationPgid) await cleanupProcessGroup(operationPgid);
+      if (operationPgid) {
+        await cleanupProcessGroup(operationPgid);
+      }
     }
   });
 
@@ -1319,7 +1430,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       operationPgid ??= readProcessIdFile(operationPgidFile);
-      if (operationPgid) await cleanupProcessGroup(operationPgid);
+      if (operationPgid) {
+        await cleanupProcessGroup(operationPgid);
+      }
     }
   });
 
@@ -1584,10 +1697,14 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ") &",
       'wait "$!"',
     ]);
-    const controller = spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
-      cwd: repoDir,
-      stdio: "ignore",
-    });
+    const controller = spawn(
+      process.execPath,
+      ["--require", createProcessGroupTimingPreload(), processGroupRunner, repoDir, fixture],
+      {
+        cwd: repoDir,
+        stdio: "ignore",
+      },
+    );
     let pgid: number | undefined;
     try {
       expect(await waitFor(() => existsSync(pidFile) && existsSync(childReady))).toBe(true);
@@ -1678,7 +1795,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
       expect(refExists(repoDir)).toBe(false);
     } finally {
-      if (nestedPgid) await cleanupProcessGroup(nestedPgid);
+      if (nestedPgid) {
+        await cleanupProcessGroup(nestedPgid);
+      }
       await cleanupController(repoDir, controller);
     }
   });

@@ -56,6 +56,7 @@ import {
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mjs";
+import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -290,6 +291,7 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/*.test.ts",
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
+const FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT = 6;
 const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
 const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
@@ -482,12 +484,29 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
       "test/scripts/plugin-prerelease-test-plan.test.ts",
     ],
   ],
-  [".github/workflows/install-smoke.yml", ["test/scripts/test-install-sh-docker.test.ts"]],
+  [
+    ".github/workflows/install-smoke.yml",
+    [
+      "test/scripts/install-smoke-no-push-workflow.test.ts",
+      "test/scripts/test-install-sh-docker.test.ts",
+    ],
+  ],
+  [
+    ".github/workflows/install-smoke-reusable.yml",
+    [
+      "test/scripts/install-smoke-no-push-workflow.test.ts",
+      "test/scripts/test-install-sh-docker.test.ts",
+    ],
+  ],
   [
     ".github/workflows/ios-periphery-comment.yml",
     ["test/scripts/ios-periphery-comment-workflow.test.ts"],
   ],
   [".github/workflows/ios-periphery.yml", ["test/scripts/ios-periphery-comment-workflow.test.ts"]],
+  [
+    ".github/workflows/shared-openclawkit-periphery.yml",
+    ["test/scripts/periphery-intersection.test.ts"],
+  ],
   [
     ".github/workflows/live-media-runner-image.yml",
     ["test/scripts/package-acceptance-workflow.test.ts"],
@@ -577,7 +596,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [
     ".github/workflows/openclaw-scheduled-live-checks.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/release-no-push-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/openclaw-stable-main-closeout.yml",
@@ -589,7 +611,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [
     ".github/workflows/plugin-clawhub-new.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/plugin-clawhub-release.yml",
@@ -597,7 +622,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [
     ".github/workflows/plugin-npm-release.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-npm-extended-stable-workflow.test.ts",
+    ],
   ],
   [".github/workflows/plugin-prerelease.yml", ["test/scripts/plugin-prerelease-test-plan.test.ts"]],
   [
@@ -686,6 +714,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/clawtributors-map.json", ["test/scripts/update-clawtributors.test.ts"]],
   ["scripts/tsconfig.json", ["test/scripts/oxlint-config.test.ts"]],
+  [
+    "tsconfig.scripts.json",
+    ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+  ],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/build-stamp.mjs", ["src/infra/build-stamp.test.ts"]],
   ["scripts/crabbox-wrapper-providers.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
@@ -761,6 +793,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
+  ["scripts/periphery-intersection.mjs", ["test/scripts/periphery-intersection.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
   ["scripts/apple-app-i18n.ts", ["test/scripts/apple-app-i18n.test.ts"]],
@@ -822,11 +855,16 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
     [
       "test/scripts/docker-e2e-crestodian.test.ts",
+      "src/cli/program/register.onboard.test.ts",
       "src/cli/run-main.test.ts",
       "src/cli/run-main.exit.test.ts",
+      "src/commands/crestodian-with-inference.test.ts",
+      "src/crestodian/assistant.configured.test.ts",
+      "src/crestodian/assistant.test.ts",
       "src/crestodian/crestodian.test.ts",
       "src/crestodian/operations.test.ts",
       "src/crestodian/overview.test.ts",
+      "src/crestodian/setup-inference.test.ts",
       "src/crestodian/audit.test.ts",
     ],
   ],
@@ -834,24 +872,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/crestodian-first-run-spec.json",
     [
       "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/operations.test.ts",
-      "src/crestodian/audit.test.ts",
-    ],
-  ],
-  [
-    "scripts/e2e/crestodian-planner-docker.sh",
-    [
-      "test/scripts/docker-build-helper.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-crestodian.test.ts",
-    ],
-  ],
-  [
-    "scripts/e2e/crestodian-planner-docker-client.mjs",
-    [
-      "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/assistant.test.ts",
-      "src/crestodian/crestodian.test.ts",
       "src/crestodian/operations.test.ts",
       "src/crestodian/audit.test.ts",
     ],
@@ -1201,6 +1221,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/lib/local-heavy-check-runtime.mjs", ["test/scripts/local-heavy-check-runtime.test.ts"]],
   ["scripts/lib/kova-report-gate.mjs", ["test/scripts/kova-report-gate.test.ts"]],
+  ["scripts/lib/kova-report-publish-files.mjs", ["test/scripts/kova-report-publish-files.test.ts"]],
+  ["scripts/lib/kova-report-selector.mjs", ["test/scripts/kova-report-selector.test.ts"]],
+  ["scripts/lib/kova-workflow-evidence.mjs", ["test/scripts/kova-workflow-evidence.test.ts"]],
   ["scripts/lib/managed-child-process.mjs", ["test/scripts/managed-child-process.test.ts"]],
   [
     "scripts/lib/windows-taskkill.mjs",
@@ -1304,6 +1327,45 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/release-check.test.ts", "test/scripts/test-install-sh-docker.test.ts"],
   ],
   ["scripts/lib/openclaw-release-clawhub-plan.ts", ["test/plugin-clawhub-release.test.ts"]],
+  [
+    "scripts/lib/actions-artifact-archive.mjs",
+    ["test/scripts/plugin-publication-artifact.test.ts"],
+  ],
+  [
+    "scripts/lib/clawhub-bootstrap-artifact.mjs",
+    [
+      "test/scripts/clawhub-bootstrap-artifact.test.ts",
+      "test/scripts/verify-clawhub-published-artifact.test.ts",
+    ],
+  ],
+  ["scripts/plugin-publication-artifact.mjs", ["test/scripts/plugin-publication-artifact.test.ts"]],
+  [
+    "scripts/materialize-clawhub-cli.sh",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    ".github/release/clawhub-cli/package.json",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    ".github/release/clawhub-cli/package-lock.json",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    "scripts/verify-clawhub-published-artifact.mjs",
+    ["test/scripts/verify-clawhub-published-artifact.test.ts"],
+  ],
+  ["scripts/plugin-clawhub-publish.sh", ["test/plugin-clawhub-release.test.ts"]],
+  ["scripts/lib/release-beta-verifier.ts", ["test/scripts/release-beta-verifier.test.ts"]],
   [
     "scripts/lib/plugin-clawhub-release.ts",
     ["test/plugin-clawhub-release.test.ts", "test/plugin-npm-release.test.ts"],
@@ -2003,6 +2065,7 @@ const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
   ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
   ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
+  ["scripts/periphery-intersection.d.mts", "scripts/periphery-intersection.mjs"],
   [
     "scripts/lib/bundled-plugin-build-entries.d.mts",
     "scripts/lib/bundled-plugin-build-entries.mjs",
@@ -2282,13 +2345,18 @@ const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
   ...Object.values(VITEST_CONFIG_BY_KIND),
   ...fullSuiteVitestShards.flatMap((shard) => [shard.config, ...shard.projects]),
 ]);
-const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
+// Duplicates the per-config pattern arrays in test/vitest/vitest.contracts-shared.ts
+// because this file must stay loader-free plain JS. Drift silently drops
+// contract files from lane routing, so test/scripts/test-projects.test.ts
+// asserts both enumerations stay identical.
+export const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
     [
       "src/channels/plugins/contracts/channel-catalog.contract.test.ts",
       "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
       "src/channels/plugins/contracts/group-policy.fallback.contract.test.ts",
+      "src/channels/plugins/contracts/message-tool-artifact.contract.test.ts",
       "src/channels/plugins/contracts/outbound-payload.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-a.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-e.contract.test.ts",
@@ -2297,6 +2365,7 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG,
     [
+      "src/channels/plugins/contracts/gateway-auth-artifact.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.authorize-config-write.policy.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.authorize-config-write.targets.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.catalog.entries.contract.test.ts",
@@ -2307,6 +2376,7 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG,
     [
+      "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.catalog.paths.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.loader.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.registry.contract.test.ts",
@@ -2320,6 +2390,8 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
       "src/channels/plugins/contracts/plugins-core.resolve-config-writes.contract.test.ts",
       "src/channels/plugins/contracts/registry.contract.test.ts",
       "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+      "src/channels/plugins/contracts/session-key-artifact.contract.test.ts",
+      "src/channels/plugins/contracts/thread-binding-artifact.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
     ],
@@ -2448,6 +2520,18 @@ function listToolingFullSuiteTestTargets(cwd) {
 function listUnitFastFullSuiteTestTargets() {
   const timerTargets = new Set(getUnitFastTimerTestFiles());
   return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
+}
+
+function listAgentsCoreFullSuiteTestTargets(cwd) {
+  const agentsDir = path.join(cwd, "src/agents");
+  if (!fs.existsSync(agentsDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(agentsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
+    .map((entry) => `src/agents/${entry.name}`)
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns, watchMode, cwd }) {
@@ -2657,6 +2741,22 @@ function expandExplicitSourceTestTargets(targetArgs, cwd) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
     if (relative === "src/commands" && isExistingDirectoryTarget(targetArg, cwd)) {
       return [COMMANDS_LIGHT_VITEST_CONFIG, COMMANDS_VITEST_CONFIG];
+    }
+    // Contract directory targets must fan out to the owning contract lanes; the
+    // generic channels/plugins projects exclude contracts/**, so routing a
+    // contracts directory there silently runs zero tests (passWithNoTests).
+    if (isExistingDirectoryTarget(targetArg, cwd)) {
+      if (isPathAtOrUnder(relative, "src/channels/plugins/contracts")) {
+        return [
+          CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
+          CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG,
+          CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG,
+          CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG,
+        ];
+      }
+      if (isPathAtOrUnder(relative, "src/plugins/contracts")) {
+        return [CONTRACTS_PLUGIN_VITEST_CONFIG];
+      }
     }
     const exactDirectoryTargets = resolveExactSourceDirectoryTestTargets(targetArg, cwd);
     if (exactDirectoryTargets) {
@@ -3145,6 +3245,7 @@ function resolveChannelContractTargetKind(relative) {
       "channel-catalog.contract.test.ts",
       "channel-import-guardrails.test.ts",
       "group-policy.fallback.contract.test.ts",
+      "message-tool-artifact.contract.test.ts",
       "outbound-payload.contract.test.ts",
     ].includes(name)
   ) {
@@ -3152,6 +3253,7 @@ function resolveChannelContractTargetKind(relative) {
   }
   if (
     [
+      "gateway-auth-artifact.contract.test.ts",
       "plugins-core.authorize-config-write.policy.contract.test.ts",
       "plugins-core.authorize-config-write.targets.contract.test.ts",
       "plugins-core.catalog.entries.contract.test.ts",
@@ -3161,6 +3263,7 @@ function resolveChannelContractTargetKind(relative) {
   }
   if (
     [
+      "plugin-shape.contract.test.ts",
       "plugins-core.catalog.paths.contract.test.ts",
       "plugins-core.loader.contract.test.ts",
       "plugins-core.registry.contract.test.ts",
@@ -3386,7 +3489,13 @@ function isRoutableChangedTarget(changedPath) {
   if (changedPath.endsWith(".live.test.ts")) {
     return false;
   }
-  return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
+  const surface = getChangedPathFacts(changedPath).surface;
+  return (
+    ["source", "package", "extension", "rootTest"].includes(surface) ||
+    changedPath === "ui" ||
+    changedPath.startsWith("ui/") ||
+    ["src", "test", "extensions", "packages"].includes(changedPath)
+  );
 }
 
 function resolveSiblingTestTarget(changedPath, cwd) {
@@ -3440,7 +3549,15 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   if (options.skipImportGraph === true) {
     return null;
   }
-  if (/^(?:src|test\/helpers|extensions|packages|ui\/src|ui\/config)\//u.test(changedPath)) {
+  const facts = getChangedPathFacts(changedPath);
+  if (
+    facts.surface === "source" ||
+    facts.surface === "package" ||
+    facts.surface === "extension" ||
+    changedPath.startsWith("test/helpers/") ||
+    changedPath.startsWith("ui/src/") ||
+    changedPath.startsWith("ui/config/")
+  ) {
     const affectedTests = resolveAffectedTestsFromImportGraph(changedPath, cwd, {
       forceFull: options.forceFullImportGraph === true,
     });
@@ -3588,7 +3705,7 @@ function classifyTarget(arg, cwd) {
   if (relative === "extensions") {
     return "extensionFull";
   }
-  if (relative.startsWith("extensions/")) {
+  if (getChangedPathFacts(relative).surface === "extension") {
     const extensionRoot = relative.split("/").slice(0, 2).join("/");
     const splitChannelShard = resolveSplitChannelExtensionShard(extensionRoot);
     if (splitChannelShard) {
@@ -3689,6 +3806,12 @@ function classifyTarget(arg, cwd) {
   }
   if (isPathAtOrUnder(relative, "src/gateway")) {
     return "gateway";
+  }
+  if (
+    isPathAtOrUnder(relative, "packages/gateway-client") ||
+    isPathAtOrUnder(relative, "packages/gateway-protocol")
+  ) {
+    return "gatewayClient";
   }
   if (isPathAtOrUnder(relative, "src/hooks")) {
     return "hooks";
@@ -4128,7 +4251,14 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     return configs.flatMap((config) => {
       if (expandShard && targetArgs.length === 0) {
         let chunks = [];
-        if (config === UNIT_FAST_VITEST_CONFIG) {
+        if (config === AGENTS_CORE_VITEST_CONFIG) {
+          // A single non-isolated agents-core process grows until its worker can
+          // exit under the full-suite memory load. Bound each process lifetime.
+          chunks = splitTargetChunks(
+            listAgentsCoreFullSuiteTestTargets(cwd),
+            FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT,
+          );
+        } else if (config === UNIT_FAST_VITEST_CONFIG) {
           const targets = listUnitFastFullSuiteTestTargets();
           const chunkCount = Math.ceil(
             targets.length / FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE,

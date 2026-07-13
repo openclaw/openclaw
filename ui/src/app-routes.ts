@@ -8,13 +8,13 @@ import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { page as chatPage } from "./pages/chat/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
+import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
-import { page as dreamsPage } from "./pages/dreams/route.ts";
-import { page as instancesPage } from "./pages/instances/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
+import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
+import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as nodesPage } from "./pages/nodes/route.ts";
-import { page as overviewPage } from "./pages/overview/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
 import { page as pluginsPage } from "./pages/plugins/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
@@ -40,16 +40,17 @@ type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteMod
 
 const APP_ROUTE_TREE = [
   chatPage,
-  overviewPage,
+  newSessionPage,
   activityPage,
   agentsPage,
   channelsPage,
+  connectionPage,
   aboutPage,
   ...configPages,
+  modelProvidersPage,
   profilePage,
   workboardPage,
   worktreesPage,
-  instancesPage,
   sessionsPage,
   usagePage,
   debugPage,
@@ -60,7 +61,6 @@ const APP_ROUTE_TREE = [
   cronPage,
   tasksPage,
   nodesPage,
-  dreamsPage,
   pluginPage,
 ] as const;
 
@@ -79,6 +79,8 @@ export async function startApplicationRouter(
   context: ApplicationContext<RouteId>,
 ): Promise<void> {
   const location = history.location();
+  // Unknown paths (including retired routes like /overview) land on chat, so
+  // removed pages need no legacy aliases for stale bookmarks or history.
   if (routeIdFromPath(location.pathname, basePath) === null) {
     history.replace({
       ...location,

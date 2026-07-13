@@ -1,8 +1,10 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
   createControlUiMockBootstrapConfig,
@@ -35,10 +37,14 @@ const TOTAL_TELEGRAM_SESSIONS = 180;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
 
+function mockFileHash(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187 };
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = expectDefined(args[i], `control UI mock argument at index ${i}`);
     if (arg === "--allowed-host") {
       const allowedHost = args[++i]?.trim();
       if (allowedHost) {
@@ -80,7 +86,7 @@ function sessionRow(
     key,
     kind: "direct",
     label,
-    model: options.model ?? "gpt-5.5",
+    model: options.model ?? "gpt-5.6-luna",
     modelProvider: options.modelProvider ?? "openai",
     status: "done",
     totalTokens: 0,
@@ -93,7 +99,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     count: sessions.length,
     defaults: {
       contextTokens: 200_000,
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       modelProvider: "openai",
     },
     hasMore: options.hasMore,
@@ -180,6 +186,386 @@ function usageCostTotals(totalTokens: number, totalCost = 0) {
   };
 }
 
+// Model Providers settings fixtures: auth state plus live plan/quota/billing
+// snapshots so the /settings/model-providers page renders fully in the mock.
+function buildSessionDiffMock() {
+  const appPatch = [
+    "diff --git a/src/app.ts b/src/app.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/app.ts",
+    "+++ b/src/app.ts",
+    "@@ -12,4 +12,5 @@ export function bootstrap() {",
+    "   const config = readSettings();",
+    "-  const client = createClient(config);",
+    "+  const client = createClient(config, { retries: 3 });",
+    '+  client.on("error", reportError);',
+    "   return client;",
+    "@@ -181,3 +182,3 @@ export function shutdown() {",
+    "   flushQueues();",
+    '-  logger.info("bye");',
+    '+  logger.info("shutdown complete");',
+    "",
+  ].join("\n");
+  const readmePatch = [
+    "diff --git a/README.md b/README.md",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/README.md",
+    "@@ -0,0 +1,3 @@",
+    "+# Demo",
+    "+",
+    "+Mock harness session diff fixture.",
+    "",
+  ].join("\n");
+  return {
+    sessionKey: "main",
+    root: "/tmp/openclaw-mock-checkout",
+    branch: "feature/session-diff-panel",
+    baseRef: "main",
+    files: [
+      {
+        path: "src/app.ts",
+        status: "modified",
+        additions: 3,
+        deletions: 2,
+        patch: appPatch,
+      },
+      {
+        path: "README.md",
+        status: "added",
+        additions: 3,
+        deletions: 0,
+        untracked: true,
+        patch: readmePatch,
+      },
+      {
+        path: "assets/logo.png",
+        status: "modified",
+        additions: 0,
+        deletions: 0,
+        binary: true,
+      },
+    ],
+    additions: 6,
+    deletions: 2,
+  };
+}
+
+function buildPluginCatalogMock() {
+  const entry = (params: {
+    id: string;
+    name: string;
+    description: string;
+    category: string;
+    installed: boolean;
+    enabled?: boolean;
+    featured?: boolean;
+  }) => ({
+    id: params.id,
+    name: params.name,
+    description: params.description,
+    version: "1.4.0",
+    installed: params.installed,
+    enabled: params.installed && (params.enabled ?? true),
+    state: params.installed ? ((params.enabled ?? true) ? "enabled" : "disabled") : "not-installed",
+    category: params.category,
+    featured: params.featured ?? false,
+    removable: params.installed,
+  });
+  return {
+    plugins: [
+      entry({
+        id: "telegram",
+        name: "Telegram",
+        description: "Chat with your agent from Telegram DMs and groups.",
+        category: "channel",
+        installed: true,
+      }),
+      entry({
+        id: "discord",
+        name: "Discord",
+        description: "Bridge agents into Discord servers and DMs.",
+        category: "channel",
+        installed: true,
+        enabled: false,
+      }),
+      entry({
+        id: "memory-wiki",
+        name: "Memory Wiki",
+        description: "Long-term wiki-style memory for people and projects.",
+        category: "memory",
+        installed: true,
+      }),
+      entry({
+        id: "browser",
+        name: "Browser",
+        description: "Drive a managed browser profile for research and automation.",
+        category: "tool",
+        installed: false,
+        featured: true,
+      }),
+      entry({
+        id: "canvas",
+        name: "Canvas",
+        description: "Generate and preview visual artifacts from sessions.",
+        category: "tool",
+        installed: false,
+      }),
+    ],
+    diagnostics: [],
+    mutationAllowed: true,
+  };
+}
+
+function buildSkillWorkshopMocks(baseTime: number) {
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  const proposals = [
+    {
+      id: "prop-release-tweets",
+      kind: "update",
+      status: "pending",
+      title: "Tighten release tweet drafting",
+      description: "Capture the changelog-to-tweet flow the agent keeps re-deriving.",
+      skillName: "release-tweets",
+      skillKey: "release-tweets",
+      createdAt: new Date(baseTime - 2 * hour).toISOString(),
+      updatedAt: new Date(baseTime - hour).toISOString(),
+      scanState: "clean",
+    },
+    {
+      id: "prop-crawler-etiquette",
+      kind: "create",
+      status: "pending",
+      title: "Add crawler etiquette skill",
+      description: "Rate limits and robots.txt handling learned during the docs sweep.",
+      skillName: "crawler-etiquette",
+      skillKey: "crawler-etiquette",
+      createdAt: new Date(baseTime - 3 * day).toISOString(),
+      updatedAt: new Date(baseTime - 2 * day).toISOString(),
+      scanState: "clean",
+    },
+    {
+      id: "prop-changelog-style",
+      kind: "update",
+      status: "applied",
+      title: "Changelog bullet style",
+      description: "One bullet per entry, no hard wraps.",
+      skillName: "changelog-style",
+      skillKey: "changelog-style",
+      createdAt: new Date(baseTime - 6 * day).toISOString(),
+      updatedAt: new Date(baseTime - 5 * day).toISOString(),
+      scanState: "clean",
+    },
+  ];
+  return {
+    list: {
+      schema: "openclaw.skill-workshop.proposals-manifest.v1",
+      updatedAt: new Date(baseTime - hour).toISOString(),
+      proposals,
+    },
+    inspect: {
+      cases: proposals.map((proposal) => ({
+        match: { proposalId: proposal.id },
+        response: {
+          record: {
+            ...proposal,
+            proposedVersion: "2",
+            target: { skillName: proposal.skillName, skillKey: proposal.skillKey },
+          },
+          content: [
+            `# ${proposal.title}`,
+            "",
+            proposal.description,
+            "",
+            "## Steps",
+            "1. Gather the source material.",
+            "2. Apply the documented workflow.",
+          ].join("\n"),
+          supportFiles: [],
+        },
+      })),
+    },
+  };
+}
+
+function buildModelProviderMocks(baseTime: number) {
+  const hour = 60 * 60 * 1000;
+  const expiry = (remainingMs: number, label: string) => ({
+    at: baseTime + remainingMs,
+    remainingMs,
+    label,
+  });
+  const costDaily = Array.from({ length: 14 }, (_, index) => {
+    const date = new Date(baseTime - (13 - index) * 24 * hour);
+    const iso = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+    const amount = 4 + Math.round(Math.abs(Math.sin(index)) * 900) / 100;
+    return {
+      date: iso,
+      amount,
+      requests: 120 + index * 7,
+      inputTokens: 2_400_000 + index * 90_000,
+      cacheReadTokens: 9_000_000,
+      cacheWriteTokens: 400_000,
+      outputTokens: 310_000,
+      totalTokens: 12_110_000 + index * 90_000,
+    };
+  });
+  const anthropicUsage = {
+    provider: "anthropic",
+    displayName: "Claude",
+    plan: "Max 20x",
+    windows: [
+      { label: "5h", usedPercent: 38, resetAt: baseTime + 2.4 * hour },
+      { label: "Week", usedPercent: 61, resetAt: baseTime + 68 * hour },
+      { label: "Opus", usedPercent: 24, resetAt: baseTime + 68 * hour },
+    ],
+    costHistory: {
+      unit: "USD",
+      periodDays: 14,
+      daily: costDaily,
+      models: [
+        {
+          name: "claude-sonnet-4-6",
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          totalTokens: 96_000_000,
+        },
+        {
+          name: "claude-opus-4-8",
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          totalTokens: 31_000_000,
+        },
+      ],
+      categories: [
+        { name: "Sessions", amount: 61.13 },
+        { name: "Code Assist", amount: 18.4 },
+      ],
+    },
+  };
+  const openaiUsage = {
+    provider: "openai",
+    displayName: "OpenAI",
+    plan: "Pro",
+    windows: [
+      { label: "5h", usedPercent: 12, resetAt: baseTime + 3.1 * hour },
+      { label: "Week", usedPercent: 44, resetAt: baseTime + 100 * hour },
+    ],
+    billing: [{ type: "balance", label: "Credits", amount: 341, unit: "credits" }],
+  };
+  const openrouterUsage = {
+    provider: "openrouter",
+    displayName: "OpenRouter",
+    windows: [],
+    billing: [{ type: "balance", amount: 12.34, unit: "USD" }],
+  };
+  const copilotUsage = {
+    provider: "github-copilot",
+    displayName: "GitHub Copilot",
+    plan: "Business",
+    windows: [{ label: "Premium requests", usedPercent: 71, resetAt: baseTime + 21 * 24 * hour }],
+  };
+  return {
+    authStatus: {
+      ts: baseTime,
+      providers: [
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          status: "ok",
+          expiry: expiry(11 * 24 * hour, "11d"),
+          profiles: [
+            {
+              profileId: "anthropic:default",
+              type: "oauth",
+              status: "ok",
+              expiry: expiry(11 * 24 * hour, "11d"),
+            },
+          ],
+          usage: {
+            providerId: "anthropic",
+            plan: anthropicUsage.plan,
+            windows: anthropicUsage.windows,
+          },
+        },
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "ok",
+          expiry: expiry(6 * 24 * hour, "6d"),
+          profiles: [
+            {
+              profileId: "openai:codex",
+              type: "oauth",
+              status: "ok",
+              expiry: expiry(6 * 24 * hour, "6d"),
+            },
+          ],
+          usage: {
+            providerId: "openai",
+            plan: openaiUsage.plan,
+            windows: openaiUsage.windows,
+            billing: openaiUsage.billing,
+          },
+        },
+        {
+          provider: "github-copilot",
+          displayName: "GitHub Copilot",
+          status: "expiring",
+          expiry: expiry(26 * 60 * 1000, "26m"),
+          profiles: [
+            {
+              profileId: "github-copilot:default",
+              type: "token",
+              status: "expiring",
+              expiry: expiry(26 * 60 * 1000, "26m"),
+            },
+          ],
+          usage: {
+            providerId: "github-copilot",
+            plan: copilotUsage.plan,
+            windows: copilotUsage.windows,
+          },
+        },
+        {
+          provider: "openrouter",
+          displayName: "OpenRouter",
+          status: "static",
+          profiles: [{ profileId: "openrouter:default", type: "api_key", status: "static" }],
+        },
+        {
+          provider: "google",
+          displayName: "Gemini",
+          status: "missing",
+          profiles: [],
+        },
+      ],
+    },
+    usageStatus: {
+      updatedAt: baseTime,
+      providers: [anthropicUsage, openaiUsage, openrouterUsage, copilotUsage],
+    },
+    models: [
+      { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic", available: true },
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        provider: "anthropic",
+        available: true,
+      },
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", available: true },
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", available: true },
+      { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
+      { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter", available: true },
+    ],
+  };
+}
+
 // Deterministic year of daily activity so the settings profile heatmap,
 // streaks, and stat strip render with a lively fixture in the mock harness.
 function buildProfileUsageMocks(baseTime: number) {
@@ -251,12 +637,23 @@ function buildProfileUsageMocks(baseTime: number) {
           },
           {
             provider: "openai",
-            model: "gpt-5.5",
+            model: "gpt-5.6-luna",
             count: 4_000,
             totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)),
           },
         ],
-        byProvider: [],
+        byProvider: [
+          {
+            provider: "anthropic",
+            count: 9_000,
+            totals: usageCostTotals(Math.round(lifetimeTokens * 0.7), 184.2),
+          },
+          {
+            provider: "openai",
+            count: 4_000,
+            totals: usageCostTotals(Math.round(lifetimeTokens * 0.3), 96.4),
+          },
+        ],
         byAgent: [
           { agentId: "openclaw-mock", totals: usageCostTotals(Math.round(lifetimeTokens * 0.8)) },
           { agentId: "alpha", totals: usageCostTotals(Math.round(lifetimeTokens * 0.2)) },
@@ -306,6 +703,41 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
       ),
     );
   }
+
+  // Completed work turn: commentary + tool results ahead of the final reply
+  // exercise the collapsed "Worked for X" rollup at the end of the thread.
+  const workTurnBase = baseTime + 37 * 60_000;
+  messages.push(
+    chatHistoryMessage(
+      "user",
+      "Mock work request: refactor the render guard and rerun the suite.",
+      workTurnBase,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Checking the guard implementation before editing.",
+      workTurnBase + 5_000,
+    ),
+    {
+      role: "toolResult",
+      toolCallId: "mock-work-read",
+      toolName: "read",
+      content: [{ type: "text", text: "Read ui/src/pages/chat/chat-thread.ts (120 lines)." }],
+      timestamp: workTurnBase + 12_000,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "mock-work-exec",
+      toolName: "exec",
+      content: [{ type: "text", text: "pnpm test chat-thread — 12 passed." }],
+      timestamp: workTurnBase + 95_000,
+    },
+    chatHistoryMessage(
+      "assistant",
+      "Refactored the render guard and reran the suite; all 12 tests pass.",
+      workTurnBase + 172_000,
+    ),
+  );
 
   return messages;
 }
@@ -500,6 +932,22 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       file: {
         ...file,
         content: sessionFileContentByPath.get(file.path) ?? "",
+        // Fake CAS token so the file panel offers edit mode against the mock.
+        hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
+      },
+      root: sessionWorkspaceRoot,
+      sessionKey: "agent:alpha",
+    },
+  }));
+  const sessionFileSetCases = sessionFiles.map((file) => ({
+    match: { sessionKey: "agent:alpha", path: file.path },
+    response: {
+      file: {
+        ...file,
+        kind: "modified",
+        workspacePath: file.path,
+        hash: mockFileHash(`${file.path}:saved`),
+        updatedAtMs: baseTime,
       },
       root: sessionWorkspaceRoot,
       sessionKey: "agent:alpha",
@@ -552,14 +1000,43 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   // Profile fixtures track the real clock so streaks and the trailing-year
   // heatmap stay filled no matter when the mock harness runs.
   const profileUsage = buildProfileUsageMocks(Date.now());
+  const modelProviders = buildModelProviderMocks(Date.now());
+  const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
+    featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "sessions.files.set"],
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      "sessions.diff": buildSessionDiffMock(),
+      // One live subagent task: exercises the tasks rail, the collapsed-rail
+      // toggle badge, and the post-turn running-tasks status row in the thread.
+      "tasks.list": {
+        tasks: [
+          {
+            id: "task-mock-running",
+            taskId: "task-mock-running",
+            status: "running",
+            runtime: "subagent",
+            agentId: "openclaw-mock",
+            title: "Map run-status indicator code",
+            createdAt: Date.now() - 25_000,
+            startedAt: Date.now() - 25_000,
+            updatedAt: Date.now(),
+            toolUseCount: 7,
+            lastToolName: "read",
+            childSessionKey: "agent:openclaw-mock:subagent:mock-task-1",
+          },
+        ],
+      },
+      "plugins.list": buildPluginCatalogMock(),
+      "skills.proposals.list": skillWorkshop.list,
+      "skills.proposals.inspect": skillWorkshop.inspect,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
+      "models.authStatus": modelProviders.authStatus,
+      "usage.status": modelProviders.usageStatus,
       "device.pair.list": {
         paired: [
           {
@@ -701,6 +1178,49 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
+      "system-presence": [
+        {
+          host: "gateway-mock.local",
+          ip: "192.168.1.10",
+          version: "2026.6.11",
+          platform: "macos 26.5.2",
+          deviceFamily: "Mac",
+          modelIdentifier: "Mac14,12",
+          lastInputSeconds: 42,
+          mode: "gateway",
+          reason: "self",
+          instanceId: "mock-gateway-instance",
+          text: "Gateway: gateway-mock.local (192.168.1.10) · app 2026.6.11 · mode gateway · reason self",
+          ts: baseTime,
+        },
+        {
+          host: "Mac Studio",
+          ip: "192.168.1.11",
+          version: "2026.6.11",
+          platform: "macos 26.5.2",
+          deviceFamily: "Mac",
+          modelIdentifier: "Mac15,14",
+          lastInputSeconds: 177,
+          mode: "node",
+          reason: "periodic",
+          deviceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          instanceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          roles: ["node"],
+          text: "Node: Mac Studio (192.168.1.11) · app 2026.6.11 · last input 177s ago · mode node · reason periodic",
+          ts: baseTime - 30_000,
+        },
+        {
+          host: "openclaw-control-ui",
+          version: "2026.6.11",
+          platform: "macos 26.5.2",
+          mode: "webchat",
+          reason: "connect",
+          roles: ["operator"],
+          instanceId: "mock-unpaired-webchat",
+          text: "Node: openclaw-control-ui · mode webchat",
+          ts: baseTime - 10_000,
+        },
+      ],
       "agents.files.get": {
         cases: workspaceFileCases,
       },
@@ -709,6 +1229,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       },
       "sessions.files.get": {
         cases: sessionFileGetCases,
+      },
+      "sessions.files.set": {
+        cases: sessionFileSetCases,
       },
       "sessions.files.list": {
         cases: [
@@ -804,10 +1327,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         ],
       },
     },
-    models: [
-      { id: "gpt-5.5", name: "gpt-5.5", provider: "openai" },
-      { id: "claude-sonnet-4-6", name: "claude-sonnet-4-6", provider: "anthropic" },
-    ],
+    models: modelProviders.models,
     sessionKey: "agent:alpha",
   };
 }

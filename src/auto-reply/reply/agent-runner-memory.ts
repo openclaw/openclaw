@@ -10,7 +10,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
@@ -18,6 +17,14 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import {
+  resolvePersistedSessionRuntimeId,
+  resolveSessionRuntimeOverrideForProvider,
+} from "../../agents/session-runtime-compat.js";
+import {
+  resolveCandidateThinkingLevel,
+  resolveEffectiveAgentRuntime,
+} from "../../agents/thinking-runtime.js";
 import {
   deriveContextPromptTokens,
   hasNonzeroUsage,
@@ -32,6 +39,10 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -246,25 +257,13 @@ function resolveMemoryFlushModelFallbackOptions(
   };
 }
 
-function resolveMemoryFlushRuntimeOverrideForProvider(params: {
-  provider: string;
-  entry?: Pick<SessionEntry, "agentRuntimeOverride">;
-}): string | undefined {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const runtime = normalizeLowercaseStringOrEmpty(params.entry?.agentRuntimeOverride);
-  if (!runtime || runtime === "auto" || runtime === "default") {
-    return undefined;
-  }
-  if (provider === "openai" && runtime === "codex") {
-    return "codex";
-  }
-  return undefined;
-}
-
 function followupUsesCliRuntime(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
-  sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+  sessionEntry?: Pick<
+    SessionEntry,
+    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+  >;
 }): boolean {
   const provider = params.followupRun.run.provider;
   if (isCliProvider(provider, params.cfg)) {
@@ -272,7 +271,7 @@ function followupUsesCliRuntime(params: {
   }
   return isCliRuntimeAliasForProvider({
     provider,
-    runtime: params.sessionEntry?.agentRuntimeOverride,
+    runtime: resolvePersistedSessionRuntimeId(params.sessionEntry),
     cfg: params.cfg,
   });
 }
@@ -303,30 +302,18 @@ function resolveFollowupAgentRuntimeId(params: {
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
       : undefined;
-  const persistedRuntimeOverride = normalizeOptionalString(
-    matchingSessionEntry?.agentRuntimeOverride,
-  );
-  const persistedRuntimeId =
-    persistedRuntimeOverride &&
-    persistedRuntimeOverride !== "auto" &&
-    persistedRuntimeOverride !== "default"
-      ? persistedRuntimeOverride
-      : matchingSessionEntry?.agentHarnessId;
-  if (persistedRuntimeId) {
-    return persistedRuntimeId;
-  }
-  const harnessPolicy = resolveAgentHarnessPolicy({
+  return resolveEffectiveAgentRuntime({
+    cfg: params.cfg,
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model,
-    config: params.cfg,
     agentId: params.followupRun.run.agentId,
     sessionKey:
       params.runtimePolicySessionKey ??
       params.sessionKey ??
       params.followupRun.run.runtimePolicySessionKey ??
       params.followupRun.run.sessionKey,
+    sessionEntry: matchingSessionEntry,
   });
-  return harnessPolicy.runtime;
 }
 
 function followupUsesCodexRuntime(params: {
@@ -379,7 +366,7 @@ function truncateMemoryFlushErrorMessage(err: unknown): string {
 }
 
 /** Usage snapshot read from a session transcript before compaction. */
-export type SessionTranscriptUsageSnapshot = {
+type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
   trailingBytesTokens?: number;
@@ -427,18 +414,27 @@ function resolveSessionLogPath(
       (sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined)?.transcriptPath,
     );
     const sessionFile = normalizeOptionalString(sessionEntry?.sessionFile) || transcriptPath;
+    if (parseSqliteSessionFileMarker(sessionFile)) {
+      return sessionFile;
+    }
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    if (!sessionFile && agentId && opts?.storePath) {
+      return formatSqliteSessionFileMarker({
+        agentId,
+        sessionId,
+        storePath: opts.storePath,
+      });
+    }
+    if (!sessionFile) {
+      return undefined;
+    }
     const pathOpts = resolveSessionFilePathOptions({
       agentId,
       storePath: opts?.storePath,
     });
     // Normalize sessionFile through resolveSessionFilePath so relative entries
     // are resolved against the sessions dir/store layout, not process.cwd().
-    return resolveSessionFilePath(
-      sessionId,
-      sessionFile ? { sessionFile } : sessionEntry,
-      pathOpts,
-    );
+    return resolveSessionFilePath(sessionId, { sessionFile }, pathOpts);
   } catch {
     return undefined;
   }
@@ -519,6 +515,9 @@ async function readSessionLogSnapshot(params: {
     params.opts,
   );
   if (!logPath) {
+    return {};
+  }
+  if (parseSqliteSessionFileMarker(logPath)) {
     return {};
   }
 
@@ -638,22 +637,16 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
-  sessionFile?: string;
   storePath?: string;
 }): Promise<TranscriptTokenEstimate | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }
-  const fallbackSessionFile = normalizeOptionalString(params.sessionFile);
-  const sessionEntryForTranscript =
-    params.sessionEntry?.sessionFile || !fallbackSessionFile
-      ? params.sessionEntry
-      : ({ ...params.sessionEntry, sessionFile: fallbackSessionFile } as SessionEntry);
   try {
     const snapshot = await readSessionLogSnapshot({
       sessionId,
-      sessionEntry: sessionEntryForTranscript,
+      sessionEntry: params.sessionEntry,
       sessionKey: params.sessionKey,
       opts: { storePath: params.storePath },
       includeByteSize: true,
@@ -687,7 +680,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     const messages = (await readSessionMessagesAsync(
       sessionId,
       params.storePath,
-      sessionEntryForTranscript?.sessionFile,
+      params.sessionEntry?.sessionFile,
       {
         mode: "recent",
         maxMessages: 200,
@@ -835,17 +828,13 @@ export async function runPreflightCompactionIfNeeded(params: {
           sessionId: entry.sessionId,
           sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-          sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
           storePath: params.storePath,
         });
   const transcriptSizeSnapshot =
     shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
       ? await readSessionLogSnapshot({
           sessionId: entry.sessionId,
-          sessionEntry:
-            entry.sessionFile || !params.followupRun.run.sessionFile
-              ? entry
-              : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+          sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
           opts: { storePath: params.storePath },
           includeByteSize: true,
@@ -948,10 +937,14 @@ export async function runPreflightCompactionIfNeeded(params: {
     await notifyStartCompaction();
     const sessionFile = resolveSessionLogPath(
       entry.sessionId,
-      entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+      entry,
       params.sessionKey ?? params.followupRun.run.sessionKey,
       { storePath: params.storePath },
     );
+    if (!sessionFile) {
+      await notifyTerminalCompaction("skipped");
+      return entry ?? params.sessionEntry;
+    }
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
       sessionKey: params.sessionKey,
@@ -966,7 +959,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       senderName: params.followupRun.run.senderName,
       senderUsername: params.followupRun.run.senderUsername,
       senderE164: params.followupRun.run.senderE164,
-      sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
+      sessionFile,
       workspaceDir: params.followupRun.run.workspaceDir,
       cwd: params.followupRun.run.cwd,
       agentDir: params.followupRun.run.agentDir,
@@ -975,8 +968,14 @@ export async function runPreflightCompactionIfNeeded(params: {
       provider: params.followupRun.run.provider,
       model: params.followupRun.run.model,
       authProfileId: params.followupRun.run.authProfileId,
+      authProfileIdSource: params.followupRun.run.authProfileIdSource,
       agentHarnessId:
-        entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
+        entry.sessionId === params.followupRun.run.sessionId
+          ? entry.modelSelectionLocked === true
+            ? resolvePersistedSessionRuntimeId(entry)
+            : entry.agentHarnessId
+          : undefined,
+      modelSelectionLocked: entry.modelSelectionLocked === true,
       thinkLevel: params.followupRun.run.thinkLevel,
       bashElevated: params.followupRun.run.bashElevated,
       trigger: "budget",
@@ -1336,9 +1335,10 @@ export async function runMemoryFlushIfNeeded(params: {
       lane: CommandLane.Main,
       abortSignal: params.replyOperation.abortSignal,
       resolveAgentHarnessRuntimeOverride: (provider) =>
-        resolveMemoryFlushRuntimeOverrideForProvider({
+        resolveSessionRuntimeOverrideForProvider({
           provider,
           entry: activeSessionEntry,
+          cfg: params.cfg,
         }),
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await memoryDeps.ensureSelectedAgentHarnessPlugin({
@@ -1350,13 +1350,32 @@ export async function runMemoryFlushIfNeeded(params: {
             params.runtimePolicySessionKey ??
             params.followupRun.run.runtimePolicySessionKey ??
             params.sessionKey,
+          agentHarnessId: agentHarnessRuntimeOverride,
           agentHarnessRuntimeOverride,
           workspaceDir: params.followupRun.run.workspaceDir,
         });
       },
       run: async (provider, model, runOptions) => {
+        const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+          provider,
+          entry: activeSessionEntry,
+          cfg: params.cfg,
+        });
+        const candidateThinkLevel = resolveCandidateThinkingLevel({
+          cfg: params.cfg,
+          provider,
+          modelId: model,
+          level: params.followupRun.run.thinkLevel,
+          agentId: params.followupRun.run.agentId,
+          sessionKey:
+            params.runtimePolicySessionKey ??
+            params.followupRun.run.runtimePolicySessionKey ??
+            params.sessionKey,
+          sessionEntry: activeSessionEntry,
+          agentRuntime: sessionRuntimeOverride,
+        });
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
-          run: params.followupRun.run,
+          run: { ...params.followupRun.run, thinkLevel: candidateThinkLevel },
           replyRoute: params.followupRun,
           sessionCtx: params.sessionCtx,
           hasRepliedRef: params.opts?.hasRepliedRef,
@@ -1369,6 +1388,8 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          agentHarnessId: sessionRuntimeOverride,
+          agentHarnessRuntimeOverride: sessionRuntimeOverride,
           sandboxSessionKey: params.runtimePolicySessionKey,
           allowGatewaySubagentBinding: true,
           silentExpected: true,

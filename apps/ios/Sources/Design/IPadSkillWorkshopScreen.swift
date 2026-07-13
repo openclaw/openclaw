@@ -153,11 +153,14 @@ struct IPadSkillWorkshopScreen: View {
     }
 
     private var compactFiltersCard: some View {
-        ProCard(radius: OpenClawProMetric.cardRadius) {
+        let count = self.filteredProposals.count
+        let countText = String(
+            AttributedString(localized: "^[\(count) proposal](inflect: true)").characters)
+        return ProCard(radius: OpenClawProMetric.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("\(self.filteredProposals.count) proposals")
+                        Text(verbatim: countText)
                             .font(OpenClawType.headline)
                         Text(self.statusFilterLabel)
                             .font(OpenClawType.caption)
@@ -601,10 +604,10 @@ struct IPadSkillWorkshopScreen: View {
         let defaultID = Self.normalizedScopeID(self.appModel.gatewayDefaultAgentId)
         if let match = appModel.gatewayAgents.first(where: { Self.normalizedScopeID($0.id) == defaultID }) {
             let name = Self.normalizedScopeID(match.name)
-            return name.isEmpty ? "Default agent" : name
+            return name.isEmpty ? String(localized: "Default agent") : name
         }
         let activeName = Self.normalizedScopeID(self.appModel.activeAgentName)
-        return activeName.isEmpty ? "Default agent" : activeName
+        return activeName.isEmpty ? String(localized: "Default agent") : activeName
     }
 
     private var selectedAgentParam: String? {
@@ -647,18 +650,18 @@ struct IPadSkillWorkshopScreen: View {
 
     static func proposalStatusFilterLabel(_ filter: String) -> String {
         switch filter {
-        case "pending": "Pending"
-        case "held": "Held"
-        case "applied": "Applied"
-        case "rejected": "Rejected"
-        default: "All"
+        case "pending": String(localized: "Pending")
+        case "held": String(localized: "Held")
+        case "applied": String(localized: "Applied")
+        case "rejected": String(localized: "Rejected")
+        default: String(localized: "All")
         }
     }
 
     static func proposalLaneLabel(_ status: String) -> String {
         switch status {
-        case "quarantined": "Quarantined"
-        case "stale": "Stale"
+        case "quarantined": String(localized: "Quarantined")
+        case "stale": String(localized: "Stale")
         case "pending", "applied", "rejected":
             self.proposalStatusFilterLabel(status)
         default:
@@ -879,7 +882,9 @@ struct IPadSkillWorkshopScreen: View {
                     agentId: self.selectedAgentParam,
                     proposalId: proposal.id),
                 timeoutSeconds: 30)
-            self.noticeText = action == .apply ? "Proposal applied." : "Proposal rejected."
+            self.noticeText = action == .apply
+                ? String(localized: "Proposal applied.")
+                : String(localized: "Proposal rejected.")
             await self.loadProposals(force: true)
         } catch {
             self.errorText = Self.message(for: error)
@@ -928,15 +933,19 @@ struct IPadSkillProposalKanbanColumn: View {
         ProCard(padding: 0, radius: OpenClawProMetric.cardRadius) {
             VStack(spacing: 0) {
                 ProPanelHeader(
-                    title: IPadSkillWorkshopScreen.proposalLaneLabel(self.status),
+                    title: .localized(IPadSkillWorkshopScreen.proposalLaneLabel(self.status)),
                     value: "\(self.proposals.count)",
                     actionTitle: nil,
                     action: nil)
 
                 if self.proposals.isEmpty {
+                    let lane = IPadSkillWorkshopScreen.proposalLaneLabel(self.status)
                     ProStatusRow(
                         icon: "hammer",
-                        title: "No \(IPadSkillWorkshopScreen.proposalLaneLabel(self.status).lowercased()) proposals",
+                        title: .verbatim(
+                            String(
+                                format: String(localized: "No proposals in %@"),
+                                lane)),
                         detail: "Matching proposals appear here after gateway refresh.",
                         value: "empty",
                         color: .secondary,
@@ -1126,13 +1135,11 @@ private struct IPadSkillProposalManifest: Decodable {
 
 struct IPadSkillProposalManifestEntry: Decodable {
     let id: String
-    let kind: String
     let status: String
     let title: String
     let description: String
     let skillName: String
     let skillKey: String
-    let createdAt: String
     let updatedAt: String
     let scanState: String
 }
@@ -1159,11 +1166,9 @@ struct IPadSkillProposalInspectResponse: Decodable {
 
 struct IPadSkillProposalRecord: Decodable {
     let id: String
-    let kind: String
     let status: String
     let title: String
     let description: String
-    let createdAt: String
     let updatedAt: String
     let target: IPadSkillProposalTarget
 }
@@ -1180,26 +1185,22 @@ struct IPadSkillProposalSupportFile: Decodable {
 
 struct IPadSkillProposal: Identifiable {
     let id: String
-    let kind: String
     let status: String
     let title: String
     let description: String
     let skillName: String
     let skillKey: String
-    let createdAtMs: Double
     let updatedAtMs: Double
     var content: String?
     var supportFiles: [IPadSkillProposalSupportFile]
 
     init(entry: IPadSkillProposalManifestEntry, previous: IPadSkillProposal?) {
         self.id = entry.id
-        self.kind = entry.kind
         self.status = entry.status
         self.title = entry.title.isEmpty ? entry.skillName : entry.title
         self.description = entry.description
         self.skillName = entry.skillName
         self.skillKey = entry.skillKey
-        self.createdAtMs = Self.parseDate(entry.createdAt)
         self.updatedAtMs = Self.parseDate(entry.updatedAt)
         self.content = previous?.updatedAtMs == self.updatedAtMs ? previous?.content : nil
         self.supportFiles = previous?.updatedAtMs == self.updatedAtMs ? previous?.supportFiles ?? [] : []
@@ -1208,13 +1209,11 @@ struct IPadSkillProposal: Identifiable {
     init(inspect: IPadSkillProposalInspectResponse, previous: IPadSkillProposal?) {
         let record = inspect.record
         self.id = record.id
-        self.kind = record.kind
         self.status = record.status
         self.title = record.title.isEmpty ? record.target.skillName : record.title
         self.description = record.description
         self.skillName = record.target.skillName
         self.skillKey = record.target.skillKey
-        self.createdAtMs = Self.parseDate(record.createdAt)
         self.updatedAtMs = Self.parseDate(record.updatedAt)
         self.content = Self.stripFrontmatter(inspect.content)
         self.supportFiles = inspect.supportFiles ?? previous?.supportFiles ?? []
@@ -1223,17 +1222,15 @@ struct IPadSkillProposal: Identifiable {
     var ageLabel: String {
         let diff = max(0, Date().timeIntervalSince1970 * 1000 - self.updatedAtMs)
         let minutes = Int(diff / 60000)
-        if minutes < 1 {
-            return "now"
-        }
+        if minutes < 1 { return String(localized: "now") }
         if minutes < 60 {
-            return "\(minutes)m"
+            return String(format: String(localized: "%@m"), minutes.formatted())
         }
         let hours = minutes / 60
         if hours < 24 {
-            return "\(hours)h"
+            return String(format: String(localized: "%@h"), hours.formatted())
         }
-        return "\(hours / 24)d"
+        return String(format: String(localized: "%@d"), (hours / 24).formatted())
     }
 
     var statusColor: Color {

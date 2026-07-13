@@ -4,7 +4,7 @@ import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
-export type BuildPluginApiParams = {
+type BuildPluginApiParams = {
   id: string;
   name: string;
   version?: string;
@@ -26,6 +26,7 @@ export type BuildPluginApiParams = {
       | "registerHostedMediaResolver"
       | "registerChannel"
       | "registerGatewayMethod"
+      | "registerSessionCatalog"
       | "registerCli"
       | "registerReload"
       | "registerNodeHostCommand"
@@ -39,6 +40,7 @@ export type BuildPluginApiParams = {
       | "registerMigrationProvider"
       | "registerAutoEnableProbe"
       | "registerProvider"
+      | "registerWorkerProvider"
       | "registerModelCatalogProvider"
       | "registerEmbeddingProvider"
       | "registerSpeechProvider"
@@ -94,6 +96,7 @@ const noopRegisterHttpRoute: OpenClawPluginApi["registerHttpRoute"] = () => {};
 const noopRegisterHostedMediaResolver: OpenClawPluginApi["registerHostedMediaResolver"] = () => {};
 const noopRegisterChannel: OpenClawPluginApi["registerChannel"] = () => {};
 const noopRegisterGatewayMethod: OpenClawPluginApi["registerGatewayMethod"] = () => {};
+const noopRegisterSessionCatalog: OpenClawPluginApi["registerSessionCatalog"] = () => {};
 const noopRegisterCli: OpenClawPluginApi["registerCli"] = () => {};
 const noopRegisterReload: OpenClawPluginApi["registerReload"] = () => {};
 const noopRegisterNodeHostCommand: OpenClawPluginApi["registerNodeHostCommand"] = () => {};
@@ -109,6 +112,7 @@ const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] 
 const noopRegisterMigrationProvider: OpenClawPluginApi["registerMigrationProvider"] = () => {};
 const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] = () => {};
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
+const noopRegisterWorkerProvider: OpenClawPluginApi["registerWorkerProvider"] = () => {};
 const noopRegisterModelCatalogProvider: OpenClawPluginApi["registerModelCatalogProvider"] =
   () => {};
 const noopRegisterEmbeddingProvider: OpenClawPluginApi["registerEmbeddingProvider"] = () => {};
@@ -202,6 +206,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerHostedMediaResolver ?? noopRegisterHostedMediaResolver,
     registerChannel: handlers.registerChannel ?? noopRegisterChannel,
     registerGatewayMethod: handlers.registerGatewayMethod ?? noopRegisterGatewayMethod,
+    registerSessionCatalog: handlers.registerSessionCatalog ?? noopRegisterSessionCatalog,
     registerCli,
     registerNodeCliFeature: (registrar, opts) =>
       registerCli(registrar, {
@@ -222,6 +227,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerMigrationProvider: handlers.registerMigrationProvider ?? noopRegisterMigrationProvider,
     registerAutoEnableProbe: handlers.registerAutoEnableProbe ?? noopRegisterAutoEnableProbe,
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,
+    registerWorkerProvider: handlers.registerWorkerProvider ?? noopRegisterWorkerProvider,
     registerModelCatalogProvider:
       handlers.registerModelCatalogProvider ?? noopRegisterModelCatalogProvider,
     registerEmbeddingProvider: handlers.registerEmbeddingProvider ?? noopRegisterEmbeddingProvider,

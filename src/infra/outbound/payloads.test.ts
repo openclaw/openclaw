@@ -488,6 +488,23 @@ describe("normalizeOutboundPayloadsForJson", () => {
       { text: "final answer", mediaUrl: null, mediaUrls: undefined, audioAsVoice: undefined },
     ]);
   });
+
+  it("preserves portable locations during JSON normalization", () => {
+    const location = { latitude: 48.858844, longitude: 2.294351 };
+    expect(normalizeOutboundPayloadsForJson([{ location }])).toEqual([
+      {
+        text: "",
+        mediaUrl: null,
+        mediaUrls: undefined,
+        audioAsVoice: undefined,
+        presentation: undefined,
+        delivery: undefined,
+        interactive: undefined,
+        channelData: undefined,
+        location,
+      },
+    ]);
+  });
 });
 
 describe("normalizeOutboundPayloads", () => {
@@ -495,6 +512,13 @@ describe("normalizeOutboundPayloads", () => {
     const channelData = { line: { flexMessage: { altText: "Card", contents: {} } } };
     expect(normalizeOutboundPayloads([{ channelData }])).toEqual([
       { text: "", mediaUrls: [], channelData },
+    ]);
+  });
+
+  it("keeps location-only payloads", () => {
+    const location = { latitude: 48.858844, longitude: 2.294351 };
+    expect(normalizeOutboundPayloads([{ location }])).toEqual([
+      { text: "", mediaUrls: [], location },
     ]);
   });
 
@@ -626,6 +650,59 @@ describe("OutboundPayloadPlan projections", () => {
 
     expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
       text: "Quarterly breakdown\nRevenue (bar chart)\n- USD: Q1: 10; Q2: 12",
+      mediaUrls: [],
+    });
+  });
+
+  it("mirrors table captions and cells when no plain reply text exists", () => {
+    const plan = createOutboundPayloadPlan([
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline report",
+              headers: ["Account", "Stage", "ARR"],
+              rows: [
+                ["Acme", "Won", 125000],
+                ["Globex", "Review", 82000],
+              ],
+              rowHeaderColumnIndex: 0,
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+      text: "Pipeline report (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
+      mediaUrls: [],
+    });
+  });
+
+  it("mirrors table data alongside plain reply text", () => {
+    const plan = createOutboundPayloadPlan([
+      {
+        text: "Quarterly pipeline",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline report",
+              headers: ["Account", "ARR"],
+              rows: [
+                ["Acme", 125000],
+                ["Globex", 82000],
+              ],
+            },
+            { type: "context", text: "Internal presentation context" },
+          ],
+        },
+      },
+    ]);
+
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+      text: "Quarterly pipeline\nPipeline report (table)\n- Account: Acme; ARR: 125000\n- Account: Globex; ARR: 82000",
       mediaUrls: [],
     });
   });

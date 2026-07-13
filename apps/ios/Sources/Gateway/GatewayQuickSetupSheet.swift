@@ -84,7 +84,7 @@ struct GatewayQuickSetupSheet: View {
                                 Image(systemName: "lock.shield.fill")
                                     .foregroundStyle(OpenClawBrand.warn)
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(availability.actionTitle)
+                                    Text(LocalizedStringKey(availability.actionTitle))
                                         .font(OpenClawType.subheadSemiBold)
                                     Text(guidanceText)
                                         .font(OpenClawType.caption)
@@ -211,7 +211,7 @@ private struct GatewayQuickSetupHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ZStack(alignment: .bottomTrailing) {
-                OpenClawActivationGlyph(size: 70)
+                OpenClawActivationGlyph(size: 70, interactive: true)
                     .shadow(color: OpenClawBrand.activationGlow.opacity(0.18), radius: 10, x: 0, y: 5)
 
                 Image(systemName: "antenna.radiowaves.left.and.right")
@@ -369,7 +369,7 @@ private struct GatewayQuickSetupErrorView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(OpenClawBrand.warn)
                 .padding(.top, 1)
-            Text(self.message)
+            Text(verbatim: self.message)
                 .font(OpenClawType.footnote)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)

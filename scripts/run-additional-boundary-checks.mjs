@@ -3,6 +3,7 @@
 // timeout handling, and grouped CI output.
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import prettyMilliseconds from "pretty-ms";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
@@ -16,6 +17,7 @@ const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 export const BOUNDARY_CHECKS = [
   ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
+  ["lint:docker-e2e", "pnpm", ["run", "lint:docker-e2e"]],
   ["lint:tmp:no-random-messaging", "pnpm", ["run", "lint:tmp:no-random-messaging"]],
   ["lint:tmp:channel-agnostic-boundaries", "pnpm", ["run", "lint:tmp:channel-agnostic-boundaries"]],
   ["lint:tmp:tsgo-core-boundary", "pnpm", ["run", "lint:tmp:tsgo-core-boundary"]],
@@ -444,10 +446,12 @@ function formatDuration(ms) {
   if (!Number.isFinite(ms)) {
     return "";
   }
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-  return `${(ms / 1000).toFixed(1)}s`;
+  const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 100) * 100;
+  return prettyMilliseconds(Math.max(0, roundedMs), {
+    millisecondsDecimalDigits: 0,
+    secondsDecimalDigits: 1,
+    unitCount: 1,
+  });
 }
 
 function writeGroupedResult(result, output) {

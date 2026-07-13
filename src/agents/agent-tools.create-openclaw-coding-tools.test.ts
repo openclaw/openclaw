@@ -7,6 +7,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
@@ -16,12 +18,13 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -32,6 +35,7 @@ import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -66,11 +70,10 @@ async function writeSessionStore(
   agentId: string,
   entries: Record<string, unknown>,
 ) {
-  await fs.writeFile(
-    storeTemplate.replaceAll("{agentId}", agentId),
-    JSON.stringify(entries, null, 2),
-    "utf-8",
-  );
+  const storePath = storeTemplate.replaceAll("{agentId}", agentId);
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await replaceSessionEntry({ agentId, sessionKey, storePath }, entry as SessionEntry);
+  }
 }
 
 function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
@@ -155,6 +158,40 @@ function cronCreatorToolNames(
 }
 
 describe("createOpenClawCodingTools", () => {
+  it("reads node-hosted skill content through the assembled workspace-only read tool", async () => {
+    const locator = "node://node-1/skills/pond/SKILL.md";
+    const tools = createOpenClawCodingTools({
+      config: { tools: { fs: { workspaceOnly: true } } },
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "pond" }],
+        resolvedSkills: [
+          {
+            name: "pond",
+            description: "Pond skill",
+            filePath: locator,
+            baseDir: "node://node-1/skills/pond",
+            readContent: "# Pond\nassembled-marker",
+            source: "openclaw-node",
+            sourceInfo: {
+              source: "openclaw-node",
+              path: locator,
+              scope: "temporary",
+              origin: "top-level",
+            },
+            disableModelInvocation: false,
+          },
+        ],
+      },
+    });
+
+    const result = await requireTool(tools, "read").execute("node-skill-read", {
+      path: locator,
+    });
+
+    expect(JSON.stringify(result)).toContain("assembled-marker");
+  });
+
   const testConfig: OpenClawConfig = {};
 
   afterEach(() => {
@@ -375,6 +412,40 @@ describe("createOpenClawCodingTools", () => {
         toolsEnabled: true,
       }),
     ).toBeNull();
+  });
+
+  it("keeps the injected ring-zero tool under policy and rejects a same-name replacement", () => {
+    const injectedTool = {
+      ...stubTool("crestodian"),
+      label: "Crestodian",
+      description: "trusted ring-zero tool",
+      execute: async () => ({ content: [], details: {} }),
+    };
+    const duplicateTool = {
+      ...stubTool("crestodian"),
+      label: "Crestodian",
+      description: "duplicate plugin tool",
+      execute: async () => ({ content: [], details: {} }),
+    };
+    vi.mocked(createOpenClawTools).mockReturnValueOnce([duplicateTool]);
+
+    const tools = runWithAgentRingZeroTools([injectedTool], () =>
+      createOpenClawCodingTools({
+        config: { tools: { allow: ["read"], deny: ["crestodian"] } },
+        runtimeToolAllowlist: ["crestodian"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: true,
+        },
+      }),
+    );
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.name).toBe("crestodian");
+    expect(tools[0]?.description).toBe("trusted ring-zero tool");
   });
 
   it("uses runtime toolsAllow when materializing plugin tools", () => {
@@ -703,7 +774,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
   });
 
-  it("forwards active model metadata to plugin-only tool construction", () => {
+  it("forwards prepared run facts to plugin-only tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
     const resolvePluginToolsSpy = vi
@@ -717,6 +788,7 @@ describe("createOpenClawCodingTools", () => {
         runtimeToolAllowlist: ["memory_search"],
         modelProvider: "openrouter",
         modelId: "openrouter/auto",
+        nativeChannelId: "oc_native_chat",
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -731,6 +803,59 @@ describe("createOpenClawCodingTools", () => {
       const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
+      expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
+  it("wraps plugin-only tools with trusted caller routing context", async () => {
+    let observedIdentity: unknown;
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([
+        {
+          name: "file_fetch",
+          label: "File fetch",
+          description: "Fetch a file",
+          parameters: { type: "object", properties: {} },
+          execute: async () => {
+            observedIdentity = getGatewayToolCallerIdentity();
+            return { content: [{ type: "text" as const, text: "ok" }], details: {} };
+          },
+        },
+      ]);
+
+    try {
+      const tools = createOpenClawCodingTools({
+        config: testConfig,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:alice",
+        messageProvider: "discord-voice",
+        messageChannel: "discord",
+        messageTo: "channel:123",
+        agentAccountId: "work",
+        messageThreadId: "42",
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["file_fetch"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      await requireTool(tools, "file_fetch").execute?.("tool-call-1", {});
+      expect(observedIdentity).toEqual({
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:alice",
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+      });
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }
@@ -761,6 +886,24 @@ describe("createOpenClawCodingTools", () => {
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }
+  });
+
+  it("forwards the native channel id through standard tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      chatType: "group",
+      nativeChannelId: "oc_native_chat",
+      messageActionTurnCapability: "turn-capability-1",
+    });
+
+    expect(latestCreateOpenClawToolsOptions().nativeChannelId).toBe("oc_native_chat");
+    expect(latestCreateOpenClawToolsOptions().currentChatType).toBe("group");
+    expect(latestCreateOpenClawToolsOptions().messageActionTurnCapability).toBe(
+      "turn-capability-1",
+    );
   });
 
   it("forwards auth profiles to plugin-only tool construction", () => {

@@ -1,14 +1,13 @@
 // Proves queue caps and depth describe pending work while active identities remain in shared state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  clearFollowupQueue,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   getFollowupQueueDepth,
   scheduleFollowupDrain,
 } from "./queue.js";
 import { createDeferred, createQueueTestRun as createRun } from "./queue.test-helpers.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./queue/types.js";
 
 describe("followup queue in-flight ownership", () => {
@@ -49,7 +48,7 @@ describe("followup queue in-flight ownership", () => {
       };
       const runFollowup = async (run: FollowupRun) => {
         calls.push(run);
-        run.queuedLifecycle?.onAdmitted?.();
+        await run.queuedLifecycle?.onAdmitted?.();
         if (run === active) {
           entered.resolve();
           await release.promise;
@@ -112,7 +111,7 @@ describe("followup queue in-flight ownership", () => {
     const rejectedComplete = vi.fn();
     const active = createRun({ prompt: "active" });
     const runFollowup = async (run: FollowupRun) => {
-      run.queuedLifecycle?.onAdmitted?.();
+      await run.queuedLifecycle?.onAdmitted?.();
       if (run === active) {
         entered.resolve();
         await release.promise;
@@ -222,7 +221,7 @@ describe("followup queue in-flight ownership", () => {
       expect(pendingComplete).toHaveBeenCalledOnce();
       expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([0, 0]);
 
-      aggregate?.queuedLifecycle?.onAdmitted?.();
+      await aggregate?.queuedLifecycle?.onAdmitted?.();
       expect(queue?.items.map((item) => item.prompt)).toEqual(["survivor"]);
       expect(queue?.inFlight.size).toBe(2);
       expect(getFollowupQueueDepth(key)).toBe(1);

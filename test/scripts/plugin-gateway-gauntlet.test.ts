@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildObservationGuardFailures,
@@ -234,10 +235,11 @@ describe("plugin gateway gauntlet helpers", () => {
       runtimeSlashAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
       skills: [],
     });
-    expect(matrix[1].runtimeSlashAliases).toEqual([
+    const beta = expectDefined(matrix[1], "beta bundled plugin manifest");
+    expect(beta.runtimeSlashAliases).toEqual([
       { name: "dreaming", kind: "runtime-slash", cliCommand: null },
     ]);
-    expect(matrix[1].buildId).toBe("beta");
+    expect(beta.buildId).toBe("beta");
   });
 
   it("keeps manifest ids separate from bounded build entry ids", async () => {
@@ -251,7 +253,8 @@ describe("plugin gateway gauntlet helpers", () => {
         id: "kimi",
       }),
     ]);
-    expect(buildGauntletPrebuildEnv({}, { buildIds: [matrix[0].buildId] })).toEqual({
+    const kimi = expectDefined(matrix[0], "Kimi bundled plugin manifest");
+    expect(buildGauntletPrebuildEnv({}, { buildIds: [kimi.buildId] })).toEqual({
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -332,9 +335,9 @@ describe("plugin gateway gauntlet helpers", () => {
       { id: "beta", requiredPlugins: ["alpha"] },
     ];
 
-    expect(() => collectRequiredPluginEntries(entries, [entries[0]])).toThrow(
-      "Bundled plugin dependency cycle detected: alpha -> beta -> alpha",
-    );
+    expect(() =>
+      collectRequiredPluginEntries(entries, [expectDefined(entries[0], "alpha plugin entry")]),
+    ).toThrow("Bundled plugin dependency cycle detected: alpha -> beta -> alpha");
   });
 
   it("detects required schema fields recursively", () => {
@@ -604,7 +607,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
     expect(row.status).toBe(1);
     expect(row.spawnError?.code).toBe("ENOENT");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("[spawn error] ENOENT");
   });
 
   it("clamps oversized measured command timers before scheduling", async () => {
@@ -624,7 +627,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
     expect(row.status).toBe(0);
     expect(row.timedOut).toBe(false);
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.not.toContain("ETIMEDOUT");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -762,8 +765,8 @@ setInterval(() => {}, 1000);
     });
 
     expect(row.status).toBe(0);
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stdout");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stderr");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("live stdout");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("live stderr");
   });
 
   it("returns a failed row when measured command log writing fails", async () => {
@@ -1014,7 +1017,7 @@ process.exit(7);
     });
 
     expect(row.status).toBe(0);
-    const log = await fs.readFile(row.logPath, "utf8");
+    const log = await fs.readFile(row.logPath!, "utf8");
     expect(log).toContain("x".repeat(12));
     expect(log).toContain("[stdout truncated after 12 bytes]");
   });
@@ -1046,7 +1049,7 @@ process.exit(7);
     expect(relayed).toContain("x".repeat(12));
     expect(relayed).not.toContain("x".repeat(32));
     expect(relayed).toContain("[stdout relay truncated after 12 bytes]");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("x".repeat(32));
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("x".repeat(32));
   });
 
   it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {

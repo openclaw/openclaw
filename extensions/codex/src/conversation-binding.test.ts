@@ -57,8 +57,21 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 
 vi.mock("./app-server/shared-client.js", () => ({
   ...sharedClientMocks,
-  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient: async (...args: unknown[]) => {
+    const client = (await sharedClientMocks.getSharedCodexAppServerClient(...args)) as {
+      getInstanceId?: () => string;
+    };
+    client.getInstanceId ??= () => "test-client";
+    return client;
+  },
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
+  releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
+    lease.client = undefined;
+  }),
+  withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
+    lease: { client?: unknown };
+    run: (client: unknown) => Promise<unknown>;
+  }) => await params.run(params.lease.client),
 }));
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
@@ -79,11 +92,12 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { legacyCodexConversationBindingId } from "./conversation-binding-data.js";
-import {
-  handleCodexConversationBindingResolved as handleCodexConversationBindingResolvedImpl,
-  handleCodexConversationInboundClaim as handleCodexConversationInboundClaimImpl,
-  startCodexConversationThread as startCodexConversationThreadImpl,
-} from "./conversation-binding.js";
+import { codexConversationBindingRuntime } from "./conversation-binding.js";
+
+const handleCodexConversationBindingResolvedImpl =
+  codexConversationBindingRuntime.handleBindingResolved;
+const handleCodexConversationInboundClaimImpl = codexConversationBindingRuntime.handleInboundClaim;
+const startCodexConversationThreadImpl = codexConversationBindingRuntime.startThread;
 
 function testConversationIdentity(sessionFile: string) {
   return {
@@ -98,7 +112,7 @@ async function writeTestConversationBinding(
 ): Promise<void> {
   await testCodexAppServerBindingStore.mutate(testConversationIdentity(sessionFile), {
     kind: "set",
-    binding,
+    binding: { clientId: "test-client", ...binding },
   });
 }
 
@@ -454,6 +468,33 @@ describe("codex conversation binding", () => {
     };
     expect(sharedClientParams?.agentDir).toBe(agentDir);
     expect(data.agentDir).toBe(agentDir);
+  });
+
+  it("rejects direct conversation start over a private supervised binding", async () => {
+    const sessionFile = path.join(tempDir, "supervised-session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-supervised",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+      cwd: tempDir,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+
+    await expect(
+      startCodexConversationThread({
+        sessionFile,
+        workspaceDir: tempDir,
+        model: "gpt-5.4",
+      }),
+    ).rejects.toThrow("Refusing to replace supervised Codex thread");
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-supervised",
+      connectionScope: "supervision",
+    });
   });
 
   it("rejects binding when configured exec auto mode may need unrouted human approvals", async () => {

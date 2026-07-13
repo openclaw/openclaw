@@ -5,7 +5,6 @@ import {
 /**
  * Resolves model extra parameters and transport overrides for embedded agents.
  */
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
@@ -34,8 +33,8 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { resolveModelExtraParamSources } from "../model-extra-params.js";
 import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
-import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { detectOpenAICompletionsCompat } from "../openai-completions-compat.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
@@ -44,6 +43,7 @@ import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
+import type { ProviderThinkLevel } from "./utils.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
@@ -92,17 +92,13 @@ export function resolveExtraParams(params: {
   modelId: string;
   agentId?: string;
 }): Record<string, unknown> | undefined {
-  const defaultParams = params.cfg?.agents?.defaults?.params ?? undefined;
-  const canonicalKey = modelKey(params.provider, params.modelId);
-  const legacyKey = legacyModelKey(params.provider, params.modelId);
-  const configuredModels = params.cfg?.agents?.defaults?.models;
-  const modelConfig =
-    configuredModels?.[canonicalKey] ?? (legacyKey ? configuredModels?.[legacyKey] : undefined);
-  const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
-  const agentParams =
-    params.agentId && params.cfg?.agents?.list
-      ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)?.params
-      : undefined;
+  const { defaultParams, modelParams, agentParams } = resolveModelExtraParamSources({
+    config: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId,
+  });
+  const globalParams = modelParams ? { ...modelParams } : undefined;
 
   const merged = Object.assign({}, defaultParams, globalParams, agentParams);
   const resolvedParallelToolCalls = resolveAliasedParamValue(
@@ -211,7 +207,7 @@ function resolvePreparedExtraParamsCacheKey(params: {
   agentDir?: string;
   workspaceDir?: string;
   extraParamsOverride?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderThinkLevel;
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
@@ -239,7 +235,7 @@ export function resolvePreparedExtraParams(params: {
   agentDir?: string;
   workspaceDir?: string;
   extraParamsOverride?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderThinkLevel;
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
@@ -786,7 +782,7 @@ type ApplyExtraParamsContext = {
   modelId: string;
   agentDir?: string;
   workspaceDir?: string;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderThinkLevel;
   model?: ProviderRuntimeModel;
   effectiveExtraParams: Record<string, unknown>;
   resolvedExtraParams?: Record<string, unknown>;
@@ -929,7 +925,9 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
     return undefined;
   }
-  const withoutSuffix = modelId.trim().toLowerCase().split(":", 1)[0];
+  const normalized = modelId.trim().toLowerCase();
+  const suffixIndex = normalized.indexOf(":");
+  const withoutSuffix = suffixIndex === -1 ? normalized : normalized.slice(0, suffixIndex);
   return withoutSuffix.split("/").pop();
 }
 
@@ -1064,7 +1062,7 @@ export function applyExtraParamsToAgent(
   provider: string,
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
-  thinkingLevel?: ThinkLevel,
+  thinkingLevel?: ProviderThinkLevel,
   agentId?: string,
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
@@ -1131,6 +1129,7 @@ export function applyExtraParamsToAgent(
   const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
     provider,
     config: cfg,
+    workspaceDir,
     context: {
       config: cfg,
       agentDir,

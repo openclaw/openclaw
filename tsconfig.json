@@ -7,11 +7,12 @@
     "experimentalDecorators": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
-    "lib": ["DOM", "DOM.Iterable", "ES2023", "ScriptHost"],
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noImplicitOverride": true,
     "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "noEmitOnError": true,
     "noUncheckedSideEffectImports": true,
@@ -115,9 +116,6 @@
         "./packages/media-core/src/read-byte-stream-with-limit.ts"
       ],
       "@openclaw/media-core/*": ["./packages/media-core/src/*"],
-      "@openclaw/media-understanding-common": [
-        "./packages/media-understanding-common/src/index.ts"
-      ],
       "@openclaw/media-understanding-common/*": [
         "./packages/media-understanding-common/src/*"
       ],
@@ -140,11 +138,15 @@
       "@openclaw/normalization-core/error-coercion": [
         "./packages/normalization-core/src/error-coercion.ts"
       ],
+      "@openclaw/normalization-core/expect": ["./packages/normalization-core/src/expect.ts"],
       "@openclaw/normalization-core/number-coercion": [
         "./packages/normalization-core/src/number-coercion.ts"
       ],
       "@openclaw/normalization-core/record-coerce": [
         "./packages/normalization-core/src/record-coerce.ts"
+      ],
+      "@openclaw/normalization-core/result": [
+        "./packages/normalization-core/src/result.ts"
       ],
       "@openclaw/normalization-core/string-coerce": [
         "./packages/normalization-core/src/string-coerce.ts"
@@ -156,6 +158,7 @@
         "./packages/normalization-core/src/utf16-slice.ts"
       ],
       "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
+      "@openclaw/retry": ["./packages/retry/src/index.ts"],
       "@openclaw/acp-core": ["./packages/acp-core/src/index.ts"],
       "@openclaw/acp-core/meta": ["./packages/acp-core/src/meta.ts"],
       "@openclaw/acp-core/numeric-options": ["./packages/acp-core/src/numeric-options.ts"],
@@ -225,7 +228,6 @@
       "@openclaw/net-policy/url-protocol": ["./packages/net-policy/src/url-protocol.ts"],
       "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
       "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
-      "@openclaw/web-content-core": ["./packages/web-content-core/src/index.ts"],
       "@openclaw/web-content-core/provider-runtime-shared": [
         "./packages/web-content-core/src/provider-runtime-shared.ts"
       ],

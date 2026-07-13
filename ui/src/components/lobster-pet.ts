@@ -4,6 +4,7 @@
 // Drawn in the smooth OpenClaw lobster style (see the dreams scene and
 // icons.lobster). Look and personality are seeded per session + page load so
 // every new session hatches a slightly different lobster.
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, LitElement, nothing, svg, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
@@ -20,7 +21,7 @@ import {
   type LobsterFamiliarity,
 } from "./lobster-dex.ts";
 
-export type LobsterPetAct =
+type LobsterPetAct =
   | "wave"
   | "snip"
   | "hop"
@@ -38,7 +39,7 @@ export type LobsterPetAct =
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
-export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
+type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
 
 export type LobsterPetPaletteId =
   | "crimson"
@@ -54,28 +55,21 @@ export type LobsterPetPaletteId =
   | "split"
   | "retro";
 
-export type LobsterPetPalette = {
+type LobsterPetPalette = {
   id: LobsterPetPaletteId;
   shell: string;
   claw: string;
 };
 
-export type LobsterPetAccessory =
-  | "none"
-  | "crown"
-  | "sprout"
-  | "patch"
-  | "santa"
-  | "pumpkin"
-  | "party";
+type LobsterPetAccessory = "none" | "crown" | "sprout" | "patch" | "santa" | "pumpkin" | "party";
 
-export type LobsterPetAntennae = "perky" | "droopy";
+type LobsterPetAntennae = "perky" | "droopy";
 
-export type LobsterPetBuild = "round" | "squat" | "slender";
+type LobsterPetBuild = "round" | "squat" | "slender";
 
-export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
+type LobsterPetClawSize = "dainty" | "regular" | "mighty";
 
-export type LobsterPetLook = {
+type LobsterPetLook = {
   palette: LobsterPetPalette;
   scale: number;
   accessory: LobsterPetAccessory;
@@ -305,7 +299,7 @@ const LEAVE_MS = 350;
 // One full ledge crossing for pass-through visitors.
 const PASSER_CROSS_MS = 11_000;
 
-export type LobsterPetAnchor = "ledge" | "bar";
+type LobsterPetAnchor = "ledge" | "bar";
 
 // The bar anchor stands the pet inside the footer bar's free stretch between
 // the status dot (left) and the settings icons (right).
@@ -362,7 +356,10 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
 };
 
 export function lobsterPetName(look: LobsterPetLook, seed: number): string {
-  return RARE_NAMES[look.palette.id] ?? PET_NAMES[(seed >>> 3) % PET_NAMES.length];
+  return (
+    RARE_NAMES[look.palette.id] ??
+    expectDefined(PET_NAMES[(seed >>> 3) % PET_NAMES.length], "lobster pet name catalog entry")
+  );
 }
 
 // Rare-event loads, planned per seed so tests can probe them purely: a molt
@@ -376,9 +373,28 @@ export function isLobsterTwinLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x7715) >>> 0)() < 0.04;
 }
 
-export type LobsterPasserKind = "stranger" | "crab";
+// On a logo load the pet's first scheduled visit skips the ledge entirely:
+// it climbs up top and fills in for the brand logo until the stay ends.
+// Offline summons still report to the ledge - status duty outranks cosplay.
+export function isLobsterLogoLoad(seed: number): boolean {
+  return mulberry32((seed ^ 0x1063) >>> 0)() < 0.12;
+}
 
-export type LobsterPasserPlan = {
+type LobsterLogoVisitPhase = "in" | "leaving" | "out";
+
+export type LobsterLogoVisitDetail = {
+  phase: LobsterLogoVisitPhase;
+  look: LobsterPetLook | null;
+  name: string | null;
+};
+
+// Fired on the pet host whenever the logo stand-in phase changes; the
+// sidebar owns the brand slot, so the swap renders there, not here.
+export const LOBSTER_LOGO_VISIT_EVENT = "openclaw-lobster-logo-visit";
+
+type LobsterPasserKind = "stranger" | "crab";
+
+type LobsterPasserPlan = {
   kind: LobsterPasserKind;
   atMs: number;
   direction: 1 | -1;
@@ -466,7 +482,7 @@ function pickWeighted<T>(rng: () => number, entries: Array<[T, number]>): T {
       return value;
     }
   }
-  return entries[entries.length - 1][0];
+  return expectDefined(entries.at(-1), "weighted lobster choice fallback")[0];
 }
 
 function randomBetween(rng: () => number, min: number, max: number): number {
@@ -532,7 +548,7 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
   };
 }
 
-export type LobsterRunOutcome = "ok" | "error" | "aborted";
+type LobsterRunOutcome = "ok" | "error" | "aborted";
 
 // The most recently active session with a terminal status decides how the
 // pet reacts when the busy state clears: failures earn sympathy, not cheers.
@@ -749,7 +765,7 @@ const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
 
 // Not a lobster. Wide shell, eye stalks, walks sideways across the ledge,
 // and the Lobsterdex refuses to acknowledge it.
-export function renderCrabSvg() {
+function renderCrabSvg() {
   return svg`
     <svg
       class="lobster-pet__svg"
@@ -901,6 +917,10 @@ export class LobsterPet extends LitElement {
   @state() private presence: "out" | "in" | "leaving" = "out";
   @state() private anchor: LobsterPetAnchor = "ledge";
   @state() private scheduledVisiting = false;
+  @state() private logoPerched = false;
+  private logoPlanned = false;
+  private logoDone = false;
+  private lastLogoPhase: LobsterLogoVisitPhase = "out";
   @state() private dismissed = false;
   @state() private grumpy = false;
   @state() private vigil = false;
@@ -1016,6 +1036,9 @@ export class LobsterPet extends LitElement {
       }
       this.moltPlanned = isLobsterMoltLoad(this.seed);
       this.twinPlanned = isLobsterTwinLoad(this.seed);
+      this.logoPlanned = isLobsterLogoLoad(this.seed);
+      this.logoDone = false;
+      this.logoPerched = false;
       this.familiarity = getLobsterFamiliarity();
       this.sailorDay = isLobsterDay(new Date());
       this.greetedThisLoad = false;
@@ -1027,6 +1050,12 @@ export class LobsterPet extends LitElement {
       this.outcomePresenceOwner = null;
       this.trackVigil();
     } else if (changed.has("mode")) {
+      // Status duty outranks the impersonation: any non-idle mode sends the
+      // logo stand-in scurrying back to the ledge, where the status acts
+      // below play out as usual.
+      if (this.logoPerched && this.mode !== "idle") {
+        this.logoPerched = false;
+      }
       const previousMode = changed.get("mode") as LobsterPetMode | undefined;
       const finished = previousMode === "busy" && this.mode === "idle";
       const presenceOwner = finished && this.vigil ? "vigil" : null;
@@ -1068,6 +1097,13 @@ export class LobsterPet extends LitElement {
       }
       if (this.presence === "out") {
         this.rollPerch();
+        // A planned logo load spends its first scheduled visit up top as the
+        // brand mark (once per load); offline summons always take the ledge.
+        this.logoPerched =
+          this.logoPlanned && !this.logoDone && this.scheduledVisiting && this.mode === "idle";
+        if (this.logoPerched) {
+          this.logoDone = true;
+        }
         if (this.look) {
           // Anniversary check reads the dex before this arrival records into
           // it: a first-ever visit today must not celebrate itself.
@@ -1097,11 +1133,13 @@ export class LobsterPet extends LitElement {
       this.leaveTimer = window.setTimeout(() => {
         this.leaveTimer = null;
         this.presence = "out";
+        this.logoPerched = false;
       }, LEAVE_MS);
     }
   }
 
   override updated() {
+    this.dispatchLogoPhase();
     if (!this.restartPending) {
       return;
     }
@@ -1110,10 +1148,12 @@ export class LobsterPet extends LitElement {
       this.enterTimer = null;
       this.entering = false;
       // Old friends get a hello: the first arrival of the load waves at you.
+      // A logo stand-in skips the greeting (and keeps it for a ledge visit).
       if (
         !this.greetedThisLoad &&
         this.familiarity.tier === "friend" &&
         this.presence === "in" &&
+        !this.logoPerched &&
         !prefersReducedMotion()
       ) {
         this.greetedThisLoad = true;
@@ -1121,6 +1161,41 @@ export class LobsterPet extends LitElement {
       }
     }, ENTER_MS);
     this.scheduleNextAct();
+  }
+
+  private logoVisitPhase(): LobsterLogoVisitPhase {
+    if (!this.logoPerched || !this.visitsEnabled || this.dismissed) {
+      return "out";
+    }
+    return this.presence === "in" ? "in" : this.presence === "leaving" ? "leaving" : "out";
+  }
+
+  // The brand slot lives in the sidebar's DOM; phase edges cross over as
+  // events so exactly one home renders the crab at any moment.
+  private dispatchLogoPhase() {
+    const phase = this.logoVisitPhase();
+    if (phase === this.lastLogoPhase) {
+      return;
+    }
+    this.lastLogoPhase = phase;
+    const look = phase === "out" || !this.look ? null : this.look;
+    // The ledge sprite dresses up for palette anniversaries; the stand-in
+    // celebrates the same way.
+    const dressed =
+      look && this.anniversary && look.accessory !== "party"
+        ? { ...look, accessory: "party" as const }
+        : look;
+    this.dispatchEvent(
+      new CustomEvent<LobsterLogoVisitDetail>(LOBSTER_LOGO_VISIT_EVENT, {
+        detail: {
+          phase,
+          look: dressed,
+          name: dressed ? lobsterPetName(dressed, this.seed) : null,
+        },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   private readonly handleVisibilityChange = () => {
@@ -1440,6 +1515,7 @@ export class LobsterPet extends LitElement {
     if (
       !this.look ||
       this.presence !== "in" ||
+      this.logoPerched ||
       this.vigil ||
       this.passer !== null ||
       this.idleTimer !== null ||
@@ -1507,7 +1583,13 @@ export class LobsterPet extends LitElement {
       // The shed shell keeps the true pre-molt size; a max-tier pet sheds a
       // max-tier shell.
       this.shellScale = this.look.scale;
-      this.look = { ...this.look, scale: tiers[Math.min(index + 1, tiers.length - 1)] };
+      this.look = {
+        ...this.look,
+        scale: expectDefined(
+          tiers[Math.min(index + 1, tiers.length - 1)],
+          "lobster molt size tier",
+        ),
+      };
     }
     this.shellSpotPct = this.spotPct;
     this.shellVisible = true;
@@ -1655,7 +1737,9 @@ export class LobsterPet extends LitElement {
     if (!look) {
       return nothing;
     }
-    const showSprites = this.presence !== "out";
+    // While the pet is upstairs playing logo, the ledge stays empty - one
+    // crab, two homes, never both at once.
+    const showSprites = this.presence !== "out" && !this.logoPerched;
     // The shell may outlive the visit while it fades, but dismissal and the
     // visits setting silence it like everything else.
     const showShell = this.shellVisible && this.visitsEnabled && !this.dismissed;

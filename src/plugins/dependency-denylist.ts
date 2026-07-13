@@ -4,12 +4,10 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES = ["plain-crypto-js"] as const;
 
 /** Package names blocked from installed plugin dependency trees. */
-export const blockedInstallDependencyPackageNames = [
-  ...BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES,
-] as const;
+const blockedInstallDependencyPackageNames = [...BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES] as const;
 
 /** Finding for blocked dependencies declared in a plugin package manifest. */
-export type BlockedManifestDependencyFinding = {
+type BlockedManifestDependencyFinding = {
   dependencyName: string;
   declaredAs?: string;
   field: "dependencies" | "name" | "optionalDependencies" | "overrides" | "peerDependencies";
@@ -172,7 +170,9 @@ function collectBlockedOverrideFindings(
   }
 
   const findings: BlockedManifestDependencyFinding[] = [];
-  for (const overrideKey of Object.keys(value).toSorted()) {
+  for (const [overrideKey, overrideValue] of Object.entries(value).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
     const overrideSelectorPackageName = parsePackageNameFromOverrideSelector(overrideKey);
     if (
       overrideSelectorPackageName &&
@@ -184,7 +184,7 @@ function collectBlockedOverrideFindings(
         field: "overrides",
       });
     }
-    findings.push(...collectBlockedOverrideFindings(value[overrideKey], [...path, overrideKey]));
+    findings.push(...collectBlockedOverrideFindings(overrideValue, [...path, overrideKey]));
   }
   return findings;
 }
@@ -209,13 +209,15 @@ export function findBlockedManifestDependencies(
     if (!dependencyMap) {
       continue;
     }
-    for (const dependencyName of Object.keys(dependencyMap).toSorted()) {
+    for (const [dependencyName, dependencySpec] of Object.entries(dependencyMap).toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       if (isBlockedInstallDependencyPackageName(dependencyName)) {
         findings.push({ dependencyName, field });
         continue;
       }
 
-      const aliasTargetPackageName = parseNpmAliasTargetPackageName(dependencyMap[dependencyName]);
+      const aliasTargetPackageName = parseNpmAliasTargetPackageName(dependencySpec);
       if (!aliasTargetPackageName) {
         continue;
       }
