@@ -2369,6 +2369,35 @@
   min-width: 180px;
 }
 
+.worktrees-cleanup {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.worktrees-cleanup__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+}
+
+.worktrees-cleanup__row + .worktrees-cleanup__row {
+  border-top: 1px solid var(--border);
+}
+
+.worktrees-cleanup__label {
+  font-weight: 500;
+}
+
+.worktrees-cleanup__help {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 560px;
+}
+
 /* Settings caps .settings-workspace at 1120px, so the table container is ~1080px
    wide; a 1100px stack breakpoint would collapse the grid at every window size. */
 @media (max-width: 900px) {

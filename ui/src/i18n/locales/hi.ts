@@ -388,6 +388,18 @@ export const hi: TranslationMap = {
     title: "प्रबंधित Worktrees",
     subtitle: "OpenClaw के स्वामित्व वाले पृथक repository checkouts.",
     cleanNow: "अभी साफ़ करें",
+    cleanupTitle: "सफ़ाई",
+    cleanupSubtitle:
+      "डिस्क स्थान खाली करने के लिए OpenClaw समय-समय पर पुराने worktrees हटाता है। तय करें कि सफ़ाई कितनी सख़्ती से की जाए।",
+    cleanupMaxCount: "अधिकतम worktrees",
+    cleanupMaxCountHelp:
+      "सभी repositories में रखे जाने वाले प्रबंधित worktrees की अधिकतम संख्या। पुराने worktrees का पहले snapshot लिया जाता है और फिर उन्हें हटा दिया जाता है। संख्या सीमा अक्षम करने के लिए इसे 0 पर सेट करें।",
+    cleanupMaxSize: "अधिकतम कुल आकार (GB)",
+    cleanupMaxSizeHelp:
+      "सभी प्रबंधित worktrees का अधिकतम कुल आकार GB में। आकार सीमा अक्षम करने के लिए इसे 0 पर सेट करें।",
+    cleanupDecrease: "{label} घटाएँ",
+    cleanupIncrease: "{label} बढ़ाएँ",
+    cleanupSaveFailed: "सफ़ाई की सीमाएँ सहेजना विफल रहा।",
     name: "नाम",
     repo: "Repository",
     branch: "Branch",

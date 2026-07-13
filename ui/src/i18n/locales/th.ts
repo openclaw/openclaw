@@ -385,6 +385,18 @@ export const th: TranslationMap = {
     title: "Worktrees ที่จัดการ",
     subtitle: "การ checkout คลังแยกที่เป็นของ OpenClaw",
     cleanNow: "ล้างข้อมูลตอนนี้",
+    cleanupTitle: "การล้างข้อมูล",
+    cleanupSubtitle:
+      "OpenClaw จะลบ worktree เก่าเป็นระยะเพื่อเพิ่มพื้นที่ว่างในดิสก์ ปรับระดับความเข้มงวดในการล้างข้อมูลได้",
+    cleanupMaxCount: "จำนวน worktree สูงสุด",
+    cleanupMaxCountHelp:
+      "จำนวน worktree ที่มีการจัดการสูงสุดที่จะเก็บไว้ในทุก repository ระบบจะสร้าง snapshot และลบ worktree ที่เก่ากว่าก่อน ตั้งค่าเป็น 0 เพื่อปิดใช้งานขีดจำกัดจำนวน",
+    cleanupMaxSize: "ขนาดรวมสูงสุด (GB)",
+    cleanupMaxSizeHelp:
+      "ขนาดรวมสูงสุดเป็น GB ของ worktree ที่มีการจัดการทั้งหมด ตั้งค่าเป็น 0 เพื่อปิดใช้งานขีดจำกัดขนาด",
+    cleanupDecrease: "ลด {label}",
+    cleanupIncrease: "เพิ่ม {label}",
+    cleanupSaveFailed: "บันทึกขีดจำกัดการล้างข้อมูลไม่สำเร็จ",
     name: "ชื่อ",
     repo: "คลัง",
     branch: "บรานช์",

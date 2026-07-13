@@ -388,6 +388,18 @@ export const ko: TranslationMap = {
     title: "관리되는 Worktree",
     subtitle: "OpenClaw가 소유한 격리된 저장소 체크아웃입니다.",
     cleanNow: "지금 정리",
+    cleanupTitle: "정리",
+    cleanupSubtitle:
+      "OpenClaw는 디스크 공간을 확보하기 위해 오래된 worktree를 주기적으로 제거합니다. 정리 수준을 조정하세요.",
+    cleanupMaxCount: "최대 worktree 수",
+    cleanupMaxCountHelp:
+      "모든 저장소에서 유지할 관리 대상 worktree의 최대 개수입니다. 오래된 worktree부터 스냅샷을 생성한 후 제거합니다. 개수 제한을 비활성화하려면 0으로 설정하세요.",
+    cleanupMaxSize: "최대 총크기(GB)",
+    cleanupMaxSizeHelp:
+      "관리되는 모든 worktree의 최대 총크기(GB)입니다. 크기 제한을 비활성화하려면 0으로 설정하세요.",
+    cleanupDecrease: "{label} 줄이기",
+    cleanupIncrease: "{label} 늘리기",
+    cleanupSaveFailed: "정리 한도를 저장하지 못했습니다.",
     name: "이름",
     repo: "저장소",
     branch: "브랜치",

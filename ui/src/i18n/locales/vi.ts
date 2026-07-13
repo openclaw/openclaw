@@ -391,6 +391,18 @@ export const vi: TranslationMap = {
     title: "Worktree được quản lý",
     subtitle: "Các bản checkout kho lưu trữ được cô lập do OpenClaw sở hữu.",
     cleanNow: "Dọn dẹp ngay",
+    cleanupTitle: "Dọn dẹp",
+    cleanupSubtitle:
+      "OpenClaw định kỳ xóa các worktree cũ để giải phóng dung lượng ổ đĩa. Điều chỉnh mức độ dọn dẹp.",
+    cleanupMaxCount: "Số worktree tối đa",
+    cleanupMaxCountHelp:
+      "Số lượng worktree được quản lý tối đa cần giữ lại trên tất cả kho lưu trữ. Các worktree cũ hơn sẽ được tạo bản chụp nhanh và xóa trước. Đặt thành 0 để tắt giới hạn số lượng.",
+    cleanupMaxSize: "Tổng kích thước tối đa (GB)",
+    cleanupMaxSizeHelp:
+      "Tổng kích thước tối đa tính bằng GB trên tất cả worktree được quản lý. Đặt thành 0 để tắt giới hạn kích thước.",
+    cleanupDecrease: "Giảm {label}",
+    cleanupIncrease: "Tăng {label}",
+    cleanupSaveFailed: "Không thể lưu các giới hạn dọn dẹp.",
     name: "Tên",
     repo: "Kho lưu trữ",
     branch: "Nhánh",

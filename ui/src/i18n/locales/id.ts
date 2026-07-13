@@ -389,6 +389,18 @@ export const id: TranslationMap = {
     title: "Worktree Terkelola",
     subtitle: "Checkout repositori terisolasi yang dimiliki oleh OpenClaw.",
     cleanNow: "Bersihkan sekarang",
+    cleanupTitle: "Pembersihan",
+    cleanupSubtitle:
+      "OpenClaw secara berkala menghapus worktree lama untuk mengosongkan ruang disk. Atur seberapa agresif pembersihan dijalankan.",
+    cleanupMaxCount: "Worktree maksimum",
+    cleanupMaxCountHelp:
+      "Jumlah maksimum worktree terkelola yang dipertahankan di seluruh repositori. Worktree yang lebih lama dibuatkan snapshot dan dihapus terlebih dahulu. Atur ke 0 untuk menonaktifkan batas jumlah.",
+    cleanupMaxSize: "Ukuran total maksimum (GB)",
+    cleanupMaxSizeHelp:
+      "Ukuran total maksimum dalam GB di seluruh worktree terkelola. Atur ke 0 untuk menonaktifkan batas ukuran.",
+    cleanupDecrease: "Kurangi {label}",
+    cleanupIncrease: "Tambah {label}",
+    cleanupSaveFailed: "Gagal menyimpan batas pembersihan.",
     name: "Nama",
     repo: "Repositori",
     branch: "Branch",

@@ -394,6 +394,18 @@ export const ja_JP: TranslationMap = {
     title: "管理対象ワークツリー",
     subtitle: "OpenClaw が所有する分離されたリポジトリのチェックアウト。",
     cleanNow: "今すぐクリーンアップ",
+    cleanupTitle: "クリーンアップ",
+    cleanupSubtitle:
+      "OpenClaw は、ディスク容量を確保するために古い worktree を定期的に削除します。クリーンアップの実行基準を調整できます。",
+    cleanupMaxCount: "worktree の最大数",
+    cleanupMaxCountHelp:
+      "すべてのリポジトリで保持する管理対象 worktree の最大数です。古い worktree から順にスナップショットが作成され、削除されます。件数制限を無効にするには 0 に設定します。",
+    cleanupMaxSize: "合計最大サイズ（GB）",
+    cleanupMaxSizeHelp:
+      "すべての管理対象 worktree の合計最大サイズ（GB）です。サイズ制限を無効にするには 0 に設定します。",
+    cleanupDecrease: "{label}を減らす",
+    cleanupIncrease: "{label}を増やす",
+    cleanupSaveFailed: "クリーンアップ制限の保存に失敗しました。",
     name: "名前",
     repo: "リポジトリ",
     branch: "ブランチ",

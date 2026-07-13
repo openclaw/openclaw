@@ -389,6 +389,18 @@ export const pl: TranslationMap = {
     title: "Zarządzane worktree",
     subtitle: "Izolowane kopie robocze repozytoriów należące do OpenClaw.",
     cleanNow: "Wyczyść teraz",
+    cleanupTitle: "Czyszczenie",
+    cleanupSubtitle:
+      "OpenClaw okresowo usuwa stare drzewa robocze, aby zwolnić miejsce na dysku. Dostosuj intensywność czyszczenia.",
+    cleanupMaxCount: "Maksymalna liczba drzew roboczych",
+    cleanupMaxCountHelp:
+      "Maksymalna liczba zarządzanych drzew roboczych przechowywanych we wszystkich repozytoriach. Starsze drzewa robocze są najpierw zapisywane jako migawki, a następnie usuwane. Ustaw 0, aby wyłączyć limit liczby.",
+    cleanupMaxSize: "Maksymalny łączny rozmiar (GB)",
+    cleanupMaxSizeHelp:
+      "Maksymalny łączny rozmiar w GB wszystkich zarządzanych drzew roboczych. Ustaw 0, aby wyłączyć limit rozmiaru.",
+    cleanupDecrease: "Zmniejsz {label}",
+    cleanupIncrease: "Zwiększ {label}",
+    cleanupSaveFailed: "Nie udało się zapisać limitów czyszczenia.",
     name: "Nazwa",
     repo: "Repozytorium",
     branch: "Gałąź",

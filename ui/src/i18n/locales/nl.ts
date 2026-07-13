@@ -391,6 +391,18 @@ export const nl: TranslationMap = {
     title: "Beheerde worktrees",
     subtitle: "Geïsoleerde repository-checkouts beheerd door OpenClaw.",
     cleanNow: "Nu opschonen",
+    cleanupTitle: "Opschonen",
+    cleanupSubtitle:
+      "OpenClaw verwijdert periodiek oude worktrees om schijfruimte vrij te maken. Stel in hoe agressief de opschoning wordt uitgevoerd.",
+    cleanupMaxCount: "Maximaal aantal worktrees",
+    cleanupMaxCountHelp:
+      "Maximaal aantal beheerde worktrees dat in alle repository's samen wordt bewaard. Van oudere worktrees wordt eerst een snapshot gemaakt, waarna ze worden verwijderd. Stel in op 0 om de limiet voor het aantal uit te schakelen.",
+    cleanupMaxSize: "Maximale totale grootte (GB)",
+    cleanupMaxSizeHelp:
+      "Maximale totale grootte in GB van alle beheerde worktrees samen. Stel in op 0 om de groottelimiet uit te schakelen.",
+    cleanupDecrease: "{label} verlagen",
+    cleanupIncrease: "{label} verhogen",
+    cleanupSaveFailed: "Opslaan van opschoningslimieten is mislukt.",
     name: "Naam",
     repo: "Repository",
     branch: "Branch",

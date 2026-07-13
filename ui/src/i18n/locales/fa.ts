@@ -390,6 +390,18 @@ export const fa: TranslationMap = {
     title: "Worktreeهای مدیریت‌شده",
     subtitle: "checkoutهای ایزولهٔ مخزن که متعلق به OpenClaw هستند.",
     cleanNow: "اکنون پاک‌سازی کن",
+    cleanupTitle: "پاک‌سازی",
+    cleanupSubtitle:
+      "OpenClaw برای آزاد کردن فضای دیسک، به‌طور دوره‌ای worktreeهای قدیمی را حذف می‌کند. میزان شدت اجرای پاک‌سازی را تنظیم کنید.",
+    cleanupMaxCount: "حداکثر تعداد worktreeها",
+    cleanupMaxCountHelp:
+      "حداکثر تعداد worktreeهای مدیریت‌شده که در همه مخزن‌ها نگه داشته می‌شوند. ابتدا از worktreeهای قدیمی‌تر snapshot گرفته می‌شود و سپس حذف می‌شوند. برای غیرفعال کردن محدودیت تعداد، مقدار را روی 0 تنظیم کنید.",
+    cleanupMaxSize: "حداکثر اندازه کل (GB)",
+    cleanupMaxSizeHelp:
+      "حداکثر اندازه کل برحسب GB در همه worktreeهای مدیریت‌شده. برای غیرفعال کردن محدودیت اندازه، مقدار را روی 0 تنظیم کنید.",
+    cleanupDecrease: "کاهش {label}",
+    cleanupIncrease: "افزایش {label}",
+    cleanupSaveFailed: "ذخیره محدودیت‌های پاک‌سازی ناموفق بود.",
     name: "نام",
     repo: "مخزن",
     branch: "شاخه",

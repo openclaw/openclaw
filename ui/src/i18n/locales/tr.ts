@@ -391,6 +391,18 @@ export const tr: TranslationMap = {
     title: "Yönetilen Worktree'ler",
     subtitle: "OpenClaw tarafından sahip olunan yalıtılmış depo checkout'ları.",
     cleanNow: "Şimdi temizle",
+    cleanupTitle: "Temizleme",
+    cleanupSubtitle:
+      "OpenClaw, disk alanı açmak için eski worktree'leri düzenli olarak kaldırır. Temizlemenin ne kadar yoğun yapılacağını ayarlayın.",
+    cleanupMaxCount: "Maksimum worktree sayısı",
+    cleanupMaxCountHelp:
+      "Tüm depolarda tutulacak maksimum yönetilen worktree sayısı. Önce eski worktree'lerin anlık görüntüsü alınır ve ardından bunlar kaldırılır. Sayı sınırını devre dışı bırakmak için 0 olarak ayarlayın.",
+    cleanupMaxSize: "Maksimum toplam boyut (GB)",
+    cleanupMaxSizeHelp:
+      "Tüm yönetilen worktree'lerin GB cinsinden maksimum toplam boyutu. Boyut sınırını devre dışı bırakmak için 0 olarak ayarlayın.",
+    cleanupDecrease: "{label} değerini azalt",
+    cleanupIncrease: "{label} değerini artır",
+    cleanupSaveFailed: "Temizleme sınırları kaydedilemedi.",
     name: "Ad",
     repo: "Depo",
     branch: "Dal",

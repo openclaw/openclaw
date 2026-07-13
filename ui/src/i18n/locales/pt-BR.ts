@@ -390,6 +390,18 @@ export const pt_BR: TranslationMap = {
     title: "Worktrees gerenciadas",
     subtitle: "Checkouts isolados de repositórios pertencentes ao OpenClaw.",
     cleanNow: "Limpar agora",
+    cleanupTitle: "Limpeza",
+    cleanupSubtitle:
+      "O OpenClaw remove periodicamente worktrees antigos para liberar espaço em disco. Ajuste o nível de agressividade da limpeza.",
+    cleanupMaxCount: "Máximo de worktrees",
+    cleanupMaxCountHelp:
+      "Número máximo de worktrees gerenciados a serem mantidos em todos os repositórios. Os worktrees mais antigos são salvos como snapshots e removidos primeiro. Defina como 0 para desativar o limite de quantidade.",
+    cleanupMaxSize: "Tamanho total máximo (GB)",
+    cleanupMaxSizeHelp:
+      "Tamanho total máximo em GB de todos os worktrees gerenciados. Defina como 0 para desativar o limite de tamanho.",
+    cleanupDecrease: "Diminuir {label}",
+    cleanupIncrease: "Aumentar {label}",
+    cleanupSaveFailed: "Falha ao salvar os limites de limpeza.",
     name: "Nome",
     repo: "Repositório",
     branch: "Branch",

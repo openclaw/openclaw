@@ -387,6 +387,18 @@ export const ar: TranslationMap = {
     title: "مساحات العمل المُدارة",
     subtitle: "نسخ مستودعات معزولة مملوكة لـ OpenClaw.",
     cleanNow: "تنظيف الآن",
+    cleanupTitle: "التنظيف",
+    cleanupSubtitle:
+      "يزيل OpenClaw دوريًا أشجار العمل القديمة لتوفير مساحة على القرص. اضبط مدى صرامة عملية التنظيف.",
+    cleanupMaxCount: "الحد الأقصى لأشجار العمل",
+    cleanupMaxCountHelp:
+      "الحد الأقصى لعدد أشجار العمل المُدارة التي سيتم الاحتفاظ بها عبر جميع المستودعات. تُؤخذ لقطات لأشجار العمل الأقدم وتُزال أولًا. اضبطه على 0 لتعطيل حد العدد.",
+    cleanupMaxSize: "الحد الأقصى للحجم الإجمالي (GB)",
+    cleanupMaxSizeHelp:
+      "الحد الأقصى للحجم الإجمالي بوحدة GB عبر جميع أشجار العمل المُدارة. اضبطه على 0 لتعطيل حد الحجم.",
+    cleanupDecrease: "تقليل {label}",
+    cleanupIncrease: "زيادة {label}",
+    cleanupSaveFailed: "فشل حفظ حدود التنظيف.",
     name: "الاسم",
     repo: "المستودع",
     branch: "الفرع",

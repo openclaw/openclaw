@@ -387,6 +387,18 @@ export const en: TranslationMap = {
     title: "Managed Worktrees",
     subtitle: "Isolated repository checkouts owned by OpenClaw.",
     cleanNow: "Clean up now",
+    cleanupTitle: "Cleanup",
+    cleanupSubtitle:
+      "OpenClaw periodically removes old worktrees to free disk space. Tune how aggressively cleanup runs.",
+    cleanupMaxCount: "Max worktrees",
+    cleanupMaxCountHelp:
+      "Maximum number of managed worktrees to retain across all repositories. Older worktrees are snapshotted and removed first. Set to 0 to disable the count limit.",
+    cleanupMaxSize: "Max total size (GB)",
+    cleanupMaxSizeHelp:
+      "Maximum total size in GB across all managed worktrees. Set to 0 to disable the size limit.",
+    cleanupDecrease: "Decrease {label}",
+    cleanupIncrease: "Increase {label}",
+    cleanupSaveFailed: "Saving cleanup limits failed.",
     name: "Name",
     repo: "Repository",
     branch: "Branch",
