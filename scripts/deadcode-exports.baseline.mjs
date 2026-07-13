@@ -872,8 +872,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/agents/auth-profiles/usage.ts: testing",
   "src/agents/bash-process-registry.ts: resetProcessRegistryForTests",
   "src/agents/bash-tools.exec.ts: testing",
-  "src/agents/bootstrap-cache.ts: clearAllBootstrapSnapshots",
-  "src/agents/bootstrap-files.ts: resetBootstrapWarningCacheForTest",
   "src/agents/cache-trace.ts: summarizeMessages",
   "src/agents/channel-tools.ts: testing",
   "src/agents/chutes-oauth.ts: CHUTES_TOKEN_ENDPOINT",

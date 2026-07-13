@@ -11,7 +11,6 @@ import {
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  resetBootstrapWarningCacheForTest,
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
@@ -654,10 +653,6 @@ describe("hasCompletedBootstrapTurn", () => {
 });
 
 describe("makeBootstrapWarn", () => {
-  afterEach(() => {
-    resetBootstrapWarningCacheForTest();
-  });
-
   it("deduplicates repeated warnings for the same session and message", () => {
     const warnings: string[] = [];
     const warn = makeBootstrapWarn({

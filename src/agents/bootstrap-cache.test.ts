@@ -9,11 +9,7 @@ vi.mock("./workspace.js", () => ({
   loadWorkspaceBootstrapFiles: vi.fn(),
 }));
 
-import {
-  clearAllBootstrapSnapshots,
-  clearBootstrapSnapshot,
-  getOrLoadBootstrapFiles,
-} from "./bootstrap-cache.js";
+import { clearBootstrapSnapshot, getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 function makeFile(name: string, content: string): WorkspaceBootstrapFile {
@@ -30,12 +26,10 @@ describe("getOrLoadBootstrapFiles", () => {
   const mockLoad = () => vi.mocked(loadWorkspaceBootstrapFiles);
 
   beforeEach(() => {
-    clearAllBootstrapSnapshots();
     mockLoad().mockResolvedValue(files);
   });
 
   afterEach(() => {
-    clearAllBootstrapSnapshots();
     vi.clearAllMocks();
   });
 
@@ -109,12 +103,10 @@ describe("clearBootstrapSnapshot", () => {
   const mockLoad = () => vi.mocked(loadWorkspaceBootstrapFiles);
 
   beforeEach(() => {
-    clearAllBootstrapSnapshots();
     mockLoad().mockResolvedValue([makeFile("AGENTS.md", "content")]);
   });
 
   afterEach(() => {
-    clearAllBootstrapSnapshots();
     vi.clearAllMocks();
   });
 
