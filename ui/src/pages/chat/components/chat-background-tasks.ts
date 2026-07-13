@@ -318,12 +318,12 @@ export function backgroundTasksActiveCount(props: BackgroundTasksProps | undefin
   return props?.tasks?.filter(isActiveTask).length ?? 0;
 }
 
-export type BackgroundTasksStatus = { count: number; startedMs: number | null };
+type BackgroundTasksStatus = { count: number; startedMs: number | null };
 
 /** Summary for the bottom-of-thread status row: active-task count plus the
  * oldest active start time so the row ticks one elapsed label, not one per
  * task. `startedMs` is null when no active task has a usable timestamp. */
-export function activeBackgroundTasksStatus(
+function activeBackgroundTasksStatus(
   props: BackgroundTasksProps | undefined,
 ): BackgroundTasksStatus | null {
   const active = props?.tasks?.filter(isActiveTask) ?? [];

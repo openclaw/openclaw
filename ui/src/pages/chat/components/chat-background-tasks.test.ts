@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/data.ts";
 import {
-  activeBackgroundTasksStatus,
   backgroundTasksActiveCount,
   createBackgroundTasksProps,
   handleBackgroundTasksEvent,
@@ -358,25 +357,29 @@ describe("running-tasks status row", () => {
     };
   }
 
-  it("summarizes active tasks with the oldest usable start time", () => {
-    expect(activeBackgroundTasksStatus(undefined)).toBeNull();
-    expect(activeBackgroundTasksStatus(makeProps({ tasks: null }))).toBeNull();
-    expect(
-      activeBackgroundTasksStatus(
-        makeProps({ tasks: [makeTask({ id: "t", status: "completed" })] }),
-      ),
-    ).toBeNull();
-
-    const status = activeBackgroundTasksStatus(
-      makeProps({
-        tasks: [
-          makeTask({ id: "t1", startedAt: 9_000 }),
-          makeTask({ id: "t2", status: "queued", startedAt: undefined, createdAt: 4_000 }),
-          makeTask({ id: "t3", status: "completed", startedAt: 100 }),
-        ],
-      }),
+  it("ticks from the oldest active start and counts only active tasks", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksStatusRow(
+        makeProps({
+          tasks: [
+            makeTask({ id: "t1", startedAt: 9_000 }),
+            makeTask({ id: "t2", status: "queued", startedAt: undefined, createdAt: 4_000 }),
+            makeTask({ id: "t3", status: "completed", startedAt: 100 }),
+          ],
+        }),
+      )}`,
+      container,
     );
-    expect(status).toEqual({ count: 2, startedMs: 4_000 });
+
+    const elapsed = container.querySelector<HTMLElement & { startMs: number | null }>(
+      "openclaw-elapsed-time",
+    );
+    expect(elapsed?.startMs).toBe(4_000);
+    expect(
+      container.querySelector<HTMLButtonElement>(".chat-tasks-status__link")?.textContent?.trim(),
+    ).toBe("2 running tasks");
   });
 
   it("renders count, ticking elapsed time, and opens the collapsed rail", () => {
