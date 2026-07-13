@@ -1757,4 +1757,3 @@ export const testing = {
       : defaultSubagentSpawnDeps;
   },
 };
-export { testing as __testing };

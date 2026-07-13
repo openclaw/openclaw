@@ -13,6 +13,7 @@ import type { SessionsListResult, UpdateAvailable } from "../api/types.ts";
 import {
   cancelRoutePreload,
   DEFAULT_SIDEBAR_PINNED_ROUTES,
+  isPluginsHubRoute,
   isSettingsNavigationRoute,
   navigationIconForRoute,
   scheduleRoutePreload,
@@ -30,13 +31,17 @@ import {
 } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import "./menu-surface.ts";
 import "./session-menu.ts";
+import "./sidebar-agent-chip.ts";
 import "./sidebar-attention.ts";
 import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { t } from "../i18n/index.ts";
+import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { editorOpenUrl } from "../lib/editor-links.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
@@ -76,6 +81,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -114,6 +120,7 @@ type SidebarRecentSession = {
   channelSession?: boolean;
   workSession?: boolean;
   worktreeId?: string;
+  hasAutomation: boolean;
   unread: boolean;
 };
 
@@ -289,6 +296,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
   @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
+  // Anchored by its bottom edge so the footer menu grows upward regardless of height.
+  @state() private agentMenuPosition: { x: number; bottom: number } | null = null;
   @state() private visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
@@ -306,6 +315,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private sessionMenuWorkVersion = 0;
   private sessionGroupMenuTrigger: HTMLElement | null = null;
   private sessionSortMenuTrigger: HTMLElement | null = null;
+  private agentMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   private sessionCreatedOrder = new Map<string, number>();
   private sessionsSource: SessionCapability | null = null;
@@ -650,12 +660,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       this.customizeMenuPosition ||
       this.sessionMenu ||
       this.sessionGroupMenu ||
-      this.sessionSortMenuPosition,
+      this.sessionSortMenuPosition ||
+      this.agentMenuPosition,
     );
     this.closeCustomizeMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeAgentMenu();
     return hadTransientMenu;
   }
 
@@ -776,14 +788,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       <div class="sidebar-brand">
         <a
           class="sidebar-brand__identity"
-          href=${pathForRoute("chat", this.basePath)}
-          aria-label=${t("nav.chat")}
+          href=${pathForRoute("new-session", this.basePath)}
+          aria-label=${titleForRoute("new-session")}
           @click=${(event: MouseEvent) => {
             if (!shouldHandleNavigationClick(event)) {
               return;
             }
             event.preventDefault();
-            this.onNavigate?.("chat");
+            this.onNavigate?.("new-session");
           }}
         >
           <span class="sidebar-brand__logo-slot">
@@ -896,6 +908,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         channelSession: channelInfo.channelSession,
         workSession: Boolean(row.worktree || row.execNode),
         worktreeId: row.worktree?.id,
+        hasAutomation: row.hasAutomation === true,
         unread: row.unread === true,
       };
     };
@@ -1203,6 +1216,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeAgentMenu();
     this.customizeMenuTrigger = trigger;
     this.customizeMenuPosition = {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
@@ -1249,6 +1263,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeCustomizeMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeAgentMenu();
     this.sessionMenuTrigger = trigger;
     this.sessionMenu = { session, x, y };
     this.loadSessionMenuWork(session);
@@ -1296,6 +1311,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeCustomizeMenu();
     this.closeSessionMenu();
     this.closeSessionSortMenu();
+    this.closeAgentMenu();
     this.sessionGroupMenuTrigger = trigger;
     this.sessionGroupMenu = {
       group,
@@ -1331,6 +1347,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeCustomizeMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
+    this.closeAgentMenu();
     this.sessionSortMenuTrigger = trigger;
     this.sessionSortMenuPosition = {
       x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
@@ -1352,6 +1369,125 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (options.restoreFocus) {
       trigger?.focus();
     }
+  }
+
+  private toggleAgentMenu(trigger: HTMLElement) {
+    if (this.agentMenuPosition) {
+      this.closeAgentMenu();
+      return;
+    }
+    const menuWidth = 240;
+    const rect = trigger.getBoundingClientRect();
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.closeSessionGroupMenu();
+    this.closeSessionSortMenu();
+    this.agentMenuTrigger = trigger;
+    // Right-aligned to the toggle so the menu stays over the sidebar column.
+    this.agentMenuPosition = {
+      x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
+      bottom: Math.max(8, window.innerHeight - rect.top + 4),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-agent-menu .sidebar-customize-menu__item")?.focus();
+    });
+  }
+
+  private closeAgentMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.agentMenuTrigger;
+    this.agentMenuTrigger = null;
+    this.agentMenuPosition = null;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private activeChipAgent() {
+    const agents = this.context?.agents.state.agentsList?.agents ?? [];
+    const activeId = this.expandedAgentId();
+    const agent = agents.find((entry) => normalizeAgentId(entry.id) === activeId);
+    return { activeId, agent, agents };
+  }
+
+  /** Newest visible session for an agent; the footer chip resumes here. */
+  private latestAgentSessionRow(agentId: string): SessionsListResult["sessions"][number] | null {
+    const normalized = normalizeAgentId(agentId);
+    const rows =
+      normalized === normalizeAgentId(this.sessionsAgentId ?? "")
+        ? (this.sessionsResult?.sessions ?? [])
+        : (this.sessionRowsByAgent[normalized] ?? []);
+    // Unprefixed keys belong to the system default agent (the filter's
+    // contract); keeping them for other agents would resume the wrong agent's
+    // session because resume navigates with the raw key.
+    const visible = filterVisibleSessionRows(rows, {
+      agentId: normalized,
+      defaultAgentId: resolveUiDefaultAgentId({
+        agentsList: this.context?.agents.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      }),
+      filterByAgent: true,
+    });
+    return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
+  }
+
+  private agentResumeKey(agentId: string): string {
+    const latest = this.latestAgentSessionRow(agentId);
+    if (latest) {
+      return latest.key;
+    }
+    return buildAgentMainSessionKey({
+      agentId,
+      mainKey: resolveUiConfiguredMainKey({
+        agentsList: this.context?.agents.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      }),
+    });
+  }
+
+  /** Offline routes to Settings (connection) instead of a dead chat load. */
+  private openAgentConversation(agentId: string) {
+    if (!this.connected) {
+      this.onNavigate?.("config");
+      return;
+    }
+    this.selectSession(this.agentResumeKey(agentId));
+  }
+
+  private agentChipSubtitle(agentId: string): string {
+    if (!this.connected) {
+      return t("common.offline");
+    }
+    const latest = this.latestAgentSessionRow(agentId);
+    if (latest?.hasActiveRun) {
+      return t("agentChip.working");
+    }
+    if (latest) {
+      const label = resolveSessionDisplayName(latest.key, latest);
+      const meta = formatSidebarTimestamp(latest.updatedAt);
+      return meta ? `${label} · ${meta}` : label;
+    }
+    return t("agentChip.ready");
+  }
+
+  private switchChipAgent(agentId: string) {
+    this.closeAgentMenu();
+    this.expandAgent(agentId);
+    this.openAgentConversation(agentId);
+  }
+
+  private askAgentCapabilities(agentId: string) {
+    this.closeAgentMenu();
+    if (!this.connected) {
+      return;
+    }
+    const key = this.agentResumeKey(agentId);
+    const draft = encodeURIComponent(t("chat.welcome.suggestions.whatCanYouDo"));
+    this.context?.gateway.setSessionKey(key);
+    this.onNavigate?.("chat", { search: `${searchForSession(key)}&draft=${draft}` });
   }
 
   private knownSessionGroups(): string[] {
@@ -1631,8 +1767,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (this.sessionSortMenuTrigger && path.includes(this.sessionSortMenuTrigger)) {
       return;
     }
+    if (this.agentMenuTrigger && path.includes(this.agentMenuTrigger)) {
+      return;
+    }
     const menu = this.querySelector(
-      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu",
+      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu, .sidebar-agent-menu",
     );
     if (menu && path.includes(menu)) {
       return;
@@ -1640,6 +1779,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeCustomizeMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeAgentMenu();
   };
 
   // Registered only while one of the transient menus is open. Keeping this
@@ -1651,6 +1791,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       this.closeCustomizeMenu({ restoreFocus: true });
       this.closeSessionGroupMenu({ restoreFocus: true });
       this.closeSessionSortMenu({ restoreFocus: true });
+      this.closeAgentMenu({ restoreFocus: true });
       return;
     }
     if (event.key === "Tab") {
@@ -1659,6 +1800,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       this.closeCustomizeMenu({ restoreFocus: true });
       this.closeSessionGroupMenu({ restoreFocus: true });
       this.closeSessionSortMenu({ restoreFocus: true });
+      this.closeAgentMenu({ restoreFocus: true });
       return;
     }
     this.moveTransientMenuFocus(event);
@@ -1666,7 +1808,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private moveTransientMenuFocus(event: KeyboardEvent) {
     const menu = this.querySelector<HTMLElement>(
-      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu",
+      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu, .sidebar-agent-menu",
     );
     if (!menu) {
       return;
@@ -1711,49 +1853,180 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return nothing;
     }
     return html`
-      <div
-        class="sidebar-customize-menu"
-        role="menu"
-        aria-label=${t("nav.customize")}
-        style="left: ${position.x}px; top: ${position.y}px;"
-      >
-        <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
-        ${SIDEBAR_NAV_ROUTES.filter((routeId) => this.isRouteEnabled(routeId)).map((routeId) => {
-          const pinned = this.sidebarPinnedRoutes.includes(routeId);
-          return html`
-            <button
-              type="button"
-              class="sidebar-customize-menu__item"
-              role="menuitemcheckbox"
-              tabindex="-1"
-              aria-checked=${String(pinned)}
-              @click=${() => this.togglePinnedRoute(routeId)}
-            >
-              <span class="nav-item__icon" aria-hidden="true"
-                >${icons[navigationIconForRoute(routeId)]}</span
-              >
-              <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
-              <span class="sidebar-customize-menu__check" aria-hidden="true">
-                ${pinned ? icons.check : nothing}
-              </span>
-            </button>
-          `;
-        })}
-        <div class="sidebar-customize-menu__separator" role="separator"></div>
-        <button
-          type="button"
-          class="sidebar-customize-menu__item"
-          role="menuitem"
-          tabindex="-1"
-          @click=${() => {
-            this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
-            this.closeCustomizeMenu({ restoreFocus: true });
-          }}
+      <openclaw-menu-surface>
+        <div
+          class="sidebar-customize-menu"
+          role="menu"
+          aria-label=${t("nav.customize")}
+          style="left: ${position.x}px; top: ${position.y}px;"
         >
-          <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
-          <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
-        </button>
-      </div>
+          <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
+          ${SIDEBAR_NAV_ROUTES.filter((routeId) => this.isRouteEnabled(routeId)).map((routeId) => {
+            const pinned = this.sidebarPinnedRoutes.includes(routeId);
+            return html`
+              <button
+                type="button"
+                class="sidebar-customize-menu__item"
+                role="menuitemcheckbox"
+                tabindex="-1"
+                aria-checked=${String(pinned)}
+                @click=${() => this.togglePinnedRoute(routeId)}
+              >
+                <span class="nav-item__icon" aria-hidden="true"
+                  >${icons[navigationIconForRoute(routeId)]}</span
+                >
+                <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
+                <span class="sidebar-customize-menu__check" aria-hidden="true">
+                  ${pinned ? icons.check : nothing}
+                </span>
+              </button>
+            `;
+          })}
+          <div class="sidebar-customize-menu__separator" role="separator"></div>
+          <button
+            type="button"
+            class="sidebar-customize-menu__item"
+            role="menuitem"
+            tabindex="-1"
+            @click=${() => {
+              this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
+              this.closeCustomizeMenu({ restoreFocus: true });
+            }}
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
+            <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
+          </button>
+        </div>
+      </openclaw-menu-surface>
+    `;
+  }
+
+  private renderAgentMenuAgentRow(
+    agent: { id: string; name?: string; identity?: { name?: string; emoji?: string } },
+    activeId: string,
+  ) {
+    const agentId = normalizeAgentId(agent.id);
+    const label = normalizeAgentLabel(agent);
+    const active = agentId === activeId;
+    const unread = active ? 0 : this.agentUnreadCount(agentId);
+    const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
+    return html`
+      <button
+        type="button"
+        class="sidebar-customize-menu__item"
+        role="menuitemradio"
+        tabindex="-1"
+        aria-checked=${String(active)}
+        @click=${() => this.switchChipAgent(agentId)}
+      >
+        <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
+        <span class="sidebar-customize-menu__text">${label}</span>
+        ${unread > 0
+          ? html`<span
+              class="session-unread-dot"
+              role="img"
+              aria-label=${t("sessionsView.unread")}
+            ></span>`
+          : nothing}
+        <span class="sidebar-customize-menu__check" aria-hidden="true">
+          ${active ? icons.check : nothing}
+        </span>
+      </button>
+    `;
+  }
+
+  private renderAgentMenu() {
+    const position = this.agentMenuPosition;
+    if (!position) {
+      return nothing;
+    }
+    const { activeId, agent, agents } = this.activeChipAgent();
+    const activeName = agent ? normalizeAgentLabel(agent) : activeId;
+    return html`
+      <openclaw-menu-surface>
+        <div
+          class="sidebar-customize-menu sidebar-agent-menu"
+          role="menu"
+          aria-label=${t("agentChip.menuLabel")}
+          style="left: ${position.x}px; bottom: ${position.bottom}px;"
+        >
+          ${agents.length > 1
+            ? html`
+                <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
+                ${agents.map((entry) => this.renderAgentMenuAgentRow(entry, activeId))}
+                <div class="sidebar-customize-menu__separator" role="separator"></div>
+              `
+            : nothing}
+          <button
+            type="button"
+            class="sidebar-customize-menu__item"
+            role="menuitem"
+            tabindex="-1"
+            ?disabled=${!this.connected}
+            @click=${() => this.askAgentCapabilities(activeId)}
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
+            <span class="sidebar-customize-menu__text">
+              ${t("agentChip.whatCanAgentDo", { name: activeName })}
+            </span>
+          </button>
+          <div class="sidebar-customize-menu__separator" role="separator"></div>
+          <button
+            type="button"
+            class="sidebar-customize-menu__item"
+            role="menuitem"
+            tabindex="-1"
+            @click=${() => {
+              this.closeAgentMenu();
+              this.onNavigate?.("config");
+            }}
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
+            <span class="sidebar-customize-menu__text">${titleForRoute("config")}</span>
+          </button>
+          <button
+            type="button"
+            class="sidebar-customize-menu__item sidebar-pair-mobile"
+            role="menuitem"
+            tabindex="-1"
+            ?disabled=${!this.canPairDevice}
+            title=${this.canPairDevice ? nothing : t("nodes.pairing.adminRequired")}
+            @click=${() => {
+              this.closeAgentMenu();
+              this.onPairMobile?.();
+            }}
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
+            <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
+          </button>
+          <a
+            class="sidebar-customize-menu__item"
+            role="menuitem"
+            tabindex="-1"
+            href="https://docs.openclaw.ai"
+            target=${EXTERNAL_LINK_TARGET}
+            rel=${buildExternalLinkRel()}
+            @click=${() => this.closeAgentMenu()}
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
+            <span class="sidebar-customize-menu__text">${t("common.docs")}</span>
+          </a>
+          <div class="sidebar-customize-menu__separator" role="separator"></div>
+          <div class="sidebar-agent-menu__footer">
+            <openclaw-sidebar-build-chip
+              .basePath=${this.basePath}
+              .gatewayVersion=${this.gatewayVersion}
+              .onNavigate=${(routeId: "about") => {
+                this.closeAgentMenu();
+                this.onNavigate?.(routeId);
+              }}
+            ></openclaw-sidebar-build-chip>
+            <span class="sidebar-mode-switch">
+              <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
+            </span>
+          </div>
+        </div>
+      </openclaw-menu-surface>
     `;
   }
 
@@ -1859,55 +2132,57 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return nothing;
     }
     return html`
-      <div
-        class="session-menu sidebar-session-group-menu"
-        role="menu"
-        aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
-        style="left: ${menu.x}px; top: ${menu.y}px;"
-      >
-        <button
-          type="button"
-          class="session-menu__item"
-          role="menuitem"
-          tabindex="-1"
-          ?disabled=${!this.connected}
-          @click=${() => {
-            this.closeSessionGroupMenu();
-            this.renameSessionGroupFromMenu(menu.group);
-          }}
+      <openclaw-menu-surface>
+        <div
+          class="session-menu sidebar-session-group-menu"
+          role="menu"
+          aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
+          style="left: ${menu.x}px; top: ${menu.y}px;"
         >
-          <span class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
-          <span class="session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
-        </button>
-        <button
-          type="button"
-          class="session-menu__item"
-          role="menuitem"
-          tabindex="-1"
-          @click=${() => {
-            this.closeSessionGroupMenu();
-            this.createSessionGroup();
-          }}
-        >
-          <span class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
-          <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
-        </button>
-        <div class="session-menu__separator" role="separator"></div>
-        <button
-          type="button"
-          class="session-menu__item session-menu__item--destructive"
-          role="menuitem"
-          tabindex="-1"
-          ?disabled=${!this.connected}
-          @click=${() => {
-            this.closeSessionGroupMenu();
-            this.deleteSessionGroupFromMenu(menu.group);
-          }}
-        >
-          <span class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
-          <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
-        </button>
-      </div>
+          <button
+            type="button"
+            class="session-menu__item"
+            role="menuitem"
+            tabindex="-1"
+            ?disabled=${!this.connected}
+            @click=${() => {
+              this.closeSessionGroupMenu();
+              this.renameSessionGroupFromMenu(menu.group);
+            }}
+          >
+            <span class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
+            <span class="session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
+          </button>
+          <button
+            type="button"
+            class="session-menu__item"
+            role="menuitem"
+            tabindex="-1"
+            @click=${() => {
+              this.closeSessionGroupMenu();
+              this.createSessionGroup();
+            }}
+          >
+            <span class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
+            <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
+          </button>
+          <div class="session-menu__separator" role="separator"></div>
+          <button
+            type="button"
+            class="session-menu__item session-menu__item--destructive"
+            role="menuitem"
+            tabindex="-1"
+            ?disabled=${!this.connected}
+            @click=${() => {
+              this.closeSessionGroupMenu();
+              this.deleteSessionGroupFromMenu(menu.group);
+            }}
+          >
+            <span class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
+            <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
+          </button>
+        </div>
+      </openclaw-menu-surface>
     `;
   }
 
@@ -1921,56 +2196,58 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       { grouping: "none", label: t("sessionsView.groupByNone") },
     ] as const satisfies ReadonlyArray<{ grouping: SidebarSessionsGrouping; label: string }>;
     return html`
-      <div
-        class="sidebar-session-sort-menu"
-        role="menu"
-        aria-label=${t("chat.sidebar.sortSessions")}
-        style="left: ${position.x}px; top: ${position.y}px;"
-      >
-        <div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
-        ${groupingOptions.map(
-          (option) => html`
-            <button
-              type="button"
-              class="sidebar-session-sort-menu__item"
-              role="menuitemradio"
-              tabindex="-1"
-              aria-checked=${String(this.sessionsGrouping === option.grouping)}
-              @click=${() => {
-                this.setSessionsGrouping(option.grouping);
-                this.closeSessionSortMenu({ restoreFocus: true });
-              }}
-            >
-              <span class="session-menu__check" aria-hidden="true">
-                ${this.sessionsGrouping === option.grouping ? icons.check : nothing}
-              </span>
-              <span class="session-menu__text">${option.label}</span>
-            </button>
-          `,
-        )}
-        <div class="session-menu__separator" role="separator"></div>
-        <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
-        ${SIDEBAR_SESSION_SORT_OPTIONS.map(
-          (option) => html`
-            <button
-              type="button"
-              class="sidebar-session-sort-menu__item"
-              role="menuitemradio"
-              tabindex="-1"
-              aria-checked=${String(this.sessionSortMode === option.mode)}
-              @click=${() => {
-                this.sessionSortMode = option.mode;
-                this.closeSessionSortMenu({ restoreFocus: true });
-              }}
-            >
-              <span class="session-menu__check" aria-hidden="true">
-                ${this.sessionSortMode === option.mode ? icons.check : nothing}
-              </span>
-              <span class="session-menu__text">${t(option.labelKey)}</span>
-            </button>
-          `,
-        )}
-      </div>
+      <openclaw-menu-surface>
+        <div
+          class="sidebar-session-sort-menu"
+          role="menu"
+          aria-label=${t("chat.sidebar.sortSessions")}
+          style="left: ${position.x}px; top: ${position.y}px;"
+        >
+          <div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
+          ${groupingOptions.map(
+            (option) => html`
+              <button
+                type="button"
+                class="sidebar-session-sort-menu__item"
+                role="menuitemradio"
+                tabindex="-1"
+                aria-checked=${String(this.sessionsGrouping === option.grouping)}
+                @click=${() => {
+                  this.setSessionsGrouping(option.grouping);
+                  this.closeSessionSortMenu({ restoreFocus: true });
+                }}
+              >
+                <span class="session-menu__check" aria-hidden="true">
+                  ${this.sessionsGrouping === option.grouping ? icons.check : nothing}
+                </span>
+                <span class="session-menu__text">${option.label}</span>
+              </button>
+            `,
+          )}
+          <div class="session-menu__separator" role="separator"></div>
+          <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
+          ${SIDEBAR_SESSION_SORT_OPTIONS.map(
+            (option) => html`
+              <button
+                type="button"
+                class="sidebar-session-sort-menu__item"
+                role="menuitemradio"
+                tabindex="-1"
+                aria-checked=${String(this.sessionSortMode === option.mode)}
+                @click=${() => {
+                  this.sessionSortMode = option.mode;
+                  this.closeSessionSortMenu({ restoreFocus: true });
+                }}
+              >
+                <span class="session-menu__check" aria-hidden="true">
+                  ${this.sessionSortMode === option.mode ? icons.check : nothing}
+                </span>
+                <span class="session-menu__text">${t(option.labelKey)}</span>
+              </button>
+            `,
+          )}
+        </div>
+      </openclaw-menu-surface>
     `;
   }
 
@@ -1978,7 +2255,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const active =
       routeId === "config"
         ? this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId)
-        : this.activeRouteId === routeId;
+        : routeId === "plugins"
+          ? this.activeRouteId !== undefined && isPluginsHubRoute(this.activeRouteId)
+          : this.activeRouteId === routeId;
     // Disabled routes (e.g. Workboard with the plugin off) stay hidden rather
     // than rendering an inert nav item.
     if (!this.isRouteEnabled(routeId)) {
@@ -2095,31 +2374,51 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           title=${`${session.label} · ${session.key}`}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
-          ${session.unread
+          ${session.hasActiveRun
             ? html`<span
-                class="session-unread-dot sidebar-recent-session__unread"
+                class="session-run-spinner sidebar-recent-session__state"
                 role="img"
-                aria-label=${t("sessionsView.unread")}
+                aria-label=${t("sessionsView.activeRun")}
+                title=${t("sessionsView.activeRun")}
               ></span>`
-            : nothing}
+            : session.unread
+              ? html`<span
+                  class="session-unread-dot sidebar-recent-session__unread"
+                  role="img"
+                  aria-label=${t("sessionsView.unread")}
+                ></span>`
+              : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
             ${session.subtitle && session.workSession && session.subtitle !== session.label
               ? html`<span class="sidebar-recent-session__subtitle">${session.subtitle}</span>`
               : nothing}
           </span>
+          ${session.worktreeId || session.hasAutomation
+            ? html`<span class="session-row-badges">
+                ${session.worktreeId
+                  ? html`<span
+                      class="session-row-badge"
+                      role="img"
+                      aria-label=${t("sessionsView.worktreeSession")}
+                      title=${t("sessionsView.worktreeSession")}
+                      >${icons.gitBranch}</span
+                    >`
+                  : nothing}
+                ${session.hasAutomation
+                  ? html`<span
+                      class="session-row-badge"
+                      role="img"
+                      aria-label=${t("sessionsView.automationAttached")}
+                      title=${t("sessionsView.automationAttached")}
+                      >${icons.clock}</span
+                    >`
+                  : nothing}
+              </span>`
+            : nothing}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
-          <span class="session-row-trail">
-            ${session.hasActiveRun
-              ? html`<span
-                  class="session-run-spinner"
-                  role="img"
-                  aria-label=${t("sessionsView.activeRun")}
-                  title=${t("sessionsView.activeRun")}
-                ></span>`
-              : session.meta}
-          </span>
+          <span class="session-row-trail">${session.meta}</span>
           <span class="session-row-actions">
             <button
               class="session-action session-action--pin"
@@ -2661,9 +2960,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
-    const settingsActive =
-      this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
-    const settingsTooltip = `${titleForRoute("config")} (⇧⌘,)`;
+    const { activeId: chipAgentId, agent: chipAgent } = this.activeChipAgent();
+    const chipName = chipAgent ? normalizeAgentLabel(chipAgent) : chipAgentId;
+    const chipAvatarText =
+      (chipAgent ? resolveAgentTextAvatar(chipAgent) : null) ??
+      (chipName || chipAgentId).slice(0, 1).toUpperCase();
     return html`
       <aside class="sidebar">
         <div class="sidebar-shell">
@@ -2702,81 +3003,23 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                   <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
                 </div>`
               : nothing}
-            <div class="sidebar-footer-bar">
-              <openclaw-tooltip .content=${gatewayStatus}>
-                <span
-                  class="sidebar-status__dot ${this.connected
-                    ? "sidebar-connection-status--online"
-                    : "sidebar-connection-status--offline"}"
-                  role="img"
-                  aria-live="polite"
-                  aria-label=${gatewayStatus}
-                ></span>
-              </openclaw-tooltip>
-              <openclaw-sidebar-build-chip
-                .basePath=${this.basePath}
-                .gatewayVersion=${this.gatewayVersion}
-                .onNavigate=${(routeId: "about") => this.onNavigate?.(routeId)}
-              ></openclaw-sidebar-build-chip>
-              <span class="sidebar-footer-bar__spacer"></span>
-              <openclaw-tooltip .content=${settingsTooltip}>
-                <a
-                  href=${pathForRoute("config", this.basePath)}
-                  class="sidebar-footer-icon ${settingsActive ? "sidebar-footer-icon--active" : ""}"
-                  aria-label=${titleForRoute("config")}
-                  aria-current=${settingsActive ? "page" : nothing}
-                  @focus=${(event: Event) => this.preloadRoute("config", event)}
-                  @blur=${this.cancelPreload}
-                  @pointerenter=${(event: Event) => this.preloadRoute("config", event)}
-                  @pointerleave=${this.cancelPreload}
-                  @touchstart=${(event: TouchEvent) => this.preloadRoute("config", event, true)}
-                  @click=${(event: MouseEvent) => {
-                    if (!shouldHandleNavigationClick(event)) {
-                      return;
-                    }
-                    event.preventDefault();
-                    this.onNavigate?.("config");
-                  }}
-                >
-                  ${icons.settings}
-                </a>
-              </openclaw-tooltip>
-              <openclaw-tooltip
-                .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
-              >
-                <a
-                  class="sidebar-footer-icon"
-                  href="https://docs.openclaw.ai"
-                  target=${EXTERNAL_LINK_TARGET}
-                  rel=${buildExternalLinkRel()}
-                  aria-label=${t("common.docs")}
-                >
-                  ${icons.book}
-                </a>
-              </openclaw-tooltip>
-              <openclaw-tooltip
-                .content=${this.canPairDevice
-                  ? t("nodes.pairing.button")
-                  : t("nodes.pairing.adminRequired")}
-              >
-                <button
-                  class="sidebar-footer-icon sidebar-pair-mobile"
-                  type="button"
-                  aria-label=${t("nodes.pairing.button")}
-                  ?disabled=${!this.canPairDevice}
-                  @click=${() => this.onPairMobile?.()}
-                >
-                  ${icons.smartphone}
-                </button>
-              </openclaw-tooltip>
-              <span class="sidebar-mode-switch">
-                <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
-              </span>
-            </div>
+            <openclaw-sidebar-agent-chip
+              .agentName=${chipName}
+              .avatarUrl=${chipAgent ? resolveAgentAvatarUrl(chipAgent) : null}
+              .avatarText=${chipAvatarText}
+              .connected=${this.connected}
+              .statusLabel=${gatewayStatus}
+              .subtitle=${this.agentChipSubtitle(chipAgentId)}
+              .menuOpen=${this.agentMenuPosition !== null}
+              .newSessionDisabled=${!this.connected}
+              .onOpenConversation=${() => this.openAgentConversation(chipAgentId)}
+              .onNewSession=${() => this.onOpenNewSession?.(chipAgentId)}
+              .onToggleMenu=${(trigger: HTMLElement) => this.toggleAgentMenu(trigger)}
+            ></openclaw-sidebar-agent-chip>
           </div>
         </div>
-        ${this.renderCustomizeMenu()} ${this.renderSessionMenu()} ${this.renderSessionGroupMenu()}
-        ${this.renderSessionSortMenu()}
+        ${this.renderCustomizeMenu()} ${this.renderAgentMenu()} ${this.renderSessionMenu()}
+        ${this.renderSessionGroupMenu()} ${this.renderSessionSortMenu()}
       </aside>
     `;
   }

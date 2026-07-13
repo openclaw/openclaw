@@ -82,6 +82,57 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
 }
 
 describe("createSessionCapability", () => {
+  it("keeps a session when sessions.delete reports no deletion", async () => {
+    const key = "agent:main:missing";
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        return { ok: true, deleted: false };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.delete(key)).resolves.toEqual({ deleted: false });
+    expect(sessions.state.deletedSessions).toEqual([]);
+    expect(request).toHaveBeenCalledTimes(1);
+    sessions.dispose();
+  });
+
+  it("excludes lifecycle no-ops from batch deletion results", async () => {
+    const keptKey = "agent:main:kept";
+    const deletedKey = "agent:main:deleted";
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.delete") {
+        const key = (params as { key?: string } | undefined)?.key;
+        return { ok: true, deleted: key === deletedKey };
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([{ key: keptKey, kind: "direct", updatedAt: 1 }], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+    const deletedSnapshots: string[][] = [];
+    const unsubscribe = sessions.subscribe((next) => {
+      deletedSnapshots.push(next.deletedSessions.map((target) => target.key));
+    });
+
+    await expect(sessions.deleteMany([{ key: keptKey }, { key: deletedKey }])).resolves.toEqual({
+      deleted: [deletedKey],
+      errors: [],
+      preservedWorktrees: [],
+    });
+    expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
+    expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
+    expect(request).toHaveBeenCalledTimes(3);
+    unsubscribe();
+    sessions.dispose();
+  });
+
   it("advances the canonical list revision only for sessions.list publications", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -175,6 +226,40 @@ describe("createSessionCapability", () => {
 
     await expect(operation).resolves.toBeNull();
     expect(created).not.toHaveBeenCalled();
+    sessions.dispose();
+  });
+
+  it("returns the initial-run rejection without discarding the created session key", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return {
+          key: "agent:main:rejected",
+          runStarted: false,
+          runError: { code: "INVALID_REQUEST", message: "send blocked by session policy" },
+        };
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const sessions = createSessionCapability({
+      snapshot: {
+        client,
+        connected: true,
+        sessionKey: "agent:main:source",
+        assistantAgentId: "main",
+        hello: null,
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await expect(sessions.createResult({ agentId: "main", message: "hello" })).resolves.toEqual({
+      key: "agent:main:rejected",
+      initialRun: { status: "rejected", error: "send blocked by session policy" },
+    });
     sessions.dispose();
   });
 

@@ -72,6 +72,8 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
 
+      // Pairing folded into the footer agent-chip menu.
+      await page.locator(".sidebar-agent-chip__menu-toggle").click();
       const sidebarPairingButton = page.locator(".sidebar-pair-mobile");
       await sidebarPairingButton.waitFor();
       await expect.poll(async () => sidebarPairingButton.isEnabled()).toBe(true);

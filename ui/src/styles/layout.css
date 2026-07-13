@@ -471,6 +471,41 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   text-overflow: ellipsis;
 }
 
+.settings-sidebar__subitem {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin-inline-start: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: default;
+  text-decoration: none;
+}
+
+.settings-sidebar__subitem:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  text-decoration: none;
+}
+
+.settings-sidebar__subitem--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+}
+
+.settings-sidebar__subitem:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__subitem-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .settings-sidebar__footer {
   flex-shrink: 0;
   display: flex;
@@ -1700,6 +1735,10 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   box-shadow: var(--shadow-lg);
 }
 
+/* Popover hosts live in the top layer so menus escape in-page stacking
+   contexts (e.g. the sidebar resizer above the nav); the host itself must
+   stay a zero-size shell around its fixed-position menu. */
+openclaw-menu-surface[popover],
 openclaw-native-link-menu[popover],
 openclaw-session-menu[popover] {
   width: 0;
@@ -1910,17 +1949,172 @@ openclaw-session-menu[popover] {
   color: var(--accent);
 }
 
-/* Single compact row: status, build identity, then utility icons right-aligned. */
-.sidebar-footer-bar {
+/* Footer agent chip: identity-first entrance to the active agent. The body
+   resumes the latest conversation; trailing actions create/open the menu. */
+.sidebar-agent-chip {
   display: flex;
   align-items: center;
   gap: 2px;
-  min-height: 34px;
-  padding: 0 10px;
+  padding: 2px 8px 6px;
 }
 
-.sidebar-footer-bar__spacer {
+.sidebar-agent-chip__main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: default;
+  transition: background var(--duration-fast) ease;
+}
+
+.sidebar-agent-chip__main:hover,
+.sidebar-agent-chip__main:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-agent-chip__main:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-agent-chip__avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sidebar-agent-chip__avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
+/* Presence fuses connection state into the identity: no separate online dot. */
+.sidebar-agent-chip__presence {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--sidebar-bg);
+}
+
+.sidebar-agent-chip__presence.sidebar-connection-status--online {
+  background: var(--ok);
+}
+
+.sidebar-agent-chip__presence.sidebar-connection-status--offline {
+  background: var(--danger);
+}
+
+.sidebar-agent-chip__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.sidebar-agent-chip__name {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-agent-chip__subtitle {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-agent-chip__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.sidebar-agent-chip__action:hover:not(:disabled),
+.sidebar-agent-chip__action:focus-visible {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-agent-chip__action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-agent-chip__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.sidebar-agent-chip__action svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-agent-chip__menu-toggle svg {
+  transition: transform var(--duration-fast) ease;
+}
+
+.sidebar-agent-chip__menu-toggle--open svg {
+  transform: rotate(180deg);
+}
+
+/* The docs row is the menu's only real hyperlink; keep it looking like a row. */
+.sidebar-agent-menu a.sidebar-customize-menu__item {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Footer menu row: build identity left, theme switch right. */
+.sidebar-agent-menu__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px 2px;
 }
 
 /* Host elements are display:contents, so the anchor itself is the flex item;
@@ -1982,75 +2176,11 @@ openclaw-session-menu[popover] {
   white-space: nowrap;
 }
 
-/* Footer icons mix in-app anchors, buttons, and one external docs link: the
-   chrome gets the default arrow; only the external (target=_blank) anchor is
-   a real hyperlink and keeps the pointer. */
-.sidebar-footer-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* 28px keeps the fixed-width footer row from ellipsizing "commit · age". */
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  cursor: default;
-  text-decoration: none;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.sidebar-footer-icon[target] {
-  cursor: pointer;
-}
-
-.sidebar-footer-icon:hover:not(:disabled),
-.sidebar-footer-icon:focus-visible {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  text-decoration: none;
-}
-
-.sidebar-footer-icon:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
-  outline-offset: 1px;
-}
-
-.sidebar-footer-icon:disabled {
-  cursor: not-allowed;
-  opacity: 0.42;
-}
-
-.sidebar-footer-icon--active {
-  color: var(--accent);
-}
-
-.sidebar-footer-icon svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .sidebar-status__dot {
   width: 8px;
   height: 8px;
   border-radius: var(--radius-full);
   flex-shrink: 0;
-}
-
-/* The online/offline glow spreads 4px beyond the dot; the footer bar's 2px gap
-   alone lets it collide with the build text. 6px + gap matches the 8px dot
-   spacing in the settings sidebar footer. */
-.sidebar-footer-bar .sidebar-status__dot {
-  margin-right: 6px;
 }
 
 .sidebar-status__dot.sidebar-connection-status--online {
@@ -2061,11 +2191,6 @@ openclaw-session-menu[popover] {
 .sidebar-status__dot.sidebar-connection-status--offline {
   background: var(--danger);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
-}
-
-.sidebar-pair-mobile svg * {
-  stroke: currentColor;
-  fill: none;
 }
 
 .sidebar-mode-switch {

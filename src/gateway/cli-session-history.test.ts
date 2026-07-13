@@ -11,6 +11,7 @@ import {
   mergeImportedChatHistoryMessages,
   readClaudeCliFallbackSeed,
   readClaudeCliSessionMessages,
+  resolveChatHistoryWithCliSessionImports,
   resolveClaudeCliSessionFilePath,
 } from "./cli-session-history.js";
 import { expectRecordFields, requireRecord } from "./test-helpers.assertions.js";
@@ -183,6 +184,7 @@ describe("cli session history", () => {
       });
       expect(String(messages[0]?.content)).toContain("[Thu 2026-03-26 16:29 GMT] hi");
       expectFields(messages[0]?.["__openclaw"], {
+        id: "user-1",
         importedFrom: "claude-cli",
         externalId: "user-1",
         cliSessionId: sessionId,
@@ -199,6 +201,7 @@ describe("cli session history", () => {
         cacheRead: 22,
       });
       expectFields(messages[1]?.["__openclaw"], {
+        id: "assistant-1",
         importedFrom: "claude-cli",
         externalId: "assistant-1",
         cliSessionId: sessionId,
@@ -222,6 +225,27 @@ describe("cli session history", () => {
           tool_use_id: "toolu_123",
         },
       ]);
+    });
+  });
+
+  it("assigns stable source-line ids when Claude entries have no uuid", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: { role: "user", content: "stable fallback" },
+        }),
+        "utf-8",
+      );
+
+      const importedId = (message: Record<string, unknown> | undefined) =>
+        (message?.["__openclaw"] as { id?: string } | undefined)?.id;
+      const first = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      const second = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      expect(importedId(first[0])).toBe(`claude-cli:${sessionId}:line:1`);
+      expect(importedId(second[0])).toBe(importedId(first[0]));
     });
   });
 
@@ -939,6 +963,25 @@ describe("cli session history", () => {
       });
 
       expect(messages).toBe(localMessages);
+    });
+  });
+
+  it("does not mark a fully deduplicated Claude transcript as imported", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
+      const localMessages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      const result = resolveChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: { "claude-cli": { sessionId } },
+        },
+        provider: "claude-cli",
+        localMessages,
+        homeDir,
+      });
+
+      expect(result.imported).toBe(false);
+      expect(result.messages).toBe(localMessages);
     });
   });
 

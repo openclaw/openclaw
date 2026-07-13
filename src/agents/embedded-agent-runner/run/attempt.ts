@@ -251,7 +251,11 @@ import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
-import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
+import {
+  collectReplaySafeToolNames,
+  isAgentToolReplaySafe,
+  isAgentToolRestartSafe,
+} from "../../tool-replay-safety.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
@@ -1584,7 +1588,25 @@ export async function runEmbeddedAttempt(
       forceMessageTool: params.forceMessageTool,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     });
-    const toolsRaw = !shouldConstructTools
+    const replaySafetyOptions = {
+      declaredReplaySafe: (candidate: { name?: string }) => {
+        const pluginMeta = getPluginToolMeta(candidate as Parameters<typeof getPluginToolMeta>[0]);
+        if (pluginMeta) {
+          return pluginMeta.replaySafe === true;
+        }
+        return getChannelAgentToolMeta(candidate as never) ? false : undefined;
+      },
+    };
+    const restartSafetyOptions = {
+      declaredReplaySafe: (candidate: { name?: string }) => {
+        const pluginMeta = getPluginToolMeta(candidate as Parameters<typeof getPluginToolMeta>[0]);
+        if (pluginMeta?.mcp) {
+          return false;
+        }
+        return replaySafetyOptions.declaredReplaySafe(candidate);
+      },
+    };
+    const constructedToolsRaw = !shouldConstructTools
       ? []
       : (() => {
           const allTools = createOpenClawCodingTools({
@@ -1704,6 +1726,16 @@ export async function runEmbeddedAttempt(
           corePluginToolStages.mark("attempt:tools-allow");
           return filteredTools;
         })();
+    // A reconstructed turn may finish with normal tools instead of Code Mode.
+    // Filter the concrete run catalog so the recovery policy cannot be bypassed.
+    const toolsRaw = params.forceRestartSafeTools
+      ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
+      : constructedToolsRaw;
+    if (params.forceRestartSafeTools) {
+      log.info(
+        `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
+      );
+    }
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
@@ -1876,12 +1908,24 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
         }),
     });
-    const clientTools = toolsEnabled && !isRawModelRun ? params.clientTools : undefined;
-    const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
-      toolsEnabled,
-      disableTools: params.disableTools || isRawModelRun,
-      toolsAllow: params.toolsAllow,
-    });
+    const clientTools =
+      toolsEnabled && !isRawModelRun && !params.forceRestartSafeTools
+        ? params.clientTools
+        : undefined;
+    const bundleMcpEnabled =
+      !params.forceRestartSafeTools &&
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled,
+        disableTools: params.disableTools || isRawModelRun,
+        toolsAllow: params.toolsAllow,
+      });
+    const bundleMetadataSnapshot = getCurrentAttemptPluginMetadataSnapshot();
+    // Scoped registries are partial views. Bundle discovery can skip its own scan only when
+    // the attempt snapshot covers every plugin; otherwise MCP/LSP bundles can disappear.
+    const bundleManifestRegistry =
+      bundleMetadataSnapshot?.pluginIds === undefined
+        ? bundleMetadataSnapshot?.manifestRegistry
+        : undefined;
     const bundleMcpSessionRuntime = bundleMcpEnabled
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
@@ -1889,6 +1933,7 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           agentDir,
           cfg: params.config,
+          manifestRegistry: bundleManifestRegistry,
         })
       : undefined;
     bundleMcpRuntime = bundleMcpSessionRuntime
@@ -1900,15 +1945,18 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
-    const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
-      toolsEnabled,
-      disableTools: params.disableTools || isRawModelRun,
-      toolsAllow: params.toolsAllow,
-    });
+    const bundleLspEnabled =
+      !params.forceRestartSafeTools &&
+      shouldCreateBundleLspRuntimeForAttempt({
+        toolsEnabled,
+        disableTools: params.disableTools || isRawModelRun,
+        toolsAllow: params.toolsAllow,
+      });
     bundleLspRuntime = bundleLspEnabled
       ? await createBundleLspToolRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
+          manifestRegistry: bundleManifestRegistry,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
@@ -1937,6 +1985,22 @@ export async function runEmbeddedAttempt(
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
+    if (bundleMcpRuntime?.restrictAppTools) {
+      const runtimeAllowedAppTools = applyEmbeddedAttemptToolsAllow(
+        bundleMcpRuntime.appTools ?? bundleMcpRuntime.tools,
+        effectiveToolsAllow,
+        { toolMeta: (tool) => getPluginToolMeta(tool) },
+      );
+      const allowedAppTools = applyFinalEffectiveToolPolicy({
+        bundledTools: runtimeAllowedAppTools,
+        config: params.config,
+        conversationCapabilityProfile: runtimeCapabilityProfile,
+        warn: (message) => log.warn(message),
+      });
+      // The view outlives this attempt. Capture policy against the complete MCP
+      // catalog now, including App-only tools that never enter the model surface.
+      bundleMcpRuntime.restrictAppTools(allowedAppTools);
+    }
     const normalizedBundledTools =
       filteredBundledTools.length > 0
         ? normalizeAgentRuntimeTools({
@@ -2016,6 +2080,7 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           catalogRef: toolSearchCatalogRef,
           abortSignal: runAbortController.signal,
+          forceRestartSafeTools: params.forceRestartSafeTools,
           executeTool: (toolParams) => {
             if (!toolSearchCatalogExecutor) {
               throw new Error("Code Mode catalog executor is unavailable for this run.");
@@ -2167,12 +2232,14 @@ export async function runEmbeddedAttempt(
     const replayAllowedToolNames = toolSearchRunPlan.replayAllowedToolNames;
     const liveAllowedToolNames = toolSearchRunPlan.liveAllowedToolNames;
     const capabilityToolNames = toolSearchRunPlan.capabilityToolNames;
-    const emptyExplicitToolAllowlistError = buildEmptyExplicitToolAllowlistError({
-      sources: explicitToolAllowlistSources,
-      callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
-      toolsEnabled,
-      disableTools: params.disableTools,
-    });
+    const emptyExplicitToolAllowlistError = params.forceRestartSafeTools
+      ? null
+      : buildEmptyExplicitToolAllowlistError({
+          sources: explicitToolAllowlistSources,
+          callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
+          toolsEnabled,
+          disableTools: params.disableTools,
+        });
     logAgentRuntimeToolDiagnostics({
       runtimePlan: params.runtimePlan,
       tools: effectiveTools,
@@ -2545,7 +2612,9 @@ export async function runEmbeddedAttempt(
         params.model.api === "openai-chatgpt-responses";
 
       await prewarmSessionFile(params.sessionFile);
-      const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
+      const preparedUserTurnMessage = params.skipPreparedUserTurnMessage
+        ? undefined
+        : await params.userTurnTranscriptRecorder?.resolveMessage();
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
@@ -2729,17 +2798,6 @@ export async function runEmbeddedAttempt(
         isPluginTool: (tool) =>
           Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
       });
-      const replaySafetyOptions = {
-        declaredReplaySafe: (candidate: { name?: string }) => {
-          const pluginMeta = getPluginToolMeta(
-            candidate as Parameters<typeof getPluginToolMeta>[0],
-          );
-          if (pluginMeta) {
-            return pluginMeta.replaySafe === true;
-          }
-          return getChannelAgentToolMeta(candidate as never) ? false : undefined;
-        },
-      };
       const isReplaySafeTool = (tool: { name?: string }) =>
         isAgentToolReplaySafe(tool, replaySafetyOptions);
       const replaySafeTools = new Set(uncompactedEffectiveTools.filter(isReplaySafeTool));
@@ -2941,6 +2999,10 @@ export async function runEmbeddedAttempt(
           sessionManager.resetLeaf();
         }
         replayTrailingEntriesForOrphanRepair(sessionManager, orphanRepair.trailingEntries);
+        // Suppression assumes the canonical user turn still exists. Orphan repair
+        // removed it, so the replacement prompt must become the one durable copy.
+        sessionManager.clearNextUserMessagePersistenceSuppression?.();
+        params.onUserMessagePersistenceInvalidated?.();
         activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
       }
       // Single source for the per-message timestamp prefix (issue #3658):
@@ -3181,18 +3243,20 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         sessionTarget: params.sessionTarget,
       });
-      trajectoryRecorder = createTrajectoryRuntimeRecorder({
-        cfg: params.config,
-        env: process.env,
-        runId: params.runId,
-        sessionId: activeSession.sessionId,
-        sessionKey: params.sessionKey,
-        sessionFile: trajectorySessionFile,
-        provider: params.provider,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        workspaceDir: params.workspaceDir,
-      });
+      trajectoryRecorder = params.disableTrajectory
+        ? null
+        : createTrajectoryRuntimeRecorder({
+            cfg: params.config,
+            env: process.env,
+            runId: params.runId,
+            sessionId: activeSession.sessionId,
+            sessionKey: params.sessionKey,
+            sessionFile: trajectorySessionFile,
+            provider: params.provider,
+            modelId: params.modelId,
+            modelApi: params.model.api,
+            workspaceDir: params.workspaceDir,
+          });
       trajectoryRecorder?.recordEvent("session.started", {
         trigger: params.trigger,
         sessionFile: params.sessionFile,

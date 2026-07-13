@@ -28,7 +28,7 @@
     "src/commands/doctor/shared/codex-route-warnings.ts": 2,
     "src/gateway/test-helpers.mocks.ts": 1,
     "src/infra/state-migrations.ts": 2,
-    "src/plugins/registry.ts": 1
+    "src/plugins/registry-runtime.ts": 1
   },
   "sessionCompactManualTrim": {},
   "sessionLifecycleCleanup": {

@@ -1,14 +1,9 @@
 /** Explicit doctor maintenance for the canonical shared state SQLite database. */
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import {
-  createNewerSqliteSchemaVersionError,
-  readSqliteUserVersion,
-} from "../infra/sqlite-user-version.js";
-import {
+  assertOpenClawStateDatabaseForMaintenance,
   ensureOpenClawStatePermissions,
   isOpenClawStateDatabaseOpen,
-  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -38,9 +33,14 @@ type DoctorStateSqliteCompactOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+type DoctorStateSqliteCompactDeps = {
+  busyTimeoutMs?: number;
+};
+
 /** Compact only the canonical shared state database resolved for this invocation. */
 export function runDoctorStateSqliteCompact(
   options: DoctorStateSqliteCompactOptions = {},
+  deps: DoctorStateSqliteCompactDeps = {},
 ): DoctorStateSqliteCompactReport {
   const env = options.env ?? process.env;
   const sqlitePath = resolveOpenClawStateSqlitePath(env);
@@ -64,8 +64,10 @@ export function runDoctorStateSqliteCompact(
 
   const compact = compactDoctorSqliteFile({
     afterMutation: () => ensureOpenClawStatePermissions(sqlitePath, env),
+    ...(deps.busyTimeoutMs !== undefined ? { busyTimeoutMs: deps.busyTimeoutMs } : {}),
     sqlitePath,
-    validateBeforeMutation: (database) => validateCanonicalStateDatabase(database, sqlitePath),
+    validateBeforeMutation: (database) =>
+      assertOpenClawStateDatabaseForMaintenance(database, { pathname: sqlitePath }),
   });
   return {
     ...compact,
@@ -83,39 +85,5 @@ function readCanonicalStateDatabaseStat(sqlitePath: string): fs.Stats | undefine
       return undefined;
     }
     throw error;
-  }
-}
-
-function validateCanonicalStateDatabase(database: DatabaseSync, sqlitePath: string): void {
-  const userVersion = readSqliteUserVersion(database);
-  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
-      "OpenClaw state database",
-      sqlitePath,
-      userVersion,
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
-  }
-  if (userVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw new Error(
-      `OpenClaw state database ${sqlitePath} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
-    );
-  }
-
-  const metadata = database
-    .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
-    .get() as { role?: unknown; schema_version?: unknown } | undefined;
-  if (metadata?.role !== "global") {
-    const role = typeof metadata?.role === "string" ? metadata.role : "missing";
-    throw new Error(
-      `OpenClaw state database ${sqlitePath} has schema role ${role}; expected global.`,
-    );
-  }
-  if (metadata.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    const schemaVersion =
-      typeof metadata.schema_version === "number" ? metadata.schema_version : "invalid";
-    throw new Error(
-      `OpenClaw state database ${sqlitePath} metadata schema version ${schemaVersion} does not match ${OPENCLAW_STATE_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
-    );
   }
 }

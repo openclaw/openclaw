@@ -9,6 +9,15 @@ import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 type CanvasSurface = "assistant_message";
 type CanvasSandbox = "strict" | "scripts";
 
+type McpAppPreviewDescriptor = {
+  viewId: string;
+  serverName?: string;
+  toolName?: string;
+  uiResourceUri?: string;
+  toolCallId?: string;
+  resultMetaState?: "unavailable";
+};
+
 type CanvasPreview = {
   kind: "canvas";
   surface: CanvasSurface;
@@ -20,6 +29,7 @@ type CanvasPreview = {
   className?: string;
   style?: string;
   sandbox?: CanvasSandbox;
+  mcpApp?: McpAppPreviewDescriptor;
 };
 
 function getRecordStringField(
@@ -44,6 +54,40 @@ function getNestedRecord(
 ): Record<string, unknown> | undefined {
   const value = record?.[key];
   return asOptionalRecord(value);
+}
+
+function coerceMcpAppDescriptor(
+  record: Record<string, unknown> | undefined,
+): McpAppPreviewDescriptor | undefined {
+  const viewId = getRecordStringField(record, "viewId");
+  if (!viewId || viewId.length > 128) {
+    return undefined;
+  }
+  const serverName = getRecordStringField(record, "serverName");
+  const toolName = getRecordStringField(record, "toolName");
+  const uiResourceUri = getRecordStringField(record, "uiResourceUri");
+  const toolCallId = getRecordStringField(record, "toolCallId");
+  const resultMetaState = record?.resultMetaState === "unavailable" ? "unavailable" : undefined;
+  const hasCompleteDescriptor = Boolean(
+    serverName &&
+    serverName.length <= 256 &&
+    toolName &&
+    toolName.length <= 256 &&
+    uiResourceUri?.startsWith("ui://") &&
+    uiResourceUri.length <= 2048 &&
+    toolCallId &&
+    toolCallId.length <= 512,
+  );
+  return hasCompleteDescriptor
+    ? {
+        viewId,
+        serverName,
+        toolName,
+        uiResourceUri,
+        toolCallId,
+        ...(resultMetaState ? { resultMetaState } : {}),
+      }
+    : { viewId };
 }
 
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
@@ -73,6 +117,9 @@ function coerceCanvasPreview(
   const presentation = getNestedRecord(record, "presentation");
   const view = getNestedRecord(record, "view");
   const source = getNestedRecord(record, "source");
+  const mcpAppRecord = getNestedRecord(record, "mcpApp");
+  const mcpApp = coerceMcpAppDescriptor(mcpAppRecord);
+  const mcpAppViewId = mcpApp?.viewId;
   const requestedSurface =
     getRecordStringField(presentation, "target") ?? getRecordStringField(record, "target");
   const surface = requestedSurface ? normalizeSurface(requestedSurface) : "assistant_message";
@@ -93,6 +140,18 @@ function coerceCanvasPreview(
   const sandbox = normalizeSandbox(getRecordStringField(presentation, "sandbox"));
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
+  if (mcpAppViewId && viewId === mcpAppViewId) {
+    return {
+      kind: "canvas",
+      surface,
+      render: "url",
+      viewId,
+      ...(title ? { title } : {}),
+      ...(preferredHeight ? { preferredHeight } : {}),
+      ...(sandbox ? { sandbox } : {}),
+      mcpApp,
+    };
+  }
   if (viewUrl) {
     return {
       kind: "canvas",
@@ -105,6 +164,7 @@ function coerceCanvasPreview(
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
       ...(sandbox ? { sandbox } : {}),
+      ...(mcpApp ? { mcpApp } : {}),
     };
   }
   const sourceType = getRecordStringField(source, "type")?.trim().toLowerCase();
@@ -123,9 +183,16 @@ function coerceCanvasPreview(
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
       ...(sandbox ? { sandbox } : {}),
+      ...(mcpApp ? { mcpApp } : {}),
     };
   }
   return undefined;
+}
+
+/** Extracts an MCP App Canvas preview from sanitized tool-result details. */
+export function extractCanvasFromDetails(value: unknown): CanvasPreview | undefined {
+  const details = asOptionalRecord(value);
+  return coerceCanvasPreview(asOptionalRecord(details?.mcpAppPreview));
 }
 
 function parseCanvasAttributes(raw: string): Record<string, string> {
