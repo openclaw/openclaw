@@ -54,7 +54,7 @@ type GatewayResponseFrame = {
   };
 };
 
-export type GatewayErrorInfo = {
+type GatewayErrorInfo = {
   code: string;
   message: string;
   details?: unknown;
@@ -239,7 +239,7 @@ export const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
   "operator.write",
 ] as const;
 
-export type GatewayConnectAuth = {
+type GatewayConnectAuth = {
   token?: string;
   bootstrapToken?: string;
   deviceToken?: string;

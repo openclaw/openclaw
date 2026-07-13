@@ -80,19 +80,22 @@ Access groups are documented in detail here: [Access groups](/channels/access-gr
 
 ### Where the state lives
 
-Stored under `~/.openclaw/credentials/`:
+Stored in the shared SQLite state database at
+`~/.openclaw/state/openclaw.sqlite`:
 
-- Pending requests: `<channel>-pairing.json`
-- Approved allowlist store: `<channel>-<accountId>-allowFrom.json` (approvals for the
-  default account use `<channel>-default-allowFrom.json`)
+- pending requests in `channel_pairing_requests`
+- approved senders in `channel_pairing_allow_entries`
 
 Account scoping behavior:
 
-- Non-default accounts read/write only their scoped allowlist file.
-- The default account also keeps honoring a legacy unscoped `<channel>-allowFrom.json`
-  file from older installs; entries from both files are merged on read.
+- each request and approved sender is keyed by channel and account
+- runtime reads only the canonical SQLite rows; it does not merge legacy files
 
-Treat these as sensitive (they gate access to your assistant).
+Older gateways wrote `<channel>-pairing.json` and
+`<channel>-<accountId>-allowFrom.json` under `~/.openclaw/credentials/`.
+Startup migration and `openclaw doctor --fix` import those files into SQLite and
+remove each source after a successful import. Treat the SQLite database as
+sensitive because these rows gate access to your assistant.
 
 <Note>
 The pairing allowlist store is for DM access. Group authorization is separate.

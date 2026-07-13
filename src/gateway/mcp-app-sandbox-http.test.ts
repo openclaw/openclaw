@@ -26,15 +26,13 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(String(csp)).toContain("connect-src https://api.example.com");
     expect(String(csp)).toContain("script-src 'self' 'unsafe-inline' https://cdn.example.com");
     expect(String(csp)).toContain("font-src 'self' https://cdn.example.com");
-    expect(String(csp)).not.toContain("frame-ancestors");
+    expect(String(csp)).toContain("frame-ancestors");
     expect(result.setHeader).not.toHaveBeenCalledWith("X-Frame-Options", expect.anything());
     expect(result.setHeader).toHaveBeenCalledWith(
       "Permissions-Policy",
       "camera=(), microphone=(), geolocation=(), clipboard-write=()",
     );
-    expect(result.end).toHaveBeenCalledWith(
-      expect.stringContaining("ui/notifications/sandbox-proxy-ready"),
-    );
+    expect(result.end).toHaveBeenCalledWith(expect.stringContaining("document.referrer"));
   });
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {

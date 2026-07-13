@@ -3,8 +3,9 @@ import { html, nothing } from "lit";
 import type { ConfigUiHints } from "../api/types.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
-import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
+import { SECTION_META } from "./config-form.meta.ts";
+import { renderNode } from "./config-form.node.ts";
+import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 type ConfigFormProps = {
@@ -277,53 +278,6 @@ const sectionIcons = {
   `,
 };
 
-function createSectionMeta(key: string): { label: string; description: string } {
-  return {
-    get label() {
-      return t(`configForm.sections.${key}.label`);
-    },
-    get description() {
-      return t(`configForm.sections.${key}.description`);
-    },
-  };
-}
-
-// Getters keep exported metadata responsive to runtime locale changes.
-export const SECTION_META: Record<string, { label: string; description: string }> = {
-  env: createSectionMeta("env"),
-  update: createSectionMeta("update"),
-  agents: createSectionMeta("agents"),
-  auth: createSectionMeta("auth"),
-  channels: createSectionMeta("channels"),
-  messages: createSectionMeta("messages"),
-  commands: createSectionMeta("commands"),
-  hooks: createSectionMeta("hooks"),
-  skills: createSectionMeta("skills"),
-  tools: createSectionMeta("tools"),
-  gateway: createSectionMeta("gateway"),
-  wizard: createSectionMeta("wizard"),
-  meta: createSectionMeta("meta"),
-  logging: createSectionMeta("logging"),
-  browser: createSectionMeta("browser"),
-  ui: createSectionMeta("ui"),
-  models: createSectionMeta("models"),
-  bindings: createSectionMeta("bindings"),
-  broadcast: createSectionMeta("broadcast"),
-  audio: createSectionMeta("audio"),
-  session: createSectionMeta("session"),
-  cron: createSectionMeta("cron"),
-  web: createSectionMeta("web"),
-  discovery: createSectionMeta("discovery"),
-  canvasHost: createSectionMeta("canvasHost"),
-  talk: createSectionMeta("talk"),
-  plugins: createSectionMeta("plugins"),
-  diagnostics: createSectionMeta("diagnostics"),
-  cli: createSectionMeta("cli"),
-  secrets: createSectionMeta("secrets"),
-  acp: createSectionMeta("acp"),
-  mcp: createSectionMeta("mcp"),
-};
-
 function getSectionIcon(key: string) {
   return sectionIcons[key as keyof typeof sectionIcons] ?? sectionIcons.default;
 }
@@ -335,28 +289,15 @@ function matchesSearch(params: {
   uiHints: ConfigUiHints;
   query: string;
 }): boolean {
-  if (!params.query) {
-    return true;
-  }
-  const criteria = parseConfigSearchQuery(params.query);
-  const q = criteria.text;
   const meta = SECTION_META[params.key];
-  const sectionMetaMatches =
-    q &&
-    (normalizeLowercaseStringOrEmpty(params.key).includes(q) ||
-      (meta?.label ? normalizeLowercaseStringOrEmpty(meta.label).includes(q) : false) ||
-      (meta?.description ? normalizeLowercaseStringOrEmpty(meta.description).includes(q) : false));
-
-  if (sectionMetaMatches && criteria.tags.length === 0) {
-    return true;
-  }
-
-  return matchesNodeSearch({
+  return matchesConfigSectionSearch({
+    key: params.key,
     schema: params.schema,
     value: params.sectionValue,
-    path: [params.key],
     hints: params.uiHints,
-    criteria,
+    query: params.query,
+    label: meta?.label,
+    description: meta?.description,
   });
 }
 

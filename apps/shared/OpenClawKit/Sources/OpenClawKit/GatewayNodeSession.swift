@@ -289,6 +289,7 @@ public actor GatewayNodeSession {
         let scopes = sorted(options.scopes)
         let caps = sorted(options.caps)
         let commands = sorted(options.commands)
+        let pathEnv = options.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let clientId = options.clientId.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientMode = options.clientMode.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientDisplayName = (options.clientDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -308,6 +309,7 @@ public actor GatewayNodeSession {
             scopes,
             caps,
             commands,
+            pathEnv,
             clientId,
             clientMode,
             clientDisplayName,
@@ -677,17 +679,6 @@ public actor GatewayNodeSession {
             self.logger.error("node event failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
-    }
-
-    public func send(method: String, paramsJSON: String?) async throws {
-        guard let channel else {
-            throw NSError(domain: "Gateway", code: 11, userInfo: [
-                NSLocalizedDescriptionKey: "not connected",
-            ])
-        }
-
-        let params = try decodeParamsJSON(paramsJSON)
-        try await channel.send(method: method, params: params)
     }
 
     public func request(
@@ -1084,14 +1075,17 @@ extension GatewayNodeSession {
     }
 
     #if DEBUG
+    // periphery:ignore - package tests observe admission rollover without exposing mutable state.
     func _test_admissionGeneration() -> UInt64 {
         self.admissionGeneration
     }
 
+    // periphery:ignore - package tests drive the private connection callback deterministically.
     func _test_notifyConnectedIfNeeded(admissionGeneration: UInt64) async {
         await self.notifyConnectedIfNeeded(admissionGeneration: admissionGeneration)
     }
 
+    // periphery:ignore - package tests inject gateway pushes without a live socket.
     func _test_handlePush(_ push: GatewayPush, socketGeneration: UInt64) async {
         await self.handlePush(
             push,
@@ -1099,6 +1093,7 @@ extension GatewayNodeSession {
             socketGeneration: socketGeneration)
     }
 
+    // periphery:ignore - package tests inject socket retirement without a live channel.
     func _test_handleChannelDisconnected(_ reason: String, socketGeneration: UInt64) async {
         await self.handleChannelDisconnected(
             reason,
@@ -1106,6 +1101,7 @@ extension GatewayNodeSession {
             socketGeneration: socketGeneration)
     }
 
+    // periphery:ignore - package tests verify event stream filtering without a live gateway.
     func _test_broadcastServerEvent(_ event: EventFrame) {
         self.broadcastServerEvent(event)
     }
@@ -1245,6 +1241,7 @@ extension GatewayNodeSession {
     }
 
     #if DEBUG
+    // periphery:ignore - package tests exercise receipt dedupe around the private invoke path.
     func invokeComputerWithReceiptForTesting(
         requestId: String,
         paramsJSON: String,
@@ -1273,6 +1270,7 @@ extension GatewayNodeSession {
             onInvoke: onInvoke)
     }
 
+    // periphery:ignore - package tests assert receipt joining without exposing the receipt store.
     func computerReceiptJoinCountForTesting(
         idempotencyKey: String,
         receiptScope: String) -> Int
@@ -1309,6 +1307,7 @@ extension GatewayNodeSession {
             type: response.type,
             id: requestId,
             ok: response.ok,
+            payload: response.payload,
             payloadJSON: response.payloadJSON,
             error: response.error)
     }
@@ -1391,6 +1390,9 @@ extension GatewayNodeSession {
         ]
         if let payloadJSON = response.payloadJSON {
             params["payloadJSON"] = AnyCodable(payloadJSON)
+        }
+        if let payload = response.payload {
+            params["payload"] = payload
         }
         if let error = response.error {
             params["error"] = AnyCodable([
