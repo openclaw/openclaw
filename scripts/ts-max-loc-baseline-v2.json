@@ -193,7 +193,7 @@
   "extensions/mattermost/src/channel.ts": 961,
   "extensions/mattermost/src/mattermost/client.ts": 736,
   "extensions/mattermost/src/mattermost/interactions.ts": 677,
-  "extensions/mattermost/src/mattermost/monitor.ts": 2476,
+  "extensions/mattermost/src/mattermost/monitor.ts": 2466,
   "extensions/mattermost/src/mattermost/send.ts": 554,
   "extensions/mattermost/src/mattermost/slash-commands.ts": 620,
   "extensions/mattermost/src/mattermost/slash-http.ts": 948,
