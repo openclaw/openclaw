@@ -3,7 +3,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionBranch,
+  ControlUiSessionPullRequest,
+} from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
@@ -83,6 +86,7 @@ export type ChatProps = {
     manualFallback: boolean;
     onLoadOlder: () => void;
   };
+  renderAllLoadedHistory?: boolean;
   sideChatTurns?: ChatSideResult[];
   sideChatPending?: ChatSideResultPending | null;
   sideChatHidden?: boolean;
@@ -198,6 +202,7 @@ export type ChatProps = {
   onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   pullRequests?: ControlUiSessionPullRequest[];
+  pullRequestsBranch?: ControlUiSessionBranch;
   pullRequestsRateLimited?: boolean;
   pullRequestsExpanded?: boolean;
   onExpandPullRequests?: () => void;
@@ -259,6 +264,7 @@ export function renderChat(props: ChatProps) {
     sessionKey: props.sessionKey,
     loading: props.loading,
     historyPagination: props.historyPagination,
+    renderAllLoadedHistory: props.renderAllLoadedHistory,
     messages: props.messages,
     toolMessages: props.toolMessages,
     streamSegments: props.streamSegments,
@@ -300,6 +306,7 @@ export function renderChat(props: ChatProps) {
     // withholding the callback keeps the popup from rendering at all.
     onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
     onOpenSession: props.onSessionSelect,
+    backgroundTasks: props.backgroundTasks,
     onFocusComposer: () =>
       chatSection
         ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
@@ -550,6 +557,7 @@ export function renderChat(props: ChatProps) {
               })}
               ${renderChatPullRequests({
                 pullRequests: props.pullRequests ?? [],
+                branch: props.pullRequestsBranch,
                 rateLimited: props.pullRequestsRateLimited === true,
                 expanded: props.pullRequestsExpanded === true,
                 onExpand: () => props.onExpandPullRequests?.(),

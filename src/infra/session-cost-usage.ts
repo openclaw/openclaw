@@ -39,7 +39,9 @@ import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-vis
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import {
@@ -49,7 +51,12 @@ import {
 } from "../utils/usage-format.js";
 import { formatErrorMessage } from "./errors.js";
 import { createTimeZoneDayKeyFormatter } from "./format-time/format-datetime.js";
-import { replaceFileAtomic } from "./replace-file.js";
+import {
+  acquireSessionCostUsageRefreshLock,
+  isSessionCostUsageRefreshRunning,
+  readSessionCostUsageCacheJson,
+  writeSessionCostUsageCacheJson,
+} from "./session-cost-usage-cache.sqlite.js";
 import {
   addCostUsageTotals as addTotals,
   cloneCostUsageTotals as cloneTotals,
@@ -98,9 +105,6 @@ export type {
 // Bump when the durable cache schema or the meaning of cached totals changes, so
 // older builds are rebuilt instead of served stale.
 const USAGE_COST_CACHE_VERSION = 7;
-const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
-const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
-const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 // Checkpoint policy for refreshCostUsageCache: bound the cost of full cache
 // serialization when scanning thousands of session files. Smaller of the two
@@ -111,8 +115,8 @@ const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
   agentId?: string;
-  cachePath: string;
   config?: OpenClawConfig;
+  databasePath: string;
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
   running: boolean;
@@ -123,6 +127,10 @@ type UsageCostRefreshState = {
 type UsageCostRefreshResult = "refreshed" | "busy";
 
 const usageCostRefreshes = new Map<string, UsageCostRefreshState>();
+
+function resolveUsageCostCacheDatabasePath(agentId?: string): string {
+  return resolveOpenClawAgentSqlitePath({ agentId: normalizeAgentId(agentId) });
+}
 
 type UsageCostCachedUsageEntry = CostUsageTotals & {
   timestamp: number;
@@ -168,23 +176,8 @@ type UsageCostTranscriptFile = {
   sessionId?: string;
 };
 
-type UsageCostCacheLock = {
-  pid: number;
-  startedAt: number;
-  token?: string;
-};
-
-type UsageCostCacheLockReadResult =
-  | { state: "missing" }
-  | { state: "valid"; lock: UsageCostCacheLock }
-  | { state: "malformed"; mtimeMs: number };
-
 function resolveUsageCostPricingFingerprint(config?: OpenClawConfig): string {
   return resolveModelCostConfigFingerprint(config);
-}
-
-function resolveUsageCostCachePath(agentId?: string): string {
-  return path.join(resolveSessionTranscriptsDirForAgent(agentId), USAGE_COST_CACHE_FILE);
 }
 
 function resolveUsageCostSessionStorePath(params?: {
@@ -194,141 +187,6 @@ function resolveUsageCostSessionStorePath(params?: {
   return params?.sessionsDir
     ? path.join(params.sessionsDir, "sessions.json")
     : resolveDefaultSessionStorePath(params?.agentId);
-}
-
-function resolveUsageCostCacheLockPath(cachePath: string): string {
-  return `${cachePath}.lock`;
-}
-
-function parseUsageCostCacheLock(raw: string): UsageCostCacheLock | null {
-  const parsed = JSON.parse(raw) as unknown;
-  if (!parsed || typeof parsed !== "object") {
-    return null;
-  }
-  const lock = parsed as Partial<UsageCostCacheLock>;
-  if (
-    typeof lock.pid !== "number" ||
-    !Number.isInteger(lock.pid) ||
-    lock.pid <= 0 ||
-    typeof lock.startedAt !== "number" ||
-    !Number.isFinite(lock.startedAt) ||
-    (lock.token !== undefined && typeof lock.token !== "string")
-  ) {
-    return null;
-  }
-  return { pid: lock.pid, startedAt: lock.startedAt, token: lock.token };
-}
-
-async function readUsageCostCacheLockState(
-  lockPath: string,
-): Promise<UsageCostCacheLockReadResult> {
-  try {
-    const lock = parseUsageCostCacheLock(await fs.promises.readFile(lockPath, "utf-8"));
-    if (lock) {
-      return { state: "valid", lock };
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return { state: "missing" };
-    }
-  }
-  const stats = await fs.promises.stat(lockPath).catch(() => null);
-  if (!stats) {
-    return { state: "missing" };
-  }
-  return { state: "malformed", mtimeMs: stats.mtimeMs };
-}
-
-async function readUsageCostCacheLock(lockPath: string): Promise<UsageCostCacheLock | null> {
-  const result = await readUsageCostCacheLockState(lockPath);
-  return result.state === "valid" ? result.lock : null;
-}
-
-function isMalformedUsageCostCacheLockRecent(mtimeMs: number): boolean {
-  return Date.now() - mtimeMs < USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
-}
-
-async function writeUsageCostCacheLockAtomically(
-  lockPath: string,
-  lock: UsageCostCacheLock,
-): Promise<void> {
-  const tempPath = `${lockPath}.${process.pid}.${process.hrtime.bigint()}.tmp`;
-  await fs.promises.writeFile(tempPath, `${JSON.stringify(lock)}\n`, { flag: "wx" });
-  try {
-    await fs.promises.link(tempPath, lockPath);
-  } finally {
-    await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
-  }
-}
-
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    return code === "EPERM";
-  }
-}
-
-async function isUsageCostCacheRefreshRunning(cachePath: string): Promise<boolean> {
-  const lockPath = resolveUsageCostCacheLockPath(cachePath);
-  const result = await readUsageCostCacheLockState(lockPath);
-  if (result.state === "missing") {
-    return false;
-  }
-  if (result.state === "malformed") {
-    if (isMalformedUsageCostCacheLockRecent(result.mtimeMs)) {
-      return true;
-    }
-    await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
-    return false;
-  }
-  const lock = result.lock;
-  if (isProcessRunning(lock.pid)) {
-    return true;
-  }
-  await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
-  return false;
-}
-
-async function acquireUsageCostCacheRefreshLock(cachePath: string): Promise<{
-  acquired: boolean;
-  release: () => Promise<void>;
-}> {
-  const lockPath = resolveUsageCostCacheLockPath(cachePath);
-  await fs.promises.mkdir(path.dirname(lockPath), { recursive: true });
-  const lock: UsageCostCacheLock = {
-    pid: process.pid,
-    startedAt: Date.now(),
-    token: `${process.pid}:${Date.now()}:${process.hrtime.bigint()}`,
-  };
-  try {
-    await writeUsageCostCacheLockAtomically(lockPath, lock);
-    return {
-      acquired: true,
-      release: async () => {
-        const current = await readUsageCostCacheLock(lockPath);
-        if (
-          current?.pid === lock.pid &&
-          current.startedAt === lock.startedAt &&
-          current.token === lock.token
-        ) {
-          await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
-        }
-      },
-    };
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "EEXIST") {
-      throw err;
-    }
-    if (await isUsageCostCacheRefreshRunning(cachePath)) {
-      return { acquired: false, release: async () => undefined };
-    }
-    await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
-    return acquireUsageCostCacheRefreshLock(cachePath);
-  }
 }
 
 function createEmptyUsageCostCache(pricingFingerprint: string): UsageCostCacheFile {
@@ -357,50 +215,34 @@ function normalizeUsageCostCache(raw: unknown, pricingFingerprint: string): Usag
   };
 }
 
-async function readUsageCostCache(
-  cachePath: string,
+function readUsageCostCache(
+  agentId: string | undefined,
   pricingFingerprint: string,
-): Promise<UsageCostCacheFile> {
+  databasePath?: string,
+): UsageCostCacheFile {
   try {
-    const raw = await fs.promises.readFile(cachePath, "utf-8");
+    const raw = readSessionCostUsageCacheJson(agentId, databasePath);
+    if (!raw) {
+      return createEmptyUsageCostCache(pricingFingerprint);
+    }
     return normalizeUsageCostCache(JSON.parse(raw), pricingFingerprint);
   } catch {
     return createEmptyUsageCostCache(pricingFingerprint);
   }
 }
 
-async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile): Promise<void> {
-  await replaceFileAtomic({
-    filePath: cachePath,
-    content: `${JSON.stringify(cache)}\n`,
-    tempPrefix: ".usage-cost-cache",
+function writeUsageCostCache(
+  agentId: string | undefined,
+  cache: UsageCostCacheFile,
+  databasePath?: string,
+): void {
+  const valueJson = JSON.stringify(cache);
+  writeSessionCostUsageCacheJson({
+    agentId,
+    databasePath,
+    valueJson,
+    updatedAt: cache.updatedAt,
   });
-}
-
-function isUsageCostCacheTempFileName(name: string): boolean {
-  if (!name.endsWith(".tmp") || name.startsWith(`${USAGE_COST_CACHE_FILE}.lock.`)) {
-    return false;
-  }
-  return name.startsWith(".usage-cost-cache.") || name.startsWith(`${USAGE_COST_CACHE_FILE}.`);
-}
-
-async function cleanupStaleUsageCostCacheTempFiles(cachePath: string): Promise<void> {
-  const dir = path.dirname(cachePath);
-  const cutoffMs = Date.now() - USAGE_COST_CACHE_TEMP_FILE_GRACE_MS;
-  const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
-  await Promise.all(
-    entries.map(async (entry) => {
-      if (!entry.isFile() || !isUsageCostCacheTempFileName(entry.name)) {
-        return;
-      }
-      const tempPath = path.join(dir, entry.name);
-      const stats = await fs.promises.stat(tempPath).catch(() => null);
-      if (!stats || stats.mtimeMs > cutoffMs) {
-        return;
-      }
-      await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
-    }),
-  );
 }
 
 async function listUsageCountedTranscriptFileStats(
@@ -1616,8 +1458,6 @@ export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
   dayBucket?: UsageDailyBucket;
-  /** @deprecated Use startMs/endMs. */
-  days?: number;
   config?: OpenClawConfig;
   agentId?: string;
 }): Promise<CostUsageSummary> {
@@ -1629,8 +1469,7 @@ export async function loadCostUsageSummary(params?: {
     sinceTime = params.startMs;
     untilTime = params.endMs;
   } else {
-    // Fallback to days-based calculation for backwards compatibility
-    const days = Math.max(1, Math.floor(params?.days ?? 30));
+    const days = 30;
     const since = new Date(now);
     since.setDate(since.getDate() - (days - 1));
     sinceTime = since.getTime();
@@ -1834,28 +1673,29 @@ async function scanUsageFileForCache(params: {
   };
 }
 
-async function refreshCostUsageCacheForPath(params?: {
+async function refreshCostUsageCacheForAgent(params?: {
   config?: OpenClawConfig;
   agentId?: string;
-  cachePath?: string;
+  databasePath?: string;
   maxFiles?: number;
   sessionsDir?: string;
   sessionFiles?: string[];
   startMs?: number;
 }): Promise<UsageCostRefreshResult> {
-  const cachePath = params?.cachePath ?? resolveUsageCostCachePath(params?.agentId);
-  const lock = await acquireUsageCostCacheRefreshLock(cachePath);
+  const databasePath =
+    params?.databasePath ??
+    resolveOpenClawAgentSqlitePath({ agentId: normalizeAgentId(params?.agentId) });
+  const lock = acquireSessionCostUsageRefreshLock(params?.agentId, databasePath);
   if (!lock.acquired) {
     return "busy";
   }
   try {
-    await cleanupStaleUsageCostCacheTempFiles(cachePath);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
-    const cache = await readUsageCostCache(cachePath, pricingFingerprint);
+    const cache = readUsageCostCache(params?.agentId, pricingFingerprint, databasePath);
     const files = await listUsageCountedTranscriptFiles(params?.agentId, {
       sessionsDir: params?.sessionsDir,
     });
-    // Empty caches come from missing/corrupt files and version/pricing mismatches.
+    // Empty caches come from missing/corrupt rows and version/pricing mismatches.
     // Persist the empty current-shape cache even when this refresh scans no files.
     let cacheMutated = cache.updatedAt === 0;
     const sessionSummaryFiles = new Set(params?.sessionFiles ?? []);
@@ -1915,7 +1755,7 @@ async function refreshCostUsageCacheForPath(params?: {
         now - lastCheckpointMs >= USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS
       ) {
         cache.updatedAt = now;
-        await writeUsageCostCache(cachePath, cache);
+        writeUsageCostCache(params?.agentId, cache, databasePath);
         dirtyCount = 0;
         lastCheckpointMs = Date.now();
       }
@@ -1923,11 +1763,11 @@ async function refreshCostUsageCacheForPath(params?: {
 
     if (cacheMutated || dirtyCount > 0) {
       cache.updatedAt = Date.now();
-      await writeUsageCostCache(cachePath, cache);
+      writeUsageCostCache(params?.agentId, cache, databasePath);
     }
     return "refreshed";
   } finally {
-    await lock.release();
+    lock.release();
   }
 }
 
@@ -1938,7 +1778,7 @@ export async function refreshCostUsageCache(params?: {
   sessionFiles?: string[];
   startMs?: number;
 }): Promise<UsageCostRefreshResult> {
-  return await refreshCostUsageCacheForPath(params);
+  return await refreshCostUsageCacheForAgent(params);
 }
 
 export async function loadCostUsageSummaryFromCache(params: {
@@ -1950,12 +1790,11 @@ export async function loadCostUsageSummaryFromCache(params: {
   requestRefresh?: boolean;
   refreshMode?: "background" | "sync-when-empty";
 }): Promise<CostUsageSummary> {
-  const cachePath = resolveUsageCostCachePath(params.agentId);
+  const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
+  const refreshKey = databasePath;
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
-  let [cache, files] = await Promise.all([
-    readUsageCostCache(cachePath, pricingFingerprint),
-    listUsageCountedTranscriptFiles(params.agentId),
-  ]);
+  let cache = readUsageCostCache(params.agentId, pricingFingerprint, databasePath);
+  let files = await listUsageCountedTranscriptFiles(params.agentId);
   const staleFiles = getUsageCostStaleFiles({
     cache,
     files,
@@ -1971,10 +1810,8 @@ export async function loadCostUsageSummaryFromCache(params: {
         agentId: params.agentId,
         startMs: params.startMs,
       });
-      [cache, files] = await Promise.all([
-        readUsageCostCache(cachePath, pricingFingerprint),
-        listUsageCountedTranscriptFiles(params.agentId),
-      ]);
+      cache = readUsageCostCache(params.agentId, pricingFingerprint, databasePath);
+      files = await listUsageCountedTranscriptFiles(params.agentId);
       if (result === "refreshed") {
         const remainingStaleFiles = getUsageCostStaleFiles({
           cache,
@@ -1988,14 +1825,14 @@ export async function loadCostUsageSummaryFromCache(params: {
       requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
     }
   }
-  const refreshRunning = await isUsageCostCacheRefreshRunning(cachePath);
+  const refreshRunning = isSessionCostUsageRefreshRunning(params.agentId, databasePath);
   return buildCostUsageSummaryFromCache({
     cache,
     files,
     startMs: params.startMs,
     endMs: params.endMs,
     dayBucket: params.dayBucket,
-    refreshing: usageCostRefreshes.has(cachePath) || refreshRunning,
+    refreshing: usageCostRefreshes.has(refreshKey) || refreshRunning,
   });
 }
 
@@ -2011,12 +1848,11 @@ export async function loadSessionCostSummaryFromCache(params: {
   requestRefresh?: boolean;
   refreshMode?: "background" | "sync-when-empty";
 }): Promise<{ summary: SessionCostSummary | null; cacheStatus: UsageCacheStatus }> {
-  const cachePath = resolveUsageCostCachePath(params.agentId);
+  const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
+  const refreshKey = databasePath;
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
-  let [cache, file] = await Promise.all([
-    readUsageCostCache(cachePath, pricingFingerprint),
-    resolveUsageCostTranscriptFile(params.sessionFile),
-  ]);
+  let cache = readUsageCostCache(params.agentId, pricingFingerprint, databasePath);
+  let file = await resolveUsageCostTranscriptFile(params.sessionFile);
   let entry = cache.files[params.sessionFile];
   let stale =
     !file ||
@@ -2034,10 +1870,8 @@ export async function loadSessionCostSummaryFromCache(params: {
         sessionFiles: [params.sessionFile],
       });
       if (result === "refreshed") {
-        [cache, file] = await Promise.all([
-          readUsageCostCache(cachePath, pricingFingerprint),
-          resolveUsageCostTranscriptFile(params.sessionFile),
-        ]);
+        cache = readUsageCostCache(params.agentId, pricingFingerprint, databasePath);
+        file = await resolveUsageCostTranscriptFile(params.sessionFile);
         entry = cache.files[params.sessionFile];
         stale =
           !file ||
@@ -2064,7 +1898,8 @@ export async function loadSessionCostSummaryFromCache(params: {
     }
   }
   const refreshRunning =
-    usageCostRefreshes.has(cachePath) || (await isUsageCostCacheRefreshRunning(cachePath));
+    usageCostRefreshes.has(refreshKey) ||
+    isSessionCostUsageRefreshRunning(params.agentId, databasePath);
   let summary = stale ? null : (entry?.sessionSummary ?? null);
   // Persisted summaries use Gateway-local day keys. Explicit request calendars
   // must rebuild daily projections from the cached transcript entries.
@@ -2126,7 +1961,7 @@ export async function loadSessionCostSummariesFromCache(params: {
   dayBucket?: UsageDailyBucket;
   requestRefresh?: boolean;
 }): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
-  const cachePath = resolveUsageCostCachePath(params.agentId);
+  const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
   const fileTasks = params.sessions.map(
     (session) => async () => await resolveUsageCostTranscriptFile(session.sessionFile),
@@ -2135,11 +1970,9 @@ export async function loadSessionCostSummariesFromCache(params: {
     tasks: fileTasks,
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
   }).then(({ results }) => results);
-  const [cache, files, refreshRunning] = await Promise.all([
-    readUsageCostCache(cachePath, pricingFingerprint),
-    filesPromise,
-    isUsageCostCacheRefreshRunning(cachePath),
-  ]);
+  const cache = readUsageCostCache(params.agentId, pricingFingerprint, databasePath);
+  const refreshRunning = isSessionCostUsageRefreshRunning(params.agentId, databasePath);
+  const files = await filesPromise;
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
   const requiresDailyRebucket = params.dayBucket !== undefined;
@@ -2217,8 +2050,9 @@ export function requestCostUsageCacheRefresh(params?: {
   agentId?: string;
   sessionFiles?: string[];
 }): void {
-  const cachePath = resolveUsageCostCachePath(params?.agentId);
-  const existing = usageCostRefreshes.get(cachePath);
+  const databasePath = resolveUsageCostCacheDatabasePath(params?.agentId);
+  const refreshKey = databasePath;
+  const existing = usageCostRefreshes.get(refreshKey);
   if (existing) {
     mergeUsageCostRefreshRequest(existing, params);
     return;
@@ -2226,16 +2060,16 @@ export function requestCostUsageCacheRefresh(params?: {
 
   const state: UsageCostRefreshState = {
     agentId: params?.agentId,
-    cachePath,
     config: params?.config,
+    databasePath,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
     running: false,
-    sessionsDir: path.dirname(cachePath),
+    sessionsDir: resolveSessionTranscriptsDirForAgent(params?.agentId),
   };
   mergeUsageCostRefreshRequest(state, params);
-  usageCostRefreshes.set(cachePath, state);
-  scheduleUsageCostRefresh(cachePath, state);
+  usageCostRefreshes.set(refreshKey, state);
+  scheduleUsageCostRefresh(refreshKey, state);
 }
 
 function mergeUsageCostRefreshRequest(
@@ -2291,10 +2125,10 @@ async function runQueuedUsageCostRefresh(
         state.pendingSessionFiles.clear();
       }
       state.fullRefreshRequested = false;
-      const result = await refreshCostUsageCacheForPath({
-        cachePath: state.cachePath,
+      const result = await refreshCostUsageCacheForAgent({
         config: state.config,
         agentId: state.agentId,
+        databasePath: state.databasePath,
         sessionsDir: state.sessionsDir,
         sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
       });

@@ -35,7 +35,7 @@ type PtyModule = {
   };
 };
 
-export type PtyAdapter = SpawnProcessAdapter;
+type PtyAdapter = SpawnProcessAdapter;
 
 const loadPtyModule = createLazyRuntimeModule(
   () => import("@lydell/node-pty") as Promise<unknown> as Promise<PtyModule>,

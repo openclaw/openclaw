@@ -9,7 +9,6 @@ import {
   md,
   toSanitizedMarkdownHtml,
   toStreamingMarkdownHtml,
-  toStreamingPlainTextHtml,
 } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
@@ -943,28 +942,6 @@ PY
   });
 });
 
-describe("toStreamingPlainTextHtml", () => {
-  it("strips unsupported citation control markers before escaping streaming text", () => {
-    const html = toStreamingPlainTextHtml(
-      "v2026.5.20 release note citeturn2view0\n\nStill readable.",
-    );
-
-    expect(html).toBe(
-      '<div class="markdown-plain-text-fallback">v2026.5.20 release note\n\nStill readable.</div>',
-    );
-    expect(html).not.toContain("cite");
-    expect(html).not.toContain("turn2view0");
-  });
-
-  it("normalizes Unicode and CR line breaks before escaping streaming text", () => {
-    const html = toStreamingPlainTextHtml("first\u2028second\u2029third\rfourth\r\nfifth");
-
-    expect(html).toBe(
-      '<div class="markdown-plain-text-fallback">first\nsecond\nthird\nfourth\nfifth</div>',
-    );
-  });
-});
-
 describe("toStreamingMarkdownHtml", () => {
   it("renders streaming raw block art without collapsing quiet-zone spaces", () => {
     const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
@@ -994,40 +971,43 @@ describe("toStreamingMarkdownHtml", () => {
     );
   });
 
-  it("renders completed block prefixes as markdown and keeps the open tail plain", () => {
+  it("renders completed block prefixes as markdown and closes the streaming tail", () => {
     const html = toStreamingMarkdownHtml("## Done\n\nworking **tail");
 
-    expect(html).toBe(
-      '<h2>Done</h2>\n<div class="markdown-plain-text-fallback">working **tail</div>',
-    );
+    expect(html).toBe("<h2>Done</h2>\n<p>working <strong>tail</strong></p>\n");
   });
 
   it("uses Unicode separators as stable markdown boundaries", () => {
     const html = toStreamingMarkdownHtml("## Done\u2028\u2028working **tail");
 
-    expect(html).toBe(
-      '<h2>Done</h2>\n<div class="markdown-plain-text-fallback">working **tail</div>',
-    );
+    expect(html).toBe("<h2>Done</h2>\n<p>working <strong>tail</strong></p>\n");
   });
 
-  it("keeps a single open paragraph as escaped text", () => {
+  it("renders a single open paragraph as markdown with closed formatting", () => {
     const html = toStreamingMarkdownHtml("**still streaming");
 
-    expect(html).toBe('<div class="markdown-plain-text-fallback">**still streaming</div>');
+    expect(html).toBe("<p><strong>still streaming</strong></p>\n");
   });
 
-  it("does not invoke the markdown parser before a stable block boundary exists", () => {
-    const renderSpy = vi.spyOn(md, "render");
-    try {
-      const html = toStreamingMarkdownHtml("**still streaming parser sentinel");
+  it("renders half-written links as text only while streaming", () => {
+    const html = toStreamingMarkdownHtml("see [Streamdown](https://strea");
 
-      expect(html).toBe(
-        '<div class="markdown-plain-text-fallback">**still streaming parser sentinel</div>',
-      );
-      expect(renderSpy).not.toHaveBeenCalled();
-    } finally {
-      renderSpy.mockRestore();
-    }
+    expect(html).toBe("<p>see Streamdown</p>\n");
+  });
+
+  it("streams tables as markdown before the closing row arrives", () => {
+    const html = toStreamingMarkdownHtml("| left | right |\n| --- | --- |\n| 1 | 2");
+    const fragment = htmlFragment(html);
+
+    expect(fragment.querySelector("table")).not.toBeNull();
+    expect(fragment.querySelector("th")?.textContent).toBe("left");
+    expect(html).not.toContain("markdown-plain-text-fallback");
+  });
+
+  it("leaves dollar amounts alone while streaming", () => {
+    const html = toStreamingMarkdownHtml("prices are $$50 and");
+
+    expect(html).toBe("<p>prices are $$50 and</p>\n");
   });
 
   it("reuses the rendered stable prefix while only the streaming tail changes", () => {
@@ -1037,35 +1017,58 @@ describe("toStreamingMarkdownHtml", () => {
       const second = toStreamingMarkdownHtml("## Streaming cache sentinel\n\nsecond **tail");
 
       expect(first).toContain("<h2>Streaming cache sentinel</h2>");
+      expect(first).toContain("<p>first <strong>tail</strong></p>");
       expect(second).toContain("<h2>Streaming cache sentinel</h2>");
-      expect(renderSpy).toHaveBeenCalledTimes(1);
+      expect(second).toContain("<p>second <strong>tail</strong></p>");
+      // Stable prefix parses once (second call hits the cache); each tail parses fresh.
+      const stableParses = renderSpy.mock.calls.filter(
+        ([input]) => input === "## Streaming cache sentinel",
+      );
+      expect(stableParses).toHaveLength(1);
+      expect(renderSpy).toHaveBeenCalledTimes(3);
     } finally {
       renderSpy.mockRestore();
     }
   });
 
-  it("does not parse an open code fence while streaming", () => {
+  it("streams an open code fence as a live-highlighted code block", () => {
     const html = toStreamingMarkdownHtml("Intro\n\n```ts\nconst x = 1 < 2");
+    const fragment = htmlFragment(html);
 
-    expect(html).toBe(
-      '<p>Intro</p>\n<div class="markdown-plain-text-fallback">```ts\nconst x = 1 &lt; 2</div>',
-    );
+    expect(fragment.querySelector("p")?.textContent).toBe("Intro");
+    expect(fragment.querySelector("code.language-ts")?.textContent).toContain("const x = 1 < 2");
+    expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
-  it("keeps an open list code fence streaming through blank lines", () => {
+  it("streams an open list code fence through blank lines", () => {
     const html = toStreamingMarkdownHtml("- ```ts\n  const x = 1;\n\n  const y = 2;");
+    const fragment = htmlFragment(html);
+    const code = fragment.querySelector("li code");
 
-    expect(html).toBe(
-      '<div class="markdown-plain-text-fallback">- ```ts\n  const x = 1;\n\n  const y = 2;</div>',
-    );
+    expect(code?.textContent).toContain("const x = 1;");
+    expect(code?.textContent).toContain("const y = 2;");
+    expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
-  it("keeps an open blockquote code fence streaming through blank lines", () => {
-    const html = toStreamingMarkdownHtml("> ```ts\n> const x = 1;\n>\n> const y = 2;");
+  it("keeps completed tilde-fence code out of the remend tail", () => {
+    // remend only understands ``` fences; a closed ~~~ block must land in the
+    // stable prefix so its raw markers are never "completed" as inline markdown.
+    const html = toStreamingMarkdownHtml('~~~ts\nconst s = "**open";\n~~~\ncontinuing **bold');
+    const fragment = htmlFragment(html);
 
-    expect(html).toBe(
-      '<div class="markdown-plain-text-fallback">&gt; ```ts\n&gt; const x = 1;\n&gt;\n&gt; const y = 2;</div>',
-    );
+    expect(fragment.querySelector("code")?.textContent).toContain('const s = "**open";');
+    expect(fragment.querySelector("code strong")).toBeNull();
+    expect(fragment.querySelector("p strong")?.textContent).toBe("bold");
+  });
+
+  it("streams an open blockquote code fence through blank lines", () => {
+    const html = toStreamingMarkdownHtml("> ```ts\n> const x = 1;\n>\n> const y = 2;");
+    const fragment = htmlFragment(html);
+    const code = fragment.querySelector("blockquote code");
+
+    expect(code?.textContent).toContain("const x = 1;");
+    expect(code?.textContent).toContain("const y = 2;");
+    expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
   it("renders a completed code fence once the closing fence arrives", () => {

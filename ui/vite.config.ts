@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { Plugin, UserConfig } from "vite";
 import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
 import {
@@ -41,6 +42,42 @@ const commonJsOptimizeDeps = [
   "highlight.js/lib/languages/xml",
   "highlight.js/lib/languages/yaml",
 ] as const;
+// npm excludes dist/**/*.map; sidecars would bypass that rule and ship source
+// maps that the browser never needs during normal runtime.
+const controlUiPrecompressedAssetExtensions = new Set([
+  ".css",
+  ".js",
+  ".json",
+  ".svg",
+  ".txt",
+  ".wasm",
+  ".webmanifest",
+]);
+
+export function createControlUiPrecompressedAssetVariants(
+  fileName: string,
+  source: string | Uint8Array,
+): Array<{ fileName: string; source: Buffer }> {
+  if (
+    !fileName.startsWith("assets/") ||
+    !controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
+  ) {
+    return [];
+  }
+  const body = typeof source === "string" ? Buffer.from(source) : Buffer.from(source);
+  return [
+    {
+      fileName: `${fileName}.br`,
+      source: brotliCompressSync(body, {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
+      }),
+    },
+    {
+      fileName: `${fileName}.gz`,
+      source: gzipSync(body, { level: 9 }),
+    },
+  ];
+}
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
@@ -337,6 +374,24 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
   };
 }
 
+function controlUiPrecompressedAssetsPlugin(): Plugin {
+  return {
+    name: "control-ui-precompressed-assets",
+    apply: "build",
+    writeBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        // Vite's post-build import analysis rewrites lazy preload markers in a
+        // later generateBundle hook. Read from disk here so sidecars always
+        // encode the exact final bytes that the identity response serves.
+        const source = fs.readFileSync(path.join(outDir, output.fileName));
+        for (const variant of createControlUiPrecompressedAssetVariants(output.fileName, source)) {
+          fs.writeFileSync(path.join(outDir, variant.fileName), variant.source);
+        }
+      }
+    },
+  };
+}
+
 export default function controlUiViteConfig(): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
@@ -384,6 +439,7 @@ export default function controlUiViteConfig(): UserConfig {
     },
     plugins: [
       controlUiBrowserOnlySharedModuleAliases(),
+      controlUiPrecompressedAssetsPlugin(),
       controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",

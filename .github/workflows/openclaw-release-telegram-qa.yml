@@ -1498,13 +1498,11 @@ jobs:
             local config_path="${1:?}"
             local config_id diagnostics_dir diagnostics_real proof_bytes proof_path proof_tmp
             umask 077
-            config_id="$(printf '%s' "$config_path" | sha256sum | awk '{print $1}')"
             diagnostics_dir="${EVIDENCE_ROOT}/trusted-runtime-diagnostics"
             install -d -o "$RUNNER_UID" -g "$RUNNER_GID" -m 0700 "$diagnostics_dir"
             [[ ! -L "$diagnostics_dir" ]]
             diagnostics_real="$(realpath -e "$diagnostics_dir")"
             [[ "$diagnostics_real" == "$diagnostics_dir" ]]
-            proof_path="${diagnostics_dir}/gateway-model-config-${config_id}.json"
             proof_tmp="${RUNTIME_ROOT}/gateway-model-config-${BASHPID}.json"
 
             # Capture only bounded routing identifiers before the QA suite removes its temp config.
@@ -1552,6 +1550,10 @@ jobs:
             ' "$config_path" >"$proof_tmp"
             proof_bytes="$(stat -c '%s' "$proof_tmp")"
             ((proof_bytes > 0 && proof_bytes <= 65536))
+            # Content addressing deduplicates credential-specific temp configs
+            # that project to the same bounded routing proof.
+            config_id="$(sha256sum "$proof_tmp" | awk '{print $1}')"
+            proof_path="${diagnostics_dir}/gateway-model-config-${config_id}.json"
             chown "$RUNNER_UID:$RUNNER_GID" "$proof_tmp"
             chmod 0600 "$proof_tmp"
             mv -f "$proof_tmp" "$proof_path"
@@ -2238,6 +2240,7 @@ jobs:
         env:
           OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
           RUNTIME_ROOT: ${{ steps.create_sut.outputs.runtime_root }}
+          RUN_LANE_OUTCOME: ${{ steps.run_lane.outcome }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2388,10 +2391,18 @@ jobs:
           NODE
           chmod 0600 "$redactor_script"
 
-          mapfile -t gateway_logs < <(
-            sudo find "$RUNTIME_ROOT/tmp" -xdev -type f -name 'openclaw-*.log' -print | sort
+          # The live suite can launch more than eight gateways. Keep the newest
+          # bounded tails instead of failing diagnostics after a successful lane.
+          mapfile -d '' -t gateway_logs < <(
+            sudo find "$RUNTIME_ROOT/tmp" -xdev -type f -name 'openclaw-*.log' -printf '%T@\t%p\0' |
+              sort -z -nr |
+              sed -z -n '1,8p' |
+              cut -z -f2-
           )
-          ((${#gateway_logs[@]} > 0 && ${#gateway_logs[@]} <= 8))
+          ((${#gateway_logs[@]} <= 8))
+          if [[ "$RUN_LANE_OUTCOME" != "success" ]]; then
+            ((${#gateway_logs[@]} > 0))
+          fi
           for index in "${!gateway_logs[@]}"; do
             log_path="$(sudo realpath -e "${gateway_logs[$index]}")"
             case "$log_path" in
@@ -2407,7 +2418,10 @@ jobs:
             find "$diagnostics_dir" -maxdepth 1 -type f -name 'gateway-model-config-*.json' -print |
               sort
           )
-          ((${#model_config_proofs[@]} > 0 && ${#model_config_proofs[@]} <= 8))
+          ((${#model_config_proofs[@]} <= 8))
+          if [[ "$RUN_LANE_OUTCOME" != "success" ]]; then
+            ((${#model_config_proofs[@]} > 0))
+          fi
           for proof_path in "${model_config_proofs[@]}"; do
             [[ "$(stat -c '%F:%a' "$proof_path")" == "regular file:600" ]]
             proof_bytes="$(stat -c '%s' "$proof_path")"

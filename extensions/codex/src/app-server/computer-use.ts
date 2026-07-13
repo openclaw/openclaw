@@ -38,7 +38,7 @@ import {
 } from "./shared-client.js";
 
 /** Minimal app-server request function needed by Computer Use setup. */
-export type CodexComputerUseRequest = <T = JsonValue | undefined>(
+type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
   params?: unknown,
   options?: { timeoutMs?: number },
@@ -67,13 +67,13 @@ type CodexComputerUseExposureStatus = "skipped" | "missing" | "available";
 
 type CodexComputerUseLiveTestState = "skipped" | "passed" | "failed";
 
-export type CodexComputerUseStatusSection = {
+type CodexComputerUseStatusSection = {
   status: string;
   ok: boolean;
   message: string;
 };
 
-export type CodexComputerUseLiveTestStatus = {
+type CodexComputerUseLiveTestStatus = {
   status: CodexComputerUseLiveTestState;
   ok: boolean;
   attempted: boolean;
@@ -1252,8 +1252,6 @@ function createComputerUseRequest(params: {
       agentDir: params.agentDir,
     });
 }
-
-export const testing = { isDescendantOfPid, parsePsOutput };
 
 function resolveComputerUseConfig(
   params: Pick<CodexComputerUseSetupParams, "pluginConfig" | "overrides" | "forceEnable">,

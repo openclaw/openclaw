@@ -35,7 +35,6 @@ import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
-  getHighSignalLiveModelProviders,
   isHighSignalLiveModelRef,
   isSmallLiveModelRef,
   listPrioritizedHighSignalLiveModelRefs,
@@ -63,7 +62,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
-import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.types.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
@@ -71,6 +69,11 @@ import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+
+type ProviderThinkingModelCompat = {
+  thinkingFormat?: string;
+  supportedReasoningEfforts?: readonly string[] | null;
+};
 import {
   hasExpectedSingleNonce,
   hasExpectedToolNonce,
@@ -181,6 +184,12 @@ function providerFilterList(): string[] | undefined {
     : undefined;
 }
 
+function listHighSignalLiveModelProviders(): string[] {
+  return [...new Set(listPrioritizedHighSignalLiveModelRefs().map((ref) => ref.provider))].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+}
+
 function providerListFromExplicitModelFilter(params: {
   modelFilter: Set<string> | null;
   providerFilter: Set<string> | null;
@@ -218,7 +227,7 @@ function providerScopedModelRegistryProviders(params: {
             listPrioritizedSmallLiveModelRefs().map((ref) => normalizeProviderId(ref.provider)),
           ),
         ].toSorted((left, right) => left.localeCompare(right))
-      : getHighSignalLiveModelProviders();
+      : listHighSignalLiveModelProviders();
     return providers.filter((provider) =>
       params.providerFilter ? params.providerFilter.has(provider) : true,
     );
@@ -1541,7 +1550,7 @@ describe("providerScopedModelRegistryProviders", () => {
         modelFilter: null,
         providerFilter: null,
       }),
-    ).toEqual(getHighSignalLiveModelProviders());
+    ).toEqual(listHighSignalLiveModelProviders());
   });
 
   it("intersects default modern sweeps with provider filters", () => {

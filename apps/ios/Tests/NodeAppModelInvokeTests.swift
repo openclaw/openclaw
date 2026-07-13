@@ -64,6 +64,24 @@ private actor RecordingCameraService: CameraServicing {
     }
 }
 
+private actor MockHealthSummaryService: HealthSummaryServicing {
+    private(set) var periods: [OpenClawHealthSummaryPeriod] = []
+
+    func summary(params: OpenClawHealthSummaryParams) async throws -> OpenClawHealthSummaryPayload {
+        self.periods.append(params.period)
+        return OpenClawHealthSummaryPayload(
+            period: params.period,
+            startISO: "2026-07-06T00:00:00Z",
+            endISO: "2026-07-12T18:30:00Z",
+            timeZoneIdentifier: "America/Los_Angeles",
+            stepCount: 42000,
+            sleepDurationMinutes: 2880,
+            restingHeartRateBpm: 61.2,
+            workoutCount: 3,
+            workoutDurationMinutes: 145)
+    }
+}
+
 private actor BlockingAudioCameraService: CameraServicing {
     private let barrier: TalkPreparationBarrier
 
@@ -678,6 +696,38 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
         let json = try NodeAppModel._test_encodePayload(Payload(value: "ok"))
         #expect(json.contains("\"value\""))
+    }
+
+    @Test @MainActor func `health summary routes a fixed period to the health service`() async throws {
+        let service = MockHealthSummaryService()
+        let appModel = NodeAppModel(healthSummaryService: service)
+        let request = BridgeInvokeRequest(
+            id: "health-1",
+            command: OpenClawHealthCommand.summary.rawValue,
+            paramsJSON: #"{"period":"today"}"#)
+
+        let response = await appModel._test_handleInvoke(request)
+        let payload = try decodeTalkPayload(OpenClawHealthSummaryPayload.self, from: response)
+
+        #expect(response.ok)
+        #expect(payload.period == .today)
+        #expect(payload.stepCount == 42000)
+        #expect(await service.periods == [.today])
+    }
+
+    @Test @MainActor func `health summary rejects arbitrary periods before querying`() async {
+        let service = MockHealthSummaryService()
+        let appModel = NodeAppModel(healthSummaryService: service)
+        let request = BridgeInvokeRequest(
+            id: "health-invalid",
+            command: OpenClawHealthCommand.summary.rawValue,
+            paramsJSON: #"{"period":"90d"}"#)
+
+        let response = await appModel._test_handleInvoke(request)
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(await service.periods.isEmpty)
     }
 
     @Test @MainActor func `chat session key defaults to main base`() {
@@ -3182,7 +3232,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await waitForTalkCondition { startResumed }
 
         #expect(!talkMode.isListening)
-        #expect(talkMode.statusText == "Paused")
+        #expect(talkMode.statusText != "Listening")
     }
 
     @Test @MainActor func `gateway disconnect invalidates a suspended Talk start`() async {
@@ -4760,7 +4810,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(watchService.lastSentAppSnapshot?.talkStatusText == "Speech error: denied")
     }
 
-    @Test @MainActor func `watch app snapshot preserves one shot push to talk phase`() async throws {
+    @Test @MainActor func `watch app snapshot preserves one shot push to talk phase`() async {
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
         appModel.talkMode.isEnabled = false

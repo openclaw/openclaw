@@ -337,4 +337,3 @@ export function resolveSlackRoutingContext(params: {
 export const testing = {
   normalizeSlackRouteBindingConfig,
 };
-export { testing as __testing };

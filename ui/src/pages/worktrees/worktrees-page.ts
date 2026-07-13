@@ -8,6 +8,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -31,6 +32,36 @@ function repoName(repoRoot: string): string {
   return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
 }
 
+type CleanupLimitKey = "maxCount" | "maxTotalSizeGb";
+
+// Coalesces bursts of stepper clicks into one config.patch and keeps sustained
+// editing far below the control-plane config-write quota (3 writes / 60 s).
+const CLEANUP_COMMIT_DELAY_MS = 2_000;
+
+// The count is an integer, but the size limit accepts fractions (0.5 GB), so
+// only maxCount gets floored; flooring the size would display 0.5 as the
+// documented "disabled" value 0.
+function normalizeCleanupLimit(key: CleanupLimitKey, value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return key === "maxCount" ? Math.floor(value) : value;
+}
+
+function cleanupLimitFromConfig(
+  config: Record<string, unknown> | null,
+  key: CleanupLimitKey,
+): number {
+  const worktrees = config?.worktrees;
+  const cleanup =
+    worktrees && typeof worktrees === "object"
+      ? (worktrees as { cleanup?: unknown }).cleanup
+      : undefined;
+  const value =
+    cleanup && typeof cleanup === "object" ? (cleanup as Record<string, unknown>)[key] : undefined;
+  return typeof value === "number" ? normalizeCleanupLimit(key, value) : 0;
+}
+
 class WorktreesPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -45,6 +76,17 @@ class WorktreesPage extends OpenClawLightDomElement {
   @state() private createBaseRef = "";
   @state() private createBranches: string[] = [];
   @state() private creating = false;
+  @state() private cleanupLoaded = false;
+  @state() private cleanupMaxCount = 0;
+  @state() private cleanupMaxSizeGb = 0;
+
+  // Debounced stepper commits: rapid clicks fold into one rate-limited config.patch.
+  private cleanupCommitTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingCleanupPatch: Partial<Record<CleanupLimitKey, number>> = {};
+  // Pending edits stay bound to the capability they were made against so a
+  // replaced gateway context never receives another gateway's limits.
+  private pendingCleanupSource: ApplicationContext["runtimeConfig"] | null = null;
+  private cleanupCommitInFlight: Promise<boolean> | null = null;
 
   private client: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
@@ -53,29 +95,163 @@ class WorktreesPage extends OpenClawLightDomElement {
   private loadGeneration = 0;
   private branchesGeneration = 0;
   private operationEpoch = 0;
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.gateway,
-    (gateway) => {
-      const sourceChanged = this.hasBoundGateway && this.gatewaySource !== gateway;
-      this.gatewaySource = gateway;
-      this.hasBoundGateway = true;
-      this.applyGatewaySnapshot(gateway.snapshot, sourceChanged);
-      return gateway.subscribe((snapshot) => {
-        if (this.gatewaySource === gateway && this.context.gateway === gateway) {
-          this.applyGatewaySnapshot(snapshot);
-        }
-      });
-    },
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const sourceChanged = this.hasBoundGateway && this.gatewaySource !== gateway;
+        this.gatewaySource = gateway;
+        this.hasBoundGateway = true;
+        this.applyGatewaySnapshot(gateway.snapshot, sourceChanged);
+        return gateway.subscribe((snapshot) => {
+          if (this.gatewaySource === gateway && this.context.gateway === gateway) {
+            this.applyGatewaySnapshot(snapshot);
+          }
+        });
+      },
+    )
+    .effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => {
+        // A replaced capability invalidates drafts made against the old one;
+        // controls stay inert until the new snapshot populates them.
+        this.resetCleanupDraft();
+        void runtimeConfig.ensureLoaded();
+        this.syncCleanupFromConfig();
+        return runtimeConfig.subscribe(() => this.syncCleanupFromConfig());
+      },
+    );
+
+  private resetCleanupDraft() {
+    if (this.cleanupCommitTimer) {
+      clearTimeout(this.cleanupCommitTimer);
+      this.cleanupCommitTimer = null;
+    }
+    this.pendingCleanupPatch = {};
+    this.pendingCleanupSource = null;
+    this.cleanupLoaded = false;
+  }
 
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.invalidateLoad();
     this.invalidateOperations();
+    // Flush a pending edit so navigating away does not drop it.
+    void this.flushCleanupEdits();
     this.gatewaySource = undefined;
     this.client = null;
     this.gatewayConnected = false;
     super.disconnectedCallback();
+  }
+
+  private syncCleanupFromConfig() {
+    // A pending local edit owns the draft values until its patch settles.
+    if (this.cleanupCommitTimer || Object.keys(this.pendingCleanupPatch).length > 0) {
+      return;
+    }
+    const runtimeConfig = this.context?.runtimeConfig;
+    if (!runtimeConfig) {
+      return;
+    }
+    const config = resolveEditableSnapshotConfig(runtimeConfig.state.configSnapshot);
+    if (!config) {
+      return;
+    }
+    this.cleanupLoaded = true;
+    this.cleanupMaxCount = cleanupLimitFromConfig(config, "maxCount");
+    this.cleanupMaxSizeGb = cleanupLimitFromConfig(config, "maxTotalSizeGb");
+  }
+
+  private setCleanupLimit(key: CleanupLimitKey, rawValue: number) {
+    const value = normalizeCleanupLimit(key, rawValue);
+    if (key === "maxCount") {
+      this.cleanupMaxCount = value;
+    } else {
+      this.cleanupMaxSizeGb = value;
+    }
+    this.pendingCleanupPatch[key] = value;
+    this.pendingCleanupSource = this.context?.runtimeConfig ?? null;
+    if (this.cleanupCommitTimer) {
+      clearTimeout(this.cleanupCommitTimer);
+    }
+    this.cleanupCommitTimer = setTimeout(() => {
+      this.cleanupCommitTimer = null;
+      void this.commitCleanupLimits();
+    }, CLEANUP_COMMIT_DELAY_MS);
+  }
+
+  /**
+   * Cancels the debounce timer and commits pending cleanup edits now. A failed
+   * in-flight commit re-queues its draft, so the serialized retry below still
+   * reports false and callers refuse to act on limits that never saved.
+   */
+  private async flushCleanupEdits(): Promise<boolean> {
+    if (this.cleanupCommitTimer) {
+      clearTimeout(this.cleanupCommitTimer);
+      this.cleanupCommitTimer = null;
+    }
+    return await this.commitCleanupLimits();
+  }
+
+  private async commitCleanupLimits(): Promise<boolean> {
+    // Serialize config writes: starting while another commit is in flight
+    // would reuse its stale base hash and could land limits out of order.
+    while (this.cleanupCommitInFlight) {
+      await this.cleanupCommitInFlight;
+    }
+    const patch = this.pendingCleanupPatch;
+    if (Object.keys(patch).length === 0) {
+      return true;
+    }
+    const source = this.pendingCleanupSource;
+    this.pendingCleanupPatch = {};
+    this.pendingCleanupSource = null;
+    const runtimeConfig = this.context?.runtimeConfig;
+    if (!runtimeConfig || (source !== null && source !== runtimeConfig)) {
+      // Dropping an edit made against a replaced context beats writing one
+      // gateway's limits into another gateway's config.
+      return false;
+    }
+    // A failed save re-queues the draft (newer edits win per key) so a later
+    // flush retries instead of reporting the unsaved limits as committed.
+    const restoreDraft = () => {
+      if (this.context?.runtimeConfig !== runtimeConfig) {
+        // The capability was replaced while this write was in flight; its
+        // draft must not leak into the replacement gateway's config.
+        return;
+      }
+      this.pendingCleanupPatch = { ...patch, ...this.pendingCleanupPatch };
+      this.pendingCleanupSource = this.pendingCleanupSource ?? source;
+    };
+    const commit = (async () => {
+      try {
+        await runtimeConfig.ensureLoaded();
+        const patched = await runtimeConfig.patch({
+          raw: { worktrees: { cleanup: patch } },
+          note: "worktrees: update cleanup limits",
+        });
+        if (!patched) {
+          this.error = runtimeConfig.state.lastError ?? t("worktrees.cleanupSaveFailed");
+          restoreDraft();
+          return false;
+        }
+        await runtimeConfig.refresh();
+        this.syncCleanupFromConfig();
+        return true;
+      } catch (error) {
+        this.error = String(error);
+        restoreDraft();
+        return false;
+      }
+    })();
+    this.cleanupCommitInFlight = commit;
+    try {
+      return await commit;
+    } finally {
+      if (this.cleanupCommitInFlight === commit) {
+        this.cleanupCommitInFlight = null;
+      }
+    }
   }
 
   private applyGatewaySnapshot(
@@ -144,14 +320,16 @@ class WorktreesPage extends OpenClawLightDomElement {
     return this.loading || this.busyId !== null || this.creating;
   }
 
-  private async load() {
+  private async load(options: { preserveError?: boolean } = {}) {
     const client = this.client;
     if (!client || !this.gatewayConnected || this.operationPending) {
       return;
     }
     const generation = ++this.loadGeneration;
     this.loading = true;
-    this.error = null;
+    if (!options.preserveError) {
+      this.error = null;
+    }
     try {
       const result = await client.request<WorktreesListResult>("worktrees.list", {});
       if (generation === this.loadGeneration && client === this.client) {
@@ -212,7 +390,7 @@ class WorktreesPage extends OpenClawLightDomElement {
     } finally {
       if (this.isOperationScopeCurrent(scope)) {
         this.busyId = null;
-        await this.load();
+        await this.load({ preserveError: true });
       }
     }
   }
@@ -233,7 +411,7 @@ class WorktreesPage extends OpenClawLightDomElement {
     } finally {
       if (this.isOperationScopeCurrent(scope)) {
         this.busyId = null;
-        await this.load();
+        await this.load({ preserveError: true });
       }
     }
   }
@@ -245,6 +423,18 @@ class WorktreesPage extends OpenClawLightDomElement {
     }
     this.loading = true;
     this.error = null;
+    // A pending stepper edit must reach the config before gc reads it,
+    // otherwise Clean up now evicts against the previous limits.
+    const flushed = await this.flushCleanupEdits();
+    if (!this.isOperationScopeCurrent(scope)) {
+      return;
+    }
+    if (!flushed) {
+      // The failed commit already surfaced its error; gc must not run
+      // against limits the operator just tried to change.
+      this.loading = false;
+      return;
+    }
     try {
       await scope.client.request("worktrees.gc", {});
     } catch (error) {
@@ -254,12 +444,17 @@ class WorktreesPage extends OpenClawLightDomElement {
     } finally {
       if (this.isOperationScopeCurrent(scope)) {
         this.loading = false;
-        await this.load();
+        await this.load({ preserveError: true });
       }
     }
   }
 
   private toggleCreate() {
+    // A successful create closes and resets this shared draft, so the submitted
+    // snapshot must stay atomic until its request settles.
+    if (this.creating) {
+      return;
+    }
     this.createOpen = !this.createOpen;
     if (this.createOpen && !this.createRepoRoot) {
       const agents = this.context.agents.state.agentsList;
@@ -320,7 +515,7 @@ class WorktreesPage extends OpenClawLightDomElement {
     } finally {
       if (this.isOperationScopeCurrent(scope)) {
         this.creating = false;
-        await this.load();
+        await this.load({ preserveError: true });
       }
     }
   }
@@ -346,6 +541,7 @@ class WorktreesPage extends OpenClawLightDomElement {
           ${t("worktrees.repo")}
           <input
             type="text"
+            ?disabled=${this.creating}
             .value=${this.createRepoRoot}
             @change=${(event: Event) => {
               this.createRepoRoot = (event.target as HTMLInputElement).value;
@@ -358,6 +554,7 @@ class WorktreesPage extends OpenClawLightDomElement {
           ${t("worktrees.name")}
           <input
             type="text"
+            ?disabled=${this.creating}
             placeholder=${t("newSession.worktreeNamePlaceholder")}
             .value=${this.createName}
             @input=${(event: Event) => {
@@ -369,6 +566,7 @@ class WorktreesPage extends OpenClawLightDomElement {
           ${t("newSession.baseBranch")}
           <input
             type="text"
+            ?disabled=${this.creating}
             list="worktrees-create-branches"
             .value=${this.createBaseRef}
             @input=${(event: Event) => {
@@ -390,8 +588,75 @@ class WorktreesPage extends OpenClawLightDomElement {
     `;
   }
 
+  private renderCleanupRow(key: CleanupLimitKey, label: string, help: string, value: number) {
+    const disabled = !this.cleanupLoaded || !this.gatewayConnected;
+    return html`
+      <div class="worktrees-cleanup__row">
+        <div>
+          <div class="worktrees-cleanup__label">${label}</div>
+          <div class="worktrees-cleanup__help">${help}</div>
+        </div>
+        <div class="cfg-number">
+          <button
+            type="button"
+            class="cfg-number__btn"
+            aria-label=${t("worktrees.cleanupDecrease", { label })}
+            ?disabled=${disabled || value <= 0}
+            @click=${() => this.setCleanupLimit(key, value - 1)}
+          >
+            −
+          </button>
+          <input
+            type="number"
+            class="cfg-number__input"
+            min="0"
+            step=${key === "maxCount" ? "1" : "any"}
+            .value=${String(value)}
+            ?disabled=${disabled}
+            @change=${(event: Event) => {
+              this.setCleanupLimit(key, Number((event.target as HTMLInputElement).value));
+            }}
+          />
+          <button
+            type="button"
+            class="cfg-number__btn"
+            aria-label=${t("worktrees.cleanupIncrease", { label })}
+            ?disabled=${disabled}
+            @click=${() => this.setCleanupLimit(key, value + 1)}
+          >
+            +
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderCleanupCard() {
+    return html`
+      <section class="card">
+        <div class="card-title">${t("worktrees.cleanupTitle")}</div>
+        <div class="card-sub">${t("worktrees.cleanupSubtitle")}</div>
+        <div class="worktrees-cleanup">
+          ${this.renderCleanupRow(
+            "maxCount",
+            t("worktrees.cleanupMaxCount"),
+            t("worktrees.cleanupMaxCountHelp"),
+            this.cleanupMaxCount,
+          )}
+          ${this.renderCleanupRow(
+            "maxTotalSizeGb",
+            t("worktrees.cleanupMaxSize"),
+            t("worktrees.cleanupMaxSizeHelp"),
+            this.cleanupMaxSizeGb,
+          )}
+        </div>
+      </section>
+    `;
+  }
+
   override render() {
     const body = html`
+      ${this.renderCleanupCard()}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
@@ -399,7 +664,7 @@ class WorktreesPage extends OpenClawLightDomElement {
             <div class="card-sub">${t("worktrees.subtitle")}</div>
           </div>
           <div class="row" style="gap: 8px;">
-            <button class="btn" @click=${() => this.toggleCreate()}>
+            <button class="btn" ?disabled=${this.creating} @click=${() => this.toggleCreate()}>
               ${t("worktrees.newWorktree")}
             </button>
             <button class="btn" ?disabled=${this.operationPending} @click=${() => void this.gc()}>

@@ -127,8 +127,8 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../config/runtime-overrides.js", () => ({
   getConfigOverrides: getConfigOverridesMock,
   resetConfigOverrides: vi.fn(),
-  setConfigOverride: vi.fn(() => ({ ok: true })),
-  unsetConfigOverride: vi.fn(() => ({ ok: true, removed: true })),
+  setConfigOverride: vi.fn((pathRaw: string) => ({ ok: true, value: pathRaw.split(".") })),
+  unsetConfigOverride: vi.fn(() => ({ ok: true, value: true })),
 }));
 
 vi.mock("../../config/runtime-schema.js", async () => {

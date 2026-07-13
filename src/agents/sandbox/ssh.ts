@@ -311,7 +311,7 @@ export function buildValidatedExecRemoteCommand(params: {
   return buildExecRemoteCommand(params);
 }
 
-export const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
+const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
   "set -e",
   'target="$1"',
   'root="$2"',

@@ -1,8 +1,8 @@
 // Covers outbound target resolver id heuristics, directory cache/live fallback,
 // ambiguity modes, display formatting, and plugin normalized fallbacks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelDirectoryEntry } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 type TargetResolverModule = typeof import("./target-resolver.js");
@@ -28,7 +28,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (value: string) => value,
 }));
 
-vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
+vi.mock("../../channels/plugins/registry-loaded.js", () => ({
   getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getLoadedChannelPlugin(...args),
 }));
 

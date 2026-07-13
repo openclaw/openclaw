@@ -202,10 +202,12 @@ export function buildGatewayCronService(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  env?: NodeJS.ProcessEnv;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
-  const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const env = params.env ?? process.env;
+  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store, env);
+  const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     Array.isArray(cfg.agents?.list)

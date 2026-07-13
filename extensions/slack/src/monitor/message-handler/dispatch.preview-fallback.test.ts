@@ -47,6 +47,8 @@ let mockedPinnedMainDmOwner: string | undefined;
 let capturedReplyOptions:
   | {
       disableBlockStreaming?: boolean;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      suppressTyping?: boolean;
       suppressDefaultToolProgressMessages?: boolean;
       commentaryProgressEnabled?: boolean;
       onVerboseProgressVisibility?: (isActive: () => boolean) => void;
@@ -516,11 +518,14 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
     },
     resolveChannelMessageSourceReplyDeliveryMode: (params: {
       cfg?: { messages?: { groupChat?: { visibleReplies?: string } } };
-      ctx?: { ChatType?: string };
+      ctx?: { ChatType?: string; InboundEventKind?: string };
       requested?: "automatic" | "message_tool_only";
     }) => {
       if (params.requested) {
         return params.requested;
+      }
+      if (params.ctx?.InboundEventKind === "room_event") {
+        return "message_tool_only";
       }
       const chatType = params.ctx?.ChatType;
       if (chatType === "group" || chatType === "channel") {
@@ -978,6 +983,8 @@ vi.mock("../reply.runtime.js", () => ({
     };
     replyOptions?: {
       disableBlockStreaming?: boolean;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      suppressTyping?: boolean;
       suppressDefaultToolProgressMessages?: boolean;
       onItemEvent?: (payload: {
         kind?: string;
@@ -1130,6 +1137,8 @@ vi.mock("../reply.runtime.js", () => ({
   dispatchInboundMessage: async (params: {
     replyOptions?: {
       disableBlockStreaming?: boolean;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      suppressTyping?: boolean;
       suppressDefaultToolProgressMessages?: boolean;
       onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
@@ -2085,6 +2094,30 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(statusReactionControllerMock.setQueued).not.toHaveBeenCalled();
     expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+  });
+
+  it("suppresses Slack typing for ambient room events", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        ctxPayload: { ChatType: "channel", InboundEventKind: "room_event" },
+      }),
+    );
+
+    expect(capturedReplyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(capturedReplyOptions?.suppressTyping).toBe(true);
+  });
+
+  it("leaves Slack typing unsuppressed for normal channel turns", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        ctxPayload: { ChatType: "channel" },
+      }),
+    );
+
+    expect(capturedReplyOptions?.sourceReplyDeliveryMode).toBe("automatic");
+    expect(capturedReplyOptions?.suppressTyping).toBeUndefined();
   });
 
   it("escapes Slack mrkdwn in tool progress preview labels", async () => {

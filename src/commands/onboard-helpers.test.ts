@@ -35,11 +35,11 @@ describe("onboard error summaries", () => {
 });
 
 describe("printWizardHeader", () => {
-  const withColumns = (columns: number | undefined, run: () => void) => {
+  const withColumns = async (columns: number | undefined, run: () => Promise<void>) => {
     const previous = Object.getOwnPropertyDescriptor(process.stdout, "columns");
     Object.defineProperty(process.stdout, "columns", { value: columns, configurable: true });
     try {
-      run();
+      await run();
     } finally {
       if (previous) {
         Object.defineProperty(process.stdout, "columns", previous);
@@ -49,9 +49,9 @@ describe("printWizardHeader", () => {
     }
   };
 
-  it("prints the mascot beside the wordmark with claws above the text line", () => {
+  it("prints the mascot beside the wordmark with claws above the text line", async () => {
     const log = vi.fn();
-    withColumns(120, () => printWizardHeader({ log } as unknown as RuntimeEnv));
+    await withColumns(120, () => printWizardHeader({ log } as unknown as RuntimeEnv));
     const output = stripAnsi(String(log.mock.calls[0]?.[0]));
     const rows = output.split("\n");
     // Claw row stands alone above the wordmark; the eye row shares a line with it.
@@ -60,9 +60,9 @@ describe("printWizardHeader", () => {
     expect(rows[3]).toContain("██ █ ██");
   });
 
-  it("falls back to the plain title on narrow terminals", () => {
+  it("falls back to the plain title on narrow terminals", async () => {
     const log = vi.fn();
-    withColumns(50, () => printWizardHeader({ log } as unknown as RuntimeEnv));
+    await withColumns(50, () => printWizardHeader({ log } as unknown as RuntimeEnv));
     const output = String(log.mock.calls[0]?.[0]);
     expect(output).toContain("OPENCLAW");
     expect(output).not.toContain("█");

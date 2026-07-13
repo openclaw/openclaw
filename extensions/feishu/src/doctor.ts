@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
@@ -967,6 +968,8 @@ export async function runFeishuDoctorSequence(params: {
 }
 
 export const feishuDoctor: ChannelDoctorAdapter = {
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
   runConfigSequence: async ({ cfg, env, shouldRepair }) =>
     await runFeishuDoctorSequence({ cfg, env, shouldRepair }),
 };

@@ -763,6 +763,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         self.updateStatus.isUpdateReady = false
     }
 
+    // periphery:ignore - Sparkle invokes this optional Objective-C delegate callback dynamically.
     func updater(
         _: SPUUpdater,
         userDidMakeChoice choice: SPUUserUpdateChoice,
