@@ -386,6 +386,13 @@ export const zh_CN: TranslationMap = {
     confirmDelete: "为 {name} 创建快照并删除？",
     confirmForceDelete: "快照失败：{error}\n\n不创建快照直接删除？",
   },
+  agentChip: {
+    menuLabel: "智能体菜单",
+    agents: "代理",
+    working: "正在工作…",
+    ready: "可以开始聊天",
+    whatCanAgentDo: "{name} 能做什么？",
+  },
   newSession: {
     title: "新建会话",
     hint: "选择此会话的工作位置，然后说明要执行的操作。",
@@ -1430,6 +1437,8 @@ export const zh_CN: TranslationMap = {
     blockedAgentFilter: "被代理过滤器阻止",
   },
   nav: {
+    back: "后退",
+    forward: "前进",
     chat: "聊天",
     settings: "设置",
     settingsGeneral: "通用",
@@ -3501,6 +3510,14 @@ export const zh_CN: TranslationMap = {
       remove: "移除",
       more: "更多操作",
       history: "历史",
+    },
+    runNotStarted: {
+      notDue: "此自动化任务尚未到运行时间。",
+      alreadyRunning: "此自动化任务已在运行。",
+      recoveryPending: "调度程序仍在恢复中。",
+      invalidSpec: "此自动化任务的计划或负载无效。",
+      stopped: "调度程序已停止。",
+      unknown: "无法启动此自动化任务。",
     },
     jobs: {
       schedule: "计划",

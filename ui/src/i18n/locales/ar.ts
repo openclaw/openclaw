@@ -388,6 +388,13 @@ export const ar: TranslationMap = {
     confirmDelete: "هل تريد أخذ لقطة وحذف {name}؟",
     confirmForceDelete: "فشل أخذ اللقطة: {error}\n\nهل تريد الحذف دون لقطة؟",
   },
+  agentChip: {
+    menuLabel: "قائمة الوكيل",
+    agents: "الوكلاء",
+    working: "جارٍ العمل…",
+    ready: "جاهز للدردشة",
+    whatCanAgentDo: "ما الذي يمكن لـ {name} فعله؟",
+  },
   newSession: {
     title: "جلسة جديدة",
     hint: "اختر مكان عمل هذه الجلسة، ثم اذكر ما يجب فعله.",
@@ -1440,6 +1447,8 @@ export const ar: TranslationMap = {
     blockedAgentFilter: "محظور بواسطة عامل تصفية الوكيل",
   },
   nav: {
+    back: "رجوع",
+    forward: "تقدّم",
     chat: "الدردشة",
     settings: "الإعدادات",
     settingsGeneral: "عام",
@@ -3544,6 +3553,14 @@ export const ar: TranslationMap = {
       remove: "إزالة",
       more: "إجراءات إضافية",
       history: "السجل",
+    },
+    runNotStarted: {
+      notDue: "لم يحن موعد تشغيل هذه العملية التلقائية بعد.",
+      alreadyRunning: "هذه العملية التلقائية قيد التشغيل بالفعل.",
+      recoveryPending: "لا تزال استعادة المجدول قيد التنفيذ.",
+      invalidSpec: "تحتوي هذه العملية التلقائية على جدول زمني أو حمولة غير صالحة.",
+      stopped: "المجدول متوقف.",
+      unknown: "تعذر بدء هذه العملية التلقائية.",
     },
     jobs: {
       schedule: "الجدول",

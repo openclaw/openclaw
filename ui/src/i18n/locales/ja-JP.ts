@@ -396,6 +396,13 @@ export const ja_JP: TranslationMap = {
     confirmForceDelete:
       "スナップショットに失敗しました: {error}\n\nスナップショットなしで削除しますか？",
   },
+  agentChip: {
+    menuLabel: "エージェントメニュー",
+    agents: "エージェント",
+    working: "作業中…",
+    ready: "チャットできます",
+    whatCanAgentDo: "{name}には何ができますか？",
+  },
   newSession: {
     title: "新しいセッション",
     hint: "このセッションが作業する場所を選び、実行する内容を入力してください。",
@@ -1455,6 +1462,8 @@ export const ja_JP: TranslationMap = {
     blockedAgentFilter: "エージェントフィルターによりブロック",
   },
   nav: {
+    back: "戻る",
+    forward: "進む",
     chat: "チャット",
     settings: "設定",
     settingsGeneral: "一般",
@@ -3581,6 +3590,14 @@ export const ja_JP: TranslationMap = {
       remove: "削除",
       more: "その他の操作",
       history: "履歴",
+    },
+    runNotStarted: {
+      notDue: "この自動化はまだ実行時刻になっていません。",
+      alreadyRunning: "この自動化はすでに実行中です。",
+      recoveryPending: "スケジューラの復旧処理がまだ進行中です。",
+      invalidSpec: "この自動化のスケジュールまたはペイロードが無効です。",
+      stopped: "スケジューラは停止しています。",
+      unknown: "この自動化を開始できませんでした。",
     },
     jobs: {
       schedule: "スケジュール",

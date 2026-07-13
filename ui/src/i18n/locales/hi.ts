@@ -390,6 +390,13 @@ export const hi: TranslationMap = {
     confirmDelete: "{name} का snapshot लेकर हटाएँ?",
     confirmForceDelete: "Snapshot विफल: {error}\n\nSnapshot के बिना हटाएँ?",
   },
+  agentChip: {
+    menuLabel: "एजेंट मेनू",
+    agents: "एजेंट",
+    working: "काम हो रहा है…",
+    ready: "चैट के लिए तैयार",
+    whatCanAgentDo: "{name} क्या कर सकता है?",
+  },
   newSession: {
     title: "नया सेशन",
     hint: "चुनें कि यह session कहाँ काम करेगा, फिर बताएं कि क्या करना है।",
@@ -1442,6 +1449,8 @@ export const hi: TranslationMap = {
     blockedAgentFilter: "agent फ़िल्टर द्वारा अवरुद्ध",
   },
   nav: {
+    back: "वापस",
+    forward: "आगे",
     chat: "चैट",
     settings: "सेटिंग्स",
     settingsGeneral: "सामान्य",
@@ -3540,6 +3549,14 @@ export const hi: TranslationMap = {
       remove: "हटाएँ",
       more: "अधिक क्रियाएं",
       history: "इतिहास",
+    },
+    runNotStarted: {
+      notDue: "इस ऑटोमेशन का समय अभी नहीं हुआ है।",
+      alreadyRunning: "यह ऑटोमेशन पहले से चल रहा है।",
+      recoveryPending: "शेड्यूलर की रिकवरी अभी भी जारी है।",
+      invalidSpec: "इस ऑटोमेशन का शेड्यूल या पेलोड अमान्य है।",
+      stopped: "शेड्यूलर बंद है।",
+      unknown: "यह ऑटोमेशन शुरू नहीं किया जा सका।",
     },
     jobs: {
       schedule: "शेड्यूल",

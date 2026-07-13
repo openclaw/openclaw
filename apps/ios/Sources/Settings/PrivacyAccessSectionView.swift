@@ -37,6 +37,29 @@ private enum PrivacyPermissionStatus {
     }
 }
 
+struct PrivacyGatewayPermissionSnapshot: Equatable {
+    let contacts: Bool
+    let photos: Bool
+    let calendar: Bool
+    let reminders: Bool
+
+    init(
+        contactsStatus: CNAuthorizationStatus,
+        photosStatus: PHAuthorizationStatus,
+        calendarStatus: EKAuthorizationStatus,
+        remindersStatus: EKAuthorizationStatus)
+    {
+        self.contacts = contactsStatus == .authorized || contactsStatus == .limited
+        self.photos = PhotoLibraryAccess.canRead(photosStatus)
+        self.calendar = Self.hasReadableEventKitAccess(calendarStatus)
+        self.reminders = Self.hasReadableEventKitAccess(remindersStatus)
+    }
+
+    private static func hasReadableEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
+        status == .fullAccess
+    }
+}
+
 struct PrivacyAccessSectionView: View {
     @Environment(GatewayConnectionController.self) private var gatewayController
     @State private var contactsStatus: CNAuthorizationStatus = CNContactStore.authorizationStatus(for: .contacts)
@@ -446,11 +469,29 @@ struct PrivacyAccessSectionView: View {
     }
 
     private func refreshAll() {
-        self.contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
-        self.calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        self.remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        self.updatePhotosStatus(PhotoLibraryAccess.authorizationStatus())
+        let previousPermissions = PrivacyGatewayPermissionSnapshot(
+            contactsStatus: self.contactsStatus,
+            photosStatus: self.photosStatus,
+            calendarStatus: self.calendarStatus,
+            remindersStatus: self.remindersStatus)
+        let contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
+        let photosStatus = PhotoLibraryAccess.authorizationStatus()
+        let calendarStatus = EKEventStore.authorizationStatus(for: .event)
+        let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
+        let currentPermissions = PrivacyGatewayPermissionSnapshot(
+            contactsStatus: contactsStatus,
+            photosStatus: photosStatus,
+            calendarStatus: calendarStatus,
+            remindersStatus: remindersStatus)
+
+        self.contactsStatus = contactsStatus
+        self.photosStatus = photosStatus
+        self.calendarStatus = calendarStatus
+        self.remindersStatus = remindersStatus
         self.healthEnabled = HealthAuthorization.isEnabled
+        if previousPermissions != currentPermissions {
+            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+        }
     }
 
     private func updatePhotosStatus(_ status: PHAuthorizationStatus) {

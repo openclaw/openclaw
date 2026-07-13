@@ -391,6 +391,13 @@ export const es: TranslationMap = {
     confirmDelete: "¿Crear snapshot y eliminar {name}?",
     confirmForceDelete: "Error al crear snapshot: {error}\n\n¿Eliminar sin snapshot?",
   },
+  agentChip: {
+    menuLabel: "Menú del agente",
+    agents: "Agentes",
+    working: "Procesando…",
+    ready: "Listo para chatear",
+    whatCanAgentDo: "¿Qué puede hacer {name}?",
+  },
   newSession: {
     title: "Nueva sesión",
     hint: "Elige dónde trabajará esta sesión y luego indica qué hacer.",
@@ -1454,6 +1461,8 @@ export const es: TranslationMap = {
     blockedAgentFilter: "bloqueado por filtro de agente",
   },
   nav: {
+    back: "Atrás",
+    forward: "Adelante",
     chat: "Chat",
     settings: "Ajustes",
     settingsGeneral: "General",
@@ -3603,6 +3612,14 @@ export const es: TranslationMap = {
       remove: "Eliminar",
       more: "Más acciones",
       history: "Historial",
+    },
+    runNotStarted: {
+      notDue: "Esta automatización aún no está programada para ejecutarse.",
+      alreadyRunning: "Esta automatización ya se está ejecutando.",
+      recoveryPending: "La recuperación del programador aún está en curso.",
+      invalidSpec: "Esta automatización tiene una programación o una carga útil no válidas.",
+      stopped: "El programador está detenido.",
+      unknown: "No se pudo iniciar esta automatización.",
     },
     jobs: {
       schedule: "Programación",

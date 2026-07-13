@@ -390,6 +390,13 @@ export const id: TranslationMap = {
     confirmDelete: "Buat snapshot dan hapus {name}?",
     confirmForceDelete: "Snapshot gagal: {error}\n\nHapus tanpa snapshot?",
   },
+  agentChip: {
+    menuLabel: "Menu agen",
+    agents: "Agen",
+    working: "Sedang bekerja…",
+    ready: "Siap mengobrol",
+    whatCanAgentDo: "Apa yang dapat dilakukan {name}?",
+  },
   newSession: {
     title: "Sesi baru",
     hint: "Pilih tempat sesi ini bekerja, lalu katakan apa yang harus dilakukan.",
@@ -1448,6 +1455,8 @@ export const id: TranslationMap = {
     blockedAgentFilter: "diblokir oleh filter agen",
   },
   nav: {
+    back: "Kembali",
+    forward: "Maju",
     chat: "Chat",
     settings: "Pengaturan",
     settingsGeneral: "Umum",
@@ -3575,6 +3584,14 @@ export const id: TranslationMap = {
       remove: "Hapus",
       more: "Tindakan lainnya",
       history: "Riwayat",
+    },
+    runNotStarted: {
+      notDue: "Otomatisasi ini belum waktunya dijalankan.",
+      alreadyRunning: "Otomatisasi ini sudah berjalan.",
+      recoveryPending: "Pemulihan penjadwal masih berlangsung.",
+      invalidSpec: "Otomatisasi ini memiliki jadwal atau payload yang tidak valid.",
+      stopped: "Penjadwal dihentikan.",
+      unknown: "Otomatisasi ini tidak dapat dimulai.",
     },
     jobs: {
       schedule: "Jadwal",

@@ -386,6 +386,13 @@ export const zh_TW: TranslationMap = {
     confirmDelete: "要建立快照並刪除 {name} 嗎？",
     confirmForceDelete: "快照失敗：{error}\n\n要在沒有快照的情況下刪除嗎？",
   },
+  agentChip: {
+    menuLabel: "代理程式選單",
+    agents: "代理程式",
+    working: "處理中…",
+    ready: "可以開始聊天",
+    whatCanAgentDo: "{name} 能做什麼？",
+  },
   newSession: {
     title: "新工作階段",
     hint: "選擇此工作階段的執行位置，然後說明要執行的事項。",
@@ -1431,6 +1438,8 @@ export const zh_TW: TranslationMap = {
     blockedAgentFilter: "被代理程式篩選器封鎖",
   },
   nav: {
+    back: "返回",
+    forward: "前進",
     chat: "聊天",
     settings: "設置",
     settingsGeneral: "一般",
@@ -3507,6 +3516,14 @@ export const zh_TW: TranslationMap = {
       remove: "移除",
       more: "更多動作",
       history: "歷史記錄",
+    },
+    runNotStarted: {
+      notDue: "此自動化尚未到執行時間。",
+      alreadyRunning: "此自動化已在執行中。",
+      recoveryPending: "排程器仍在復原中。",
+      invalidSpec: "此自動化的排程或承載資料無效。",
+      stopped: "排程器已停止。",
+      unknown: "無法啟動此自動化。",
     },
     jobs: {
       schedule: "排程",

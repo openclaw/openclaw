@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - **Control UI session workspace shortcut:** expand or collapse the active Chat pane's session workspace rail with ⇧⌘B without changing the main app sidebar or the separate detail and Canvas preview panel. Thanks @shakkernerd.
 - **Control UI Settings shortcut:** open Settings with ⇧⌘, while leaving the browser-owned ⌘, shortcut unchanged. Thanks @shakkernerd.
 - **Control UI chat layout:** center the transcript on the composer axis, keep assistant and tool output left and user bubbles right within the same readable frame, and preserve custom message-width overrides. (#104474) Thanks @shakkernerd.
+- **Control UI composer footer:** center the chat settings chip and model controls between the divider and the card edge instead of pinning them to the divider. (#105866)
 - **Control UI assistant actions:** keep assistant name and time first while placing hover actions beside them on the left instead of at the far edge. Thanks @shakkernerd.
 - **Cron model selection:** choose an agent-turn model in Control UI Quick Create and show configured or default models in cron job rows and details. (#95341) Thanks @ly85206559.
 - **Control UI GitHub previews:** show issue and pull request state, title, author, activity, comments, and change statistics in hover and keyboard-focus cards. (#100434)
@@ -31,6 +32,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Native app connection and relay reliability:** keep Android disconnects stopped across Activity recreation, fail remote camera commands without opening permission prompts, refresh mobile node registration after capability changes, surface iOS onboarding connection failures, cancel stale Talk owners on session switches, reject invalid Watch acknowledgments, preserve Watch events received during startup, and prevent older agent overview requests from replacing newer gateway state.
+- **Gateway source watch:** hand the configured port off from the installed service before starting the tmux watcher, preserve failed panes for attach/capture, and keep explicit alternate-port watches side by side with the managed Gateway.
+- **Claude CLI max-turn diagnostics:** preserve terminal max-turn results with OpenClaw and Claude session context, warn when tool actions may already have run, and stop unsafe auth-profile or model replay for potentially side-effecting turns. (#94130) Thanks @zhangguiping-xydt.
 - **Provider network retries:** align provider read/poll/download and agent-wait recovery for transient connection errors, retry bounded provider `ENOTFOUND` failures while leaving gateway `ENOTFOUND` and non-idempotent create operations fail-fast. (#101496) Thanks @xialonglee.
 - **Session retry classification:** stop permanent provider errors whose identifiers or payload details merely contain 429/5xx digit sequences from re-sending full context, and share bounded rate-limit-window parsing across retry paths. (#105258) Thanks @destire-mio.
 - **LINE directive templates:** suppress confirms and buttons with blank required fields or unlabeled actions while preserving valid titleless buttons and surrounding reply text. (#105520) Thanks @edenfunf.

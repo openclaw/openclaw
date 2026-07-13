@@ -24,6 +24,23 @@ const loadDoctorStateMigrations = createLazyRuntimeModule(
 );
 
 const loadDoctorCron = createLazyRuntimeModule(() => import("./doctor/cron/index.js"));
+const startupPreflightTraceStartedAt = performance.now();
+
+async function measureStartupPreflightStep<T>(name: string, run: () => T | Promise<T>): Promise<T> {
+  if (!isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE)) {
+    return await run();
+  }
+  const startedAt = performance.now();
+  try {
+    return await run();
+  } finally {
+    const durationMs = performance.now() - startedAt;
+    const totalMs = performance.now() - startupPreflightTraceStartedAt;
+    process.stderr.write(
+      `[gateway] startup trace: cli.bootstrap.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
+    );
+  }
+}
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
@@ -122,12 +139,30 @@ async function runStartupUpgradeConvergence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): Promise<string[]> {
-  const { runPostCorePluginConvergence } =
-    await import("../cli/update-cli/post-core-plugin-convergence.js");
-  const convergence = await runPostCorePluginConvergence({
-    cfg: params.cfg,
-    env: params.env,
-  });
+  const { planStartupPluginConvergence } = await measureStartupPreflightStep(
+    "plugin-plan-import",
+    () => import("./doctor/shared/startup-plugin-convergence-plan.js"),
+  );
+  const plan = await measureStartupPreflightStep("plugin-plan", () =>
+    planStartupPluginConvergence({
+      config: params.cfg,
+      env: params.env,
+    }),
+  );
+  if (!plan.required) {
+    return [];
+  }
+  const { runPostCorePluginConvergence } = await measureStartupPreflightStep(
+    "plugin-convergence-import",
+    () => import("../cli/update-cli/post-core-plugin-convergence.js"),
+  );
+  const convergence = await measureStartupPreflightStep("plugin-convergence", () =>
+    runPostCorePluginConvergence({
+      cfg: params.cfg,
+      env: params.env,
+      baselineInstallRecords: plan.installRecords,
+    }),
+  );
   if (convergence.changes.length > 0) {
     note(convergence.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
   }
@@ -182,6 +217,8 @@ export async function runDoctorConfigPreflight(
     /** Return false or reject on config drift; the preflight always unwinds owned resources. */
     beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
     requireStartupMigrationCheckpoint?: boolean;
+    /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
+    skipPristineStartupStateMigrations?: boolean;
     /**
      * Allows legacy imports whose source lives in the DEFAULT home state dir
      * while OPENCLAW_STATE_DIR points elsewhere. Only explicit doctor repair
@@ -199,6 +236,7 @@ export async function runDoctorConfigPreflight(
   let stateMigrations: Awaited<ReturnType<typeof loadDoctorStateMigrations>> | undefined;
   let startupMigrationEnv = process.env;
   let shouldRecordStartupCheckpoint = false;
+  let skipPristineStartupStateMigrations = options.skipPristineStartupStateMigrations === true;
   let startupMigrationLease: StartupMigrationLease | undefined;
   let startupMigrationHeartbeat: ReturnType<typeof setInterval> | undefined;
   let startupMigrationHeartbeatError: unknown;
@@ -212,6 +250,17 @@ export async function runDoctorConfigPreflight(
     noteStateMigrationResult(result);
   };
   try {
+    if (startupCheckpoint && !skipPristineStartupStateMigrations) {
+      // Capture pristine state before the Gateway's fresh-config guard can prepare runtime state.
+      const { canSkipPristineStartupStateMigrations } = await measureStartupPreflightStep(
+        "pristine-state-plan-import",
+        () => import("./doctor/shared/pristine-startup-state.js"),
+      );
+      skipPristineStartupStateMigrations = await measureStartupPreflightStep(
+        "pristine-state-plan",
+        () => canSkipPristineStartupStateMigrations(process.env),
+      );
+    }
     // The gateway uses this last-moment guard to ensure its prepared config did not change before
     // any automatic migration mutates state. A rejected guard skips every state migration stage.
     const stateMigrationsAllowed =
@@ -244,12 +293,16 @@ export async function runDoctorConfigPreflight(
     // A current version checkpoint proves this state root already completed every automatic
     // migration. Keep repeated Gateway boots out of the legacy/plugin migration import graph.
     stateMigrations =
-      stateMigrationsRequested && (!startupCheckpoint || shouldRecordStartupCheckpoint)
-        ? await loadDoctorStateMigrations()
+      stateMigrationsRequested &&
+      (!startupCheckpoint || shouldRecordStartupCheckpoint) &&
+      !skipPristineStartupStateMigrations
+        ? await measureStartupPreflightStep("state-migrations-import", loadDoctorStateMigrations)
         : undefined;
     if (stateMigrations && stateMigrationsAllowed) {
       const { autoMigrateLegacyStateDir } = stateMigrations;
-      const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
+      const stateDirResult = await measureStartupPreflightStep("state-dir-migrations", () =>
+        autoMigrateLegacyStateDir({ env: process.env }),
+      );
       noteStartupStateMigrationResult(stateDirResult);
     }
 
@@ -264,7 +317,11 @@ export async function runDoctorConfigPreflight(
       ...(options.observe === false ? { observe: false } : {}),
       skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
     };
-    let snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
+    let snapshot = addDoctorLegacyIssues(
+      await measureStartupPreflightStep("config-snapshot", () =>
+        readConfigFileSnapshot(readOptions),
+      ),
+    );
     if (options.repairPrefixedConfig === true && snapshot.exists && !snapshot.valid) {
       if (await recoverConfigFromJsonRootSuffix(snapshot)) {
         note(
@@ -301,8 +358,9 @@ export async function runDoctorConfigPreflight(
 
     const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
+    const freshConfigGuardRequired = stateMigrations !== undefined || shouldRecordStartupCheckpoint;
     const freshConfigGuardAllowed =
-      stateMigrations === undefined ||
+      !freshConfigGuardRequired ||
       !stateMigrationsAllowed ||
       options.beforeStateMigrations === undefined ||
       (await options.beforeStateMigrations(snapshot));

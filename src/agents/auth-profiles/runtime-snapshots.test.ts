@@ -8,8 +8,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  noteRuntimeAuthProfileStorePersistedMutation,
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
+  testing,
 } from "./runtime-snapshots.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -54,6 +57,22 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
+  it("advances credential revision without coupling to usage bookkeeping", () => {
+    const initialRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+    const store = createStore("set");
+    setRuntimeAuthProfileStoreSnapshot(store);
+    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(initialRevision + 1);
+
+    setRuntimeAuthProfileStoreSnapshot({
+      ...store,
+      usageStats: { "openai:default": { lastUsed: 2 } },
+    });
+    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(initialRevision + 1);
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(initialRevision + 2);
+  });
+
   it("isolates set/get/replace snapshot mutations without structuredClone", () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
     const agentDir = "/tmp/openclaw-auth-runtime-snapshot-agent";
@@ -100,5 +119,27 @@ describe("runtime auth profile snapshots", () => {
       structuredCloneSpy.mockRestore();
       clearRuntimeAuthProfileStoreSnapshots();
     }
+  });
+
+  it("bounds persisted mutation lineage by owner and profile", () => {
+    for (let index = 0; index <= testing.MAX_PERSISTED_MUTATION_OWNERS; index += 1) {
+      noteRuntimeAuthProfileStorePersistedMutation(`/tmp/openclaw-mutation-owner-${index}`, {
+        credentialsChanged: true,
+        stateChanged: false,
+        profileIds: ["openai:default"],
+      });
+    }
+    for (let index = 0; index <= testing.MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER; index += 1) {
+      noteRuntimeAuthProfileStorePersistedMutation("/tmp/openclaw-mutation-profile-owner", {
+        credentialsChanged: true,
+        stateChanged: false,
+        profileIds: [`openai:${index}`],
+      });
+    }
+
+    const counts = testing.getPersistedMutationRecordCounts();
+    expect(counts.owners).toBeLessThanOrEqual(testing.MAX_PERSISTED_MUTATION_OWNERS);
+    expect(counts.profiles).toBeLessThanOrEqual(testing.MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER);
+    testing.resetPersistedMutationLineage();
   });
 });

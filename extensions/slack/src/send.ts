@@ -569,10 +569,13 @@ function createSlackDeliveryMetadataSignature(params: {
 }
 
 function matchesSlackDeliveryMetadataSignature(actual: unknown, expected: string): boolean {
-  if (typeof actual !== "string" || actual.length !== expected.length) {
+  if (typeof actual !== "string") {
     return false;
   }
-  return timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  // timingSafeEqual throws on byte-length mismatch; string lengths are UTF-16.
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
 
 function withSlackDeliveryMetadata(

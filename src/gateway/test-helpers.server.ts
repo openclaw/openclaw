@@ -642,10 +642,12 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
   const mod = await getServerModule();
-  const resolvedOpts =
-    opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+  const resolvedOpts = {
+    ...opts,
+    controlUiEnabled: opts?.controlUiEnabled ?? false,
+  };
   if (
-    resolvedOpts?.controlUiEnabled === true &&
+    resolvedOpts.controlUiEnabled &&
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&
     tempControlUiRoot &&
     typeof (testState.gatewayControlUi as { root?: unknown } | undefined)?.root !== "string"

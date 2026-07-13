@@ -767,7 +767,7 @@ extension SettingsProTab {
 
     /// Native inset-grouped action row (plain tinted text, no pill chrome).
     func gatewayActionButton(
-        title: String,
+        title: LocalizedStringKey,
         icon: String,
         color: Color,
         isBusy: Bool,
@@ -788,7 +788,7 @@ extension SettingsProTab {
         .buttonStyle(.plain)
         .foregroundStyle(color)
         .disabled(isBusy || isDisabled)
-        .accessibilityLabel(title)
+        .accessibilityLabel(Text(title))
     }
 
     var aboutDestination: some View {

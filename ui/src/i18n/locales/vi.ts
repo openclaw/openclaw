@@ -390,6 +390,13 @@ export const vi: TranslationMap = {
     confirmDelete: "Tạo snapshot và xóa {name}?",
     confirmForceDelete: "Tạo snapshot thất bại: {error}\n\nXóa mà không có snapshot?",
   },
+  agentChip: {
+    menuLabel: "Menu tác nhân",
+    agents: "Tác nhân",
+    working: "Đang làm việc…",
+    ready: "Sẵn sàng trò chuyện",
+    whatCanAgentDo: "{name} có thể làm gì?",
+  },
   newSession: {
     title: "Phiên mới",
     hint: "Chọn nơi phiên này làm việc, rồi cho biết cần làm gì.",
@@ -1445,6 +1452,8 @@ export const vi: TranslationMap = {
     blockedAgentFilter: "bị chặn bởi bộ lọc agent",
   },
   nav: {
+    back: "Quay lại",
+    forward: "Tiến",
     chat: "Trò chuyện",
     settings: "Cài đặt",
     settingsGeneral: "Chung",
@@ -3562,6 +3571,14 @@ export const vi: TranslationMap = {
       remove: "Xóa",
       more: "Thêm hành động",
       history: "Lịch sử",
+    },
+    runNotStarted: {
+      notDue: "Chưa đến thời điểm chạy tác vụ tự động này.",
+      alreadyRunning: "Tác vụ tự động này đang chạy.",
+      recoveryPending: "Quá trình khôi phục trình lập lịch vẫn đang diễn ra.",
+      invalidSpec: "Tác vụ tự động này có lịch biểu hoặc tải trọng không hợp lệ.",
+      stopped: "Trình lập lịch đã dừng.",
+      unknown: "Không thể khởi chạy tác vụ tự động này.",
     },
     jobs: {
       schedule: "Lịch",

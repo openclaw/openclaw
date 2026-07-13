@@ -391,6 +391,13 @@ export const uk: TranslationMap = {
     confirmDelete: "Створити знімок і видалити {name}?",
     confirmForceDelete: "Не вдалося створити знімок: {error}\n\nВидалити без знімка?",
   },
+  agentChip: {
+    menuLabel: "Меню агента",
+    agents: "Агенти",
+    working: "Працює…",
+    ready: "Готовий до спілкування",
+    whatCanAgentDo: "Що може робити {name}?",
+  },
   newSession: {
     title: "Новий сеанс",
     hint: "Виберіть, де працюватиме цей сеанс, а потім скажіть, що потрібно зробити.",
@@ -1452,6 +1459,8 @@ export const uk: TranslationMap = {
     blockedAgentFilter: "заблоковано фільтром агента",
   },
   nav: {
+    back: "Назад",
+    forward: "Вперед",
     chat: "Чат",
     settings: "Налаштування",
     settingsGeneral: "Загальні",
@@ -3579,6 +3588,14 @@ export const uk: TranslationMap = {
       remove: "Видалити",
       more: "Більше дій",
       history: "Історія",
+    },
+    runNotStarted: {
+      notDue: "Час запуску цієї автоматизації ще не настав.",
+      alreadyRunning: "Ця автоматизація вже виконується.",
+      recoveryPending: "Відновлення планувальника ще триває.",
+      invalidSpec: "Ця автоматизація має некоректний розклад або корисне навантаження.",
+      stopped: "Планувальник зупинено.",
+      unknown: "Не вдалося запустити цю автоматизацію.",
     },
     jobs: {
       schedule: "Розклад",

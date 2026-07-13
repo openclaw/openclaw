@@ -386,6 +386,13 @@ export const th: TranslationMap = {
     confirmDelete: "สร้างสแนปช็อตและลบ {name}?",
     confirmForceDelete: "สร้างสแนปช็อตไม่สำเร็จ: {error}\n\nลบโดยไม่มีสแนปช็อตหรือไม่?",
   },
+  agentChip: {
+    menuLabel: "เมนูเอเจนต์",
+    agents: "เอเจนต์",
+    working: "กำลังทำงาน…",
+    ready: "พร้อมแชต",
+    whatCanAgentDo: "{name} ทำอะไรได้บ้าง?",
+  },
   newSession: {
     title: "เซสชันใหม่",
     hint: "เลือกตำแหน่งที่เซสชันนี้จะทำงาน จากนั้นบอกสิ่งที่ต้องทำ",
@@ -1433,6 +1440,8 @@ export const th: TranslationMap = {
     blockedAgentFilter: "ถูกบล็อกโดยตัวกรองเอเจนต์",
   },
   nav: {
+    back: "ย้อนกลับ",
+    forward: "ไปข้างหน้า",
     chat: "แชต",
     settings: "การตั้งค่า",
     settingsGeneral: "ทั่วไป",
@@ -3515,6 +3524,14 @@ export const th: TranslationMap = {
       remove: "ลบ",
       more: "การดำเนินการเพิ่มเติม",
       history: "ประวัติ",
+    },
+    runNotStarted: {
+      notDue: "ระบบอัตโนมัตินี้ยังไม่ถึงเวลาดำเนินการ",
+      alreadyRunning: "ระบบอัตโนมัตินี้กำลังทำงานอยู่แล้ว",
+      recoveryPending: "การกู้คืนตัวกำหนดเวลายังคงดำเนินอยู่",
+      invalidSpec: "ระบบอัตโนมัตินี้มีกำหนดการหรือเพย์โหลดที่ไม่ถูกต้อง",
+      stopped: "ตัวกำหนดเวลาหยุดทำงานแล้ว",
+      unknown: "ไม่สามารถเริ่มระบบอัตโนมัตินี้ได้",
     },
     jobs: {
       schedule: "กำหนดเวลา",

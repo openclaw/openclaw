@@ -1,6 +1,7 @@
 // Memory Core plugin module implements memory tool manager mock behavior.
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
+import type { getMemorySearchManager } from "./tools.runtime.js";
 
 type SearchImpl = (opts?: {
   maxResults?: number;
@@ -20,6 +21,7 @@ type MemoryReadResult = {
   nextFrom?: number;
 };
 type MemoryBackend = "builtin" | "qmd";
+type MemoryManagerDebug = Awaited<ReturnType<typeof getMemorySearchManager>>["debug"];
 
 let backend: MemoryBackend = "builtin";
 let workspaceDir = "/workspace";
@@ -29,6 +31,7 @@ let getManagerImpl:
   | ((params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
       manager?: unknown;
       error?: string;
+      debug?: MemoryManagerDebug;
     }>)
   | undefined;
 let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
@@ -101,6 +104,7 @@ export function setMemorySearchManagerImpl(
   next: (params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
     manager?: unknown;
     error?: string;
+    debug?: MemoryManagerDebug;
   }>,
 ): void {
   getManagerImpl = next;

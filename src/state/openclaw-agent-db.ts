@@ -958,6 +958,21 @@ export function openOpenClawAgentDatabase(
 }
 
 /** Run a synchronous immediate transaction against an agent database. */
+const postCommitPublications = new WeakMap<OpenClawAgentDatabase, Array<() => void>>();
+
+/** Queue a non-throwing runtime publication on the outer database commit edge. */
+export function deferOpenClawAgentPostCommitPublication(
+  database: OpenClawAgentDatabase,
+  publish: () => void,
+): boolean {
+  const publications = postCommitPublications.get(database);
+  if (!publications) {
+    return false;
+  }
+  publications.push(publish);
+  return true;
+}
+
 export function runOpenClawAgentWriteTransaction<T>(
   operation: (database: OpenClawAgentDatabase) => T,
   options: OpenClawAgentDatabaseOptions,
@@ -968,16 +983,45 @@ export function runOpenClawAgentWriteTransaction<T>(
 ): T {
   const database = openOpenClawAgentDatabase(options);
   const enteredNestedTransaction = database.db.isTransaction;
-  const result = runSqliteImmediateTransactionSync(database.db, () => operation(database), {
-    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    databaseLabel: database.path,
-    ...transactionOptions,
-    operationLabel: transactionOptions.operationLabel ?? "agent.write",
-  });
-  // The outer owner repairs permissions after COMMIT; nested savepoint callers
-  // must not add filesystem work while that transaction is still open.
+  const publications: Array<() => void> | undefined = enteredNestedTransaction
+    ? postCommitPublications.get(database)
+    : [];
+  const publicationStart = publications?.length ?? 0;
+  if (!enteredNestedTransaction && publications) {
+    postCommitPublications.set(database, publications);
+  }
+  let result: T;
+  try {
+    result = runSqliteImmediateTransactionSync(
+      database.db,
+      () => {
+        const operationResult = operation(database);
+        if (!enteredNestedTransaction) {
+          // Permission failure must roll back with the write. Repairing after
+          // COMMIT could make callers retry a transaction already durable in SQLite.
+          ensureOpenClawAgentDatabasePermissions(database.path, options);
+        }
+        return operationResult;
+      },
+      {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: database.path,
+        ...transactionOptions,
+        operationLabel: transactionOptions.operationLabel ?? "agent.write",
+      },
+    );
+  } catch (error) {
+    publications?.splice(publicationStart);
+    throw error;
+  } finally {
+    if (!enteredNestedTransaction && publications) {
+      postCommitPublications.delete(database);
+    }
+  }
   if (!enteredNestedTransaction) {
-    ensureOpenClawAgentDatabasePermissions(database.path, options);
+    for (const publish of publications ?? []) {
+      publish();
+    }
   }
   return result;
 }
