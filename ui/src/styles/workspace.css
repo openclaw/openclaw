@@ -35,7 +35,7 @@
   padding-bottom: 8px;
 }
 
-.workspace-tabs::part(nav) {
+.workspace-tabs::part(tabs) {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -268,7 +268,6 @@ button.workspace-tab:hover {
 }
 
 .workspace-widget__menu {
-  min-width: 160px;
   z-index: 30;
 }
 

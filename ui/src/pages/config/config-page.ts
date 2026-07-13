@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
@@ -23,7 +24,6 @@ import {
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import "../../components/web-awesome.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -112,12 +112,6 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
       return { activeSection: null, activeSubsection: null };
   }
   throw new Error("Unknown config page");
-}
-
-function asConfigRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function normalizeConfigSelection(

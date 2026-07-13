@@ -1,7 +1,7 @@
 // Workshop page header: self-learning toggle, revision-session toggle, and
 // the board/today view switch.
 import { html } from "lit";
-import "../../components/web-awesome.ts";
+import "../../components/web-awesome-tabs.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillWorkshopState } from "./proposals.ts";
 import { renderSelfLearningToggle, type SkillWorkshopSelfLearning } from "./self-learning.ts";

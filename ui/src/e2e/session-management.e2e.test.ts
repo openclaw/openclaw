@@ -681,6 +681,44 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
+  it("shows a rejected Sessions-page custom group instead of leaking a page error", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.groups.put"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+      },
+      sessionKey: "agent:main:main",
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+
+    try {
+      await page.goto(`${server.baseUrl}sessions`);
+      await page.locator(".session-groupby__select").selectOption("category");
+      page.once("dialog", (dialog) => void dialog.accept("X".repeat(513)));
+      await page.getByRole("button", { name: "New group…" }).click();
+      await gateway.waitForRequest("sessions.groups.put");
+      await gateway.rejectDeferred("sessions.groups.put", {
+        code: "INVALID_REQUEST",
+        message: "group name exceeds 512 characters",
+      });
+
+      const error = page.locator(".sessions-error");
+      await error.waitFor({ state: "visible" });
+      await expect.poll(() => error.textContent()).toContain("group name exceeds 512 characters");
+      expect(pageErrors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps sidebar sessions visible through a same-client Gateway reconnect", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -864,15 +902,15 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         "button.sidebar-session-sort:not(.sidebar-session-new)",
       );
       await sortSessionsButton.click();
-      await page.getByRole("menuitemcheckbox", { name: "None" }).waitFor({ state: "visible" });
+      await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-groupby-sort-menu.png");
       await sortSessionsButton.click();
       await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
-      await expect.poll(() => page.getByRole("menuitemcheckbox", { name: "None" }).count()).toBe(0);
+      await expect.poll(() => page.getByRole("menuitemradio", { name: "None" }).count()).toBe(0);
       await captureUiProof(page, "sidebar-groupby-sort-menu-closed.png");
 
       await sortSessionsButton.click();
-      await activateMenuItem(page.getByRole("menuitemcheckbox", { name: "None" }));
+      await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(4);
     } finally {
@@ -1019,7 +1057,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.keyboard.press("ArrowRight");
       await expect.poll(() => moveToGroup.getAttribute("aria-expanded")).toBe("true");
       page.once("dialog", (dialog) => void dialog.accept("Gamma"));
-      await activateMenuItem(page.getByRole("menuitemcheckbox", { name: "New group…" }));
+      await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
       const gamma = page.locator('[data-session-section="category:Gamma"]');
       await gamma.waitFor({ state: "visible" });
       const createdPatch = await waitForPatch(
@@ -1107,7 +1145,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
       const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
       await sortSessionsButton.click();
-      await activateMenuItem(page.getByRole("menuitemcheckbox", { name: "None" }));
+      await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));
       const flatSection = page.locator('[data-session-section="ungrouped"]');
       await flatSection
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-1"]')

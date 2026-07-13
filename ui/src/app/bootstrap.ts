@@ -384,6 +384,7 @@ export function bootstrapApplication(): ApplicationRuntime {
           console.error("[openclaw] route replacement failed", error);
         });
     },
+    revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
   return {

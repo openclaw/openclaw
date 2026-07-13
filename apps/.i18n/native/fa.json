@@ -3929,11 +3929,6 @@
       "translated": "در حال بارگیری کار cron…"
     },
     {
-      "id": "native.android.6da97c8c6e1a3d3a",
-      "source": "Agents",
-      "translated": "عامل‌ها"
-    },
-    {
       "id": "native.android.0f33ca43db97b2a9",
       "source": "Choose and inspect the assistants available on this gateway.",
       "translated": "دستیارهای موجود در این Gateway را انتخاب و بررسی کنید."
@@ -4434,6 +4429,31 @@
       "translated": "نشانی"
     },
     {
+      "id": "native.android.7f63838c1aaa496a",
+      "source": "Discovered",
+      "translated": "کشف‌شده"
+    },
+    {
+      "id": "native.android.b1c378e882375bba",
+      "source": "Default Agent",
+      "translated": "عامل پیش‌فرض"
+    },
+    {
+      "id": "native.android.6da97c8c6e1a3d3a",
+      "source": "Agents",
+      "translated": "عامل‌ها"
+    },
+    {
+      "id": "native.android.f2c8ad44786cc3b8",
+      "source": "Instance ID",
+      "translated": "شناسه نمونه"
+    },
+    {
+      "id": "native.android.27b4b0e04eca357c",
+      "source": "Scan QR to Pair",
+      "translated": "برای جفت‌سازی، کد QR را اسکن کنید"
+    },
+    {
       "id": "native.android.6926684139f297b5",
       "source": "Limited Gateway access",
       "translated": "دسترسی محدود به Gateway"
@@ -4447,6 +4467,51 @@
       "id": "native.android.e11f54696b376155",
       "source": "Disconnect",
       "translated": "قطع اتصال"
+    },
+    {
+      "id": "native.android.4dd409fe93b28258",
+      "source": "Diagnose",
+      "translated": "عیب‌یابی"
+    },
+    {
+      "id": "native.android.3901b9fb63225af4",
+      "source": "Add Gateway",
+      "translated": "افزودن Gateway"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "برای افزودن Gateway دیگر، کد راه‌اندازی را اسکن یا جای‌گذاری کنید."
+    },
+    {
+      "id": "native.android.d869cbfce570d83c",
+      "source": "Scan QR",
+      "translated": "اسکن کد QR"
+    },
+    {
+      "id": "native.android.1fcfa6e7f5daac35",
+      "source": "Setup code",
+      "translated": "کد راه‌اندازی"
+    },
+    {
+      "id": "native.android.c73418c6ff187c8e",
+      "source": "Where do I get a setup code?",
+      "translated": "کد راه‌اندازی را از کجا دریافت کنم؟"
+    },
+    {
+      "id": "native.android.de12fd162a566974",
+      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+      "translated": "Android می‌تواند یک کد راه‌اندازی موجود را اسکن یا جای‌گذاری کند، اما این gateway هنوز تولید کد راه‌اندازی را در اختیار برنامه قرار نمی‌دهد. QR/کد را روی میزبان gateway با openclaw qr تولید کنید، سپس آن را اینجا اسکن کنید یا کد راه‌اندازی را در پایین جای‌گذاری کنید."
+    },
+    {
+      "id": "native.android.ac1032dabe06ab02",
+      "source": "No gateways found yet. Use manual setup if discovery is blocked.",
+      "translated": "هنوز هیچ Gateway یافت نشده است. اگر شناسایی مسدود شده، از راه‌اندازی دستی استفاده کنید."
+    },
+    {
+      "id": "native.android.bb6a50133b74967d",
+      "source": "Connect",
+      "translated": "اتصال"
     },
     {
       "id": "native.android.87eee1e2bafbf13b",
@@ -4464,39 +4529,9 @@
       "translated": "فراموش کردن"
     },
     {
-      "id": "native.android.56e98811c4e9b027",
-      "source": "Gateway setup",
-      "translated": "راه‌اندازی Gateway"
-    },
-    {
-      "id": "native.android.c040d4ee72a810e0",
-      "source": "Scan or paste a setup code to add another gateway.",
-      "translated": "برای افزودن Gateway دیگر، کد راه‌اندازی را اسکن یا جای‌گذاری کنید."
-    },
-    {
-      "id": "native.android.a7c243ff3f1d6447",
-      "source": "Add gateway",
-      "translated": "افزودن Gateway"
-    },
-    {
-      "id": "native.android.77a03c8c22155ec5",
-      "source": "Setup Code",
-      "translated": "کد راه‌اندازی"
-    },
-    {
-      "id": "native.android.de12fd162a566974",
-      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
-      "translated": "Android می‌تواند یک کد راه‌اندازی موجود را اسکن یا جای‌گذاری کند، اما این gateway هنوز تولید کد راه‌اندازی را در اختیار برنامه قرار نمی‌دهد. QR/کد را روی میزبان gateway با openclaw qr تولید کنید، سپس آن را اینجا اسکن کنید یا کد راه‌اندازی را در پایین جای‌گذاری کنید."
-    },
-    {
-      "id": "native.android.0e8f4c02f7aa20e9",
-      "source": "Connection Setup",
-      "translated": "راه‌اندازی اتصال"
-    },
-    {
-      "id": "native.android.1fcfa6e7f5daac35",
-      "source": "Setup code",
-      "translated": "کد راه‌اندازی"
+      "id": "native.android.ec5f17e1a1fa0515",
+      "source": "Manual Gateway",
+      "translated": "Gateway دستی"
     },
     {
       "id": "native.android.29fe804ebbaed339",
@@ -5007,6 +5042,11 @@
       "id": "native.android.b3185067fb7fa30e",
       "source": "Default",
       "translated": "پیش‌فرض"
+    },
+    {
+      "id": "native.android.66baf6f63dafa213",
+      "source": "${endpoint.host}:${endpoint.port}",
+      "translated": "${endpoint.host}:${endpoint.port}"
     },
     {
       "id": "native.android.f154617fd2233082",
@@ -17569,9 +17609,9 @@
       "translated": "فعال‌سازی Peekaboo Bridge"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "به ابزارهای امضاشده (مثلاً `peekaboo`) اجازه دهید از طریق PeekabooBridge اتوماسیون UI را هدایت کنند."
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "به ابزارهای امضاشده (مثل `peekaboo`) اجازه می‌دهد تا خودکارسازی UI را از طریق PeekabooBridge هدایت کنند. به Computer Control نیاز دارد؛ در غیر این صورت اپلیکیشن Mac اختصاصی Peekaboo را اجرا کنید."
     },
     {
       "id": "native.apple.72b24ed86295d6fa",

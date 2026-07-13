@@ -126,6 +126,7 @@ export const en: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, by {author}",
   },
   channels: {
+    lastError: "Last error",
     refreshingStaleSnapshot:
       "Refreshing channel status in the background; showing the last successful snapshot.",
     config: {
@@ -381,7 +382,6 @@ export const en: TranslationMap = {
   },
   worktrees: {
     newWorktree: "New worktree",
-    owner: "Owner",
     ownerManual: "Manual",
     ownerSession: "Session",
     ownerWorkboard: "Workboard",
@@ -402,10 +402,6 @@ export const en: TranslationMap = {
     cleanupSaveFailed: "Saving cleanup limits failed.",
     name: "Name",
     repo: "Repository",
-    branch: "Branch",
-    status: "Status",
-    lastActive: "Last active",
-    actions: "Actions",
     empty: "No managed worktrees.",
     restorable: "Restorable",
     restore: "Restore",
@@ -442,6 +438,7 @@ export const en: TranslationMap = {
     start: "Start session",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
+    catalogUnavailable: "This session target is unavailable.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -792,6 +789,7 @@ export const en: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "Call failed",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1378,6 +1376,7 @@ export const en: TranslationMap = {
     moreLiveTitle: "{count} more live tools are available in the groups below.",
     moreLive: "+{count} more live tools",
     quickPresets: "Quick Presets",
+    catalogTitle: "Tool Catalog",
     inherit: "Inherit",
     profile: "Profile",
     source: "Source",
@@ -1715,7 +1714,6 @@ export const en: TranslationMap = {
     filterAll: "All",
     filterIssues: "Issues",
     filterLabel: "Filter installed plugins",
-    pulseLabel: "{enabled} enabled, {disabled} disabled, {issues} with issues",
     categoryChannels: "Channels",
     categoryProviders: "Model providers",
     categoryMemory: "Memory",
@@ -2454,6 +2452,7 @@ export const en: TranslationMap = {
       uptime: "Uptime",
       tickInterval: "Tick Interval",
       lastChannelsRefresh: "Last Channels Refresh",
+      lastError: "Last error",
     },
     help: {
       title: "How to connect",

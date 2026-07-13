@@ -126,6 +126,7 @@ export const id: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, oleh {author}",
   },
   channels: {
+    lastError: "Kesalahan terakhir",
     refreshingStaleSnapshot:
       "Menyegarkan status channel di latar belakang; menampilkan snapshot terakhir yang berhasil.",
     config: {
@@ -383,7 +384,6 @@ export const id: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Worktree baru",
-    owner: "Pemilik",
     ownerManual: "Manual",
     ownerSession: "Sesi",
     ownerWorkboard: "Workboard",
@@ -404,10 +404,6 @@ export const id: TranslationMap = {
     cleanupSaveFailed: "Gagal menyimpan batas pembersihan.",
     name: "Nama",
     repo: "Repositori",
-    branch: "Branch",
-    status: "Status",
-    lastActive: "Terakhir aktif",
-    actions: "Tindakan",
     empty: "Tidak ada worktree terkelola.",
     restorable: "Dapat dipulihkan",
     restore: "Pulihkan",
@@ -460,6 +456,7 @@ export const id: TranslationMap = {
     start: "Mulai sesi",
     starting: "Memulai…",
     createFailed: "Tidak dapat membuat sesi.",
+    catalogUnavailable: "Target sesi ini tidak tersedia.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -824,6 +821,7 @@ export const id: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "Panggilan gagal",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1414,6 +1412,7 @@ export const id: TranslationMap = {
     moreLiveTitle: "{count} alat langsung lainnya tersedia di grup di bawah.",
     moreLive: "+{count} alat langsung lainnya",
     quickPresets: "Preset Cepat",
+    catalogTitle: "Katalog Alat",
     inherit: "Warisi",
     profile: "Profil",
     source: "Sumber",
@@ -1752,7 +1751,6 @@ export const id: TranslationMap = {
     filterAll: "Semua",
     filterIssues: "Masalah",
     filterLabel: "Filter plugin terinstal",
-    pulseLabel: "{enabled} diaktifkan, {disabled} dinonaktifkan, {issues} bermasalah",
     categoryChannels: "Saluran",
     categoryProviders: "Penyedia model",
     categoryMemory: "Memori",
@@ -2499,6 +2497,7 @@ export const id: TranslationMap = {
       uptime: "Waktu aktif",
       tickInterval: "Interval tick",
       lastChannelsRefresh: "Penyegaran saluran terakhir",
+      lastError: "Kesalahan terakhir",
     },
     help: {
       title: "Cara menghubungkan",

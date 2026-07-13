@@ -148,16 +148,19 @@ type RuntimeSessionStoreEntryUpdateParams = {
   takeCacheOwnership?: boolean;
   requireWriteSuccess?: boolean;
 };
+/** @public Part of the PluginRuntime declaration contract. */
 export type PluginRuntimeThinkingPolicyRequest = {
   provider?: string | null;
   model?: string | null;
   catalog?: import("../../auto-reply/thinking.js").ThinkingCatalogEntry[];
   agentRuntime?: string | null;
 };
+/** @public Part of the PluginRuntime declaration contract. */
 export type PluginRuntimeThinkingPolicyLevel = {
   id: import("../../auto-reply/thinking.js").ThinkLevel;
   label: string;
 };
+/** @public Part of the PluginRuntime declaration contract. */
 export type PluginRuntimeThinkingPolicy = {
   levels: PluginRuntimeThinkingPolicyLevel[];
   defaultLevel?: import("../../auto-reply/thinking.js").ThinkLevel | null;

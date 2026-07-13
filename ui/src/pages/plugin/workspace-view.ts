@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import "../../components/modal-dialog.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
+import "../../components/web-awesome-tabs.ts";
 import {
   loadWidgetManifestView,
   type CustomWidgetHostContext,

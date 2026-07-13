@@ -2238,15 +2238,34 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   height: 6px;
 }
 
-/* Large rosters: the switcher list scrolls; the utility rows below stay put. */
-.sidebar-agent-menu__list {
-  flex: 0 1 auto;
-  min-height: 30px;
-  max-height: 264px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+.sidebar-agent-menu__agent-switch {
+  min-width: 0;
 }
 
+.sidebar-agent-menu__new {
+  padding-inline-start: 26px;
+}
+
+.sidebar-agent-menu__new:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+/* The docs row is the menu's only real hyperlink; keep it looking like a row. */
+.sidebar-agent-menu a.sidebar-customize-menu__item {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* The help flyout must escape the menu box, so the root stays
+   overflow-visible; the viewport bound moves to a flex column where only
+   the switcher list shrinks and scrolls (the action rows always fit). */
+.sidebar-agent-menu {
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  max-height: calc(100vh - 16px);
+}
 .sidebar-agent-menu__filter {
   padding: 2px 8px 6px;
 }
@@ -2711,26 +2730,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   gap: 20px;
 }
 
-.grid-cols-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.grid-cols-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.stat-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-
-.note-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
 .row {
   display: flex;
   gap: 12px;
@@ -2766,20 +2765,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
       "content";
   }
 
-  .grid-cols-2,
-  .grid-cols-3 {
-    grid-template-columns: 1fr;
-  }
-
   .topbar {
     position: static;
     padding: 6px 12px;
     gap: 10px;
-  }
-
-  .table-head,
-  .table-row {
-    grid-template-columns: 1fr;
   }
 
   .list-item {

@@ -126,6 +126,7 @@ export const de: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, von {author}",
   },
   channels: {
+    lastError: "Letzter Fehler",
     refreshingStaleSnapshot:
       "Kanalstatus wird im Hintergrund aktualisiert; der letzte erfolgreiche Snapshot wird angezeigt.",
     config: {
@@ -387,7 +388,6 @@ export const de: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Neuer Worktree",
-    owner: "Besitzer",
     ownerManual: "Manuell",
     ownerSession: "Sitzung",
     ownerWorkboard: "Workboard",
@@ -408,10 +408,6 @@ export const de: TranslationMap = {
     cleanupSaveFailed: "Speichern der Bereinigungsgrenzwerte fehlgeschlagen.",
     name: "Name",
     repo: "Repository",
-    branch: "Branch",
-    status: "Status",
-    lastActive: "Zuletzt aktiv",
-    actions: "Aktionen",
     empty: "Keine verwalteten Worktrees.",
     restorable: "Wiederherstellbar",
     restore: "Wiederherstellen",
@@ -464,6 +460,7 @@ export const de: TranslationMap = {
     start: "Sitzung starten",
     starting: "Wird gestartet…",
     createFailed: "Die Sitzung konnte nicht erstellt werden.",
+    catalogUnavailable: "Dieses Sitzungsziel ist nicht verfügbar.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -830,6 +827,7 @@ export const de: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "Aufruf fehlgeschlagen",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1420,6 +1418,7 @@ export const de: TranslationMap = {
     moreLiveTitle: "{count} weitere Live-Tools sind in den folgenden Gruppen verfügbar.",
     moreLive: "+{count} weitere Live-Tools",
     quickPresets: "Schnelle Voreinstellungen",
+    catalogTitle: "Toolkatalog",
     inherit: "Erben",
     profile: "Profil",
     source: "Quelle",
@@ -1770,7 +1769,6 @@ export const de: TranslationMap = {
     filterAll: "Alle",
     filterIssues: "Probleme",
     filterLabel: "Installierte Plugins filtern",
-    pulseLabel: "{enabled} aktiviert, {disabled} deaktiviert, {issues} mit Problemen",
     categoryChannels: "Kanäle",
     categoryProviders: "Modellanbieter",
     categoryMemory: "Speicher",
@@ -2523,6 +2521,7 @@ export const de: TranslationMap = {
       uptime: "Betriebszeit",
       tickInterval: "Tick-Intervall",
       lastChannelsRefresh: "Letzte Kanalaktualisierung",
+      lastError: "Letzter Fehler",
     },
     help: {
       title: "So stellen Sie eine Verbindung her",

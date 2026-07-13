@@ -126,6 +126,7 @@ export const ja_JP: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}、作成者 {author}",
   },
   channels: {
+    lastError: "直近のエラー",
     refreshingStaleSnapshot:
       "バックグラウンドでチャンネルの状態を更新しています。最後に成功したスナップショットを表示しています。",
     config: {
@@ -388,7 +389,6 @@ export const ja_JP: TranslationMap = {
   },
   worktrees: {
     newWorktree: "新しいワークツリー",
-    owner: "所有者",
     ownerManual: "手動",
     ownerSession: "セッション",
     ownerWorkboard: "Workboard",
@@ -409,10 +409,6 @@ export const ja_JP: TranslationMap = {
     cleanupSaveFailed: "クリーンアップ制限の保存に失敗しました。",
     name: "名前",
     repo: "リポジトリ",
-    branch: "ブランチ",
-    status: "ステータス",
-    lastActive: "最終アクティブ",
-    actions: "アクション",
     empty: "管理対象のワークツリーはありません。",
     restorable: "復元可能",
     restore: "復元",
@@ -466,6 +462,7 @@ export const ja_JP: TranslationMap = {
     start: "セッションを開始",
     starting: "開始中…",
     createFailed: "セッションを作成できませんでした。",
+    catalogUnavailable: "このセッションのターゲットは利用できません。",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -830,6 +827,7 @@ export const ja_JP: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "呼び出しに失敗しました",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1420,6 +1418,7 @@ export const ja_JP: TranslationMap = {
     moreLiveTitle: "さらに {count} 個のライブツールが下記のグループで利用可能です。",
     moreLive: "+{count} 個のライブツール",
     quickPresets: "クイックプリセット",
+    catalogTitle: "ツールカタログ",
     inherit: "継承",
     profile: "プロファイル",
     source: "ソース",
@@ -1760,7 +1759,6 @@ export const ja_JP: TranslationMap = {
     filterAll: "すべて",
     filterIssues: "問題",
     filterLabel: "インストール済みプラグインをフィルター",
-    pulseLabel: "有効 {enabled} 件、無効 {disabled} 件、問題あり {issues} 件",
     categoryChannels: "チャンネル",
     categoryProviders: "モデルプロバイダー",
     categoryMemory: "メモリ",
@@ -2506,6 +2504,7 @@ export const ja_JP: TranslationMap = {
       uptime: "稼働時間",
       tickInterval: "更新間隔",
       lastChannelsRefresh: "最終チャンネル更新",
+      lastError: "直近のエラー",
     },
     help: {
       title: "接続方法",

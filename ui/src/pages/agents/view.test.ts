@@ -238,7 +238,7 @@ describe("renderAgents", () => {
     );
 
     const defaultSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(select?.value).toBe("openai/gpt-5.4");
       return select;
     });
@@ -260,7 +260,7 @@ describe("renderAgents", () => {
     );
 
     const inheritedSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(select?.value).toBe("");
       return select;
     });
@@ -302,7 +302,7 @@ describe("renderAgents", () => {
     );
 
     const betaSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(
         Array.from(select?.options ?? []).some((option) => option.value === "openai/gpt-5.4"),
       ).toBe(true);
@@ -325,7 +325,7 @@ describe("renderAgents", () => {
     );
 
     const alphaSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(
         Array.from(select?.options ?? []).some(
           (option) => option.value === "anthropic/claude-sonnet-4-6",
@@ -359,11 +359,10 @@ describe("renderAgents", () => {
 
     await Promise.resolve();
 
-    const thinkingKv = Array.from(container.querySelectorAll(".agent-kv")).find(
-      (entry) =>
-        entry.querySelector(".label")?.textContent?.trim() === t("agents.context.thinkingDefault"),
+    const thinkingKv = Array.from(container.querySelectorAll(".settings-kv dt")).find(
+      (entry) => entry.textContent?.trim() === t("agents.context.thinkingDefault"),
     );
-    expect(thinkingKv?.textContent).toContain("xhigh");
+    expect(thinkingKv?.nextElementSibling?.textContent).toContain("xhigh");
   });
 
   it("shows the skills count only for the selected agent's report", async () => {
@@ -453,8 +452,8 @@ describe("renderAgents", () => {
         t("agents.tabs.cronJobs"),
         "记忆",
       ]);
-      const cards = container.querySelectorAll("section.card");
-      expect(cards[1]?.querySelector(".muted")?.textContent?.trim()).toBe("上次刷新：从未");
+      const sectionDescs = Array.from(container.querySelectorAll(".settings-section__desc"));
+      expect(sectionDescs.some((desc) => desc.textContent?.includes("上次刷新：从未"))).toBe(true);
     } finally {
       await i18n.setLocale("en");
       vi.unstubAllGlobals();

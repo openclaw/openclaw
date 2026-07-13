@@ -126,6 +126,7 @@ export const tr: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, {author} tarafından",
   },
   channels: {
+    lastError: "Son hata",
     refreshingStaleSnapshot:
       "Kanal durumu arka planda yenileniyor; son başarılı anlık görüntü gösteriliyor.",
     config: {
@@ -385,7 +386,6 @@ export const tr: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Yeni worktree",
-    owner: "Sahip",
     ownerManual: "Manuel",
     ownerSession: "Oturum",
     ownerWorkboard: "Workboard",
@@ -406,10 +406,6 @@ export const tr: TranslationMap = {
     cleanupSaveFailed: "Temizleme sınırları kaydedilemedi.",
     name: "Ad",
     repo: "Depo",
-    branch: "Dal",
-    status: "Durum",
-    lastActive: "Son etkinlik",
-    actions: "Eylemler",
     empty: "Yönetilen worktree yok.",
     restorable: "Geri yüklenebilir",
     restore: "Geri yükle",
@@ -463,6 +459,7 @@ export const tr: TranslationMap = {
     start: "Oturumu başlat",
     starting: "Başlatılıyor…",
     createFailed: "Oturum oluşturulamadı.",
+    catalogUnavailable: "Bu oturum hedefi kullanılamıyor.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -828,6 +825,7 @@ export const tr: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "Çağrı başarısız oldu",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1417,6 +1415,7 @@ export const tr: TranslationMap = {
     moreLiveTitle: "Aşağıdaki gruplarda {count} canlı araç daha kullanılabilir.",
     moreLive: "+{count} canlı araç daha",
     quickPresets: "Hızlı Ön Ayarlar",
+    catalogTitle: "Araç Kataloğu",
     inherit: "Devral",
     profile: "Profil",
     source: "Kaynak",
@@ -1767,7 +1766,6 @@ export const tr: TranslationMap = {
     filterAll: "Tümü",
     filterIssues: "Sorunlar",
     filterLabel: "Yüklü eklentileri filtrele",
-    pulseLabel: "{enabled} etkin, {disabled} devre dışı, {issues} sorunlu",
     categoryChannels: "Kanallar",
     categoryProviders: "Model sağlayıcıları",
     categoryMemory: "Bellek",
@@ -2514,6 +2512,7 @@ export const tr: TranslationMap = {
       uptime: "Çalışma Süresi",
       tickInterval: "Tik Aralığı",
       lastChannelsRefresh: "Son Kanal Yenileme",
+      lastError: "Son hata",
     },
     help: {
       title: "Nasıl bağlanılır",

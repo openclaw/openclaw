@@ -6,7 +6,7 @@ import "./session-menu.ts";
 import type { SessionMenuAction, SessionMenuData, SessionMenuWork } from "./session-menu.ts";
 
 type SessionMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
-type SessionMenuItem = HTMLElement & { checked: boolean; disabled: boolean };
+type SessionMenuItem = HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> };
 
 const containers: HTMLElement[] = [];
 
@@ -180,7 +180,15 @@ describe("session menu", () => {
 
     expect(menuItemLabels(submenu)).toContain("Research");
     expect(menuItemLabels(submenu)).toContain("Projects");
-    expect(menuItem(submenu, "Research").checked).toBe(true);
+    const research = menuItem(submenu, "Research");
+    const remove = menuItem(submenu, "Remove from group");
+    const create = menuItem(submenu, "New group…");
+    await Promise.all([research.updateComplete, remove.updateComplete, create.updateComplete]);
+    await Promise.resolve();
+    expect(research.getAttribute("role")).toBe("menuitemradio");
+    expect(research.getAttribute("aria-checked")).toBe("true");
+    expect(remove.getAttribute("role")).toBe("menuitem");
+    expect(create.getAttribute("role")).toBe("menuitem");
 
     menuItem(menu, "Projects").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Projects" });

@@ -16,8 +16,35 @@ const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
 const NPM_RELEASE_PROOF_TIMEOUT_MS = 60_000;
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 // Host node_modules can contain platform-native code and is not portable to a leased box.
-// The milestone-2 worker entry must therefore be self-contained inside the built dist.
+// The bundle ships dist plus a pruned package.json; bootstrap installs production
+// dependencies on the box with scripts disabled, mirroring the npm channel.
 const WORKER_BUNDLE_RUNTIME_FILES = ["openclaw.mjs", "package.json"] as const;
+
+// Workspace packages are compiled into dist and their `workspace:` specs cannot
+// resolve on the box; dev-only and lifecycle fields never ship.
+function pruneWorkerPackageManifest(contents: Buffer): Buffer {
+  const parsed = JSON.parse(contents.toString("utf8")) as Record<string, unknown>;
+  const dependencies =
+    parsed.dependencies && typeof parsed.dependencies === "object"
+      ? (parsed.dependencies as Record<string, string>)
+      : {};
+  const portable = Object.fromEntries(
+    Object.entries(dependencies).filter(([, spec]) => !spec.startsWith("workspace:")),
+  );
+  const prunedFields = ["devDependencies", "scripts", "pnpm"].filter((key) => key in parsed);
+  if (
+    prunedFields.length === 0 &&
+    Object.keys(portable).length === Object.keys(dependencies).length
+  ) {
+    // Released package manifests are already portable; keep bytes (and hashes) stable.
+    return contents;
+  }
+  const pruned: Record<string, unknown> = { ...parsed, dependencies: portable };
+  for (const key of prunedFields) {
+    delete pruned[key];
+  }
+  return Buffer.from(`${JSON.stringify(pruned, null, 2)}\n`, "utf8");
+}
 
 type WorkerInstallationArtifactBase = {
   bundleHash: string;
@@ -313,6 +340,9 @@ async function stageManifestEntry(
       throw new Error(`Worker bundle path changed while packaging: ${relativePath}`);
     }
     contents = await handle.readFile();
+    if (relativePath === "package.json") {
+      contents = pruneWorkerPackageManifest(contents);
+    }
     mode = normalizePortableMode(openedStats.mode, relativePath);
   } finally {
     await handle.close();

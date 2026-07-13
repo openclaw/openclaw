@@ -1,12 +1,13 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
-import "./web-awesome.ts";
+import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 export type SessionMenuData = {
   key: string;
@@ -199,20 +200,26 @@ class SessionMenu extends OpenClawLightDomElement {
     // rather than reusing digits.
     let nextDigit = 1;
     const takeDigit = () => (nextDigit <= 9 ? String(nextDigit++) : null);
-    const entry = (label: string, checked: boolean, value: string) => {
+    const entry = (label: string, checked: boolean, value: string, radio = true) => {
       const digit = takeDigit();
       return html`
         <wa-dropdown-item
           slot="submenu"
           class="session-menu__item"
-          type="checkbox"
-          .checked=${checked}
           value=${value}
+          role=${radio ? "menuitemradio" : "menuitem"}
+          aria-checked=${radio ? String(checked) : nothing}
+          ${radio ? ref((element) => syncDropdownItemRadio(element, checked)) : nothing}
           data-shortcut=${digit ?? nothing}
           aria-keyshortcuts=${digit ?? nothing}
           ?disabled=${this.disabled}
         >
           <span class="session-menu__text">${label}</span>
+          ${radio && checked
+            ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                >${icons.check}</span
+              >`
+            : nothing}
           ${digit ? menuShortcutHint(digit) : nothing}
         </wa-dropdown-item>
       `;
@@ -222,9 +229,9 @@ class SessionMenu extends OpenClawLightDomElement {
         entry(group, session.category === group, `move-to-group:${encodeURIComponent(group)}`),
       )}
       ${session.category
-        ? entry(t("sessionsView.removeFromGroup"), false, "move-to-group:")
+        ? entry(t("sessionsView.removeFromGroup"), false, "move-to-group:", false)
         : nothing}
-      ${entry(t("sessionsView.newGroup"), false, "new-group")}
+      ${entry(t("sessionsView.newGroup"), false, "new-group", false)}
     `;
   }
 
@@ -255,6 +262,7 @@ class SessionMenu extends OpenClawLightDomElement {
           slot="trigger"
           type="button"
           tabindex="-1"
+          aria-hidden="true"
           aria-label=${menuLabel}
           style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>

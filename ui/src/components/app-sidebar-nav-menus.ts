@@ -204,6 +204,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
         .distance=${0}
         aria-label=${t("nav.more")}
         @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+          event.preventDefault();
           const item = event.detail.item;
           if (item.dataset.nativeNavigation) {
             delete item.dataset.nativeNavigation;
@@ -215,11 +216,12 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
             return;
           }
           if (value?.startsWith("plugin:")) {
-            const tab = params.pluginTabs.find(
-              (candidate) => `plugin:${pluginTabKey(candidate)}` === value,
-            );
+            const tab = params.pluginTabs.find((candidate) => {
+              const ref = { pluginId: candidate.pluginId, id: candidate.id };
+              return `plugin:${pluginTabKey(ref)}` === value;
+            });
             if (tab) {
-              params.onNavigatePluginTab(pluginTabSearch(tab));
+              params.onNavigatePluginTab(pluginTabSearch({ pluginId: tab.pluginId, id: tab.id }));
             }
             return;
           }
@@ -234,6 +236,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
           slot="trigger"
           type="button"
           tabindex="-1"
+          aria-hidden="true"
           aria-label=${t("nav.more")}
           style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
@@ -287,6 +290,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           slot="trigger"
           type="button"
           tabindex="-1"
+          aria-hidden="true"
           aria-label=${t("nav.customize")}
           style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>

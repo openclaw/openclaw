@@ -10,7 +10,7 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
-import "../web-awesome.ts";
+import "../web-awesome-tabs.ts";
 import {
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -1083,6 +1083,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
     .tp-tab:hover + .tp-tab__close,
     .tp-tab[active] + .tp-tab__close,
+    .tp-tab__close:hover,
     .tp-tab__close:focus-visible {
       opacity: 0.7;
     }

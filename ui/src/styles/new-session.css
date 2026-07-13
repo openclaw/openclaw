@@ -101,6 +101,19 @@ openclaw-new-session-page {
   pointer-events: none;
 }
 
+.new-session-page__runtime {
+  color: var(--text);
+  cursor: default;
+}
+
+.new-session-page__catalog-unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .new-session-page__trigger-label {
   max-width: min(40vw, 260px);
   overflow: hidden;

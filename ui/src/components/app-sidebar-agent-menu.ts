@@ -1,6 +1,7 @@
 // Sidebar agent-chip menu (switcher, filter, utility rows), split out of
 // app-sidebar.ts to keep that hot component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
@@ -10,7 +11,11 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { icons, type IconName } from "./icons.ts";
-import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
+import {
+  consumeDropdownKeyboardDismissal,
+  syncDropdownItemRadio,
+  trackDropdownKeyboardDismissal,
+} from "./web-awesome.ts";
 
 // External rows of the footer agent menu. Docs-first: public docs pages over
 // raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
@@ -32,6 +37,7 @@ const AGENT_MENU_LINKS: ReadonlyArray<{ href: string; icon: IconName; label: () 
 /** Above this roster size the chip menu switches to pinned agents + filter. */
 const QUICK_SWITCH_AGENT_LIMIT = 10;
 const AGENT_VALUE_PREFIX = "agent:";
+const NEW_SESSION_VALUE_PREFIX = "new-session:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 
@@ -53,6 +59,7 @@ type SidebarAgentMenuParams = {
   onFilterChange: (next: string) => void;
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
+  onOpenNewSession: (agentId: string) => void;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
@@ -120,13 +127,19 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
   return html`
     <wa-dropdown-item
-      class="sidebar-customize-menu__item"
-      type="checkbox"
+      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
       value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
-      .checked=${active}
+      role="menuitemradio"
+      aria-checked=${String(active)}
+      ${ref((element) => syncDropdownItemRadio(element, active))}
     >
       <span slot="icon" class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
       <span class="sidebar-customize-menu__text">${label}</span>
+      ${active
+        ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+            >${icons.check}</span
+          >`
+        : nothing}
       ${unread > 0
         ? html`<span
             slot="details"
@@ -135,6 +148,16 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
             aria-label=${t("sessionsView.unread")}
           ></span>`
         : nothing}
+    </wa-dropdown-item>
+    <wa-dropdown-item
+      class="sidebar-customize-menu__item sidebar-agent-menu__new"
+      value=${`${NEW_SESSION_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
+      ?disabled=${!params.connected}
+    >
+      <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.plus}</span>
+      <span class="sidebar-customize-menu__text">
+        ${t("chat.runControls.newSession")} — ${label}
+      </span>
     </wa-dropdown-item>
   `;
 }
@@ -200,6 +223,12 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             params.onSwitchAgent(decodeURIComponent(value.slice(AGENT_VALUE_PREFIX.length)));
             return;
           }
+          if (value.startsWith(NEW_SESSION_VALUE_PREFIX)) {
+            params.onOpenNewSession(
+              decodeURIComponent(value.slice(NEW_SESSION_VALUE_PREFIX.length)),
+            );
+            return;
+          }
           if (value.startsWith(LINK_VALUE_PREFIX)) {
             openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
             return;
@@ -233,6 +262,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           slot="trigger"
           type="button"
           tabindex="-1"
+          aria-hidden="true"
           aria-label=${t("agentChip.menuLabel")}
           style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
@@ -250,14 +280,28 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
                         @input=${(event: Event) =>
                           params.onFilterChange((event.target as HTMLInputElement).value)}
                         @keydown=${(event: KeyboardEvent) => {
+                          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            const dropdown = (event.currentTarget as HTMLElement).closest(
+                              "wa-dropdown",
+                            );
+                            const items = Array.from(dropdown?.children ?? []).filter(
+                              (child): child is HTMLElement & { active: boolean } =>
+                                child instanceof HTMLElement &&
+                                child.localName === "wa-dropdown-item" &&
+                                !child.hasAttribute("disabled"),
+                            );
+                            const target = event.key === "ArrowDown" ? items.at(0) : items.at(-1);
+                            if (target) {
+                              items.forEach((item) => (item.active = item === target));
+                              target.focus({ preventScroll: true });
+                            }
+                            return;
+                          }
                           // Keep editing keys out of Web Awesome's document-level
                           // menu handler; Escape still dismisses the whole menu.
-                          if (
-                            event.key !== "Escape" &&
-                            event.key !== "ArrowUp" &&
-                            event.key !== "ArrowDown" &&
-                            event.key !== "Tab"
-                          ) {
+                          if (event.key !== "Escape" && event.key !== "Tab") {
                             event.stopPropagation();
                           }
                         }}
@@ -265,14 +309,12 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
                     </div>
                   `
                 : nothing}
-              <div class="sidebar-agent-menu__list">
-                ${rows.map((entry) => renderAgentRow(entry, params))}
-                ${rows.length === 0
-                  ? html`<div class="sidebar-agent-menu__empty">
-                      ${t("agentChip.noAgentMatches")}
-                    </div>`
-                  : nothing}
-              </div>
+              ${rows.map((entry) => renderAgentRow(entry, params))}
+              ${rows.length === 0
+                ? html`<div class="sidebar-agent-menu__empty">
+                    ${t("agentChip.noAgentMatches")}
+                  </div>`
+                : nothing}
               <div class="sidebar-customize-menu__separator" role="separator"></div>
             `
           : nothing}

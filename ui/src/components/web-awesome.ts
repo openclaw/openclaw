@@ -1,17 +1,7 @@
-// Register only the Web Awesome Core elements used by the Control UI.
-// Per-component imports keep the production bundle tree-shakeable.
-import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
+// Shared dropdown registration and behavior. Other Web Awesome components use
+// surface-specific registrars so route-only controls stay out of startup.
 import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
-import "@awesome.me/webawesome/dist/components/option/option.js";
-import "@awesome.me/webawesome/dist/components/popover/popover.js";
-import "@awesome.me/webawesome/dist/components/radio/radio.js";
-import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
-import "@awesome.me/webawesome/dist/components/select/select.js";
-import "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
-import "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
-import "@awesome.me/webawesome/dist/components/tab/tab.js";
-import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 
 const keyboardDismissedDropdowns = new WeakSet<EventTarget>();
 
@@ -32,13 +22,25 @@ export function consumeDropdownKeyboardDismissal(event: Event): boolean {
   return true;
 }
 
-// Web Awesome labels its trigger but leaves the internal menu unnamed. Copy
-// the host label, or reference the trigger, when the popup enters the a11y tree.
-function labelDropdownMenu(event: Event) {
-  const dropdown = event.target;
-  if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
+/** Web Awesome exposes checkbox items only. Preserve its roving-focus item
+ * while restoring radio semantics for choices where exactly one value wins. */
+export function syncDropdownItemRadio(element: Element | undefined, checked: boolean) {
+  if (!(element instanceof HTMLElement) || element.localName !== "wa-dropdown-item") {
     return;
   }
+  const item = element as HTMLElement & { updateComplete?: Promise<unknown> };
+  void Promise.resolve(item.updateComplete).then(() => {
+    if (!item.isConnected) {
+      return;
+    }
+    item.setAttribute("role", "menuitemradio");
+    item.setAttribute("aria-checked", String(checked));
+  });
+}
+
+// Web Awesome labels its trigger but leaves the internal menu unnamed. Copy
+// the host label, or reference the trigger, when the popup enters the a11y tree.
+function labelDropdownMenu(dropdown: HTMLElement) {
   const menu = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
   if (!menu) {
     return;
@@ -50,12 +52,48 @@ function labelDropdownMenu(event: Event) {
     return;
   }
   const trigger = dropdown.querySelector<HTMLElement>('[slot="trigger"]');
-  if (trigger?.id) {
-    menu.setAttribute("aria-labelledby", trigger.id);
-    menu.removeAttribute("aria-label");
+  const triggerLabel = trigger?.getAttribute("aria-label") ?? trigger?.textContent?.trim();
+  if (triggerLabel) {
+    menu.setAttribute("aria-label", triggerLabel);
+    menu.removeAttribute("aria-labelledby");
   }
 }
 
+const dropdownLabelObservers = new WeakMap<HTMLElement, MutationObserver>();
+
+function startDropdownLabelSync(event: Event) {
+  const dropdown = event.target;
+  if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
+    return;
+  }
+  labelDropdownMenu(dropdown);
+  dropdownLabelObservers.get(dropdown)?.disconnect();
+  if (typeof MutationObserver === "undefined") {
+    return;
+  }
+  const observer = new MutationObserver(() => labelDropdownMenu(dropdown));
+  // Open menus can survive an in-place locale render. Watch only their light
+  // DOM so translated labels stay current without observing the whole app.
+  observer.observe(dropdown, {
+    attributes: true,
+    attributeFilter: ["aria-label"],
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+  dropdownLabelObservers.set(dropdown, observer);
+}
+
+function stopDropdownLabelSync(event: Event) {
+  const dropdown = event.target;
+  if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
+    return;
+  }
+  dropdownLabelObservers.get(dropdown)?.disconnect();
+  dropdownLabelObservers.delete(dropdown);
+}
+
 if (typeof document !== "undefined") {
-  document.addEventListener("wa-show", labelDropdownMenu);
+  document.addEventListener("wa-show", startDropdownLabelSync);
+  document.addEventListener("wa-after-hide", stopDropdownLabelSync);
 }

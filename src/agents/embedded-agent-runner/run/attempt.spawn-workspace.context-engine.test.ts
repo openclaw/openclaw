@@ -2758,6 +2758,15 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         promptMode: "none",
         disableTools: true,
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "unsafe_client_tool",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "agent:main:discord:source",
@@ -2782,6 +2791,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBe("hello");
     expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
     expect(result.messagesSnapshot).toHaveLength(1);
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
+      0,
+      "raw model createAgentSession options",
+    );
+    expect(sessionOptions.customTools).toStrictEqual([]);
     expectFields(requireRecord(result.messagesSnapshot[0], "gateway model snapshot"), {
       role: "assistant",
       content: "pong",

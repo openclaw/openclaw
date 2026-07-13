@@ -137,6 +137,24 @@ describe("openclaw-file-preview-modal", () => {
     expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
   });
 
+  it("handles file navigation from the modal dialog event path", async () => {
+    const modal = await renderPreview();
+    const onSelect = vi.fn();
+    modal.addEventListener("file-preview-select", onSelect);
+
+    const dialog = modal.shadowRoot?.querySelector<HTMLElement>("openclaw-modal-dialog");
+    const arrowDown = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    dialog?.dispatchEvent(arrowDown);
+
+    expect(arrowDown.defaultPrevented).toBe(true);
+    expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
+  });
+
   it("restores modal focus when the same element reconnects", async () => {
     const modal = await renderPreview();
     const outside = document.createElement("button");

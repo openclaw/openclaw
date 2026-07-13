@@ -25,6 +25,15 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
+  protected override firstUpdated() {
+    const dropdown = this.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
+      "wa-dropdown",
+    );
+    void Promise.resolve(dropdown?.updateComplete).then(() => {
+      this.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
+    });
+  }
+
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -54,8 +63,10 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
         .distance=${0}
         aria-label=${t("nativeLinkMenu.label")}
         @wa-select=${(event: CustomEvent<{ item: { value?: NativeLinkMenuAction } }>) => {
+          event.preventDefault();
           const action = event.detail.item.value;
           if (action) {
+            this.trigger?.focus();
             this.runAction(action);
           }
         }}
@@ -67,6 +78,7 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
           slot="trigger"
           type="button"
           tabindex="-1"
+          aria-hidden="true"
           aria-label=${t("nativeLinkMenu.label")}
           style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>

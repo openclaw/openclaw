@@ -93,6 +93,43 @@ describe("worker bundle producer", () => {
     });
   });
 
+  it("prunes workspace deps and lifecycle fields from dev manifests", async () => {
+    await withTempDir({ prefix: "openclaw-worker-bundle-prune-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      await writeFixture(packageRoot, [["dist/entry.js", "export const entry = true;\n"]]);
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        `${JSON.stringify({
+          name: "openclaw",
+          version: "1.2.3",
+          type: "module",
+          files: ["dist/"],
+          dependencies: { json5: "2.2.3", "@openclaw/gateway-protocol": "workspace:*" },
+          devDependencies: { vitest: "4.0.0" },
+          scripts: { prepare: "node scripts/prepare.mjs" },
+          pnpm: { patchedDependencies: {} },
+        })}\n`,
+        "utf8",
+      );
+
+      const bundle = await createWorkerBundleProducer({
+        packageRoot,
+        cacheDir: path.join(root, "cache"),
+        openclawVersion: "1.2.3",
+      }).prepare();
+      const extractRoot = path.join(root, "extract");
+      await fs.mkdir(extractRoot, { recursive: true });
+      await tar.extract({ file: bundle.tarballPath, cwd: extractRoot });
+      const staged = JSON.parse(
+        await fs.readFile(path.join(extractRoot, "package.json"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(staged.dependencies).toEqual({ json5: "2.2.3" });
+      expect(staged).not.toHaveProperty("devDependencies");
+      expect(staged).not.toHaveProperty("scripts");
+      expect(staged).not.toHaveProperty("pnpm");
+    });
+  });
+
   it("changes the hash when file contents change", async () => {
     await withTempDir({ prefix: "openclaw-worker-bundle-change-" }, async (root) => {
       const packageRoot = path.join(root, "package");

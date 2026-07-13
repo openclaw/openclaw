@@ -125,6 +125,7 @@ export const browserPanelStyles = css`
   }
   .bp-tab:hover + .bp-tab__close,
   .bp-tab[active] + .bp-tab__close,
+  .bp-tab__close:hover,
   .bp-tab__close:focus-visible {
     opacity: 0.7;
   }

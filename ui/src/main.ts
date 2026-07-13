@@ -1,6 +1,6 @@
 // Control UI module implements main behavior.
+import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "./styles.css";
-import "./components/web-awesome.ts";
 import "./app/app-host.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 import { installStaleChunkReloadListener } from "./app/stale-chunk-reload.ts";

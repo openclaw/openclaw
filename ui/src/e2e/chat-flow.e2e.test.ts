@@ -2647,18 +2647,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(activeWeight).toBe(inactiveWeight);
 
       await page.getByRole("button", { name: "Sort sessions" }).click();
-      await page.getByRole("menuitemcheckbox", { name: "Last updated" }).click();
+      await page.getByRole("menuitemradio", { name: "Last updated" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
       await page.getByRole("button", { name: "Sort sessions" }).click();
-      await page.getByRole("menuitemcheckbox", { name: "Created" }).click();
+      await page.getByRole("menuitemradio", { name: "Created" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       await page.getByRole("button", { name: "Sort sessions" }).click();
       await page.getByRole("main").click();
-      await expect
-        .poll(() => page.getByRole("menuitemcheckbox", { name: "Created" }).count())
-        .toBe(0);
+      await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
     } finally {
       await closeBrowserContext(context);
     }

@@ -2,10 +2,9 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import type {
   SessionCatalog,
-  SessionCatalogHost,
-  SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -35,8 +34,8 @@ import "./sidebar-attention.ts";
 import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
-import "./tooltip.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import "./tooltip.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { editorOpenUrl } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -84,6 +83,7 @@ import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
 import {
   isSidebarRouteActive,
@@ -96,8 +96,15 @@ import {
   sidebarPluginTabs,
 } from "./app-sidebar-nav-menus.ts";
 import {
+  mergeCatalogSessionRows,
+  mergeSessionCatalogPage,
+  preserveExpandedCatalogHost,
+  sessionCatalogRequestError,
+} from "./app-sidebar-session-catalog-state.ts";
+import {
   adoptedCatalogSessionKeys,
   bindAdoptedCatalogSession,
+  type CatalogBackingSessionDisplay,
   formatSidebarTimestamp,
   renderSessionCatalogGroups,
 } from "./app-sidebar-session-catalogs.ts";
@@ -114,6 +121,7 @@ import {
 } from "./lobster-pet.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
+import { syncDropdownItemRadio } from "./web-awesome.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type SidebarRecentSession = {
@@ -233,31 +241,6 @@ function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;
 }
 
-function mergeCatalogSessionRows(
-  first: readonly SessionCatalogSession[],
-  second: readonly SessionCatalogSession[],
-): SessionCatalogSession[] {
-  const seen = new Set(first.map((session) => session.threadId));
-  return [...first, ...second.filter((session) => !seen.has(session.threadId))];
-}
-
-function preserveExpandedCatalogHost(
-  freshHost: SessionCatalogHost,
-  previous: SessionCatalogHost | undefined,
-): SessionCatalogHost {
-  if (!previous) {
-    return freshHost;
-  }
-  const { sessions, nextCursor, ...previousDetails } = previous;
-  const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
-  return {
-    ...previousDetails,
-    ...freshDetails,
-    sessions,
-    ...(nextCursor !== undefined ? { nextCursor } : {}),
-  };
-}
-
 class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
@@ -280,7 +263,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
-  @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
+  @property({ attribute: false }) onOpenNewSession?: (
+    agentId: string,
+    target?: NewSessionTarget,
+  ) => void;
   /** Agent id of the in-flight new-session draft; renders the draft row. */
   @property({ attribute: false }) draftSessionAgentId = "";
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
@@ -345,6 +331,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private sessionsScrollElement: HTMLElement | null = null;
   private sessionsScrollResizeObserver: ResizeObserver | null = null;
   private sessionCatalogTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private sessionCatalogAgentId: string | null = null;
   private sessionCatalogGeneration = 0;
   private sessionCatalogRevision = 0;
   private sessionCatalogRequestGeneration: number | null = null;
@@ -423,6 +410,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   override updated() {
     this.syncSessionsScrollObserver();
     const snapshot = this.context?.gateway.snapshot;
+    if (this.context) {
+      this.synchronizeSessionCatalogAgent(this.expandedAgentId());
+    }
     if (
       !snapshot?.connected ||
       !snapshot.client ||
@@ -433,6 +423,26 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     void this.refreshSessionCatalogs();
+  }
+
+  private synchronizeSessionCatalogAgent(agentId: string) {
+    if (agentId === this.sessionCatalogAgentId) {
+      return;
+    }
+    this.sessionCatalogAgentId = agentId;
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogRevision += 1;
+    this.loadingMoreSessionCatalogIds = new Set();
+    if (this.sessionCatalogTimer) {
+      globalThis.clearTimeout(this.sessionCatalogTimer);
+      this.sessionCatalogTimer = null;
+    }
+    if (this.sessionCatalogs.some((catalog) => catalog.capabilities.createSession)) {
+      this.sessionCatalogs = this.sessionCatalogs.map((catalog) => {
+        const { createSession: _createSession, ...capabilities } = catalog.capabilities;
+        return { ...catalog, capabilities };
+      });
+    }
   }
 
   private readonly handleCatalogSessionContinued = (
@@ -459,12 +469,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     const generation = this.sessionCatalogGeneration;
     const revision = this.sessionCatalogRevision;
+    const agentId = this.sessionCatalogAgentId ?? this.expandedAgentId();
     if (this.sessionCatalogRequestGeneration === generation) {
       return;
     }
     this.sessionCatalogRequestGeneration = generation;
     try {
       const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId,
         limitPerHost: 40,
       });
       if (generation !== this.sessionCatalogGeneration || client !== this.gatewayClient) {
@@ -474,6 +486,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         catalogs: result.catalogs,
         client,
         generation,
+        agentId,
       });
       if (
         generation !== this.sessionCatalogGeneration ||
@@ -517,6 +530,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     catalogs: SessionCatalog[];
     client: GatewayBrowserClient;
     generation: number;
+    agentId: string;
   }): Promise<SessionCatalog[]> {
     const previousCatalogs = new Map(this.sessionCatalogs.map((catalog) => [catalog.id, catalog]));
     return Promise.all(
@@ -543,7 +557,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               try {
                 result = await params.client.request<SessionsCatalogListResult>(
                   "sessions.catalog.list",
-                  { catalogId: catalog.id, cursors: { [host.hostId]: nextCursor } },
+                  {
+                    agentId: params.agentId,
+                    catalogId: catalog.id,
+                    cursors: { [host.hostId]: nextCursor },
+                  },
                 );
               } catch {
                 return previous ?? host;
@@ -601,10 +619,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     const generation = this.sessionCatalogGeneration;
+    const agentId = this.sessionCatalogAgentId ?? this.expandedAgentId();
     const revision = this.sessionCatalogRevisions.get(catalogId) ?? 0;
     this.loadingMoreSessionCatalogIds = new Set([...this.loadingMoreSessionCatalogIds, catalogId]);
     try {
       const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId,
         catalogId,
         cursors,
       });
@@ -619,49 +639,37 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       if (!page) {
         return;
       }
-      const pageHosts = new Map(page.hosts.map((host) => [host.hostId, host]));
-      const requestedHosts = new Set(Object.keys(cursors));
-      let updated = false;
-      const catalogs = this.sessionCatalogs.map((currentCatalog) => {
-        if (currentCatalog.id !== catalogId) {
-          return currentCatalog;
-        }
-        return {
-          ...currentCatalog,
-          hosts: currentCatalog.hosts.map((host) => {
-            const pageHost = pageHosts.get(host.hostId);
-            if (
-              !requestedHosts.has(host.hostId) ||
-              host.nextCursor !== cursors[host.hostId] ||
-              !pageHost ||
-              pageHost.error
-            ) {
-              return host;
-            }
-            updated = true;
-            const key = sessionCatalogHostKey(catalogId, host.hostId);
-            this.sessionCatalogPageDepths.set(
-              key,
-              (this.sessionCatalogPageDepths.get(key) ?? 0) + 1,
-            );
-            const { nextCursor, sessions, ...pageHostDetails } = pageHost;
-            const { nextCursor: _currentCursor, ...currentHost } = host;
-            return {
-              ...currentHost,
-              ...pageHostDetails,
-              sessions: mergeCatalogSessionRows(host.sessions, sessions),
-              ...(nextCursor ? { nextCursor } : {}),
-            };
-          }),
-        };
-      });
-      if (updated) {
-        this.sessionCatalogs = catalogs;
-        this.sessionCatalogRevisions.set(catalogId, revision + 1);
-        this.sessionCatalogRevision += 1;
+      const current = this.sessionCatalogs.find((candidate) => candidate.id === catalogId);
+      if (!current) {
+        return;
       }
-    } catch {
-      // Keep the current cursor so the user can retry the same page.
+      const merged = mergeSessionCatalogPage({ current, page, cursors });
+      for (const hostId of merged.advancedHostIds) {
+        const key = sessionCatalogHostKey(catalogId, hostId);
+        this.sessionCatalogPageDepths.set(key, (this.sessionCatalogPageDepths.get(key) ?? 0) + 1);
+      }
+      this.sessionCatalogs = this.sessionCatalogs.map((candidate) =>
+        candidate.id === catalogId ? merged.catalog : candidate,
+      );
+      this.sessionCatalogRevisions.set(catalogId, revision + 1);
+      this.sessionCatalogRevision += 1;
+    } catch (error) {
+      if (
+        generation !== this.sessionCatalogGeneration ||
+        revision !== (this.sessionCatalogRevisions.get(catalogId) ?? 0) ||
+        client !== this.gatewayClient
+      ) {
+        return;
+      }
+      // Preserve rows and cursors: the visible error explains that retrying
+      // Load More will request the same page rather than advancing past it.
+      this.sessionCatalogs = this.sessionCatalogs.map((candidate) =>
+        candidate.id === catalogId
+          ? { ...candidate, error: sessionCatalogRequestError(error) }
+          : candidate,
+      );
+      this.sessionCatalogRevisions.set(catalogId, revision + 1);
+      this.sessionCatalogRevision += 1;
     } finally {
       if (generation === this.sessionCatalogGeneration) {
         const loading = new Set(this.loadingMoreSessionCatalogIds);
@@ -2048,6 +2056,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       },
       onSwitchAgent: (agentId) => this.switchChipAgent(agentId),
       onAskCapabilities: (agentId) => this.askAgentCapabilities(agentId),
+      onOpenNewSession: (agentId) => this.onOpenNewSession?.(agentId),
       onClose: (restoreFocus) => this.closeAgentMenu({ restoreFocus }),
       onNavigate: (routeId, options) => this.onNavigate?.(routeId, options),
       onPairMobile: () => this.onPairMobile?.(),
@@ -2078,82 +2087,85 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     )
       ? (rows[0]?.category ?? null)
       : null;
-    return html`
-      <openclaw-session-menu
-        .session=${{
-          key: session.key,
-          label: session.label,
-          pinned: session.pinned,
-          unread: batchRows ? allUnread : session.unread,
-          archived: false,
-          category: batchRows ? sharedCategory : (session.category ?? null),
-        }}
-        .selectionCount=${rows.length}
-        .x=${menu.x}
-        .y=${menu.y}
-        .trigger=${this.sessionMenuTrigger}
-        .disabled=${!this.connected}
-        .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
-        .archiveAllowed=${archiveAllowed}
-        .groups=${this.knownSessionGroups()}
-        .canOpenChat=${true}
-        .work=${batchRows ? null : this.sessionMenuWork}
-        .workboard=${null}
-        .onClose=${() => {
-          // A removed Web Awesome menu can finish hiding after its replacement
-          // opens. Ignore that stale close or the new menu disappears too.
-          if (this.sessionMenu === menu) {
-            this.closeSessionMenu();
-          }
-        }}
-        .onAction=${(action: SessionMenuAction) => {
-          if (batchRows) {
-            this.runBatchSessionAction(action, batchRows, allUnread);
-            return;
-          }
-          switch (action.kind) {
-            case "open-chat":
-              this.selectSession(session.key);
-              break;
-            case "open-pr":
-              window.open(action.url, "_blank", "noopener");
-              break;
-            case "open-in":
-              // A custom-scheme window hands off to the OS without navigating this page.
-              window.open(editorOpenUrl(action.editor, action.path));
-              break;
-            case "toggle-pin":
-              void this.patchSession(session, { pinned: !session.pinned });
-              break;
-            case "toggle-unread":
-              void this.patchSession(session, { unread: !session.unread });
-              break;
-            case "rename":
-              this.renameSession(session);
-              break;
-            case "fork":
-              void this.forkSession(session);
-              break;
-            case "workboard":
-              break;
-            case "move-to-group":
-              if (action.category === null || session.category !== action.category) {
-                this.assignSessionCategory(session, action.category);
-              }
-              break;
-            case "new-group":
-              this.createSessionGroup([session]);
-              break;
-            case "toggle-archived":
-              void this.patchSession(session, { archived: true });
-              break;
-            case "delete":
-              void this.deleteSession(session);
-              break;
-          }
-        }}
-      ></openclaw-session-menu>
-    `;
+    return keyed(
+      menu,
+      html`
+        <openclaw-session-menu
+          .session=${{
+            key: session.key,
+            label: session.label,
+            pinned: session.pinned,
+            unread: batchRows ? allUnread : session.unread,
+            archived: false,
+            category: batchRows ? sharedCategory : (session.category ?? null),
+          }}
+          .selectionCount=${rows.length}
+          .x=${menu.x}
+          .y=${menu.y}
+          .trigger=${this.sessionMenuTrigger}
+          .disabled=${!this.connected}
+          .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
+          .archiveAllowed=${archiveAllowed}
+          .groups=${this.knownSessionGroups()}
+          .canOpenChat=${true}
+          .work=${batchRows ? null : this.sessionMenuWork}
+          .workboard=${null}
+          .onClose=${() => {
+            // A removed Web Awesome menu can finish hiding after its replacement
+            // opens. Ignore that stale close or the new menu disappears too.
+            if (this.sessionMenu === menu) {
+              this.closeSessionMenu();
+            }
+          }}
+          .onAction=${(action: SessionMenuAction) => {
+            if (batchRows) {
+              this.runBatchSessionAction(action, batchRows, allUnread);
+              return;
+            }
+            switch (action.kind) {
+              case "open-chat":
+                this.selectSession(session.key);
+                break;
+              case "open-pr":
+                window.open(action.url, "_blank", "noopener");
+                break;
+              case "open-in":
+                // A custom-scheme window hands off to the OS without navigating this page.
+                window.open(editorOpenUrl(action.editor, action.path));
+                break;
+              case "toggle-pin":
+                void this.patchSession(session, { pinned: !session.pinned });
+                break;
+              case "toggle-unread":
+                void this.patchSession(session, { unread: !session.unread });
+                break;
+              case "rename":
+                this.renameSession(session);
+                break;
+              case "fork":
+                void this.forkSession(session);
+                break;
+              case "workboard":
+                break;
+              case "move-to-group":
+                if (action.category === null || session.category !== action.category) {
+                  this.assignSessionCategory(session, action.category);
+                }
+                break;
+              case "new-group":
+                this.createSessionGroup([session]);
+                break;
+              case "toggle-archived":
+                void this.patchSession(session, { archived: true });
+                break;
+              case "delete":
+                void this.deleteSession(session);
+                break;
+            }
+          }}
+        ></openclaw-session-menu>
+      `,
+    );
   }
 
   private renderSessionGroupMenu() {
@@ -2161,67 +2173,76 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (!menu) {
       return nothing;
     }
-    return html`
-      <openclaw-menu-surface>
-        <wa-dropdown
-          class="session-menu sidebar-session-group-menu"
-          .open=${true}
-          placement="bottom-start"
-          .distance=${0}
-          aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
-          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-            const value = event.detail.item.value;
-            this.closeSessionGroupMenu();
-            switch (value) {
-              case "rename-group":
-                this.renameSessionGroupFromMenu(menu.group);
-                break;
-              case "new-group":
-                this.createSessionGroup();
-                break;
-              case "delete-group":
-                this.deleteSessionGroupFromMenu(menu.group);
-                break;
-            }
-          }}
-          @keydown=${trackDropdownKeyboardDismissal}
-          @wa-after-hide=${(event: Event) =>
-            this.closeSessionGroupMenu({
-              restoreFocus: consumeDropdownKeyboardDismissal(event),
-            })}
-        >
-          <button
-            slot="trigger"
-            type="button"
-            tabindex="-1"
+    return keyed(
+      menu,
+      html`
+        <openclaw-menu-surface>
+          <wa-dropdown
+            class="session-menu sidebar-session-group-menu"
+            .open=${true}
+            placement="bottom-start"
+            .distance=${0}
             aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
-            style="position: fixed; left: ${menu.x}px; top: ${menu.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-          ></button>
-          <wa-dropdown-item
-            class="session-menu__item"
-            value="rename-group"
-            ?disabled=${!this.connected}
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              event.preventDefault();
+              const value = event.detail.item.value;
+              this.closeSessionGroupMenu({ restoreFocus: true });
+              switch (value) {
+                case "rename-group":
+                  this.renameSessionGroupFromMenu(menu.group);
+                  break;
+                case "new-group":
+                  this.createSessionGroup();
+                  break;
+                case "delete-group":
+                  this.deleteSessionGroupFromMenu(menu.group);
+                  break;
+              }
+            }}
+            @keydown=${trackDropdownKeyboardDismissal}
+            @wa-after-hide=${(event: Event) => {
+              if (this.sessionGroupMenu && this.sessionGroupMenu !== menu) {
+                return;
+              }
+              this.closeSessionGroupMenu({
+                restoreFocus: consumeDropdownKeyboardDismissal(event),
+              });
+            }}
           >
-            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
-            <span class="session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
-          </wa-dropdown-item>
-          <wa-dropdown-item class="session-menu__item" value="new-group">
-            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
-            <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
-          </wa-dropdown-item>
-          <div class="session-menu__separator" role="separator"></div>
-          <wa-dropdown-item
-            class="session-menu__item session-menu__item--destructive"
-            value="delete-group"
-            variant="danger"
-            ?disabled=${!this.connected}
-          >
-            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
-            <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
-          </wa-dropdown-item>
-        </wa-dropdown>
-      </openclaw-menu-surface>
-    `;
+            <button
+              slot="trigger"
+              type="button"
+              tabindex="-1"
+              aria-hidden="true"
+              aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
+              style="position: fixed; left: ${menu.x}px; top: ${menu.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+            ></button>
+            <wa-dropdown-item
+              class="session-menu__item"
+              value="rename-group"
+              ?disabled=${!this.connected}
+            >
+              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
+              <span class="session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
+            </wa-dropdown-item>
+            <wa-dropdown-item class="session-menu__item" value="new-group">
+              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
+              <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
+            </wa-dropdown-item>
+            <div class="session-menu__separator" role="separator"></div>
+            <wa-dropdown-item
+              class="session-menu__item session-menu__item--destructive"
+              value="delete-group"
+              variant="danger"
+              ?disabled=${!this.connected}
+            >
+              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
+              <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
+            </wa-dropdown-item>
+          </wa-dropdown>
+        </openclaw-menu-surface>
+      `,
+    );
   }
 
   private renderSessionSortMenu() {
@@ -2233,77 +2254,100 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       { grouping: "category", label: t("sessionsView.groupByCategory") },
       { grouping: "none", label: t("sessionsView.groupByNone") },
     ] as const satisfies ReadonlyArray<{ grouping: SidebarSessionsGrouping; label: string }>;
-    return html`
-      <openclaw-menu-surface>
-        <wa-dropdown
-          class="sidebar-session-sort-menu"
-          .open=${true}
-          placement="bottom-end"
-          .distance=${0}
-          aria-label=${t("chat.sidebar.sortSessions")}
-          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-            const value = event.detail.item.value;
-            if (value?.startsWith("grouping:")) {
-              this.setSessionsGrouping(value.slice("grouping:".length) as SidebarSessionsGrouping);
-            } else if (value?.startsWith("sort:")) {
-              this.sessionSortMode = value.slice("sort:".length) as SidebarSessionSortMode;
-            } else if (value === "show-cron") {
-              this.setSessionsShowCron(!this.sessionsShowCron);
-            }
-            this.closeSessionSortMenu({ restoreFocus: true });
-          }}
-          @keydown=${trackDropdownKeyboardDismissal}
-          @wa-after-hide=${(event: Event) =>
-            this.closeSessionSortMenu({
-              restoreFocus: consumeDropdownKeyboardDismissal(event),
-            })}
-        >
-          <button
-            slot="trigger"
-            type="button"
-            tabindex="-1"
+    return keyed(
+      position,
+      html`
+        <openclaw-menu-surface>
+          <wa-dropdown
+            class="sidebar-session-sort-menu"
+            .open=${true}
+            placement="bottom-start"
+            .distance=${0}
             aria-label=${t("chat.sidebar.sortSessions")}
-            style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-          ></button>
-          <div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
-          ${groupingOptions.map(
-            (option) => html`
-              <wa-dropdown-item
-                class="sidebar-session-sort-menu__item"
-                type="checkbox"
-                value=${`grouping:${option.grouping}`}
-                .checked=${this.sessionsGrouping === option.grouping}
-              >
-                <span class="session-menu__text">${option.label}</span>
-              </wa-dropdown-item>
-            `,
-          )}
-          <div class="session-menu__separator" role="separator"></div>
-          <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
-          ${SIDEBAR_SESSION_SORT_OPTIONS.map(
-            (option) => html`
-              <wa-dropdown-item
-                class="sidebar-session-sort-menu__item"
-                type="checkbox"
-                value=${`sort:${option.mode}`}
-                .checked=${this.sessionSortMode === option.mode}
-              >
-                <span class="session-menu__text">${t(option.labelKey)}</span>
-              </wa-dropdown-item>
-            `,
-          )}
-          <div class="session-menu__separator" role="separator"></div>
-          <wa-dropdown-item
-            class="sidebar-session-sort-menu__item"
-            type="checkbox"
-            value="show-cron"
-            .checked=${this.sessionsShowCron}
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              event.preventDefault();
+              const value = event.detail.item.value;
+              if (value?.startsWith("grouping:")) {
+                this.setSessionsGrouping(
+                  value.slice("grouping:".length) as SidebarSessionsGrouping,
+                );
+              } else if (value?.startsWith("sort:")) {
+                this.sessionSortMode = value.slice("sort:".length) as SidebarSessionSortMode;
+              } else if (value === "show-cron") {
+                this.setSessionsShowCron(!this.sessionsShowCron);
+              }
+              this.closeSessionSortMenu({ restoreFocus: true });
+            }}
+            @keydown=${trackDropdownKeyboardDismissal}
+            @wa-after-hide=${(event: Event) => {
+              if (this.sessionSortMenuPosition !== position) {
+                return;
+              }
+              this.closeSessionSortMenu({
+                restoreFocus: consumeDropdownKeyboardDismissal(event),
+              });
+            }}
           >
-            <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
-          </wa-dropdown-item>
-        </wa-dropdown>
-      </openclaw-menu-surface>
-    `;
+            <button
+              slot="trigger"
+              type="button"
+              tabindex="-1"
+              aria-hidden="true"
+              aria-label=${t("chat.sidebar.sortSessions")}
+              style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+            ></button>
+            <div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
+            ${groupingOptions.map(
+              (option) => html`
+                <wa-dropdown-item
+                  class="sidebar-session-sort-menu__item"
+                  value=${`grouping:${option.grouping}`}
+                  role="menuitemradio"
+                  aria-checked=${String(this.sessionsGrouping === option.grouping)}
+                  ${ref((element) =>
+                    syncDropdownItemRadio(element, this.sessionsGrouping === option.grouping),
+                  )}
+                >
+                  <span slot="details" class="session-menu__check" aria-hidden="true"
+                    >${this.sessionsGrouping === option.grouping ? icons.check : nothing}</span
+                  >
+                  <span class="session-menu__text">${option.label}</span>
+                </wa-dropdown-item>
+              `,
+            )}
+            <div class="session-menu__separator" role="separator"></div>
+            <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
+            ${SIDEBAR_SESSION_SORT_OPTIONS.map(
+              (option) => html`
+                <wa-dropdown-item
+                  class="sidebar-session-sort-menu__item"
+                  value=${`sort:${option.mode}`}
+                  role="menuitemradio"
+                  aria-checked=${String(this.sessionSortMode === option.mode)}
+                  ${ref((element) =>
+                    syncDropdownItemRadio(element, this.sessionSortMode === option.mode),
+                  )}
+                >
+                  <span slot="details" class="session-menu__check" aria-hidden="true"
+                    >${this.sessionSortMode === option.mode ? icons.check : nothing}</span
+                  >
+                  <span class="session-menu__text">${t(option.labelKey)}</span>
+                </wa-dropdown-item>
+              `,
+            )}
+            <div class="session-menu__separator" role="separator"></div>
+            <wa-dropdown-item
+              class="sidebar-session-sort-menu__item"
+              type="checkbox"
+              value="show-cron"
+              .checked=${this.sessionsShowCron}
+            >
+              <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
+            </wa-dropdown-item>
+          </wa-dropdown>
+        </openclaw-menu-surface>
+      `,
+    );
   }
 
   private renderRoute(routeId: NavigationRouteId) {
@@ -2329,7 +2373,17 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     });
   }
 
-  private renderRecentSession(session: SidebarRecentSession) {
+  private renderRecentSession(
+    session: SidebarRecentSession,
+    display?: CatalogBackingSessionDisplay,
+  ) {
+    const label = display?.label ?? session.label;
+    const subtitle = display
+      ? display.subtitle
+      : session.subtitle && session.workSession && session.subtitle !== session.label
+        ? session.subtitle
+        : undefined;
+    const meta = display?.meta ?? session.meta;
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
@@ -2367,7 +2421,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           href=${session.href}
           class="sidebar-recent-session__link"
           draggable="false"
-          title=${`${session.label} · ${session.key}`}
+          title=${display?.title ?? `${session.label} · ${session.key}`}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
           ${session.hasActiveRun
@@ -2385,9 +2439,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 ></span>`
               : nothing}
           <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
-            ${session.subtitle && session.workSession && session.subtitle !== session.label
-              ? html`<span class="sidebar-recent-session__subtitle">${session.subtitle}</span>`
+            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+            ${subtitle
+              ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
           ${session.worktreeId || session.hasAutomation
@@ -2414,7 +2468,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             : nothing}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
-          <span class="session-row-trail">${session.meta}</span>
+          <span class="session-row-trail">${meta}</span>
           <span class="session-row-actions">
             <button
               class="session-action session-action--pin"
@@ -2799,18 +2853,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   ) {
     return renderSessionCatalogGroups({
       catalogs: this.sessionCatalogs,
+      connected: this.connected,
       basePath: this.basePath,
       routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+      newSessionAgentId: this.expandedAgentId(),
       collapsedSections: this.collapsedSessionSections,
       loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
       liveRows: [
         ...(this.sessionsResult?.sessions ?? []),
         ...Object.values(this.sessionRowsByAgent).flat(),
       ],
-      renderLiveRow: (row) => this.renderRecentSession(navigationState.toSidebarSession(row)),
+      renderLiveRow: (row, display) =>
+        this.renderRecentSession(navigationState.toSidebarSession(row), display),
       onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),
       onLoadMore: (catalogId) => void this.loadMoreSessionCatalog(catalogId),
-      onNavigate: (search) => this.onNavigate?.("chat", { search }),
+      onOpenNewSession: this.onOpenNewSession,
+      onNavigate: this.onNavigate,
     });
   }
 

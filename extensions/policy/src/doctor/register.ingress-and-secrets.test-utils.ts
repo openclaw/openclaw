@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { runDoctorLintChecks, type OpenClawConfig } from "openclaw/plugin-sdk/health";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectPolicyEvidence, scanPolicyIngress } from "../policy-state.js";
+import { collectPolicyEvidence } from "../policy-state.js";
 import { registerPolicyDoctorChecks } from "./register.js";
 import {
   workspaceDir,
@@ -14,6 +14,9 @@ import {
   describe0BeforeEach0,
   describe0AfterEach1,
 } from "./register.test-harness.js";
+
+const scanPolicyIngress = (cfg: object) =>
+  collectPolicyEvidence(cfg as Record<string, unknown>).ingress ?? [];
 
 describe("registerPolicyDoctorChecks", () => {
   beforeEach(describe0BeforeEach0);

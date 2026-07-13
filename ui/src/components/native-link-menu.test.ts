@@ -6,6 +6,7 @@ import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.ts
 
 const NATIVE_LINK_MENU_ELEMENT_NAME = `test-openclaw-native-link-menu-${crypto.randomUUID()}`;
 const containers: HTMLElement[] = [];
+type DropdownElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
 
 // The non-isolated UI runner resets modules but not customElements. Register
 // the current class graph so instanceof and locale updates share one module.
@@ -59,6 +60,9 @@ describe("native link menu", () => {
     });
     const items = menuItems(menu);
 
+    await Promise.resolve();
+    expect(document.activeElement).toBe(items[0]);
+
     expect(
       items.map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
     ).toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
@@ -69,11 +73,19 @@ describe("native link menu", () => {
 
   it("rerenders open actions when the locale changes", async () => {
     const menu = await mountMenu({});
+    const dropdown = menu.querySelector<DropdownElement>("wa-dropdown");
+    expect(dropdown).not.toBeNull();
+    await dropdown?.updateComplete;
 
     await i18n.setLocale("de");
     await menu.updateComplete;
 
     expect(menu.querySelector("wa-dropdown")?.getAttribute("aria-label")).toBe("Link-Aktionen");
+    await vi.waitFor(() =>
+      expect(dropdown?.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
+        "Link-Aktionen",
+      ),
+    );
     expect(
       menuItems(menu).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
     ).toEqual(["In der Seitenleiste öffnen", "Im Standardbrowser öffnen", "Link kopieren"]);

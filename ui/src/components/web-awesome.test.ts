@@ -1,7 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it } from "vitest";
-import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
+import {
+  consumeDropdownKeyboardDismissal,
+  syncDropdownItemRadio,
+  trackDropdownKeyboardDismissal,
+} from "./web-awesome.ts";
 
 type DropdownElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
 
@@ -31,15 +35,20 @@ describe("Web Awesome adapters", () => {
     expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
       "Message actions",
     );
+
+    dropdown.setAttribute("aria-label", "Updated actions");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
+      "Updated actions",
+    );
   });
 
   it("labels a dropdown menu from its trigger", async () => {
-    const { dropdown, trigger } = await createDropdown();
+    const { dropdown } = await createDropdown();
 
-    expect(trigger.id).not.toBe("");
-    expect(
-      dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-labelledby"),
-    ).toBe(trigger.id);
+    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
+      "Actions",
+    );
   });
 
   it("restores a durable trigger only after keyboard dismissal", async () => {
@@ -55,5 +64,18 @@ describe("Web Awesome adapters", () => {
     });
     dropdown.dispatchEvent(new CustomEvent("wa-after-hide"));
     expect(restoreFocus).toBe(true);
+  });
+
+  it("restores radio semantics after a dropdown item updates", async () => {
+    const item = document.createElement("wa-dropdown-item") as DropdownElement;
+    item.setAttribute("type", "normal");
+    document.body.append(item);
+
+    syncDropdownItemRadio(item, true);
+    await item.updateComplete;
+    await Promise.resolve();
+
+    expect(item.getAttribute("role")).toBe("menuitemradio");
+    expect(item.getAttribute("aria-checked")).toBe("true");
   });
 });

@@ -126,6 +126,7 @@ export const ru: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, автор {author}",
   },
   channels: {
+    lastError: "Последняя ошибка",
     refreshingStaleSnapshot:
       "Статус канала обновляется в фоновом режиме; показан последний успешный снимок.",
     config: {
@@ -386,7 +387,6 @@ export const ru: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Новое рабочее дерево",
-    owner: "Владелец",
     ownerManual: "Вручную",
     ownerSession: "Сеанс",
     ownerWorkboard: "Рабочая доска",
@@ -407,10 +407,6 @@ export const ru: TranslationMap = {
     cleanupSaveFailed: "Не удалось сохранить ограничения очистки.",
     name: "Имя",
     repo: "Репозиторий",
-    branch: "Ветка",
-    status: "Статус",
-    lastActive: "Последняя активность",
-    actions: "Действия",
     empty: "Нет управляемых рабочих деревьев.",
     restorable: "Доступно для восстановления",
     restore: "Восстановить",
@@ -463,6 +459,7 @@ export const ru: TranslationMap = {
     start: "Начать сессию",
     starting: "Запуск…",
     createFailed: "Не удалось создать сессию.",
+    catalogUnavailable: "Целевой объект этого сеанса недоступен.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -831,6 +828,7 @@ export const ru: TranslationMap = {
     },
     manualRpcTitle: "Ручной RPC",
     manualRpcSubtitle: "Отправьте необработанный метод шлюза с параметрами JSON.",
+    callFailed: "Вызов завершился с ошибкой",
     method: "Метод",
     selectMethod: "Выберите метод…",
     paramsJson: "Параметры (JSON)",
@@ -1424,6 +1422,7 @@ export const ru: TranslationMap = {
     moreLiveTitle: "Ещё {count} активных инструментов доступно в группах ниже.",
     moreLive: "+{count} активных инструментов",
     quickPresets: "Быстрые пресеты",
+    catalogTitle: "Каталог инструментов",
     inherit: "Наследовать",
     profile: "Профиль",
     source: "Источник",
@@ -1770,7 +1769,6 @@ export const ru: TranslationMap = {
     filterAll: "Все",
     filterIssues: "Проблемы",
     filterLabel: "Фильтр установленных плагинов",
-    pulseLabel: "{enabled} включено, {disabled} отключено, {issues} с проблемами",
     categoryChannels: "Каналы",
     categoryProviders: "Поставщики моделей",
     categoryMemory: "Память",
@@ -2515,6 +2513,7 @@ export const ru: TranslationMap = {
       uptime: "Время работы",
       tickInterval: "Интервал тика",
       lastChannelsRefresh: "Последнее обновление каналов",
+      lastError: "Последняя ошибка",
     },
     help: {
       title: "Как подключиться",

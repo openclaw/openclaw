@@ -74,20 +74,31 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var auth: DashboardWindowAuth
     private let updater: UpdaterProviding?
     private var updateBridgeEnabled: Bool
+    private let requestBrowserProfileImportOffer:
+        @MainActor (@escaping @MainActor () -> Bool) async -> Bool
     private var canGoBackObservation: NSKeyValueObservation?
     private var canGoForwardObservation: NSKeyValueObservation?
+    private var didRequestBrowserProfileImportOffer = false
+    private var browserProfileImportOfferIsArmed = false
+    private var browserProfileImportOfferRequestIsInFlight = false
+    private var browserProfileImportOfferRetryPending = false
 
     init(
         url: URL,
         auth: DashboardWindowAuth,
         updater: UpdaterProviding? = nil,
-        updateBridgeEnabled: Bool = true)
+        updateBridgeEnabled: Bool = true,
+        requestBrowserProfileImportOffer:
+        @escaping @MainActor (@escaping @MainActor () -> Bool) async -> Bool = { shouldApply in
+            await BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible(while: shouldApply)
+        })
     {
         let shouldEnableUpdateBridge = updater?.isAvailable == true && updateBridgeEnabled
         self.currentURL = url
         self.auth = auth
         self.updater = updater
         self.updateBridgeEnabled = shouldEnableUpdateBridge
+        self.requestBrowserProfileImportOffer = requestBrowserProfileImportOffer
 
         let dataStore = WKWebsiteDataStore.default()
         let config = WKWebViewConfiguration()
@@ -261,6 +272,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             self.setUpdateBridgeEnabled(updateBridgeEnabled)
         }
         self.load(url)
+        self.requestBrowserProfileImportOfferIfNeeded()
     }
 
     /// Miniaturized windows report `isVisible == false` but must still follow
@@ -307,10 +319,51 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.webView.load(URLRequest(url: url))
     }
 
-    private func openLinkBrowser(_ url: URL) {
+    private func openLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = true) {
         self.linkBrowserItem.isCollapsed = false
         self.linkBrowser.open(url)
         window?.makeFirstResponder(self.linkBrowser.activeWebView)
+        if requestBrowserProfileImportOffer {
+            self.browserProfileImportOfferIsArmed = true
+            self.requestBrowserProfileImportOfferIfNeeded()
+        }
+    }
+
+    private func requestBrowserProfileImportOfferIfNeeded() {
+        guard self.browserProfileImportOfferIsArmed,
+              !self.linkBrowserItem.isCollapsed,
+              !self.didRequestBrowserProfileImportOffer
+        else { return }
+        if self.browserProfileImportOfferRequestIsInFlight {
+            // Gateway readiness can arrive while the status poll awaits transport.
+            // Latch one retry so in-flight dedupe does not discard that reconnect signal.
+            self.browserProfileImportOfferRetryPending = true
+            return
+        }
+        self.browserProfileImportOfferRequestIsInFlight = true
+        Task { [weak self] in
+            guard let self else { return }
+            let didApply = await self.requestBrowserProfileImportOffer { [weak self] in
+                guard let self else { return false }
+                return self.browserProfileImportOfferIsArmed &&
+                    !self.linkBrowserItem.isCollapsed &&
+                    !self.didRequestBrowserProfileImportOffer
+            }
+            self.browserProfileImportOfferRequestIsInFlight = false
+            let shouldRetry = self.browserProfileImportOfferRetryPending && !didApply
+            self.browserProfileImportOfferRetryPending = false
+            if didApply {
+                self.didRequestBrowserProfileImportOffer = true
+            } else if shouldRetry {
+                self.requestBrowserProfileImportOfferIfNeeded()
+            }
+        }
+    }
+
+    func handleOnboardingCompletion() {
+        // A pre-onboarding inline browser leaves the one-shot armed. Retry at
+        // the eligibility transition so it does not depend on later navigation.
+        self.requestBrowserProfileImportOfferIfNeeded()
     }
 
     private func closeLinkBrowser(focusDashboard: Bool = true) {
@@ -984,8 +1037,8 @@ extension DashboardWindowController {
         self.splitViewController.splitView.autosaveName
     }
 
-    func _testOpenLinkBrowser(_ url: URL) {
-        self.openLinkBrowser(url)
+    func _testOpenLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = false) {
+        self.openLinkBrowser(url, requestBrowserProfileImportOffer: requestBrowserProfileImportOffer)
     }
 
     func _testCloseLinkBrowser() {

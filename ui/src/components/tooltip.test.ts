@@ -140,6 +140,51 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
   });
 
+  it("keeps a repeated-label tooltip when a nested label clips", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
+    const label = document.createElement("span");
+    label.textContent = "Claude Opus 4.7 Anthropic";
+    Object.defineProperty(label, "scrollWidth", { value: 160, configurable: true });
+    Object.defineProperty(label, "clientWidth", { value: 80, configurable: true });
+    trigger.append(label);
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    focusTrigger(trigger);
+    expectOpenCount(1);
+  });
+
+  it("does not reopen from pointer-origin focus", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Pointer tooltip");
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    focusTrigger(trigger);
+    expectOpenCount(1);
+    const pointerDown = new MouseEvent("pointerdown", { bubbles: true });
+    Object.defineProperty(pointerDown, "pointerType", { value: "mouse" });
+    trigger.dispatchEvent(pointerDown);
+    focusTrigger(trigger);
+
+    expectOpenCount(0);
+  });
+
+  it("keeps the accessible description in the trigger document tree", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Accessible tooltip");
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    const descriptionId = trigger.getAttribute("aria-describedby");
+    expect(descriptionId).toBeTruthy();
+    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Accessible tooltip");
+  });
+
   it("releases the active provider reference when an open tooltip is removed", async () => {
     const provider = createProvider();
     provider.delay = 40;

@@ -73,7 +73,7 @@ describeControlUiE2e("Control UI Quick Config thinking persistence mocked Gatewa
       const response = await page.goto(`${server.baseUrl}config`);
       expect(response?.status()).toBe(200);
 
-      const modelCard = page.locator(".qs-card--model");
+      const modelCard = page.locator("#settings-general-model");
       const lowButton = modelCard.getByRole("radio", { name: "Low", exact: true });
       await lowButton.waitFor();
       expect(await lowButton.getAttribute("aria-checked")).toBe("true");
@@ -94,7 +94,7 @@ describeControlUiE2e("Control UI Quick Config thinking persistence mocked Gatewa
       });
       await freshPage.goto(`${server.baseUrl}config`);
       const highButton = freshPage
-        .locator(".qs-card--model")
+        .locator("#settings-general-model")
         .getByRole("radio", { name: "High", exact: true });
       await highButton.waitFor();
       expect(await highButton.getAttribute("aria-checked")).toBe("true");

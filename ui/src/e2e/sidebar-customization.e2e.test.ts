@@ -34,6 +34,31 @@ async function roundedWidth(locator: Locator): Promise<number> {
   return Math.round((await locator.boundingBox())?.width ?? 0);
 }
 
+async function expectLobsterOnFooterLedge(sidebar: Locator) {
+  const footer = sidebar.locator(".sidebar-shell__footer");
+  const sprite = footer.locator(".lobster-pet:not(.lobster-pet--passer)").first();
+  await sprite.waitFor();
+
+  await expect
+    .poll(async () => {
+      const [footerBox, spriteBox, borderTopWidth] = await Promise.all([
+        footer.boundingBox(),
+        sprite.boundingBox(),
+        footer.evaluate((element) =>
+          Number.parseFloat(window.getComputedStyle(element).borderTopWidth),
+        ),
+      ]);
+      if (!footerBox || !spriteBox) {
+        return null;
+      }
+      return {
+        bottomOverlap: Math.round(spriteBox.y + spriteBox.height - footerBox.y - borderTopWidth),
+        isAboveFooter: spriteBox.y < footerBox.y,
+      };
+    })
+    .toEqual({ bottomOverlap: 3, isAboveFooter: true });
+}
+
 async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
@@ -610,6 +635,56 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     }
   });
 
+  it("keeps the lobster on the footer ledge across desktop and drawer layouts", async () => {
+    const { context, page } = await openSidebarTestPage();
+
+    try {
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const pet = sidebar.locator("openclaw-lobster-pet");
+      const movement = await pet.evaluate(async (element) => {
+        const lobster = element as HTMLElement & {
+          anchor: "bar";
+          mode: "offline";
+          performAct(act: "scuttle"): void;
+          requestUpdate(): void;
+          updateComplete: Promise<unknown>;
+        };
+        lobster.mode = "offline";
+        await lobster.updateComplete;
+        lobster.anchor = "bar";
+        lobster.setAttribute("data-spot", "bar");
+        lobster.requestUpdate();
+        await lobster.updateComplete;
+
+        const sprite = lobster.querySelector<HTMLElement>(".lobster-pet:not(.lobster-pet--passer)");
+        const before = sprite?.style.getPropertyValue("--lob-x") ?? "";
+        lobster.performAct("scuttle");
+        await lobster.updateComplete;
+        const after = sprite?.style.getPropertyValue("--lob-x") ?? "";
+        return { after, before, spot: lobster.getAttribute("data-spot") };
+      });
+
+      expect(movement.spot).toBe("bar");
+      expect(movement.after).not.toBe(movement.before);
+      expect(Number.parseFloat(movement.after)).toBeGreaterThanOrEqual(18);
+      expect(Number.parseFloat(movement.after)).toBeLessThanOrEqual(50);
+      await expectLobsterOnFooterLedge(sidebar);
+      const sprite = pet.locator(".lobster-pet:not(.lobster-pet--passer)").first();
+      await sprite.dispatchEvent("pointerdown");
+      await sprite.dispatchEvent("pointerup");
+      await expect.poll(() => sprite.getAttribute("class")).toContain("lobster-pet--act-startle");
+      await captureUiProof(page, "08-lobster-footer-ledge-desktop.png");
+
+      await page.setViewportSize({ height: 900, width: 900 });
+      await page.locator(".topbar-nav-toggle").click();
+      await expect.poll(() => sidebar.isVisible()).toBe(true);
+      await expectLobsterOnFooterLedge(sidebar);
+      await captureUiProof(page, "09-lobster-footer-ledge-drawer.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("restores focus to the More row after closing the pin editor with Escape", async () => {
     const { context, page } = await openSidebarTestPage();
 
@@ -688,6 +763,74 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .toBe(true);
       await page.keyboard.press("Tab");
       await expect.poll(() => menu.count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("reaches per-agent new-session actions with menu keys", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const agentsList = {
+      agents: [
+        { id: "main", identity: { name: "Main" }, name: "Main" },
+        { id: "research", identity: { name: "Research" }, name: "Research" },
+      ],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+    };
+    await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": agentsList,
+        "chat.startup": {
+          agentsList,
+          messages: [],
+          metadata: { models: [] },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Agent menu/ }).click();
+      const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
+      const mainSwitch = menu.getByRole("menuitemradio", { name: "Main" });
+      const researchSwitch = menu.getByRole("menuitemradio", { name: "Research" });
+      const researchNewSession = menu.getByRole("menuitem", {
+        name: "New session — Research",
+      });
+
+      // Web Awesome only includes direct light-DOM items in its roving focus model.
+      await expect
+        .poll(() =>
+          researchNewSession.evaluate(
+            (element) => element.parentElement?.matches("wa-dropdown.sidebar-agent-menu") ?? false,
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+      await expect
+        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("ArrowDown");
+      await expect
+        .poll(() => researchNewSession.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Enter");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      expect(new URL(page.url()).searchParams.get("agent")).toBe("research");
     } finally {
       await context.close();
     }

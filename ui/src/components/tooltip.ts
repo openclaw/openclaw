@@ -97,9 +97,13 @@ class Tooltip extends OpenClawLitElement {
   private touchTimer: number | null = null;
   private touchCloseTimer: number | null = null;
   private touchStart: { x: number; y: number } | null = null;
+  private suppressPointerFocus = false;
   private describedBy: string | null = null;
+  private descriptionCaptured = false;
+  private descriptionElement: HTMLSpanElement | null = null;
   private tooltipProvider: TooltipProvider | null = null;
   private readonly tooltipId = createTooltipId();
+  private readonly descriptionId = `${this.tooltipId}-description`;
 
   static override styles = css`
     :host {
@@ -179,6 +183,7 @@ class Tooltip extends OpenClawLitElement {
     trigger.addEventListener("pointercancel", this.handlePointerCancel);
     trigger.addEventListener("focusin", this.handleFocusIn);
     trigger.addEventListener("focusout", this.handleFocusOut);
+    trigger.addEventListener("click", this.handleClick, true);
     trigger.addEventListener("keydown", this.handleKeyDown);
     this.syncDescription();
     this.syncWebAwesomeTooltip();
@@ -197,7 +202,10 @@ class Tooltip extends OpenClawLitElement {
     trigger.removeEventListener("pointercancel", this.handlePointerCancel);
     trigger.removeEventListener("focusin", this.handleFocusIn);
     trigger.removeEventListener("focusout", this.handleFocusOut);
+    trigger.removeEventListener("click", this.handleClick, true);
     trigger.removeEventListener("keydown", this.handleKeyDown);
+    document.removeEventListener("pointerup", this.handleDocumentPointerUp);
+    this.suppressPointerFocus = false;
     this.restoreDescription();
     this.triggerElement = null;
   }
@@ -222,6 +230,9 @@ class Tooltip extends OpenClawLitElement {
 
   private readonly handlePointerDown = (event: PointerEvent) => {
     if (event.pointerType !== "touch") {
+      this.suppressPointerFocus = true;
+      document.removeEventListener("pointerup", this.handleDocumentPointerUp);
+      document.addEventListener("pointerup", this.handleDocumentPointerUp, { once: true });
       this.close();
       return;
     }
@@ -245,6 +256,7 @@ class Tooltip extends OpenClawLitElement {
 
   private readonly handlePointerUp = (event: PointerEvent) => {
     if (event.pointerType !== "touch") {
+      this.handleDocumentPointerUp();
       return;
     }
     this.clearTouchTimer();
@@ -254,9 +266,21 @@ class Tooltip extends OpenClawLitElement {
     }
   };
 
-  private readonly handlePointerCancel = () => this.close();
-  private readonly handleFocusIn = () => this.show();
+  private readonly handlePointerCancel = () => {
+    this.handleDocumentPointerUp();
+    this.close();
+  };
+  private readonly handleFocusIn = () => {
+    if (!this.suppressPointerFocus) {
+      this.show();
+    }
+  };
   private readonly handleFocusOut = () => this.close();
+  private readonly handleClick = () => this.close();
+  private readonly handleDocumentPointerUp = () => {
+    document.removeEventListener("pointerup", this.handleDocumentPointerUp);
+    this.suppressPointerFocus = false;
+  };
   private readonly handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       this.close();
@@ -303,12 +327,15 @@ class Tooltip extends OpenClawLitElement {
 
   private isRedundant() {
     const trigger = this.triggerElement;
-    if (!trigger || trigger.scrollWidth > trigger.clientWidth) {
+    if (!trigger) {
       return false;
     }
     const content = normalizeTooltipText(this.content);
     const triggerText = normalizeTooltipText(trigger.textContent ?? "");
-    return Boolean(content && triggerText && triggerText.includes(content));
+    const clipsContent = [trigger, ...trigger.querySelectorAll("*")].some(
+      (element) => element instanceof HTMLElement && element.scrollWidth > element.clientWidth,
+    );
+    return Boolean(content && triggerText && triggerText.includes(content) && !clipsContent);
   }
 
   private syncDescription() {
@@ -317,11 +344,20 @@ class Tooltip extends OpenClawLitElement {
       return;
     }
     const current = trigger.getAttribute("aria-describedby");
-    if (this.describedBy === null) {
+    if (!this.descriptionCaptured) {
       this.describedBy = current;
+      this.descriptionCaptured = true;
     }
+    if (!this.descriptionElement) {
+      const description = document.createElement("span");
+      description.id = this.descriptionId;
+      description.hidden = true;
+      this.append(description);
+      this.descriptionElement = description;
+    }
+    this.descriptionElement.textContent = this.content;
     const ids = new Set((current ?? "").split(/\s+/u).filter(Boolean));
-    ids.add(this.tooltipId);
+    ids.add(this.descriptionId);
     trigger.setAttribute("aria-describedby", [...ids].join(" "));
   }
 
@@ -334,7 +370,10 @@ class Tooltip extends OpenClawLitElement {
     } else {
       this.triggerElement.removeAttribute("aria-describedby");
     }
+    this.descriptionElement?.remove();
+    this.descriptionElement = null;
     this.describedBy = null;
+    this.descriptionCaptured = false;
   }
 
   private clearTouchTimer() {

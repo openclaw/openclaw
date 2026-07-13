@@ -7,7 +7,7 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
-import "../../components/web-awesome.ts";
+import "../../components/web-awesome-select.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
 import "../../styles/workboard.css";
@@ -444,7 +444,6 @@ function isCardActionTarget(event: Event): boolean {
     : false;
 }
 
-
 function renderWorkboardSelect<Value extends string>(params: {
   value: Value;
   options: readonly WorkboardSelectOption<Value>[];
@@ -465,7 +464,10 @@ function renderWorkboardSelect<Value extends string>(params: {
         const value = (event.currentTarget as HTMLElement & { value?: string }).value as
           | Value
           | undefined;
-        if (value && params.options.some((option) => option.value === value && !option.disabled)) {
+        if (
+          value !== undefined &&
+          params.options.some((option) => option.value === value && !option.disabled)
+        ) {
           params.onChange(value);
           params.requestUpdate?.();
         }

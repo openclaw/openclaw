@@ -117,7 +117,7 @@ describeControlUiE2e("Control UI agent page scope", () => {
       await sidebar.getByRole("button", { name: /Agent menu/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
-        .locator('wa-dropdown-item[value="writer"]')
+        .locator('wa-dropdown-item[value="agent:writer"]')
         .click();
       await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
       await expect
@@ -149,7 +149,7 @@ describeControlUiE2e("Control UI agent page scope", () => {
       await sidebar.getByRole("button", { name: /Agent menu/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
-        .locator('wa-dropdown-item[value="agent-settings"]')
+        .locator('wa-dropdown-item[value="command:agent-settings"]')
         .click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents");
       await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("writer");

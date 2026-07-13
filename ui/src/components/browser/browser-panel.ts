@@ -13,7 +13,7 @@ import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
-import "../web-awesome.ts";
+import "../web-awesome-tabs.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,

@@ -2654,6 +2654,7 @@ export function renderChatComposer(props: ChatComposerProps) {
           <wa-dropdown
             class="agent-chat__attach-menu"
             placement="top-start"
+            aria-label=${t("chat.composer.addAttachment")}
             @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
               const menu = event.currentTarget as HTMLElement;
               switch (event.detail.item.value) {

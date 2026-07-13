@@ -357,7 +357,9 @@ class SkillsPage extends OpenClawLightDomElement {
         </div>
       </section>
       ${renderSettingsWorkspace(html`
-        ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
+        <div class="plugins-hub-tabs-row">
+          ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
+        </div>
         <wa-tab-panel
           id="plugins-hub-panel"
           name="skills"

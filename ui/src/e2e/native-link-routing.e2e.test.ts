@@ -227,10 +227,9 @@ describeControlUiE2e("native link routing", () => {
       )
       .toBe(true);
     await modalLink.click({ button: "right" });
-    await expect
-      .poll(() => menuHost.getByRole("menuitem", { name: "Open in Sidebar" }).isVisible())
-      .toBe(true);
-    await page.keyboard.press("Enter");
+    const modalSidebarItem = menuHost.getByRole("menuitem", { name: "Open in Sidebar" });
+    await expect.poll(() => modalSidebarItem.isVisible()).toBe(true);
+    await modalSidebarItem.click();
     await expect
       .poll(() =>
         page.evaluate(

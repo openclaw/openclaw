@@ -1,4 +1,5 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -129,12 +130,6 @@ function appendCanvasBlockToAssistantMessage(
       },
     ],
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function safeNormalizeMessage(message: unknown): NormalizedMessage | null {

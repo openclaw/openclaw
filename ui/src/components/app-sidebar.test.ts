@@ -7,7 +7,7 @@ import type {
   SessionCatalog,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import {
@@ -64,10 +64,12 @@ type SidebarLifecycleState = HTMLElement & {
   sessionCreatedOrder: Map<string, number>;
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
+  requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
   onUpdate: () => void;
+  onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };
 
@@ -345,7 +347,7 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     const rows = [
       ...sidebar.querySelectorAll<HTMLElement>(
-        '.sidebar-agent-menu wa-dropdown-item[type="checkbox"]',
+        '.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]',
       ),
     ];
     rows.find((row) => row.textContent?.includes("Molty"))?.click();
@@ -491,9 +493,11 @@ describe("AppSidebar agent chip", () => {
       TWO_AGENTS,
     );
     const onNavigate = vi.fn();
+    const onOpenNewSession = vi.fn();
     sidebar.connected = true;
     sidebar.canPairDevice = true;
     sidebar.onNavigate = onNavigate;
+    sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
@@ -542,9 +546,27 @@ describe("AppSidebar agent chip", () => {
       ...(reopenedMenu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? []),
     ];
     expect(agentRows).toHaveLength(2);
-    const researchRow = agentRows.find((row) => row.textContent?.includes("research"));
+    const newSessionItem = [
+      ...(reopenedMenu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__new") ?? []),
+    ].find((item) => item.textContent?.includes("research"));
+    expect(newSessionItem).toBeDefined();
+    reopenedMenu?.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: newSessionItem }, bubbles: true }),
+    );
+    await sidebar.updateComplete;
+    expect(onOpenNewSession).toHaveBeenCalledWith("research");
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const switchMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    const researchRow = [
+      ...(switchMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[type="checkbox"]') ?? []),
+    ].find((row) => row.textContent?.includes("research"));
     expect(researchRow).toBeDefined();
-    (researchRow as HTMLButtonElement).click();
+    switchMenu?.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: researchRow }, bubbles: true }),
+    );
     await sidebar.updateComplete;
 
     // No cached sessions for the other agent: resume falls back to its main key.
@@ -603,7 +625,7 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     expect(
-      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]'),
+      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]'),
     ).toHaveLength(10);
   });
 
@@ -629,7 +651,7 @@ describe("AppSidebar agent chip", () => {
     const labels = () =>
       [
         ...sidebar.querySelectorAll(
-          '.sidebar-agent-menu wa-dropdown-item[type="checkbox"] .sidebar-customize-menu__text',
+          '.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"] .sidebar-customize-menu__text',
         ),
       ].map((el) => el.textContent?.trim());
     expect(labels()).toEqual(["agent-7", "agent-12", "agent-1"]);
@@ -640,8 +662,12 @@ describe("AppSidebar agent chip", () => {
     const dropdown = sidebar.querySelector("wa-dropdown");
     const onDropdownKeydown = vi.fn();
     dropdown?.addEventListener("keydown", onDropdownKeydown);
+    input.focus();
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    expect(onDropdownKeydown).toHaveBeenCalledOnce();
+    expect(onDropdownKeydown).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(
+      sidebar.querySelector('.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]'),
+    );
     onDropdownKeydown.mockClear();
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
     expect(onDropdownKeydown).toHaveBeenCalledOnce();
@@ -670,7 +696,7 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
     expect(
-      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]'),
+      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]'),
     ).toHaveLength(10);
   });
 
@@ -689,7 +715,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     expect(
-      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]'),
+      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]'),
     ).toHaveLength(10);
   });
 
@@ -710,7 +736,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     const rows = [
-      ...sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]'),
+      ...sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]'),
     ];
     expect(rows).toHaveLength(10);
     expect(rows.some((row) => row.textContent?.includes("agent-12"))).toBe(true);
@@ -801,6 +827,149 @@ describe("AppSidebar session catalog pagination", () => {
     ],
   });
 
+  it("opens a catalog-targeted draft from its new-session action", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("research", ["agent:research:main"]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "global",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ],
+      },
+    );
+    const onOpenNewSession = vi.fn();
+    sidebar.connected = true;
+    sidebar.onOpenNewSession = onOpenNewSession;
+    sidebar.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: {
+          continueSession: true,
+          archive: false,
+          createSession: { model: "anthropic/claude-opus-4-8" },
+        },
+        hosts: [],
+      },
+    ];
+    await sidebar.updateComplete;
+
+    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-catalog-new");
+    expect(button?.getAttribute("aria-label")).toBe("New session — Claude Code");
+    button?.click();
+
+    expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
+  });
+
+  it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const backingSessionKey = "agent:main:claude-bound";
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", backingSessionKey]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "global",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ],
+      },
+    );
+    sidebar.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: { continueSession: true, archive: false },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Local Claude",
+            kind: "gateway",
+            connected: true,
+            sessions: [
+              {
+                threadId: "claude-thread",
+                name: "Claude session",
+                status: "stored",
+                archived: false,
+                openClawSessionKey: backingSessionKey,
+                canContinue: true,
+                canArchive: false,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const backingRows = (sidebar.sessionsResult?.sessions ?? []).map((row) =>
+      row.key === backingSessionKey ? Object.assign({}, row, { unread: true }) : row,
+    );
+    sidebar.sessionsResult = { ...sidebar.sessionsResult!, sessions: backingRows };
+    sidebar.sessionRowsByAgent = { main: backingRows };
+    await sidebar.updateComplete;
+
+    expect(
+      sidebar.querySelectorAll(
+        `.sidebar-agent-section__body [data-session-key="${backingSessionKey}"]`,
+      ),
+    ).toHaveLength(0);
+    expect(
+      sidebar.querySelectorAll(
+        `[data-session-section="catalog:claude"] [data-session-key="${backingSessionKey}"]`,
+      ),
+    ).toHaveLength(1);
+    expect(sidebar.querySelectorAll(`[data-session-key="${backingSessionKey}"]`)).toHaveLength(1);
+    const catalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+    const linkedRow = catalogSection?.querySelector<HTMLElement>(
+      `[data-session-key="${backingSessionKey}"]`,
+    );
+    expect(linkedRow?.getAttribute("draggable")).toBe("true");
+    expect(linkedRow?.querySelector('[data-sidebar-session-pin="true"]')).not.toBeNull();
+    expect(linkedRow?.querySelector('[data-session-menu="true"]')).not.toBeNull();
+    linkedRow?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    const linkedMenu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await linkedMenu?.updateComplete;
+    expect(linkedMenu?.querySelector('[data-shortcut="a"]')).not.toBeNull();
+    expect(linkedMenu?.querySelector('[data-shortcut="d"]')).not.toBeNull();
+    expect(
+      catalogSection?.querySelector(
+        `[data-session-key="${backingSessionKey}"] .session-unread-dot`,
+      ),
+    ).not.toBeNull();
+    expect(
+      catalogSection?.querySelector(".sidebar-recent-sessions__head .session-unread-dot"),
+    ).not.toBeNull();
+
+    const runningRows = backingRows.map((row) =>
+      row.key === backingSessionKey
+        ? Object.assign({}, row, { unread: false, hasActiveRun: true })
+        : row,
+    );
+    sidebar.sessionsResult = { ...sidebar.sessionsResult, sessions: runningRows };
+    sidebar.sessionRowsByAgent = { main: runningRows };
+    await sidebar.updateComplete;
+
+    const runningCatalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+    expect(
+      runningCatalogSection?.querySelector(
+        `[data-session-key="${backingSessionKey}"].session-row-host--running .session-run-spinner`,
+      ),
+    ).not.toBeNull();
+    expect(
+      runningCatalogSection?.querySelector(".sidebar-recent-sessions__head .session-run-spinner"),
+    ).not.toBeNull();
+  });
+
   it("renders catalog groups inside the shared sessions scroller", async () => {
     vi.useFakeTimers();
     try {
@@ -828,6 +997,55 @@ describe("AppSidebar session catalog pagination", () => {
         sidebar.querySelector('.sidebar-recent-sessions [data-session-section="catalog:codex"]'),
       ).not.toBeNull();
       expect(sidebar.querySelectorAll(".sidebar-sessions")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes catalog creation capability for the expanded agent", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar, context } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+          agents: [{ id: "main" }, { id: "research" }],
+        },
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", {
+        agentId: "main",
+        limitPerHost: 40,
+      });
+
+      const selection = context.agentSelection.state as {
+        selectedId: string | null;
+        scopeId: string | null;
+      };
+      selection.selectedId = "research";
+      selection.scopeId = "research";
+      sidebar.requestUpdate();
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+        agentId: "research",
+        limitPerHost: 40,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -949,6 +1167,127 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
+  it("shows a rejected load-more request and clears it after a successful retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+        .mockRejectedValueOnce(
+          new GatewayRequestError({ code: "UNAVAILABLE", message: "Second page unavailable" }),
+        )
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      const section = () => sidebar.querySelector('[data-session-section="catalog:codex"]');
+      const loadMore = () =>
+        sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
+      loadMore()?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(section()?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
+      expect(
+        section()?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+      ).toContain("Second page unavailable");
+      expect(sidebar.sessionCatalogs[0]?.error?.code).toBe("UNAVAILABLE");
+      expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+      expect(loadMore()?.disabled).toBe(false);
+
+      loadMore()?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+        agentId: "main",
+        catalogId: "codex",
+        cursors: { "gateway:local": "page-2" },
+      });
+      expect(section()?.querySelector('[data-session-catalog-error="codex"]')).toBeNull();
+      expect(sidebar.textContent).toContain("Older");
+      expect(loadMore()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["catalog", "host"] as const)(
+    "preserves the current page while exposing a structured %s load-more error",
+    async (errorOwner) => {
+      vi.useFakeTimers();
+      try {
+        const structuredError =
+          errorOwner === "catalog"
+            ? {
+                catalogs: [
+                  {
+                    id: "codex",
+                    label: "Codex",
+                    capabilities: { continueSession: true, archive: true },
+                    hosts: [],
+                    error: { code: "catalog_error", message: "Catalog page failed" },
+                  },
+                ],
+              }
+            : catalogErrorPage("Host page failed");
+        const request = vi
+          .fn()
+          .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+          .mockResolvedValueOnce(structuredError)
+          .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]));
+        const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+        gateway.publish({
+          hello: {
+            features: { methods: ["sessions.catalog.list"] },
+          } as ApplicationGatewaySnapshot["hello"],
+        });
+        const { sidebar } = await mountSidebar(
+          gateway.gateway,
+          createSessions("main", ["agent:main:main"]),
+        );
+        sidebar.connected = true;
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+
+        const loadMore = () =>
+          sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
+        loadMore()?.click();
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+
+        const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
+        expect(section?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
+        expect(
+          section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+        ).toContain(errorOwner === "catalog" ? "Catalog page failed" : "Host page failed");
+        expect(sidebar.textContent).toContain("Newest");
+        expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+
+        loadMore()?.click();
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+        expect(sidebar.querySelector('[data-session-catalog-error="codex"]')).toBeNull();
+        expect(sidebar.textContent).toContain("Older");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("appends host pages and keeps them through the next poll refresh", async () => {
     vi.useFakeTimers();
     try {
@@ -990,6 +1329,7 @@ describe("AppSidebar session catalog pagination", () => {
       await sidebar.updateComplete;
 
       expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "page-2" },
       });
@@ -999,9 +1339,11 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+        agentId: "main",
         limitPerHost: 40,
       });
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "page-2" },
       });
@@ -1014,6 +1356,7 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(5, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "page-3" },
       });
@@ -1071,6 +1414,7 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "replacement-page" },
       });
@@ -2065,6 +2409,36 @@ describe("AppSidebar transient menus", () => {
     const menu = sidebar.querySelector(".sidebar-session-sort-menu");
     expect(menu).not.toBeNull();
     expect(menu?.closest("openclaw-menu-surface")).not.toBeNull();
+  });
+
+  it("ignores a stale sort-menu hide after opening its replacement", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
+    if (!trigger) {
+      throw new Error("expected sort menu trigger");
+    }
+
+    trigger.click();
+    await sidebar.updateComplete;
+    const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-session-sort-menu");
+    expect(firstMenu).not.toBeNull();
+    firstMenu?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: "sort:created" } },
+      }),
+    );
+    await sidebar.updateComplete;
+
+    trigger.click();
+    await sidebar.updateComplete;
+    const replacement = sidebar.querySelector<HTMLElement>(".sidebar-session-sort-menu");
+    expect(replacement).not.toBe(firstMenu);
+
+    firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(replacement);
   });
 });
 

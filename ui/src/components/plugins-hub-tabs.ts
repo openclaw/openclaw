@@ -4,7 +4,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
-import "./web-awesome.ts";
+import "./web-awesome-tabs.ts";
 
 export type PluginsHubTab = "installed" | "discover" | "skills" | "workshop";
 
@@ -72,11 +72,13 @@ function reclaimFocus(tab: PluginsHubTab, element: Element | undefined) {
 /**
  * Every hub page marks its main content container with
  * id="plugins-hub-panel" so aria-controls stays valid on each route.
+ * Styled through the settings design language's segmented control
+ * (ui/src/styles/settings.css) while keeping tablist semantics.
  */
 export function renderPluginsHubTabs(props: PluginsHubTabsProps) {
   return html`
     <wa-tab-group
-      class="plugins-tabs"
+      class="settings-segmented plugins-hub-tabs plugins-tabs"
       aria-label=${t("pluginsPage.hubTablistLabel")}
       .active=${props.active}
       activation="manual"
@@ -92,6 +94,7 @@ export function renderPluginsHubTabs(props: PluginsHubTabsProps) {
             id=${`plugins-tab-${tab}`}
             panel=${tab}
             aria-controls="plugins-hub-panel"
+            class="settings-segmented__btn ${selected ? "settings-segmented__btn--active" : ""}"
             ?active=${selected}
             @click=${(event: MouseEvent) => {
               // Trusted pointer clicks carry a click count. Keyboard and AT
@@ -106,7 +109,8 @@ export function renderPluginsHubTabs(props: PluginsHubTabsProps) {
             }}
             ${selected ? ref((element) => reclaimFocus(tab, element)) : nothing}
           >
-            ${hubTabLabel(tab)} ${count === null ? nothing : html`<span>${count}</span>`}
+            ${hubTabLabel(tab)}
+            ${count === null ? nothing : html`<span class="settings-count">${count}</span>`}
           </wa-tab>
         `;
       })}

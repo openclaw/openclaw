@@ -481,8 +481,9 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
         label=${label}
         style="--openclaw-modal-width: min(1100px, 92vw); --openclaw-modal-max-height: 86vh;"
         @modal-cancel=${this.emitClose}
+        @keydown=${this.handleKeydown}
       >
-        <div class="modal" @keydown=${this.handleKeydown}>
+        <div class="modal">
           <header class="head">
             <span class="search-icon">⌕</span>
             <input

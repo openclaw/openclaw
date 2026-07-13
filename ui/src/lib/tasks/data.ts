@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
@@ -31,10 +32,6 @@ export type TaskEventPayload =
   | { action: "upserted"; task: TaskSummary }
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
