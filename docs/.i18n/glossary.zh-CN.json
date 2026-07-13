@@ -816,6 +816,10 @@
     "target": "Parallel 搜索"
   },
   {
+    "source": "Mxc plugin",
+    "target": "MXC 插件"
+  },
+  {
     "source": "CLI reference",
     "target": "CLI 参考"
   },
@@ -1466,5 +1470,21 @@
   {
     "source": "Path 3 live SQLite E2E harness",
     "target": "Path 3 live SQLite E2E harness"
+  },
+  {
+    "source": "HealthKit summaries",
+    "target": "HealthKit 摘要"
+  },
+  {
+    "source": "iOS app",
+    "target": "iOS 应用"
+  },
+  {
+    "source": "Gateway configuration reference",
+    "target": "Gateway 配置参考"
+  },
+  {
+    "source": "Security audit",
+    "target": "安全审计"
   }
 ]

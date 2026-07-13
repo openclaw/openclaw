@@ -660,7 +660,7 @@ describe("renderWorkboard", () => {
         onOpenSession: () => undefined,
       });
 
-      expect(container.textContent).toContain("heartbeat 42 s");
+      expect(container.textContent).toContain("heartbeat 42s");
     } finally {
       vi.useRealTimers();
     }

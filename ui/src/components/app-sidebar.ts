@@ -204,6 +204,23 @@ const SIDEBAR_SESSION_SORT_OPTIONS = [
   labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
 }>;
 
+// External rows of the footer agent menu. Docs-first: public docs pages over
+// raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
+const AGENT_MENU_LINKS: ReadonlyArray<{ href: string; icon: IconName; label: () => string }> = [
+  { href: "https://docs.openclaw.ai", icon: "book", label: () => t("common.docs") },
+  {
+    href: "https://docs.openclaw.ai/help",
+    icon: "messageSquare",
+    label: () => t("agentChip.getHelp"),
+  },
+  { href: "https://discord.gg/clawd", icon: "users", label: () => t("agentChip.discord") },
+  {
+    href: "https://docs.openclaw.ai/releases",
+    icon: "scrollText",
+    label: () => t("agentChip.viewChangelog"),
+  },
+];
+
 function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
   if (value === "just now") {
@@ -1998,18 +2015,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             <span class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
             <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
           </button>
-          <a
-            class="sidebar-customize-menu__item"
-            role="menuitem"
-            tabindex="-1"
-            href="https://docs.openclaw.ai"
-            target=${EXTERNAL_LINK_TARGET}
-            rel=${buildExternalLinkRel()}
-            @click=${() => this.closeAgentMenu()}
-          >
-            <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-            <span class="sidebar-customize-menu__text">${t("common.docs")}</span>
-          </a>
+          ${AGENT_MENU_LINKS.map(
+            (link) => html`
+              <a
+                class="sidebar-customize-menu__item"
+                role="menuitem"
+                tabindex="-1"
+                href=${link.href}
+                target=${EXTERNAL_LINK_TARGET}
+                rel=${buildExternalLinkRel()}
+                @click=${() => this.closeAgentMenu()}
+              >
+                <span class="nav-item__icon" aria-hidden="true">${icons[link.icon]}</span>
+                <span class="sidebar-customize-menu__text">${link.label()}</span>
+              </a>
+            `,
+          )}
           <div class="sidebar-customize-menu__separator" role="separator"></div>
           <div class="sidebar-agent-menu__footer">
             <openclaw-sidebar-build-chip
