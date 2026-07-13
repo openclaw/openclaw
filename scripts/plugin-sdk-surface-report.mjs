@@ -91,7 +91,6 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 }
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
-  "agent-core": 1,
   core: 2,
   health: 1,
   lmstudio: 1,
@@ -210,7 +209,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5359,
+      5358,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
