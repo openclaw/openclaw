@@ -4,10 +4,15 @@ import type { SignalMention } from "./event-handler.types.js";
 
 const OBJECT_REPLACEMENT = "\uFFFC";
 
-export type SignalNativeMentionFacts = {
+type SignalNativeMentionFacts = {
   canDetectBotMention: boolean;
   hasAnyMention: boolean;
   mentionsBot: boolean;
+};
+
+type SignalNativeMentionIdentity = {
+  account?: string | null;
+  accountUuid?: string | null;
 };
 
 function isValidMention(mention: SignalMention | null | undefined): mention is SignalMention {
@@ -84,6 +89,19 @@ export function resolveSignalNativeMentionFacts(params: {
     hasAnyMention: validMentions.length > 0,
     mentionsBot,
   };
+}
+
+export function resolveSignalMentionFacts(
+  identity: SignalNativeMentionIdentity,
+  message: string,
+  mentions?: SignalMention[] | null,
+) {
+  return resolveSignalNativeMentionFacts({
+    message,
+    mentions,
+    account: identity.account,
+    accountUuid: identity.accountUuid,
+  });
 }
 
 export function renderSignalMentions(message: string, mentions?: SignalMention[] | null) {
