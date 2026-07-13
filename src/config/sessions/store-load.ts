@@ -176,6 +176,10 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
     assign("restartRecoveryDeliveryContext", restartRecoveryDeliveryContext);
   }
   assign(
+    "restartRecoveryDeliveryRequestFingerprint",
+    normalizeOptionalString(entry.restartRecoveryDeliveryRequestFingerprint),
+  );
+  assign(
     "restartRecoveryDeliveryRunId",
     normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
   );

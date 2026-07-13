@@ -68,6 +68,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
       : undefined;
   return {
     restartRecoveryDeliveryContext: undefined,
+    restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
     ...(terminalRunIds ? { restartRecoveryTerminalRunIds: terminalRunIds } : {}),

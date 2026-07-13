@@ -858,11 +858,72 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
   });
 
+  it("atomically replaces a terminal stale recovery claim for the next run", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryContext: {
+        channel: "webchat",
+        to: "stale-client",
+      },
+      restartRecoveryDeliveryRunId: "stale-run",
+      restartRecoveryDeliverySourceRunId: "stale-control-ui-run",
+      sessionId: "session",
+      status: "done",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const storedDuringRun = await readStoredMainSession(storePath);
+      expect(storedDuringRun.restartRecoveryDeliveryContext).toEqual({
+        channel: "discord",
+        to: "channel:24680",
+        accountId: "work",
+        threadId: "1503645939964055592",
+      });
+      expect(storedDuringRun.restartRecoveryDeliveryRunId).not.toBe("stale-run");
+      expect(storedDuringRun.restartRecoveryDeliveryRunId).toEqual(expect.any(String));
+      expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(storedDuringRun.restartRecoveryTerminalRunIds).toEqual(["stale-control-ui-run"]);
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        AccountId: "work",
+        MessageSid: "1503645939964055592",
+        MessageThreadId: "1503645939964055592",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.restartRecoveryTerminalRunIds).toEqual(["stale-control-ui-run"]);
+  });
+
   it("adopts and clears a transcript-only restart recovery claim", async () => {
     const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
       sessionId: "session",
+      status: "running",
       updatedAt: Date.now(),
     };
     const sessionStore = { main: sessionEntry };
@@ -870,6 +931,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const storedDuringRun = await readStoredMainSession(storePath);
       expect(storedDuringRun.restartRecoveryDeliveryContext).toBeUndefined();
+      expect(storedDuringRun.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
       expect(typeof storedDuringRun.restartRecoveryDeliveryRunId).toBe("string");
       expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBe("control-ui-run");
       return {
@@ -896,6 +958,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(sessionStore.main.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
     const stored = await readStoredMainSession(storePath);
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
     expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
@@ -903,9 +966,12 @@ describe("runReplyAgent pending final delivery capture", () => {
 
   it("clears an adopted transcript-only claim after user cancellation", async () => {
     const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
       sessionId: "session",
+      status: "running",
       updatedAt: Date.now(),
     };
     const sessionStore = { main: sessionEntry };

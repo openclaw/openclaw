@@ -1877,6 +1877,7 @@ export async function appendSqliteTranscriptEvents(
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
 type SessionTranscriptTurnExpectedState = {
   abortedLastRun: SessionEntry["abortedLastRun"];
+  restartRecoveryDeliveryRequestFingerprint: SessionEntry["restartRecoveryDeliveryRequestFingerprint"];
   restartRecoveryDeliveryRunId: SessionEntry["restartRecoveryDeliveryRunId"];
   restartRecoveryDeliverySourceRunId: SessionEntry["restartRecoveryDeliverySourceRunId"];
   status: SessionEntry["status"];
@@ -1887,6 +1888,7 @@ type SessionTranscriptTurnLifecyclePatch = {
   abortedLastRun?: SessionEntry["abortedLastRun"];
   endedAt?: SessionEntry["endedAt"];
   restartRecoveryDeliveryContext?: SessionEntry["restartRecoveryDeliveryContext"];
+  restartRecoveryDeliveryRequestFingerprint?: SessionEntry["restartRecoveryDeliveryRequestFingerprint"];
   restartRecoveryDeliveryRunId?: SessionEntry["restartRecoveryDeliveryRunId"];
   restartRecoveryDeliverySourceRunId?: SessionEntry["restartRecoveryDeliverySourceRunId"];
   restartRecoveryTerminalRunIds?: SessionEntry["restartRecoveryTerminalRunIds"];
@@ -1956,6 +1958,10 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
       }
 
       const appendedCount = appendedMessages.filter((message) => message.appended).length;
+      const acceptedMessage =
+        appendedCount > 0 ||
+        (options.expectedSessionState !== undefined &&
+          appendedMessages.some((message) => !message.appended));
       const touchUpdatedAt =
         options.touchSessionEntry === true && appendedCount > 0 ? Date.now() : undefined;
       const restartRecoveryTerminalRunIds = options.sessionLifecyclePatch
@@ -1966,8 +1972,8 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
           )
         : undefined;
       const sessionPatch: Partial<SessionEntry> = {
-        ...(appendedCount > 0 ? options.sessionLifecyclePatch : undefined),
-        ...(appendedCount > 0 && restartRecoveryTerminalRunIds
+        ...(acceptedMessage ? options.sessionLifecyclePatch : undefined),
+        ...(acceptedMessage && restartRecoveryTerminalRunIds
           ? { restartRecoveryTerminalRunIds }
           : {}),
         ...(fresh.entry.sessionFile === options.sessionFile
@@ -2021,6 +2027,8 @@ function sqliteSessionMatchesExpectedTranscriptTurn(
       selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
+        selected.entry.restartRecoveryDeliveryRequestFingerprint ===
+          expectedState.restartRecoveryDeliveryRequestFingerprint &&
         selected.entry.restartRecoveryDeliveryRunId ===
           expectedState.restartRecoveryDeliveryRunId &&
         selected.entry.restartRecoveryDeliverySourceRunId ===

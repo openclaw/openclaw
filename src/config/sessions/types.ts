@@ -430,6 +430,8 @@ export type SessionEntry = {
   pendingFinalDeliveryIntentId?: string | null;
   /** Current visible run delivery context used only for restart recovery. */
   restartRecoveryDeliveryContext?: DeliveryContext;
+  /** Pre-redaction request identity retained while a Control UI admission is retryable. */
+  restartRecoveryDeliveryRequestFingerprint?: string;
   /** Active run delivery claim; a missing context explicitly means transcript-only. */
   restartRecoveryDeliveryRunId?: string;
   /** Original client run id retained while restart recovery may rebind the active run. */

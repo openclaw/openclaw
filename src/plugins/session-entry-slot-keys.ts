@@ -99,6 +99,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pendingFinalDeliveryContext",
   "pendingFinalDeliveryIntentId",
   "restartRecoveryDeliveryContext",
+  "restartRecoveryDeliveryRequestFingerprint",
   "restartRecoveryDeliveryRunId",
   "restartRecoveryDeliverySourceRunId",
   "restartRecoveryTerminalRunIds",

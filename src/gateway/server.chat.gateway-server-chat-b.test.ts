@@ -2461,10 +2461,13 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.send terminalizes a restart-safe turn aborted during SQLite admission", async () => {
+  test.each([
+    { caseName: "tombstones an explicit abort", retryable: false, stopReason: "rpc" },
+    { caseName: "retains a restart interruption", retryable: true, stopReason: "restart" },
+  ])("chat.send $caseName during SQLite admission", async ({ retryable, stopReason }) => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const storePath = path.join(sessionDir, "sessions.json");
-    const runId = "idem-restart-safe-abort";
+    const runId = `idem-restart-safe-abort-${stopReason}`;
     const lockEntered = createDeferred();
     const releaseLock = createDeferred();
     let lockPromise: Promise<void> | undefined;
@@ -2506,7 +2509,7 @@ describe("gateway server chat", () => {
       if (!activeRun) {
         throw new Error("expected admitted chat run");
       }
-      activeRun.abortStopReason = "rpc";
+      activeRun.abortStopReason = stopReason;
       activeRun.controller.abort();
       releaseLock.resolve(undefined);
       await Promise.all([sendPromise, lockPromise]);
@@ -2518,20 +2521,31 @@ describe("gateway server chat", () => {
             runId,
             status: "timeout",
             summary: "aborted",
-            stopReason: "rpc",
+            stopReason,
           }),
         },
       ]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       const stored = loadSessionEntry(scope);
       expect(stored).toMatchObject({
-        abortedLastRun: true,
+        abortedLastRun: !retryable,
         sessionId: "sess-main",
         status: "killed",
       });
       expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
-      expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
-      expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      if (retryable) {
+        expect(stored?.restartRecoveryDeliveryRequestFingerprint).toEqual(
+          expect.stringMatching(/^hmac-sha256:v1:/u),
+        );
+        expect(stored?.restartRecoveryDeliveryRunId).toBe(runId);
+        expect(stored?.restartRecoveryDeliverySourceRunId).toBe(runId);
+        expect(stored?.restartRecoveryTerminalRunIds).toBeUndefined();
+      } else {
+        expect(stored?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+        expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+        expect(stored?.restartRecoveryTerminalRunIds).toEqual([runId]);
+      }
       expect(loadTranscriptEventsSync(scope)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -2547,7 +2561,9 @@ describe("gateway server chat", () => {
 
       const retryContext = createDirectChatContext();
       const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+      if (retryable) {
+        dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+      }
       await sendControlUiChat({
         context: retryContext,
         idempotencyKey: runId,
@@ -2557,14 +2573,31 @@ describe("gateway server chat", () => {
       expect(retryResponses).toEqual([
         {
           ok: true,
-          payload: expect.objectContaining({ runId, status: "started" }),
+          payload: retryable
+            ? expect.objectContaining({ runId, status: "started" })
+            : { runId, status: "ok" },
         },
       ]);
-      await vi.waitFor(
-        () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      if (retryable) {
+        await vi.waitFor(
+          () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
+          FAST_WAIT_OPTS,
+        );
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+        expect(
+          (dispatchInboundMessageMock.mock.calls[0]?.[0] as { replyOptions?: GetReplyOptions })
+            .replyOptions?.suppressNextUserMessagePersistence,
+        ).toBe(true);
+      } else {
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      }
+      expect(
+        loadTranscriptEventsSync(scope).filter(
+          (event) =>
+            event.type === "message" &&
+            (event.message as { idempotencyKey?: unknown }).idempotencyKey === `${runId}:user`,
+        ),
+      ).toHaveLength(1);
     } finally {
       releaseLock.resolve(undefined);
       await lockPromise?.catch(() => undefined);
@@ -2791,9 +2824,32 @@ describe("gateway server chat", () => {
         FAST_WAIT_OPTS,
       );
       const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-      expect(failed).toMatchObject({ abortedLastRun: true, status: "failed" });
-      expect(failed?.restartRecoveryDeliveryRunId).toBeUndefined();
-      expect(failed?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
+      expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
+        expect.stringMatching(/^hmac-sha256:v1:/u),
+      );
+      expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
+      expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
+
+      const collisionContext = createDirectChatContext();
+      const collisionResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+      await sendControlUiChat({
+        context: collisionContext,
+        idempotencyKey: runId,
+        message: "changed text under the same run id",
+        respond: ((ok, payload) => collisionResponses.push({ ok, payload })) as RespondFn,
+      });
+      expect(collisionResponses).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+        },
+      ]);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: false,
+        status: "failed",
+      });
 
       const retryContext = createDirectChatContext();
       const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
@@ -2815,6 +2871,10 @@ describe("gateway server chat", () => {
         FAST_WAIT_OPTS,
       );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(
+        (dispatchInboundMessageMock.mock.calls[1]?.[0] as { replyOptions?: GetReplyOptions })
+          .replyOptions?.suppressNextUserMessagePersistence,
+      ).toBe(true);
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
@@ -2858,9 +2918,12 @@ describe("gateway server chat", () => {
       expect(responses).toEqual([{ ok: false, payload: expect.objectContaining({ runId }) }]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-      expect(failed).toMatchObject({ abortedLastRun: true, status: "failed" });
-      expect(failed?.restartRecoveryDeliveryRunId).toBeUndefined();
-      expect(failed?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
+      expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
+        expect.stringMatching(/^hmac-sha256:v1:/u),
+      );
+      expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
+      expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
@@ -2910,9 +2973,12 @@ describe("gateway server chat", () => {
       expect(responses).toEqual([{ ok: false, payload: undefined }]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-      expect(failed).toMatchObject({ abortedLastRun: true, status: "failed" });
-      expect(failed?.restartRecoveryDeliveryRunId).toBeUndefined();
-      expect(failed?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
+      expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
+        expect.stringMatching(/^hmac-sha256:v1:/u),
+      );
+      expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
+      expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
 
       const retryContext = createDirectChatContext();
       const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
@@ -2934,6 +3000,10 @@ describe("gateway server chat", () => {
         FAST_WAIT_OPTS,
       );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(
+        (dispatchInboundMessageMock.mock.calls[0]?.[0] as { replyOptions?: GetReplyOptions })
+          .replyOptions?.suppressNextUserMessagePersistence,
+      ).toBe(true);
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;

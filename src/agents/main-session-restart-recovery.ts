@@ -810,6 +810,8 @@ async function writeUnresumableSessionNotice(params: {
     expectedSessionId: params.entry.sessionId,
     expectedSessionState: {
       abortedLastRun: params.entry.abortedLastRun,
+      restartRecoveryDeliveryRequestFingerprint:
+        params.entry.restartRecoveryDeliveryRequestFingerprint,
       restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
       restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
       status: params.entry.status,

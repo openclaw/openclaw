@@ -383,7 +383,7 @@ export type SessionTranscriptTurnPersistOptions = {
   expectedLifecycleRevision?: string;
   /** Rejects the turn unless the persisted row still has this exact lifecycle owner state. */
   expectedSessionState?: SessionTranscriptTurnExpectedState;
-  /** Lifecycle metadata committed only when the guarded turn inserts a message. */
+  /** Lifecycle metadata committed when the guarded turn inserts or idempotently matches a message. */
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
@@ -402,6 +402,7 @@ export type SessionTranscriptTurnPersistOptions = {
 
 export type SessionTranscriptTurnExpectedState = {
   abortedLastRun: SessionEntry["abortedLastRun"];
+  restartRecoveryDeliveryRequestFingerprint: SessionEntry["restartRecoveryDeliveryRequestFingerprint"];
   restartRecoveryDeliveryRunId: SessionEntry["restartRecoveryDeliveryRunId"];
   restartRecoveryDeliverySourceRunId: SessionEntry["restartRecoveryDeliverySourceRunId"];
   status: SessionEntry["status"];
@@ -412,6 +413,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   abortedLastRun?: SessionEntry["abortedLastRun"];
   endedAt?: SessionEntry["endedAt"];
   restartRecoveryDeliveryContext?: SessionEntry["restartRecoveryDeliveryContext"];
+  restartRecoveryDeliveryRequestFingerprint?: SessionEntry["restartRecoveryDeliveryRequestFingerprint"];
   restartRecoveryDeliveryRunId?: SessionEntry["restartRecoveryDeliveryRunId"];
   restartRecoveryDeliverySourceRunId?: SessionEntry["restartRecoveryDeliverySourceRunId"];
   /** Durable tombstones merged with the fresh row inside the SQLite write transaction. */

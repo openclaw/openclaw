@@ -1,6 +1,6 @@
 // Chat gateway methods implement chat.send/history/abort/inject/metadata and
 // bridge UI RPCs to agent dispatch, transcripts, media, and streaming state.
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -74,6 +74,7 @@ import {
 import {
   patchSessionEntry,
   resolveTranscriptSessionKeyBySessionId,
+  type SessionTranscriptTurnExpectedState,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -81,6 +82,7 @@ import {
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { loadOrCreateProcessDeviceIdentity } from "../../infra/device-identity.js";
 import {
   emitDiagnosticsTimelineEvent,
   measureDiagnosticsTimelineSpan,
@@ -570,6 +572,42 @@ function isRestartSafeChatSession(params: {
     return false;
   }
   return true;
+}
+
+const RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN = "openclaw.chat.restart-retry.v1";
+
+function fingerprintRestartSafeChatRequest(params: {
+  message: string;
+  senderIsOwner: boolean;
+}): string {
+  const identity = loadOrCreateProcessDeviceIdentity();
+  const digest = createHmac("sha256", identity.privateKeyPem)
+    .update(
+      JSON.stringify([
+        RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN,
+        params.message,
+        params.senderIsOwner,
+      ]),
+    )
+    .digest("hex");
+  // The verifier can survive a gateway restart without retaining an offline
+  // digest of redacted prompt material in the session database.
+  return `hmac-sha256:v1:${identity.deviceId}:${digest}`;
+}
+
+function isRetryableUnadoptedChatClaim(
+  entry: SessionEntry | undefined,
+  clientRunId: string,
+): entry is SessionEntry {
+  return Boolean(
+    entry &&
+    entry.abortedLastRun !== true &&
+    (entry.status === "failed" || entry.status === "killed") &&
+    entry.restartRecoveryDeliveryContext === undefined &&
+    entry.restartRecoveryDeliveryRunId === clientRunId &&
+    entry.restartRecoveryDeliverySourceRunId === clientRunId &&
+    entry.restartRecoveryDeliveryRequestFingerprint,
+  );
 }
 
 function hasRestartUnsafeChatWork(params: {
@@ -1920,6 +1958,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       systemProvenanceReceipt === undefined &&
       !suppressCommandInterpretation &&
       !hasRestartUnsafeMessageSemantics(rawMessage, cfg);
+    const restartSafeRequestFingerprint = restartSafeRequest
+      ? fingerprintRestartSafeChatRequest({
+          message: rawMessage,
+          senderIsOwner: hasGatewayAdminScope(client),
+        })
+      : undefined;
 
     const sendPolicy = resolveSendPolicy({
       cfg,
@@ -2025,9 +2069,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    const retryableUnadoptedClaim = isRetryableUnadoptedChatClaim(entry, clientRunId);
     if (
       (entry?.restartRecoveryDeliveryRunId &&
-        entry.restartRecoveryDeliverySourceRunId === clientRunId) ||
+        entry.restartRecoveryDeliverySourceRunId === clientRunId &&
+        !retryableUnadoptedClaim) ||
       hasRestartRecoveryTerminalRun(entry, clientRunId)
     ) {
       // An active source claim or terminal tombstone proves the durable turn
@@ -2109,6 +2155,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
     let restartSafeAdmission = false;
     let restartSafePriorTerminalSourceRunId: string | undefined;
+    let restartSafeRetryExpectedState: SessionTranscriptTurnExpectedState | undefined;
     let reservationSuperseded = false;
     let supersedingResult: DedupeEntry | undefined;
     const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
@@ -2183,9 +2230,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       ) {
         throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
       }
+      const retryableClaim = isRetryableUnadoptedChatClaim(latestEntry, clientRunId);
       if (
         (latestEntry?.restartRecoveryDeliveryRunId &&
-          latestEntry.restartRecoveryDeliverySourceRunId === clientRunId) ||
+          latestEntry.restartRecoveryDeliverySourceRunId === clientRunId &&
+          !retryableClaim) ||
         hasRestartRecoveryTerminalRun(latestEntry, clientRunId)
       ) {
         // Recovery can settle while this retry waits on lifecycle admission.
@@ -2232,9 +2281,30 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionId: admittedSessionId,
           sessionKey,
         });
-      restartSafePriorTerminalSourceRunId = restartSafeAdmission
-        ? latestEntry?.restartRecoveryDeliverySourceRunId
-        : undefined;
+      if (retryableClaim) {
+        if (
+          !restartSafeAdmission ||
+          restartSafeRequestFingerprint === undefined ||
+          latestEntry.restartRecoveryDeliveryRequestFingerprint !== restartSafeRequestFingerprint
+        ) {
+          throw new Error("chat retry does not match its durable admission");
+        }
+        restartSafeRetryExpectedState = {
+          abortedLastRun: latestEntry.abortedLastRun,
+          restartRecoveryDeliveryRequestFingerprint:
+            latestEntry.restartRecoveryDeliveryRequestFingerprint,
+          restartRecoveryDeliveryRunId: latestEntry.restartRecoveryDeliveryRunId,
+          restartRecoveryDeliverySourceRunId: latestEntry.restartRecoveryDeliverySourceRunId,
+          status: latestEntry.status,
+          updatedAt: latestEntry.updatedAt,
+        };
+      } else {
+        restartSafeRetryExpectedState = undefined;
+      }
+      restartSafePriorTerminalSourceRunId =
+        restartSafeAdmission && !retryableClaim
+          ? latestEntry?.restartRecoveryDeliverySourceRunId
+          : undefined;
       // A terminal Control UI claim can survive a crash after status commit.
       // The transcript transaction merges its source with fresh tombstones.
       admittedRunAbort = registerChatAbortController({
@@ -2473,8 +2543,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     const admissionStartedAt = Date.now();
-    const terminalizeRestartSafeAdmission = async (terminalState: {
-      abortedLastRun: boolean;
+    const terminalizeRestartSafeAdmission = async (params: {
+      retryable: boolean;
       status: "failed" | "killed";
     }): Promise<boolean> => {
       const endedAt = Date.now();
@@ -2490,14 +2560,17 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
           terminalized = true;
           return {
-            abortedLastRun: terminalState.abortedLastRun,
+            abortedLastRun: params.retryable ? false : params.status === "killed",
             endedAt,
-            ...buildRestartRecoveryClaimCleanupPatch({
-              entry: current,
-              recordTerminalSource: false,
-            }),
+            ...(params.retryable
+              ? {}
+              : buildRestartRecoveryClaimCleanupPatch({
+                  entry: current,
+                  recordTerminalSource: true,
+                  terminalSourceRunId: current.restartRecoveryDeliverySourceRunId,
+                })),
             runtimeMs: Math.max(0, endedAt - admissionStartedAt),
-            status: terminalState.status,
+            status: params.status,
             updatedAt: endedAt,
           };
         },
@@ -2541,11 +2614,15 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
         ...(restartSafeAdmission
           ? {
+              ...(restartSafeRetryExpectedState
+                ? { expectedSessionState: restartSafeRetryExpectedState }
+                : {}),
               sessionLifecyclePatch: {
                 status: "running",
                 startedAt: admissionStartedAt,
                 endedAt: undefined,
                 restartRecoveryDeliveryContext: undefined,
+                restartRecoveryDeliveryRequestFingerprint: restartSafeRequestFingerprint,
                 restartRecoveryDeliveryRunId: clientRunId,
                 restartRecoveryDeliverySourceRunId: clientRunId,
                 ...(restartSafePriorTerminalSourceRunId
@@ -2581,10 +2658,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       if (restartSafeAdmission) {
         const persistedUserTurn = await persistGatewayUserTurnTranscript();
         const admittedEntry = persistedUserTurn?.sessionEntry;
-        // A dedupe hit proves only that old bytes exist; it does not grant this
-        // run lifecycle ownership or make its ACK restart-safe.
+        // A matching idempotency row and lifecycle claim commit atomically, so
+        // retries adopt the durable turn without submitting it twice.
         if (
-          persistedUserTurn?.appended !== true ||
+          !persistedUserTurn ||
           admittedEntry?.status !== "running" ||
           admittedEntry.restartRecoveryDeliveryRunId !== clientRunId
         ) {
@@ -2599,7 +2676,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (activeRunAbort.controller.signal.aborted) {
           if (
             !(await terminalizeRestartSafeAdmission({
-              abortedLastRun: true,
+              retryable: activeRunAbort.entry?.abortStopReason === "restart",
               status: "killed",
             }))
           ) {
@@ -2609,12 +2686,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         if (sessionRoutingChanged(context.getRuntimeConfig())) {
-          if (
-            !(await terminalizeRestartSafeAdmission({
-              abortedLastRun: true,
-              status: "failed",
-            }))
-          ) {
+          if (!(await terminalizeRestartSafeAdmission({ retryable: true, status: "failed" }))) {
             throw new Error("chat admission ownership changed before terminalization");
           }
           cleanupAdmittedRun({ force: true });
@@ -3997,7 +4069,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           let restartSafeDispatchFailureTerminalized = false;
           if (restartSafeAdmission && !queuedFollowupEnqueued) {
             restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
-              abortedLastRun: true,
+              retryable: true,
               status: "failed",
             }).catch((terminalizeError: unknown) => {
               context.logGateway.warn(
@@ -4149,7 +4221,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     } catch (err) {
       if (restartSafeAdmission) {
         const terminalized = await terminalizeRestartSafeAdmission({
-          abortedLastRun: true,
+          retryable: true,
           status: "failed",
         }).catch((terminalizeError: unknown) => {
           context.logGateway.warn(

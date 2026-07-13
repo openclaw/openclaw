@@ -1545,15 +1545,40 @@ export async function runReplyAgent(params: {
       activeClaimRunId === admittedRunId
     ) {
       // Control UI admission already committed this transcript-only claim.
-      // Adopt it before route resolution so WebChat cannot overwrite its owner.
+      // Clear its retry marker before execution so a terminal cleanup failure
+      // cannot make an already-adopted turn eligible for dispatch again.
+      const adopted = await updateSessionEntry(
+        {
+          storePath,
+          sessionKey,
+        },
+        (current) =>
+          current.sessionId === replyOperation.sessionId &&
+          current.status === "running" &&
+          current.abortedLastRun !== true &&
+          current.restartRecoveryDeliveryContext === undefined &&
+          current.restartRecoveryDeliveryRunId === admittedRunId &&
+          current.restartRecoveryDeliverySourceRunId === entry.restartRecoveryDeliverySourceRunId &&
+          current.restartRecoveryDeliveryRequestFingerprint ===
+            entry.restartRecoveryDeliveryRequestFingerprint
+            ? {
+                restartRecoveryDeliveryRequestFingerprint: undefined,
+                updatedAt: Date.now(),
+              }
+            : null,
+      );
+      if (!adopted) {
+        throw new Error("restart recovery claim changed before agent adoption");
+      }
+      activeSessionEntry = adopted;
+      if (activeSessionStore) {
+        activeSessionStore[sessionKey] = adopted;
+      }
       restartRecoveryDeliveryRunId = admittedRunId;
       restartRecoveryDeliverySourceRunId = normalizeOptionalString(
-        entry.restartRecoveryDeliverySourceRunId,
+        adopted.restartRecoveryDeliverySourceRunId,
       );
       trackedRestartRecoveryDeliveryClaim = true;
-      return;
-    }
-    if (activeClaimRunId) {
       return;
     }
     const deliveryContext = resolveReplyRunDeliveryContext({
@@ -1564,27 +1589,54 @@ export async function runReplyAgent(params: {
       runtimePolicySessionKey,
       opts,
     });
-    if (!deliveryContext) {
+    if (!deliveryContext && !activeClaimRunId) {
       return;
     }
     const updatedAt = Date.now();
-    const patch: Partial<SessionEntry> = {
-      restartRecoveryDeliveryContext: deliveryContext,
-      restartRecoveryDeliveryRunId,
-      restartRecoveryDeliverySourceRunId: undefined,
-      updatedAt,
-    };
     const persisted = await updateSessionEntry(
       {
         storePath,
         sessionKey,
       },
-      async (current) =>
-        current.sessionId === replyOperation.sessionId &&
-        current.abortedLastRun !== true &&
-        current.restartRecoveryDeliveryRunId === undefined
-          ? patch
-          : null,
+      async (current) => {
+        if (current.sessionId !== replyOperation.sessionId || current.abortedLastRun === true) {
+          return null;
+        }
+        const currentClaimRunId = normalizeOptionalString(current.restartRecoveryDeliveryRunId);
+        if (activeClaimRunId) {
+          if (currentClaimRunId !== activeClaimRunId || current.status === "running") {
+            return null;
+          }
+          const retiredClaim = buildRestartRecoveryClaimCleanupPatch({
+            entry: current,
+            recordTerminalSource: true,
+            terminalSourceRunId: normalizeOptionalString(
+              current.restartRecoveryDeliverySourceRunId,
+            ),
+          });
+          // A terminal owner cannot protect the next turn. Retire it and, when
+          // this run is externally deliverable, install the new owner atomically.
+          return deliveryContext
+            ? {
+                ...retiredClaim,
+                restartRecoveryDeliveryContext: deliveryContext,
+                restartRecoveryDeliveryRequestFingerprint: undefined,
+                restartRecoveryDeliveryRunId,
+                restartRecoveryDeliverySourceRunId: undefined,
+                updatedAt,
+              }
+            : { ...retiredClaim, updatedAt };
+        }
+        return currentClaimRunId === undefined && deliveryContext
+          ? {
+              restartRecoveryDeliveryContext: deliveryContext,
+              restartRecoveryDeliveryRequestFingerprint: undefined,
+              restartRecoveryDeliveryRunId,
+              restartRecoveryDeliverySourceRunId: undefined,
+              updatedAt,
+            }
+          : null;
+      },
     );
     if (persisted) {
       activeSessionEntry = persisted;
