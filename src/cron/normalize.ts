@@ -58,14 +58,22 @@ function normalizeTrimmedStringRecord(value: unknown): Record<string, string> | 
   if (!isRecord(value)) {
     return undefined;
   }
+  const sourceKeyCount = Object.keys(value).length;
   const entries: Array<[string, string]> = [];
   for (const [rawKey, rawValue] of Object.entries(value)) {
     const key = normalizeOptionalString(rawKey);
     const val = typeof rawValue === "string" ? rawValue : undefined;
     if (!key || val === undefined) {
-      return undefined;
+      // Skip invalid entries instead of discarding the whole record, matching
+      // normalizeTrimmedStringArray: one bad value must not drop valid siblings.
+      continue;
     }
     entries.push([key, val]);
+  }
+  if (entries.length === 0 && sourceKeyCount > 0) {
+    // Every entry was invalid: normalize the map away entirely (same shape as the
+    // array helper) so callers delete the field instead of persisting an empty map.
+    return undefined;
   }
   return Object.fromEntries(entries);
 }
