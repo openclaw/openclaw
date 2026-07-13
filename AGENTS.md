@@ -177,6 +177,7 @@ Skills own workflows; root owns hard policy and routing.
 - `scripts/pr` artifacts: preserve template enum values; validate before prepare.
 - `scripts/pr` subcommands require a PR number; no subcommand `--help` placeholder.
 - `scripts/pr` review: checkout main baseline, then PR, before artifact validation.
+- Review artifacts: validate from PR-head mode; moving main invalidates main-baseline guard.
 - `scripts/pr` prepare/merge: `main` PRs only; non-main uses reviewed release-branch flow.
 - PR head changed: rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
 - `rg`: options/globs before `--`; `--` immediately before a leading-dash pattern only.
