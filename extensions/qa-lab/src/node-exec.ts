@@ -13,7 +13,7 @@ type ExecFileAsync = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 const execFileAsync: ExecFileAsync = async (file, args, options) =>
-  await runExec(file, [...args], { env: options.env, logOutput: false });
+  await runExec(file, [...args], { baseEnv: options.env, logOutput: false });
 
 function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
   const pathModule = platform === "win32" ? path.win32 : path.posix;
