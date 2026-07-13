@@ -130,6 +130,18 @@ describe("rewriteUpdateFlagArgv", () => {
       "--json",
     ]);
   });
+
+  it("does not rewrite --update after the -- terminator", () => {
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "foo", "--", "--update"]),
+    ).toEqual(["node", "entry.js", "config", "set", "foo", "--", "--update"]);
+  });
+
+  it("does not rewrite --update when it is a positional value for another command", () => {
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "update.channel", "--update"]),
+    ).toEqual(["node", "entry.js", "config", "set", "update.channel", "--update"]);
+  });
 });
 
 describe("shouldEnsureCliPath", () => {
