@@ -41,8 +41,8 @@ export function resetPolicyDoctorChecksForTest(): void {
 
 export { evaluatePolicy };
 export { policyContainerShapeFindings } from "./policy-shape.js";
+export { POLICY_CHECK_IDS } from "./check-ids.js";
 export {
-  POLICY_CHECK_IDS,
   POLICY_RULE_METADATA,
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,

@@ -1,6 +1,6 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CHECK_IDS } from "./metadata.js";
+import { CHECK_IDS } from "./check-ids.js";
 import { ocPathSegment } from "./utils.js";
 
 export function unsupportedPolicyKey(

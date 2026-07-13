@@ -1,6 +1,7 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyDataHandlingEvidence, PolicyEvidence } from "../policy-state.js";
+import { CHECK_IDS } from "./check-ids.js";
 import {
   authProfileAllowModesShapeFindings,
   dataHandlingEntries,
@@ -9,7 +10,6 @@ import {
   dataHandlingPolicyShapeFindings,
   secretPolicyShapeFindings,
 } from "./data-auth-shapes.js";
-import { CHECK_IDS } from "./metadata.js";
 import { authProfileHasMetadata, requiredAuthProfileMetadata } from "./policy-runtime.js";
 import {
   agentScopedPolicyTargets,

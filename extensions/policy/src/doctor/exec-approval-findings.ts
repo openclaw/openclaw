@@ -3,6 +3,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicyExecApprovalEvidence } from "../policy-state.js";
 import { execApprovalsPolicyShapeFinding } from "./access-shapes.js";
+import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import {
   effectiveExecApprovalAgentAutoAllowSkillsEntry,
   effectiveExecApprovalAgentSecurityEntry,
@@ -13,10 +14,9 @@ import {
   readExecApprovalAllowlistRequirements,
   syntheticExecApprovalAgentEntry,
 } from "./exec-approval-rules.js";
-import { CHECK_IDS, POLICY_CHECK_IDS } from "./metadata.js";
 import { parseExecApprovalsFile } from "./policy-runtime.js";
 import { agentScopedPolicyTargets } from "./policy-scope.js";
-import { hasValidScopedPolicy } from "./policy-shape.js";
+import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
 export function execApprovalsFindings(

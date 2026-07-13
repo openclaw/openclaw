@@ -1,10 +1,11 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicySandboxPostureEvidence } from "../policy-state.js";
-import { CHECK_IDS, POLICY_CHECK_IDS, SANDBOX_CONTAINER_POLICY_RULES } from "./metadata.js";
+import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
+import { SANDBOX_CONTAINER_POLICY_RULES } from "./metadata.js";
 import { agentScopedPolicyTargets, scopedAgentIdMatches } from "./policy-scope.js";
-import { hasValidScopedPolicy } from "./policy-shape.js";
 import { sandboxPolicyShapeFinding } from "./sandbox-gateway-shapes.js";
+import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
 export function sandboxPostureFindings(

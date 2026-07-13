@@ -7,14 +7,14 @@ import {
   type PolicyEvidence,
 } from "../policy-state.js";
 import {
-  agentWorkspaceFindings,
   authProfileMetadataRequirementFindings,
-  ingressFindings,
   invalidChannelDenyRuleFindings,
 } from "./access-findings.js";
+import { agentWorkspaceFindings } from "./agent-workspace-findings.js";
+import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import { dataHandlingFindings, secretAuthProvenanceFindings } from "./data-auth-findings.js";
 import { execApprovalsFindings } from "./exec-approval-findings.js";
-import { CHECK_IDS, POLICY_CHECK_IDS } from "./metadata.js";
+import { ingressFindings } from "./ingress-findings.js";
 import { SUPPORTED_TOOL_METADATA } from "./policy-constants.js";
 import {
   execApprovalsDisplayName,

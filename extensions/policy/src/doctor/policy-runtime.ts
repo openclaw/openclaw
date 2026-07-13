@@ -6,7 +6,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAuthProfileEvidence } from "../policy-state.js";
 import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
-import { CHECK_IDS } from "./metadata.js";
+import { CHECK_IDS } from "./check-ids.js";
 import {
   SUPPORTED_AUTH_PROFILE_METADATA,
   SUPPORTED_AUTH_PROFILE_MODES,
