@@ -26,6 +26,4 @@ describe("HookDecision helpers", () => {
       expect(isHookDecision({ outcome: "block", reason: "policy", metadata: [] })).toBe(false);
     });
   });
-
-  describe("resolveBlockMessage", () => {});
 });

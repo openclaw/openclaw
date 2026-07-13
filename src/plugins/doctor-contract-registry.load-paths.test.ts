@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -11,6 +11,7 @@ import {
   listPluginDoctorSessionRouteStateOwners,
   listPluginDoctorSessionStoreAgentIds,
 } from "./doctor-contract-registry.js";
+import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 
 const tempDirs: string[] = [];
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -204,6 +205,17 @@ function readPluginLlmPolicy(config: OpenClawConfig, pluginId: string): Record<s
     ? (entry.llm as Record<string, unknown>)
     : {};
 }
+
+beforeEach(() => {
+  clearPluginDoctorContractRegistryCache();
+});
+
+afterEach(() => {
+  clearPluginDoctorContractRegistryCache();
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("doctor contract registry load-path plugins", () => {
   it("discovers doctor warning rules from plugins.load.paths", () => {
