@@ -12,7 +12,7 @@ export { collectPluginConfigContractMatches } from "./config-contract-matches.js
 type PluginConfigContractMetadata = {
   /** Runtime origin that supplied the contract metadata. */
   origin: PluginOrigin;
-  /** Capability contracts that determine runtime ownership of config subtrees. */
+  /** Capability contracts that determine runtime ownership of exact secret paths. */
   contracts?: PluginManifestContracts;
   /** Manifest-declared config contract paths used by secret/security/config scanners. */
   configContracts: PluginManifestConfigContracts;

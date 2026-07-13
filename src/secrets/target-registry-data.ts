@@ -4,16 +4,13 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
+import {
+  WEB_PROVIDER_SECRET_CONFIGS,
+  type WebProviderSecretConfig,
+} from "./web-provider-secret-configs.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
 const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
-
-const WEB_PROVIDER_SECRET_CONFIGS = [
-  { contract: "webSearchProviders", configPath: "webSearch.apiKey" },
-  { contract: "webFetchProviders", configPath: "webFetch.apiKey" },
-] as const;
-
-type WebProviderSecretConfig = (typeof WEB_PROVIDER_SECRET_CONFIGS)[number];
 
 function createPluginOpenClawConfigSecretTargetEntry(
   pluginId: string,

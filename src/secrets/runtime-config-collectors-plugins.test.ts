@@ -570,4 +570,54 @@ describe("collectPluginConfigAssignments", () => {
       "plugins.entries.other.config.service.tokens.secondary",
     ]);
   });
+
+  it("defers only the exact web-search credential path for active provider plugins", () => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "custom-search",
+          origin: "config",
+          providers: [],
+          legacyPluginIds: [],
+          contracts: { webSearchProviders: ["custom"] },
+          configContracts: {
+            secretInputs: {
+              paths: [
+                { path: "webSearch.apiKey", expected: "string" },
+                { path: "webSearch.headers.authorization", expected: "string" },
+              ],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = asConfig({
+      plugins: {
+        entries: {
+          "custom-search": {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: envRef("A"),
+                headers: { authorization: envRef("B") },
+              },
+            },
+          },
+        },
+      },
+    });
+    const context = makeContext(config);
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: loadablePluginOrigins([["custom-search", "config"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.custom-search.config.webSearch.headers.authorization",
+    ]);
+  });
 });

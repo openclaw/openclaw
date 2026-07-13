@@ -15,6 +15,7 @@ import {
   type SecretDefaults,
 } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
+import { listWebProviderSecretConfigPaths } from "./web-provider-secret-configs.js";
 
 function parsePluginConfigArrayIndex(segment: string): number | undefined {
   return parseConfigPathArrayIndex(segment);
@@ -124,9 +125,10 @@ export function collectPluginConfigAssignments(params: {
       pluginConfig,
       secretPaths: secretInputs.paths,
       active: enableState.enabled,
-      runtimeOwnedPathPrefixes: secretInputs.contracts?.webSearchProviders?.length
-        ? ["webSearch."]
-        : [],
+      runtimeOwnedPaths: listWebProviderSecretConfigPaths({
+        contracts: secretInputs.contracts,
+        contract: "webSearchProviders",
+      }),
       inactiveReason: enableState.reason ?? "plugin is disabled.",
       defaults: params.defaults,
       context: params.context,
@@ -139,17 +141,14 @@ function collectConfiguredPluginSecretAssignments(params: {
   pluginConfig: Record<string, unknown>;
   secretPaths: ReadonlyArray<{ path: string; expected?: "string" }>;
   active: boolean;
-  runtimeOwnedPathPrefixes?: readonly string[];
+  runtimeOwnedPaths?: readonly string[];
   inactiveReason: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
   const seenPaths = new Set<string>();
   for (const secretPath of params.secretPaths) {
-    if (
-      params.active &&
-      params.runtimeOwnedPathPrefixes?.some((prefix) => secretPath.path.startsWith(prefix))
-    ) {
+    if (params.active && params.runtimeOwnedPaths?.includes(secretPath.path)) {
       // Web provider selection owns these credentials. Resolving them here would make an
       // inactive or non-selected provider block the whole runtime snapshot.
       continue;
