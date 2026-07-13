@@ -13,11 +13,11 @@ import {
   readConnectErrorRecoveryAdvice,
   type ConnectErrorRecoveryAdvice,
 } from "@openclaw/gateway-protocol/connect-error-details";
-import {
-  type ConnectParams,
-  type ErrorShape,
-  type EventFrame,
-  type HelloOk,
+import type {
+  ConnectParams,
+  ErrorShape,
+  EventFrame,
+  HelloOk,
 } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";

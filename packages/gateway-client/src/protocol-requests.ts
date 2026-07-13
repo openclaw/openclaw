@@ -43,7 +43,17 @@ export class GatewayProtocolRequests<TPlan> {
       options?.timeoutMs === null ? undefined : (options?.timeoutMs ?? this.opts.requestTimeoutMs);
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
-      let pending: Pending;
+      const pending: Pending = {
+        resolve: (value) => resolve(value as T),
+        reject,
+        expectFinal: options?.expectFinal === true,
+        acceptedNotified: false,
+        onAccepted: options?.onAccepted,
+        cleanup: () => cleanup(),
+        unbounded: timeoutMs === undefined,
+        method,
+        startedAtMs: this.opts.nowMs?.() ?? Date.now(),
+      };
       const onAbort = () => {
         this.pending.delete(id);
         if (timeout) {
@@ -68,17 +78,7 @@ export class GatewayProtocolRequests<TPlan> {
         );
         return;
       }
-      pending = {
-        resolve: (value) => resolve(value as T),
-        reject,
-        expectFinal: options?.expectFinal === true,
-        acceptedNotified: false,
-        onAccepted: options?.onAccepted,
-        cleanup,
-        unbounded: timeoutMs === undefined,
-        method,
-        startedAtMs: this.opts.nowMs?.() ?? Date.now(),
-      };
+      pending.cleanup = cleanup;
       if (timeoutMs !== undefined && timeoutMs >= 0) {
         timeout = setTimeout(() => {
           this.pending.delete(id);

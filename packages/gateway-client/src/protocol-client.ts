@@ -216,7 +216,7 @@ export class GatewayProtocolClient<TPlan> {
       }
       if (this.opts.handshake.mode === "fallback") {
         this.recordTiming("fallback", generation);
-        void this.sendConnect(socket, generation);
+        this.sendConnect(socket, generation);
         return;
       }
       const elapsedMs = Date.now() - armedAt;
@@ -339,15 +339,14 @@ export class GatewayProtocolClient<TPlan> {
         }
         this.connectNonce = nonce;
         this.recordTiming("challenge", generation);
-        void this.sendConnect(socket, generation);
+        this.sendConnect(socket, generation);
         return;
       }
       const seq = typeof parsed.seq === "number" ? parsed.seq : null;
       if (seq !== null) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
-          this.invoke("gap", () =>
-            this.opts.onGap?.({ expected: this.lastSeq! + 1, received: seq }),
-          );
+          const expected = this.lastSeq + 1;
+          this.invoke("gap", () => this.opts.onGap?.({ expected, received: seq }));
         }
         this.lastSeq = seq;
       }
