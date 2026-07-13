@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
   createOpenClawCrablineChannelReportNotes,
   runOpenClawCrablineChannelDriverSmoke,
+  type OpenClawCrablineChannelDriverSelection,
 } from "@openclaw/crabline";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
