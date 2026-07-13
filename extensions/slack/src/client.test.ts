@@ -216,7 +216,7 @@ describe("slack web client config", () => {
   it("applies the exact lookup deadline and no-retry policy", () => {
     const options = resolveSlackLookupClientOptions();
 
-    expect(options.timeout).toBe(10_000);
+    expect(options.timeout).toBe(30_000);
     expect(options.timeout).toBe(SLACK_LOOKUP_TIMEOUT_MS);
     expect(options.retryConfig).toBe(SLACK_LOOKUP_RETRY_OPTIONS);
     expect(options.retryConfig).toEqual({ retries: 0 });
