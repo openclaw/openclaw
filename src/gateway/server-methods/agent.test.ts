@@ -7,10 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import {
-  registerExecApprovalFollowupRuntimeHandoff,
-  resetExecApprovalFollowupRuntimeHandoffsForTests,
-} from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   createAgentRunRestartAbortError,
@@ -966,7 +963,6 @@ describe("gateway agent handler", () => {
     mocks.lifecycleGeneration = "test-generation";
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
-    resetExecApprovalFollowupRuntimeHandoffsForTests();
   });
 
   it("passes resolved maintenance config to the gateway admission store write", async () => {
@@ -9004,7 +9000,6 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.lifecycleGeneration = "test-generation";
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
-    resetExecApprovalFollowupRuntimeHandoffsForTests();
   }
 
   beforeEach(() => {
