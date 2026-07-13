@@ -4,7 +4,7 @@ import { detectChangedLanes } from "../changed-lanes.mjs";
 import {
   buildVitestRunPlans,
   findUnmatchedExplicitTestTargets,
-  hasReexportGraphImpactOnTargets,
+  hasImportGraphImpactOnTargets,
   isTestFileTarget,
   resolveChangedTestTargetPlan,
 } from "../test-projects.test-support.mjs";
@@ -54,7 +54,7 @@ export function createChangedNodeTestShards(changedPaths, options = {}) {
   if (
     detectChangedLanes(changedPaths).extensionImpactFromCore ||
     (changedPaths.some((changedPath) => changedPath.startsWith("src/")) &&
-      hasReexportGraphImpactOnTargets(changedPaths, publicPluginSdkEntrySources, cwd))
+      hasImportGraphImpactOnTargets(changedPaths, publicPluginSdkEntrySources, cwd))
   ) {
     return null;
   }

@@ -3204,14 +3204,14 @@ function getImportGraph(cwd) {
   return cachedImportGraph;
 }
 
-/** Returns whether any changed path is re-exported through one of the requested targets. */
-export function hasReexportGraphImpactOnTargets(changedPaths, targetPaths, cwd = process.cwd()) {
+/** Returns whether any changed path reaches one of the requested import-graph targets. */
+export function hasImportGraphImpactOnTargets(changedPaths, targetPaths, cwd = process.cwd()) {
   const targets = new Set(targetPaths.map(normalizePathPattern));
   if (targets.size === 0) {
     return false;
   }
 
-  const { reverseReexports } = getImportGraph(cwd);
+  const { reverseImports, reverseReexports } = getImportGraph(cwd);
   for (const changedPath of changedPaths) {
     const queue = [normalizePathPattern(changedPath)];
     const seen = new Set(queue);
@@ -3219,7 +3219,11 @@ export function hasReexportGraphImpactOnTargets(changedPaths, targetPaths, cwd =
       if (targets.has(current)) {
         return true;
       }
-      for (const importer of reverseReexports.get(current) ?? []) {
+      const importers = [
+        ...(reverseImports.get(current) ?? []),
+        ...(reverseReexports.get(current) ?? []),
+      ];
+      for (const importer of importers) {
         if (!seen.has(importer)) {
           seen.add(importer);
           queue.push(importer);

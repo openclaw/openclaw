@@ -96,7 +96,7 @@ export function resolveChangedTestTargetPlan(
   options?: ChangedTestTargetOptions,
 ): ChangedTestTargetPlan;
 
-export function hasReexportGraphImpactOnTargets(
+export function hasImportGraphImpactOnTargets(
   changedPaths: string[],
   targetPaths: string[],
   cwd?: string,

@@ -48,6 +48,10 @@ describe("CI changed Node test plan", () => {
     expect(createChangedNodeTestShards(["src/shared/text/strip-markdown.ts"])).toBeNull();
   });
 
+  it("fails safe when a core change reaches a public SDK wrapper through an import", () => {
+    expect(createChangedNodeTestShards(["src/channels/chat-meta-shared.ts"])).toBeNull();
+  });
+
   it("fails safe when workspace package consumers use package imports", () => {
     expect(
       createChangedNodeTestShards(["packages/gateway-protocol/src/frame-guards.ts"]),
