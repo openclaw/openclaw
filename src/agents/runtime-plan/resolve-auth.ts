@@ -4,11 +4,11 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { getApiKeyForModel } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
+import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
 import { sameAgentRuntimeAuthModelRoute } from "./model-route.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
   preparedAgentRuntimeProfileAttemptHasCandidate,
-  shouldForceDirectAuthFallbackModelResolve,
   type PreparedAgentRuntimeAuthAttempt,
 } from "./prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";

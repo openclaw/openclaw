@@ -1,12 +1,14 @@
 // Coverage for small run-attempt decision helpers.
 import { describe, expect, it } from "vitest";
 import {
+  shouldForceCredentialScopedModelResolve,
+  shouldMaterializeAuthPlanModel,
+} from "../../runtime-plan/credential-scoped-model.js";
+import {
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
   resolveUnknownToolGuardThreshold,
-  shouldForceCredentialScopedModelResolve,
-  shouldMaterializeAuthPlanModel,
   shouldRunLlmOutputHooksForAttempt,
 } from "./attempt.run-decisions.js";
 

@@ -36,8 +36,6 @@ import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   prepareProviderRuntimeAuth,
-  resolveProviderTextTransforms,
-  shouldPreferProviderRuntimeResolvedModel,
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import {
@@ -101,12 +99,7 @@ import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "../harness/selection.js";
-import {
-  resolveAgentHarnessPreparedAuthSupport,
-  resolveAgentHarnessPreparedRouteSupport,
-} from "../harness/support.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
@@ -124,9 +117,7 @@ import {
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { isOpenAIProvider } from "../openai-routing.js";
-import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
-import { resolveProviderModelMaterializationAuthMode } from "../provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import {
   protectPreparedProviderRuntimeAuth,
@@ -139,9 +130,12 @@ import {
 } from "../run-session-target.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
+import {
+  providerUsesCredentialScopedModelMetadata,
+  resolveReusableRuntimeModelAuth,
+} from "../runtime-plan/credential-scoped-model.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import {
-  agentRuntimeAuthPlanMatchesTarget,
   prepareAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../runtime-plan/prepare-auth.js";
@@ -180,6 +174,7 @@ import type {
   CompactionMessageMetrics,
 } from "./compact.types.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
+import { buildCompactionHarnessModelProvider } from "./compaction-harness-model-provider.js";
 import {
   asCompactionHookRunner,
   buildBeforeCompactionHookMetrics,
@@ -196,6 +191,7 @@ import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import {
   type CompactionTranscriptRotation,
   rotateTranscriptAfterCompaction,
@@ -203,7 +199,6 @@ import {
 } from "./compaction-successor-transcript.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
-import { applyExtraParamsToAgent } from "./extra-params.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
@@ -221,11 +216,6 @@ import {
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
-import {
-  resolveEmbeddedAgentApiKey,
-  resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
-} from "./stream-resolution.js";
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import {
   collectAllowedToolNames,
@@ -260,116 +250,6 @@ function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
-async function prepareCompactionSessionAgent(params: {
-  session: { agent: { streamFn?: unknown } };
-  providerStreamFn: unknown;
-  sessionId: string;
-  signal: AbortSignal;
-  effectiveModel: ProviderRuntimeModel;
-  resolvedApiKey?: string;
-  authStorage: unknown;
-  config?: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  thinkLevel: ThinkLevel;
-  sessionAgentId: string;
-  effectiveWorkspace: string;
-  agentDir: string;
-  runtimePlan?: AgentRuntimePlan;
-  sessionKey?: string;
-  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-}) {
-  const authStorage =
-    params.authStorage &&
-    typeof params.authStorage === "object" &&
-    "getApiKey" in params.authStorage &&
-    typeof params.authStorage.getApiKey === "function"
-      ? (params.authStorage as {
-          getApiKey(provider: string): Promise<string | undefined>;
-        })
-      : undefined;
-  const transportApiKey = authStorage
-    ? await resolveEmbeddedAgentApiKey({
-        provider: params.effectiveModel.provider,
-        resolvedApiKey: params.resolvedApiKey,
-        authStorage,
-      })
-    : params.resolvedApiKey;
-  params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
-    currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
-    providerStreamFn: params.providerStreamFn as never,
-    sessionId: params.sessionId,
-    signal: params.signal,
-    model: params.effectiveModel,
-    resolvedApiKey: params.resolvedApiKey,
-    transportAuthAvailable: Boolean(transportApiKey?.trim()),
-    authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
-    authStorage: params.authStorage as never,
-  });
-  const providerTextTransforms = resolveProviderTextTransforms({
-    provider: params.provider,
-    config: params.config,
-    workspaceDir: params.effectiveWorkspace,
-  });
-  if (providerTextTransforms) {
-    params.session.agent.streamFn = wrapStreamFnTextTransforms({
-      streamFn: params.session.agent.streamFn as never,
-      input: providerTextTransforms.input,
-      output: providerTextTransforms.output,
-      transformSystemPrompt: false,
-    }) as never;
-  }
-  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel);
-  const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
-    thinkingLevel: providerThinkingLevel,
-    agentId: params.sessionAgentId,
-    workspaceDir: params.effectiveWorkspace,
-    model: params.effectiveModel,
-  });
-  return applyExtraParamsToAgent(
-    params.session.agent as never,
-    params.config,
-    params.provider,
-    params.modelId,
-    undefined,
-    providerThinkingLevel,
-    params.sessionAgentId,
-    params.effectiveWorkspace,
-    params.effectiveModel,
-    params.agentDir,
-    undefined,
-    {
-      ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
-      nativeWebSearchPolicyContext: {
-        // Compaction rebuilds the provider stream wrapper, so preserve the
-        // session-scoped policy inputs that can suppress provider-native search.
-        sessionKey: params.sessionKey,
-        sandboxToolPolicy: params.sandboxToolPolicy,
-        messageProvider: params.messageProvider,
-        agentAccountId: params.agentAccountId,
-        groupId: params.groupId,
-        groupChannel: params.groupChannel,
-        groupSpace: params.groupSpace,
-        spawnedBy: params.spawnedBy,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-      },
-    },
-  );
-}
-
 function resolveCompactionProviderStream(params: {
   effectiveModel: ProviderRuntimeModel;
   config?: OpenClawConfig;
@@ -382,27 +262,6 @@ function resolveCompactionProviderStream(params: {
     agentDir: params.agentDir,
     workspaceDir: params.effectiveWorkspace,
   });
-}
-
-function buildCompactionHarnessModelProvider(params: {
-  model: ProviderRuntimeModel;
-  plan?: AgentRuntimeAuthPlan;
-  attempt?: PreparedAgentRuntimeAuthAttempt;
-}): AgentHarnessPreparedModelProvider {
-  const route = params.plan?.modelRoute;
-  return {
-    api: route?.api ?? params.model.api,
-    baseUrl: route?.baseUrl ?? params.model.baseUrl,
-    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
-    ...(params.plan
-      ? {
-          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-            plan: params.plan,
-            source: params.attempt?.kind === "implicit" ? undefined : params.attempt?.kind,
-          }),
-        }
-      : {}),
-  };
 }
 
 function normalizeObservedTokenCount(value: unknown): number | undefined {
@@ -763,22 +622,16 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const contextConfigProvider = resolvedCompactionTarget.contextProvider ?? provider;
   const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const providedRuntimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
-  const reusableRuntimeAuthPlan =
-    providedRuntimeAuthPlan &&
-    agentRuntimeAuthPlanMatchesTarget(providedRuntimeAuthPlan, { provider, modelId })
-      ? providedRuntimeAuthPlan
-      : undefined;
-  const authProfileId =
-    resolvedCompactionTarget.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId;
-  const authProfileMode = resolveProviderModelMaterializationAuthMode(
-    reusableRuntimeAuthPlan?.selectedAuthMode,
-  );
-  const initialModelAuth =
-    authProfileId !== undefined
-      ? { authProfileId }
-      : authProfileMode !== undefined
-        ? { authProfileMode }
-        : undefined;
+  const {
+    plan: reusableRuntimeAuthPlan,
+    authProfileId,
+    modelAuth: initialModelAuth,
+  } = resolveReusableRuntimeModelAuth({
+    plan: providedRuntimeAuthPlan,
+    provider,
+    modelId,
+    authProfileId: resolvedCompactionTarget.authProfileId,
+  });
   // Ensure the policy-selected harness plugin so selection can pick implicit codex.
   await ensureSelectedAgentHarnessPlugin({
     config: params.config,
@@ -840,18 +693,12 @@ async function compactEmbeddedAgentSessionDirectOnce(
     : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
         allowKeychainPrompt: false,
       });
-  const providerUsesProfileScopedModelMetadata = shouldPreferProviderRuntimeResolvedModel({
+  const providerUsesProfileScopedModelMetadata = providerUsesCredentialScopedModelMetadata({
     provider: runtimeProvider,
+    modelId,
     config: params.config,
+    agentDir,
     workspaceDir: resolvedWorkspace,
-    env: process.env,
-    context: {
-      config: params.config,
-      agentDir,
-      workspaceDir: resolvedWorkspace,
-      provider: runtimeProvider,
-      modelId,
-    },
   });
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native

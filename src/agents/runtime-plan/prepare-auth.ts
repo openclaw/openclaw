@@ -105,14 +105,6 @@ export function canRunPreparedAgentRuntimeAuthAttempt(params: {
   );
 }
 
-/** Direct auth after a profile attempt must drop credential-scoped model metadata. */
-export function shouldForceDirectAuthFallbackModelResolve(params: {
-  attempt: PreparedAgentRuntimeAuthAttempt;
-  priorProfileAttempted: boolean;
-}): boolean {
-  return params.attempt.kind === "direct" && params.priorProfileAttempted;
-}
-
 /** Rechecks automatic cooldowns immediately before a prepared profile attempt. */
 export function preparedAgentRuntimeProfileAttemptHasCandidate(params: {
   attempt: PreparedAgentRuntimeAuthAttempt;

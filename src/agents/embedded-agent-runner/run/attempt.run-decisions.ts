@@ -2,7 +2,6 @@
  * Resolves per-attempt runtime decisions from config and channel context.
  */
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import {
   resolveSessionLockMaxHoldFromTimeout,
   resolveSessionWriteLockOptions,
@@ -40,35 +39,6 @@ export function resolveAttemptStreamAuthProfileId(
   params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">,
 ): string | undefined {
   return params.runtimePlan?.auth.forwardedAuthProfileId;
-}
-
-/** Re-resolves metadata whenever the prepared credential can change provider limits. */
-export function shouldMaterializeAuthPlanModel(
-  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "modelRoute" | "selectedAuthMode">,
-  requestedProfileId?: string,
-  providerUsesProfileScopedModelMetadata = false,
-): boolean {
-  return Boolean(
-    plan.modelRoute ||
-    shouldForceCredentialScopedModelResolve(
-      plan,
-      requestedProfileId,
-      providerUsesProfileScopedModelMetadata,
-    ),
-  );
-}
-
-/** Re-resolves when the selected profile or direct credential can change provider metadata. */
-export function shouldForceCredentialScopedModelResolve(
-  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "selectedAuthMode">,
-  requestedProfileId?: string,
-  providerUsesProfileScopedModelMetadata = false,
-): boolean {
-  return Boolean(
-    plan.forwardedAuthProfileId ||
-    requestedProfileId ||
-    (providerUsesProfileScopedModelMetadata && plan.selectedAuthMode),
-  );
 }
 
 /**
