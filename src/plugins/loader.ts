@@ -50,7 +50,7 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
-import { PluginLoaderCacheState } from "./loader-cache-state.js";
+import { pluginLoaderCacheInstances } from "./loader-cache-instances.js";
 import {
   channelPluginIdBelongsToManifest,
   loadBundledRuntimeChannelPlugin,
@@ -326,18 +326,8 @@ class PluginLoadFailureError extends Error {
   }
 }
 
-type CachedPluginState = {
-  registry: PluginRegistry;
-  processGlobalState: PluginProcessGlobalState;
-};
-
-const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
-const pluginLoaderCacheState = new PluginLoaderCacheState<CachedPluginState>(
-  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
-);
-const fullWorkspacePluginLoaderCacheState = new PluginLoaderCacheState<CachedPluginState>(
-  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
-);
+const { scoped: pluginLoaderCacheState, fullWorkspace: fullWorkspacePluginLoaderCacheState } =
+  pluginLoaderCacheInstances;
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "gateway",
