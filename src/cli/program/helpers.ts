@@ -1,5 +1,5 @@
-// Shared Commander registration helpers for repeated options, positive ints, and lazy reparse args.
-import { InvalidArgumentError, type Command } from "commander";
+// Shared Commander registration helpers for repeated options and positive integers.
+import { InvalidArgumentError } from "commander";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 
 /** Commander option collector for repeatable string flags. */
@@ -27,61 +27,4 @@ export function parseStrictPositiveIntOption(value: string, flag: string): numbe
     throw new InvalidArgumentError(`${flag} must be a positive integer.`);
   }
   return parsed;
-}
-
-function appendOptionValue(out: string[], flag: string, value: unknown): void {
-  if (value === undefined) {
-    return;
-  }
-  if (value === false) {
-    if (flag.startsWith("--no-")) {
-      out.push(flag);
-    }
-    return;
-  }
-  if (value === true) {
-    out.push(flag);
-    return;
-  }
-  const arg = stringifyOptionValue(value);
-  if (arg !== undefined) {
-    out.push(flag, arg);
-  }
-}
-
-function stringifyOptionValue(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  if (typeof value === "bigint") {
-    return value.toString();
-  }
-  return undefined;
-}
-
-/** Reconstruct explicit option tokens from a Commander command for lazy reparsing. */
-export function resolveCommandOptionArgs(command: Command): string[] {
-  const out: string[] = [];
-  for (const option of command.options) {
-    const name = option.attributeName();
-    if (command.getOptionValueSource(name) === "default") {
-      continue;
-    }
-    const flag = option.long ?? option.short;
-    if (!flag) {
-      continue;
-    }
-    const value = command.getOptionValue(name);
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        appendOptionValue(out, flag, item);
-      }
-      continue;
-    }
-    appendOptionValue(out, flag, value);
-  }
-  return out;
 }

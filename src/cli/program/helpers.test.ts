@@ -1,12 +1,10 @@
 // Program helper tests cover shared command registration and help helpers.
-import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import {
   collectOption,
   parsePositiveIntOrUndefined,
   parseStrictPositiveIntOption,
   parseStrictPositiveIntOrUndefined,
-  resolveCommandOptionArgs,
 } from "./helpers.js";
 
 describe("program helpers", () => {
@@ -60,47 +58,5 @@ describe("program helpers", () => {
     expect(() => parseStrictPositiveIntOption("10ms", "--limit")).toThrow(
       "--limit must be a positive integer.",
     );
-  });
-
-  it("resolveCommandOptionArgs serializes explicit options", () => {
-    const command = new Command()
-      .option("--json", "JSON output", false)
-      .option("--timeout <ms>", "Timeout", "30000")
-      .option("--tag <name>", "Tag", collectOption)
-      .option("--no-progress", "Disable progress");
-
-    command.parse([
-      "node",
-      "test",
-      "--json",
-      "--timeout",
-      "10",
-      "--tag",
-      "a",
-      "--tag",
-      "b",
-      "--no-progress",
-    ]);
-
-    expect(resolveCommandOptionArgs(command)).toEqual([
-      "--json",
-      "--timeout",
-      "10",
-      "--tag",
-      "a",
-      "--tag",
-      "b",
-      "--no-progress",
-    ]);
-  });
-
-  it("resolveCommandOptionArgs skips defaults", () => {
-    const command = new Command()
-      .option("--json", "JSON output", false)
-      .option("--timeout <ms>", "Timeout", "30000");
-
-    command.parse(["node", "test"]);
-
-    expect(resolveCommandOptionArgs(command)).toStrictEqual([]);
   });
 });
