@@ -123,6 +123,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.nodesHydrated = false;
     this.branchesRequestToken += 1;
     this.branchesLoading = false;
+    this.branches = null;
+    this.baseRef = ""; // Never carry a derived ref across a transport epoch.
     this.agentsHydrated = false;
     this.closeBrowser();
     this.invalidateSubmission(true); // Transport loss makes an in-flight create outcome unknowable.
@@ -137,9 +139,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.folderSelectedByUser = false;
     this.worktree = false;
     this.worktreeName = "";
-    this.baseRef = "";
     this.baseRefEditGeneration += 1;
-    this.branches = null;
     this.nodes = [];
     this.execNode = "";
     this.error = null;

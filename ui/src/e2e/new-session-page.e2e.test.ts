@@ -650,10 +650,15 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         repoRoot: REFRESHED_RESEARCH_WORKSPACE,
       });
 
-      await gateway.setMethodResponse("worktrees.branches", {
-        branches: [{ kind: "local", name: "beta" }],
-        defaultBranch: "beta",
-      });
+      const whereTrigger = page.locator('summary[title="Where"]');
+      await whereTrigger.click();
+      const worktreeItem = page.getByRole("menuitemradio", { name: "Worktree" });
+      await worktreeItem.click();
+      const baseInput = page.getByLabel("Base branch");
+      await expect.poll(() => baseInput.inputValue()).toBe("main");
+      await page.keyboard.press("Escape");
+
+      await gateway.deferNext("worktrees.branches");
       const branchesBeforeSameWorkspaceReconnect = (await gateway.getRequests("worktrees.branches"))
         .length;
       await gateway.setOnline(false);
@@ -666,19 +671,21 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect((await gateway.getRequests("worktrees.branches")).at(-1)?.params).toEqual({
         repoRoot: REFRESHED_RESEARCH_WORKSPACE,
       });
-      const whereTrigger = page.locator('summary[title="Where"]');
-      await whereTrigger.click();
-      const worktreeItem = page.getByRole("menuitemradio", { name: "Worktree" });
-      await worktreeItem.click();
-      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("beta");
-      await worktreeItem.click();
-      await page.keyboard.press("Escape");
+      expect(await baseInput.inputValue()).toBe("");
+      expect(await baseInput.getAttribute("placeholder")).toBe("Loading…");
+      await gateway.resolveDeferred("worktrees.branches", {
+        branches: [{ kind: "local", name: "beta" }],
+        defaultBranch: "beta",
+      });
+      await expect.poll(() => baseInput.inputValue()).toBe("beta");
 
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "research",
         message: "keep my selected agent",
+        worktree: true,
+        worktreeBaseRef: "beta",
       });
       expect(create.params).not.toHaveProperty("cwd");
     } finally {
