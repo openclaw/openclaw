@@ -125,7 +125,7 @@ GHSA-specific advisory work outside this skill.
 - If an exact PR-head CI run has no active jobs because Blacksmith capacity is
   stalled, a maintainer may dispatch the explicit GitHub-hosted fallback from
   the PR head branch. Check the target-owned workflow with `git show
-  <full-pr-sha>:.github/workflows/ci.yml | rg -q '^  +pr_number:'`. When it
+<full-pr-sha>:.github/workflows/ci.yml | rg -q '^  +pr_number:'`. When it
   declares `pr_number`, run:
   `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
 target_ref=<full-pr-sha> -f pr_number=<pr-number> -f include_android=true -f
