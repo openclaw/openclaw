@@ -82,6 +82,7 @@ export const ko: TranslationMap = {
     relink: "다시 연결",
     waitForScan: "스캔 대기",
     logout: "로그아웃",
+    skipToMainContent: "주요 콘텐츠로 건너뛰기",
   },
   nativeLinkMenu: {
     label: "링크 작업",
@@ -388,6 +389,18 @@ export const ko: TranslationMap = {
     title: "관리되는 Worktree",
     subtitle: "OpenClaw가 소유한 격리된 저장소 체크아웃입니다.",
     cleanNow: "지금 정리",
+    cleanupTitle: "정리",
+    cleanupSubtitle:
+      "OpenClaw는 디스크 공간을 확보하기 위해 오래된 worktree를 주기적으로 제거합니다. 정리 수준을 조정하세요.",
+    cleanupMaxCount: "최대 worktree 수",
+    cleanupMaxCountHelp:
+      "모든 저장소에서 유지할 관리 대상 worktree의 최대 개수입니다. 오래된 worktree부터 스냅샷을 생성한 후 제거합니다. 개수 제한을 비활성화하려면 0으로 설정하세요.",
+    cleanupMaxSize: "최대 총크기(GB)",
+    cleanupMaxSizeHelp:
+      "관리되는 모든 worktree의 최대 총크기(GB)입니다. 크기 제한을 비활성화하려면 0으로 설정하세요.",
+    cleanupDecrease: "{label} 줄이기",
+    cleanupIncrease: "{label} 늘리기",
+    cleanupSaveFailed: "정리 한도를 저장하지 못했습니다.",
     name: "이름",
     repo: "저장소",
     branch: "브랜치",
@@ -406,9 +419,17 @@ export const ko: TranslationMap = {
     working: "작업 중…",
     ready: "채팅할 준비가 되었습니다",
     whatCanAgentDo: "{name}님은 무엇을 할 수 있나요?",
+    help: "도움말",
     getHelp: "도움말 보기",
     discord: "Discord 커뮤니티",
     viewChangelog: "변경 로그 보기",
+    agentSettings: "에이전트 설정",
+    filterAgents: "에이전트 찾기…",
+    noAgentMatches: "일치하는 에이전트 없음",
+  },
+  agentScope: {
+    label: "에이전트 범위",
+    allAgents: "모든 에이전트",
   },
   newSession: {
     title: "새 세션",
@@ -617,6 +638,8 @@ export const ko: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "전환기에 고정",
+    unpinFromSwitcher: "전환기에서 고정 해제",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -641,6 +664,17 @@ export const ko: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "ID",
+      subtitle: "채팅과 사이드바에 표시되는 이름, 이모지 및 아바타입니다.",
+      name: "표시 이름",
+      namePlaceholder: "에이전트 이름",
+      emoji: "이모지",
+      chooseImage: "이미지 선택…",
+      replaceImage: "이미지 교체…",
+      imageUnusable: "해당 이미지는 사용할 수 없습니다. 최대 2MB의 이미지 파일을 선택하세요.",
+      fileHint: "에이전트는 작업 공간의 IDENTITY.md를 편집하여 직접 설정할 수 있습니다.",
     },
     overview: {
       title: "개요",
@@ -1084,6 +1118,7 @@ export const ko: TranslationMap = {
     settingsView: "설정 보기",
     simple: "간단",
     advanced: "고급",
+    content: "설정 콘텐츠",
     themeImported: "{name}을(를) 가져왔습니다.",
     themeRemoved: "사용자 지정 테마가 제거되었습니다.",
     channels: {
@@ -1437,6 +1472,8 @@ export const ko: TranslationMap = {
     platforms: "플랫폼: {platforms}",
     installNamed: "{name} 설치",
     notFound: "Skill을 찾을 수 없습니다.",
+    openDetails: "{name} 세부 정보 열기",
+    enabledNamed: "{name} 활성화됨",
     invalidLink: "ClawHub 링크가 잘못되었습니다",
     overview: "개요",
     skillCard: "Skill Card",
@@ -3480,11 +3517,13 @@ export const ko: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "자동화 상태",
       all: "전체",
       active: "활성",
       paused: "일시중지됨",
     },
     list: {
+      viewLabel: "자동화 보기",
       searchPlaceholder: "예약된 작업 검색",
       newTask: "새 작업",
       filters: "필터",
@@ -3555,6 +3594,7 @@ export const ko: TranslationMap = {
       nextWake: "다음 실행",
     },
     detail: {
+      tabsLabel: "자동화 세부 정보",
       newTitle: "새 예약 작업",
       newSubtitle: "OpenClaw가 수행할 작업을 설명한 후 실행 시점을 선택하세요.",
       back: "모든 자동화",

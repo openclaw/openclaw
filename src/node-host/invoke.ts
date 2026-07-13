@@ -38,7 +38,11 @@ import {
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { NODE_FS_LIST_DIR_COMMAND, NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
+import {
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_FS_LIST_DIR_COMMAND,
+  NODE_MCP_TOOLS_CALL_COMMAND,
+} from "../infra/node-commands.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
@@ -47,6 +51,10 @@ import { logWarn } from "../logger.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
 import {
+  handleClaudeCliNodeInvoke,
+  type NodeHostInvokeRuntime,
+} from "./invoke-agent-cli-claude-handler.js";
+import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
   resolveEffectiveSystemRunExecPolicy,
@@ -54,6 +62,7 @@ import {
 import type {
   ExecEventPayload,
   ExecFinishedEventParams,
+  NodeInvokeRequestPayload,
   RunResult,
   SkillBinsProvider,
   SystemRunParams,
@@ -63,13 +72,19 @@ import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const OUTPUT_CAP = 200_000;
+
 const MCP_TEXT_CONTENT_MAX_BYTES = 1024 * 1024;
 const MCP_TEXT_TRUNCATION_MARKER = "\n[truncated: MCP text content exceeded 1 MB]";
+
 const MCP_INVOKE_PAYLOAD_MAX_BYTES = 20 * 1024 * 1024;
 const MCP_PAYLOAD_TRUNCATION_MARKER = "[truncated: MCP result exceeded 20 MB]";
+
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
+
 const OUTPUT_EVENT_TAIL = 20_000;
+
 const STREAM_ERROR_KILL_GRACE_MS = 1_000;
+
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 const execHostEnforced =
@@ -226,16 +241,7 @@ type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
-export type NodeInvokeRequestPayload = {
-  id: string;
-  nodeId: string;
-  command: string;
-  paramsJSON?: string | null;
-  timeoutMs?: number | null;
-  idempotencyKey?: string | null;
-};
-
-export type { SkillBinsProvider } from "./invoke-types.js";
+export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
   return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
@@ -645,9 +651,10 @@ export async function handleInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
+  runtime: NodeHostInvokeRuntime = {},
 ) {
   try {
-    await dispatchInvoke(frame, client, skillBins, mcpManager);
+    await dispatchInvoke(frame, client, skillBins, mcpManager, runtime);
   } catch (err) {
     // Gateway events launch this handler without awaiting it. Consume unexpected
     // failures here so one bad request cannot terminate the node-host process.
@@ -671,6 +678,7 @@ async function dispatchInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
+  runtime: NodeHostInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
   if (command === "system.execApprovals.get") {
@@ -780,6 +788,27 @@ async function dispatchInvoke(
 
   if (command === NODE_MCP_TOOLS_CALL_COMMAND) {
     await handleMcpToolsCall(frame, client, mcpManager);
+    return;
+  }
+
+  if (command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND) {
+    await handleClaudeCliNodeInvoke({
+      frame,
+      client,
+      skillBins,
+      runtime,
+      deps: {
+        sendErrorResult,
+        sendInvalidRequestResult,
+        sendInvokeResult,
+        resolveExecSecurity,
+        resolveExecAsk,
+        isCmdExeInvocation,
+        sanitizeEnv,
+        runViaMacAppExecHost,
+        buildExecEventPayload,
+      },
+    });
     return;
   }
 
@@ -1094,35 +1123,6 @@ function decodeParams<T>(raw?: string | null): T {
   } catch {
     throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
   }
-}
-
-export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const obj = payload as Record<string, unknown>;
-  const id = typeof obj.id === "string" ? obj.id.trim() : "";
-  const nodeId = typeof obj.nodeId === "string" ? obj.nodeId.trim() : "";
-  const command = typeof obj.command === "string" ? obj.command.trim() : "";
-  if (!id || !nodeId || !command) {
-    return null;
-  }
-  const paramsJSON =
-    typeof obj.paramsJSON === "string"
-      ? obj.paramsJSON
-      : obj.params !== undefined
-        ? JSON.stringify(obj.params)
-        : null;
-  const timeoutMs = typeof obj.timeoutMs === "number" ? obj.timeoutMs : null;
-  const idempotencyKey = typeof obj.idempotencyKey === "string" ? obj.idempotencyKey : null;
-  return {
-    id,
-    nodeId,
-    command,
-    paramsJSON,
-    timeoutMs,
-    idempotencyKey,
-  };
 }
 
 async function sendInvokeResult(

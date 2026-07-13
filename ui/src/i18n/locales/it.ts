@@ -82,6 +82,7 @@ export const it: TranslationMap = {
     relink: "Ricollega",
     waitForScan: "Attendi la scansione",
     logout: "Esci",
+    skipToMainContent: "Vai al contenuto principale",
   },
   nativeLinkMenu: {
     label: "Azioni del link",
@@ -393,6 +394,18 @@ export const it: TranslationMap = {
     title: "Worktree gestiti",
     subtitle: "Checkout di repository isolati di proprietà di OpenClaw.",
     cleanNow: "Pulisci ora",
+    cleanupTitle: "Pulizia",
+    cleanupSubtitle:
+      "OpenClaw rimuove periodicamente i worktree obsoleti per liberare spazio su disco. Configura il livello di aggressività della pulizia.",
+    cleanupMaxCount: "Numero massimo di worktree",
+    cleanupMaxCountHelp:
+      "Numero massimo di worktree gestiti da conservare in tutti i repository. I worktree meno recenti vengono prima salvati come snapshot e poi rimossi. Imposta 0 per disattivare il limite numerico.",
+    cleanupMaxSize: "Dimensione totale massima (GB)",
+    cleanupMaxSizeHelp:
+      "Dimensione totale massima in GB di tutti i worktree gestiti. Imposta 0 per disattivare il limite di dimensione.",
+    cleanupDecrease: "Diminuisci {label}",
+    cleanupIncrease: "Aumenta {label}",
+    cleanupSaveFailed: "Salvataggio dei limiti di pulizia non riuscito.",
     name: "Nome",
     repo: "Repository",
     branch: "Branch",
@@ -411,9 +424,17 @@ export const it: TranslationMap = {
     working: "In elaborazione…",
     ready: "Pronto per chattare",
     whatCanAgentDo: "Cosa può fare {name}?",
+    help: "Aiuto",
     getHelp: "Ottieni assistenza",
     discord: "Community Discord",
     viewChangelog: "Visualizza il registro delle modifiche",
+    agentSettings: "Impostazioni dell'agente",
+    filterAgents: "Trova agente…",
+    noAgentMatches: "Nessun agente corrispondente",
+  },
+  agentScope: {
+    label: "Ambito dell'agente",
+    allAgents: "Tutti gli agenti",
   },
   newSession: {
     title: "Nuova sessione",
@@ -625,6 +646,8 @@ export const it: TranslationMap = {
     setDefault: "Imposta come predefinito",
     alreadyDefaultTitle: "Già l'agente predefinito",
     setDefaultTitle: "Imposta come agente predefinito",
+    pinToSwitcher: "Fissa nel selettore",
+    unpinFromSwitcher: "Rimuovi dal selettore",
     selectTitle: "Seleziona un agente",
     selectSubtitle: "Scegli un agente per esaminarne lo spazio di lavoro e gli strumenti.",
     tabs: {
@@ -649,6 +672,19 @@ export const it: TranslationMap = {
       default: "Predefinito",
       configurationSubtitle: "Configurazione di spazio di lavoro, identità e modello.",
       schedulingSubtitle: "Spazio di lavoro e destinazioni di pianificazione.",
+    },
+    identity: {
+      title: "Identità",
+      subtitle: "Nome, emoji e avatar mostrati nelle chat e nella barra laterale.",
+      name: "Nome visualizzato",
+      namePlaceholder: "Nome dell'agente",
+      emoji: "Emoji",
+      chooseImage: "Scegli immagine…",
+      replaceImage: "Sostituisci immagine…",
+      imageUnusable:
+        "Questa immagine non può essere utilizzata. Scegli un file immagine di massimo 2 MB.",
+      fileHint:
+        "Gli agenti possono impostare questi dati autonomamente modificando IDENTITY.md nel proprio workspace.",
     },
     overview: {
       title: "Panoramica",
@@ -1098,6 +1134,7 @@ export const it: TranslationMap = {
     settingsView: "Vista impostazioni",
     simple: "Semplice",
     advanced: "Avanzate",
+    content: "Contenuto delle impostazioni",
     themeImported: "Importato {name}.",
     themeRemoved: "Tema personalizzato rimosso.",
     channels: {
@@ -1453,6 +1490,8 @@ export const it: TranslationMap = {
     platforms: "Piattaforme: {platforms}",
     installNamed: "Installa {name}",
     notFound: "Skill non trovata.",
+    openDetails: "Apri i dettagli di {name}",
+    enabledNamed: "{name} abilitata",
     invalidLink: "Link ClawHub non valido",
     overview: "Panoramica",
     skillCard: "Skill Card",
@@ -3528,11 +3567,13 @@ export const it: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Stato dell'automazione",
       all: "Tutti",
       active: "Attive",
       paused: "In pausa",
     },
     list: {
+      viewLabel: "Viste delle automazioni",
       searchPlaceholder: "Cerca attività pianificate",
       newTask: "Nuova attività",
       filters: "Filtri",
@@ -3604,6 +3645,7 @@ export const it: TranslationMap = {
       nextWake: "Prossima attivazione",
     },
     detail: {
+      tabsLabel: "Dettagli dell'automazione",
       newTitle: "Nuova attività pianificata",
       newSubtitle: "Descrivi cosa deve fare OpenClaw, poi scegli quando eseguirla.",
       back: "Tutte le automazioni",

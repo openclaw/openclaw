@@ -82,6 +82,7 @@ export const ru: TranslationMap = {
     relink: "Повторно привязать",
     waitForScan: "Ожидание сканирования",
     logout: "Выйти",
+    skipToMainContent: "Перейти к основному содержимому",
   },
   nativeLinkMenu: {
     label: "Действия со ссылкой",
@@ -392,6 +393,18 @@ export const ru: TranslationMap = {
     title: "Управляемые рабочие деревья",
     subtitle: "Изолированные копии репозиториев, принадлежащие OpenClaw.",
     cleanNow: "Очистить сейчас",
+    cleanupTitle: "Очистка",
+    cleanupSubtitle:
+      "OpenClaw периодически удаляет старые рабочие деревья, чтобы освободить место на диске. Настройте интенсивность очистки.",
+    cleanupMaxCount: "Максимальное количество рабочих деревьев",
+    cleanupMaxCountHelp:
+      "Максимальное количество управляемых рабочих деревьев, сохраняемых во всех репозиториях. Более старые рабочие деревья сначала сохраняются в виде снимков, а затем удаляются. Установите значение 0, чтобы отключить ограничение по количеству.",
+    cleanupMaxSize: "Максимальный общий размер (ГБ)",
+    cleanupMaxSizeHelp:
+      "Максимальный общий размер в ГБ для всех управляемых рабочих деревьев. Установите значение 0, чтобы отключить ограничение по размеру.",
+    cleanupDecrease: "Уменьшить {label}",
+    cleanupIncrease: "Увеличить {label}",
+    cleanupSaveFailed: "Не удалось сохранить ограничения очистки.",
     name: "Имя",
     repo: "Репозиторий",
     branch: "Ветка",
@@ -410,9 +423,17 @@ export const ru: TranslationMap = {
     working: "Выполняется…",
     ready: "Готово к чату",
     whatCanAgentDo: "Что умеет {name}?",
+    help: "Справка",
     getHelp: "Получить помощь",
     discord: "Сообщество Discord",
     viewChangelog: "Посмотреть журнал изменений",
+    agentSettings: "Настройки агента",
+    filterAgents: "Найти агента…",
+    noAgentMatches: "Подходящие агенты не найдены",
+  },
+  agentScope: {
+    label: "Область действия агента",
+    allAgents: "Все агенты",
   },
   newSession: {
     title: "Новый сеанс",
@@ -623,6 +644,8 @@ export const ru: TranslationMap = {
     setDefault: "Сделать по умолчанию",
     alreadyDefaultTitle: "Уже агент по умолчанию",
     setDefaultTitle: "Сделать агентом по умолчанию",
+    pinToSwitcher: "Закрепить в переключателе",
+    unpinFromSwitcher: "Открепить от переключателя",
     selectTitle: "Выберите агента",
     selectSubtitle: "Выберите агента, чтобы просмотреть его рабочую область и инструменты.",
     tabs: {
@@ -647,6 +670,19 @@ export const ru: TranslationMap = {
       default: "По умолчанию",
       configurationSubtitle: "Настройка рабочей области, удостоверения и модели.",
       schedulingSubtitle: "Рабочая область и целевые объекты расписания.",
+    },
+    identity: {
+      title: "Профиль",
+      subtitle: "Имя, эмодзи и аватар, отображаемые в чатах и на боковой панели.",
+      name: "Отображаемое имя",
+      namePlaceholder: "Имя агента",
+      emoji: "Эмодзи",
+      chooseImage: "Выбрать изображение…",
+      replaceImage: "Заменить изображение…",
+      imageUnusable:
+        "Это изображение нельзя использовать. Выберите файл изображения размером до 2 МБ.",
+      fileHint:
+        "Агенты могут настроить это самостоятельно, отредактировав файл IDENTITY.md в своей рабочей области.",
     },
     overview: {
       title: "Обзор",
@@ -1095,6 +1131,7 @@ export const ru: TranslationMap = {
     settingsView: "Просмотр настроек",
     simple: "Простой",
     advanced: "Расширенные",
+    content: "Содержимое настроек",
     themeImported: "Импортировано: {name}.",
     themeRemoved: "Пользовательская тема удалена.",
     channels: {
@@ -1452,6 +1489,8 @@ export const ru: TranslationMap = {
     platforms: "Платформы: {platforms}",
     installNamed: "Установить {name}",
     notFound: "Skill не найден.",
+    openDetails: "Открыть сведения о {name}",
+    enabledNamed: "{name} включено",
     invalidLink: "Недействительная ссылка ClawHub",
     overview: "Обзор",
     skillCard: "Карточка Skill",
@@ -3518,11 +3557,13 @@ export const ru: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Статус автоматизации",
       all: "Все",
       active: "Активно",
       paused: "Приостановлено",
     },
     list: {
+      viewLabel: "Представления автоматизации",
       searchPlaceholder: "Поиск запланированных задач",
       newTask: "Новая задача",
       filters: "Фильтры",
@@ -3594,6 +3635,7 @@ export const ru: TranslationMap = {
       nextWake: "Следующее пробуждение",
     },
     detail: {
+      tabsLabel: "Сведения об автоматизации",
       newTitle: "Новая запланированная задача",
       newSubtitle: "Опишите, что должен делать OpenClaw, затем выберите время запуска.",
       back: "Все автоматизации",

@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -175,7 +174,6 @@ function resetGatewayTestState(): void {
   clearConfigCache();
   clearSessionStoreCacheForTest();
   resetAgentRunContextForTest();
-  clearAllBootstrapSnapshots();
   clearGatewaySubagentRuntime();
 }
 

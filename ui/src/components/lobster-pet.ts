@@ -301,10 +301,9 @@ const PASSER_CROSS_MS = 11_000;
 
 type LobsterPetAnchor = "ledge" | "bar";
 
-// The bar anchor stands the pet inside the footer bar's free stretch between
-// the status dot (left) and the settings icons (right).
+// The historical bar visit keeps its compact left-to-center roaming and scale
+// cap, while CSS places it on the same ledge as regular visits.
 const BAR_ZONE = [18, 50] as const;
-// Inside the ~30px bar the sprite must stay small regardless of rolled size.
 const BAR_MAX_SCALE = 1.7;
 
 // Visit cadence: seeded per load, the pet is a guest, not a fixture. A share
@@ -1481,8 +1480,8 @@ export class LobsterPet extends LitElement {
     }, PASSER_CROSS_MS / 2);
   }
 
-  // Each arrival re-rolls where the pet shows up: the ledge above the footer
-  // divider or the free stretch inside the footer bar.
+  // Each arrival re-rolls either the standard side zone or compact bar zone.
+  // Both visit profiles render above the footer divider.
   private rollPerch() {
     this.anchor = this.visitRng() < 0.6 ? "ledge" : "bar";
     this.setAttribute("data-spot", this.anchor);
@@ -1638,7 +1637,6 @@ export class LobsterPet extends LitElement {
     ].join(";");
   }
 
-  // The bar anchor stands inside the ~30px footer bar, so cap the sprite.
   private anchoredScale(scale: number): number {
     return this.anchor === "bar" ? Math.min(scale, BAR_MAX_SCALE) : scale;
   }

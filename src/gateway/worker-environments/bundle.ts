@@ -25,7 +25,7 @@ type WorkerInstallationArtifactBase = {
   protocolFeatures: readonly string[];
 };
 
-export type WorkerBundleArtifact = WorkerInstallationArtifactBase & {
+type WorkerBundleArtifact = WorkerInstallationArtifactBase & {
   install: "bundle";
   tarballSha256: string;
   tarballPath: string;
@@ -43,19 +43,19 @@ export type WorkerBundleProducer = {
   prepare: () => Promise<WorkerBundleArtifact>;
 };
 
-export type WorkerBundleProducerOptions = {
+type WorkerBundleProducerOptions = {
   packageRoot?: string;
   cacheDir?: string;
   openclawVersion?: string;
   protocolFeatures?: readonly string[];
 };
 
-export type WorkerNpmPackageInstallCheck = (packageRoot: string) => Promise<boolean>;
-export type WorkerNpmReleaseVerifier = (params: {
+type WorkerNpmPackageInstallCheck = (packageRoot: string) => Promise<boolean>;
+type WorkerNpmReleaseVerifier = (params: {
   bundleHash: string;
   version: string;
 }) => Promise<string>;
-export type WorkerNpmProofCommandRunner = typeof runCommandWithTimeout;
+type WorkerNpmProofCommandRunner = typeof runCommandWithTimeout;
 
 type WorkerBundleManifestEntry = {
   path: string;
@@ -177,7 +177,7 @@ async function hashWorkerBundleTarball(tarballPath: string): Promise<string> {
   return hash.digest("hex");
 }
 
-export async function verifyPublishedNpmRelease(params: {
+async function verifyPublishedNpmRelease(params: {
   bundleHash: string;
   version: string;
   runCommand?: WorkerNpmProofCommandRunner;

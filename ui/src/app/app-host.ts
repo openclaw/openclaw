@@ -686,11 +686,8 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private chatNavigationOptions(options?: ApplicationNavigationOptions) {
-    if (options) {
-      return options;
-    }
     const sessionKey = this.activeSessionKey.trim();
-    return sessionKey ? { search: searchForSession(sessionKey) } : undefined;
+    return options ?? (sessionKey ? { search: searchForSession(sessionKey) } : undefined);
   }
 
   private navigate(routeId: string, options?: ApplicationNavigationOptions) {
@@ -1208,6 +1205,7 @@ class OpenClawShell extends OpenClawLightDomElement {
         @keydown=${this.handleShellKeydown}
         @theme-change=${this.handleThemeChange}
       >
+        <a class="shell-skip-link" href="#control-ui-main"> ${t("common.skipToMainContent")} </a>
         <button
           type="button"
           class="shell-nav-backdrop"
@@ -1285,6 +1283,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
+                .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
                 .themeMode=${context.theme.mode}
                 .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
                 .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}
@@ -1328,10 +1327,11 @@ class OpenClawShell extends OpenClawLightDomElement {
             `
           : nothing}
         <main
+          id="control-ui-main"
           class="content ${chatLikeRoute ? "content--chat" : ""} ${activeRoute === "workboard"
             ? "content--workboard"
             : ""}"
-          tabindex="-1"
+          .tabIndex=${-1}
         >
           ${gatewaySnapshot.connected
             ? nothing

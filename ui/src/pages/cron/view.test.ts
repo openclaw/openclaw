@@ -29,6 +29,9 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     jobsLoadingMore: false,
     status: null,
     failingCount: null,
+    agentScoped: false,
+    scopedTotal: null,
+    scopedNextWakeAtMs: null,
     jobs: [],
     jobsTotal: 0,
     jobsHasMore: false,
@@ -116,13 +119,56 @@ function getElement<T extends Element>(
 }
 
 describe("cron view list pane", () => {
+  it("uses agent-scoped summary values", () => {
+    const container = renderView({
+      agentScoped: true,
+      scopedTotal: 3,
+      scopedNextWakeAtMs: Date.now() + 60_000,
+      status: { enabled: true, jobs: 99, nextWakeAtMs: null },
+    });
+    const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
+      entry.textContent?.trim(),
+    );
+
+    expect(values[0]).toBe("3");
+    expect(values[2]).not.toBe("n/a");
+  });
+
+  it("hides an agent-scoped next wake while the scheduler is disabled", () => {
+    const container = renderView({
+      agentScoped: true,
+      scopedNextWakeAtMs: Date.now() + 60_000,
+      status: { enabled: false, jobs: 3, nextWakeAtMs: null },
+    });
+    const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
+      entry.textContent?.trim(),
+    );
+
+    expect(values[2]).toBe("n/a");
+  });
+
+  it("keeps an agent-scoped next wake while scheduler status is loading", () => {
+    const container = renderView({
+      agentScoped: true,
+      scopedNextWakeAtMs: Date.now() + 60_000,
+      status: null,
+    });
+    const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
+      entry.textContent?.trim(),
+    );
+
+    expect(values[2]).not.toBe("n/a");
+  });
+
   it("wires the enabled tabs and marks the active one", () => {
     const onJobsFiltersChange = vi.fn();
     const container = renderView({ jobsEnabledFilter: "enabled", onJobsFiltersChange });
 
     const active = getElement(container, '[data-test-id="cron-tab-enabled"]', HTMLButtonElement);
     expect(active.classList.contains("cron-tab--active")).toBe(true);
-    expect(active.getAttribute("aria-selected")).toBe("true");
+    expect(active.getAttribute("aria-pressed")).toBe("true");
+    expect(active.hasAttribute("role")).toBe(false);
+    expect(active.closest('[role="group"]')?.getAttribute("aria-label")).toBe("Automation status");
 
     getElement(container, '[data-test-id="cron-tab-disabled"]', HTMLButtonElement).click();
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
@@ -317,6 +363,30 @@ describe("cron view list pane", () => {
     expect(activity.querySelector(".cron-table")).toBeNull();
     expect(activity.querySelector(".cron-activity")).not.toBeNull();
   });
+
+  it("moves and activates list tabs with arrow keys", () => {
+    const onListTabChange = vi.fn();
+    const container = renderView({ onListTabChange });
+    document.body.append(container);
+    const tasks = getElement(container, '[data-test-id="cron-list-tab-tasks"]', HTMLButtonElement);
+    const activity = getElement(
+      container,
+      '[data-test-id="cron-list-tab-activity"]',
+      HTMLButtonElement,
+    );
+
+    expect(tasks.tabIndex).toBe(0);
+    expect(activity.tabIndex).toBe(-1);
+    tasks.focus();
+    tasks.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(activity);
+    expect(onListTabChange).toHaveBeenCalledWith("activity");
+    expect(activity.getAttribute("aria-controls")).toBe("cron-list-panel");
+    container.remove();
+  });
 });
 
 describe("cron view run history", () => {
@@ -387,6 +457,13 @@ describe("cron view run history", () => {
 });
 
 describe("cron view editor", () => {
+  it("does not expose a tab panel when the selected job is unavailable", () => {
+    const container = renderView({ editingJobId: "missing-job" });
+
+    expect(container.querySelector('[role="tablist"]')).toBeNull();
+    expect(container.querySelector('[role="tabpanel"]')).toBeNull();
+  });
+
   it("renders the create view with prompt, general, and schedule cards", () => {
     const onSubmit = vi.fn();
     const onClosePanel = vi.fn();

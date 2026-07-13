@@ -20,7 +20,6 @@ export const SIDEBAR_NAV_ROUTES = [
   "usage",
   "cron",
   "tasks",
-  "agents",
   "plugins",
 ] as const satisfies readonly NavigationRouteId[];
 
@@ -129,7 +128,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["ai-agents", "sessions", "model-providers", "automation", "mcp"],
+    routes: ["agents", "ai-agents", "sessions", "model-providers", "automation", "mcp"],
   },
   {
     labelKey: "nav.settingsGroupSystem",
