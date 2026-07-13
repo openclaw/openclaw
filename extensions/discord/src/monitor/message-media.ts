@@ -18,7 +18,6 @@ import {
   resolveDiscordReferencedReplyMessage,
   resolveDiscordSnapshotStickers,
 } from "./message-forwarded.js";
-import { mergeAbortSignals } from "./timeouts.js";
 
 const DISCORD_CDN_HOSTNAMES = [
   "cdn.discordapp.com",
@@ -254,7 +253,10 @@ async function fetchDiscordMedia(params: {
   originalFilename?: string;
 }) {
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
-  const signal = mergeAbortSignals([params.abortSignal, timeoutAbortController?.signal]);
+  const signal =
+    params.abortSignal && timeoutAbortController
+      ? AbortSignal.any([params.abortSignal, timeoutAbortController.signal])
+      : (params.abortSignal ?? timeoutAbortController?.signal);
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
