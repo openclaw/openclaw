@@ -374,6 +374,15 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   text-transform: none;
 }
 
+.context-usage__account {
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .context-usage__limits {
   display: flex;
   flex-direction: column;
