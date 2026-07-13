@@ -25,6 +25,11 @@
       - any-glob-to-any-file:
           - "extensions/irc/**"
           - "docs/channels/irc.md"
+"channel: reef":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/reef/**"
+          - "docs/channels/reef.md"
 "channel: feishu":
   - changed-files:
       - any-glob-to-any-file:
