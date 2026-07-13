@@ -21,6 +21,8 @@ function createProps(overrides: Partial<AboutProps> = {}): AboutProps {
     gatewayVersion: "2026.7.9",
     copyState: "idle",
     onCopyCommit: vi.fn(),
+    clawdWaving: false,
+    onPokeClawd: vi.fn(),
     ...overrides,
   };
 }
@@ -29,6 +31,47 @@ describe("renderAbout", () => {
   beforeEach(async () => {
     document.body.innerHTML = "";
     await i18n.setLocale("en");
+  });
+
+  it("renders the hero with Clawd, identity, community links, and license", () => {
+    const onPokeClawd = vi.fn();
+    const container = document.createElement("div");
+    render(renderAbout(createProps({ onPokeClawd })), container);
+
+    const hero = container.querySelector(".about-hero");
+    expect(hero?.querySelector(".about-hero__name")?.textContent).toBe("OpenClaw");
+    expect(hero?.querySelector(".about-hero__version")?.textContent).toBe("v2026.7.10");
+    expect(hero?.querySelector(".about-hero__clawd svg")).not.toBeNull();
+
+    const clawd = hero?.querySelector<HTMLButtonElement>(".about-hero__clawd");
+    expect(clawd?.getAttribute("aria-label")).toBe("Wave hello to Clawd");
+    clawd?.click();
+    expect(onPokeClawd).toHaveBeenCalledOnce();
+
+    const links = Array.from(hero?.querySelectorAll<HTMLAnchorElement>(".about-hero__link") ?? []);
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      "https://openclaw.ai",
+      "https://docs.openclaw.ai",
+      "https://github.com/openclaw/openclaw",
+      "https://discord.gg/clawd",
+      "https://docs.openclaw.ai/releases",
+    ]);
+    for (const link of links) {
+      expect(link.getAttribute("target")).toBe("_blank");
+      expect(link.getAttribute("rel")).toContain("noopener");
+      expect(link.getAttribute("rel")).toContain("noreferrer");
+    }
+
+    expect(container.querySelector(".about-footer")?.textContent).toContain("MIT License");
+  });
+
+  it("marks the hero as waving only while a poke is active", () => {
+    const container = document.createElement("div");
+    render(renderAbout(createProps({ clawdWaving: true })), container);
+    expect(container.querySelector(".about-hero__clawd--wave")).not.toBeNull();
+
+    render(renderAbout(createProps({ clawdWaving: false })), container);
+    expect(container.querySelector(".about-hero__clawd--wave")).toBeNull();
   });
 
   it("keeps version, commit, branch, and localized UTC build date in one facts grid", () => {
