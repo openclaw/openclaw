@@ -3,14 +3,8 @@
  */
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
-import {
-  listSessionEntries,
-  updateSessionEntry,
-} from "../../../config/sessions/session-accessor.js";
 import {
   bindOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptCacheSnapshot,
@@ -23,14 +17,12 @@ import {
 } from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
-import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
-import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
   buildAgentHookContextChannelFields,
@@ -80,7 +72,6 @@ import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js"
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { createAgentSession, SessionManager } from "../../sessions/index.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
-import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
 import {
   ackPendingAgentSteeringItems,
   releasePendingAgentSteeringItems,
@@ -99,14 +90,9 @@ import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
-import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
-import {
-  normalizeAssistantReplayContent,
-  sanitizeSessionHistory,
-  validateReplayTurns,
-} from "../replay-history.js";
+import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import {
   clearActiveEmbeddedRun,
@@ -143,6 +129,7 @@ import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js"
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { snapshotRecentMessages, summarizeSessionContext } from "./attempt-context-summary.js";
+import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import {
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
@@ -167,7 +154,6 @@ import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flu
 import {
   cloneHookMessages,
   flushSessionManagerTranscript,
-  loadAttemptSessionEntryAfterQuotaMaintenance,
   removeTrailingMidTurnPrecheckAssistantError,
   repairAttemptToolUseResultPairing,
   resolveAttemptTrajectorySessionFile,
@@ -178,7 +164,6 @@ import {
   type AsyncStartedToolMeta,
 } from "./attempt.async-tasks.js";
 import {
-  assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
@@ -191,7 +176,6 @@ import {
 } from "./attempt.llm-boundary.js";
 import {
   buildAfterTurnRuntimeContext,
-  prependSystemPromptAddition,
   resolvePromptSubmissionSkipReason,
 } from "./attempt.prompt-helpers.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
@@ -239,7 +223,6 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
   estimateLlmBoundaryTokenPressure,
-  estimateRenderedLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -944,12 +927,11 @@ export async function runEmbeddedAttempt(
       };
       setActiveSessionSystemPrompt(systemPromptText);
       let didDeliverSourceReplyViaMessageTool = false;
+      const markSourceReplyDelivered = () => (didDeliverSourceReplyViaMessageTool = true);
       installMessageToolOnlyTerminalHook({
         agent: activeSession.agent,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-        onDeliveredSourceReply: () => {
-          didDeliverSourceReplyViaMessageTool = true;
-        },
+        onDeliveredSourceReply: markSourceReplyDelivered,
       });
       prepStages.mark("agent-session");
       if (isRawModelRun) {
@@ -1028,10 +1010,6 @@ export async function runEmbeddedAttempt(
       const sessionPromptState = getEmbeddedSessionPromptState(params.sessionId);
       const toolResultPromptProjectionState = sessionPromptState.toolResults;
       let contextEngineAfterTurnCheckpoint: number | null = null;
-      let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
-      let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
-        "assembled";
-      let contextEngineAssemblySucceeded = false;
       const inFlightPromptSettlePromises = new Set<Promise<void>>();
       const inFlightAbortSettlePromises = new Set<Promise<void>>();
       const trackSettlePromise = (
@@ -1327,214 +1305,26 @@ export async function runEmbeddedAttempt(
       emitPrepStageSummary("stream-ready");
       let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
 
+      let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
       try {
-        if (isRawModelRun) {
-          activeSession.agent.reset();
-          setActiveSessionSystemPrompt("");
-          cacheTrace?.recordStage("session:raw-model-run", {
-            messages: activeSession.messages,
-            system: systemPromptText,
-          });
-        } else {
-          const prior = await sanitizeSessionHistory({
-            messages: activeSession.messages,
-            modelApi: params.model.api,
-            modelId: params.modelId,
-            provider: params.provider,
-            allowedToolNames: replayAllowedToolNames,
-            config: params.config,
-            workspaceDir: effectiveWorkspace,
-            env: process.env,
-            model: params.model,
-            sessionManager,
-            sessionId: params.sessionId,
-            policy: transcriptPolicy,
-          });
-          cacheTrace?.recordStage("session:sanitized", { messages: prior });
-          const validated = await validateReplayTurns({
-            messages: prior,
-            modelApi: params.model.api,
-            modelId: params.modelId,
-            provider: params.provider,
-            config: params.config,
-            workspaceDir: effectiveWorkspace,
-            env: process.env,
-            model: params.model,
-            sessionId: params.sessionId,
-            policy: transcriptPolicy,
-          });
-
-          if (params.sessionKey && !isRawModelRun) {
-            const storePath = resolveStorePath(params.config?.session?.store, {
-              agentId: sessionAgentId,
-            });
-            const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance({
-              storePath,
-              sessionKey: params.sessionKey,
-            });
-            const suspension = sessionEntry?.quotaSuspension;
-            if (sessionEntry && suspension?.state === "resuming") {
-              const subagents = listSessionEntries({ storePath, clone: false })
-                .map(({ entry }) => entry)
-                .filter((s) => s.spawnedBy === sessionEntry.sessionId)
-                .map((s) => ({
-                  sessionId: s.sessionId,
-                  role: s.subagentRole,
-                  lastStatus: s.status,
-                }));
-              const handoffMsg = buildHierarchyReinforcementMessage({
-                summary: suspension.summary ?? "No recovery briefing was captured.",
-                activeSubagents: subagents,
-              });
-              validated.push(handoffMsg);
-              await updateSessionEntry(
-                {
-                  storePath,
-                  sessionKey: params.sessionKey,
-                },
-                async (entry) => {
-                  if (entry.quotaSuspension?.state !== "resuming") {
-                    return null;
-                  }
-                  return {
-                    quotaSuspension: { ...entry.quotaSuspension, state: "active" },
-                  };
-                },
-                {
-                  skipMaintenance: true,
-                  takeCacheOwnership: true,
-                },
-              );
-            }
-          }
-
-          if (params.sessionKey && params.config && !isRawModelRun) {
-            // Capability guidance must include deferred OpenClaw tools without
-            // interpreting arbitrary client tool names as native capabilities.
-            const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
-              cfg: params.config,
-              controllerSessionKey: params.sessionKey,
-              hasSessionsYield: capabilityToolNames.has("sessions_yield"),
-            });
-            if (activeSubagentPromptAddition) {
-              setActiveSessionSystemPrompt(
-                prependSystemPromptAddition({
-                  systemPrompt: systemPromptText,
-                  systemPromptAddition: activeSubagentPromptAddition,
-                }),
-              );
-            }
-          }
-
-          const heartbeatSummary =
-            params.config && sessionAgentId
-              ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
-              : undefined;
-          const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
-            validated,
-            heartbeatSummary?.ackMaxChars,
-            heartbeatSummary?.prompt,
-          );
-          const truncated = limitHistoryTurns(
-            heartbeatFiltered,
-            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
-          );
-          // Re-run tool_use/tool_result pairing repair after truncation, since
-          // limitHistoryTurns can orphan tool_result blocks by removing the
-          // assistant message that contained the matching tool_use.
-          const limited = transcriptPolicy.repairToolUseResultPairing
-            ? repairAttemptToolUseResultPairing(truncated, isOpenAIResponsesApi)
-            : truncated;
-          cacheTrace?.recordStage("session:limited", { messages: limited });
-          if (limited.length > 0 || prior.length > 0) {
-            activeSession.agent.state.messages = limited;
-          }
-        }
-
-        if (activeContextEngine) {
-          try {
-            // Snapshot before assemble: the assemble contract does not require
-            // the input array to be treated immutably, so an engine that windows
-            // history in place would otherwise leave the precheck reading
-            // already-windowed messages instead of the true pre-assembly state.
-            const preassemblyContextEngineMessagesForPrecheck = activeSession.messages.slice();
-            const contextEngineAssembleReserveTokens = Math.max(
-              0,
-              Math.floor(settingsManager.getCompactionReserveTokens()),
-            );
-            const contextEngineAssembleContextTokenBudget = Math.max(
-              1,
-              Math.floor(
-                params.contextTokenBudget ??
-                  params.model.contextWindow ??
-                  params.model.maxTokens ??
-                  DEFAULT_CONTEXT_TOKENS,
-              ),
-            );
-            const contextEngineAssemblePromptBudget = Math.max(
-              1,
-              contextEngineAssembleContextTokenBudget - contextEngineAssembleReserveTokens,
-            );
-            const contextEngineAssemblePrompt =
-              orphanRepair?.contextEnginePrompt ?? params.prompt ?? "";
-            const contextEngineAssembleRenderedPromptTokens =
-              estimateRenderedLlmBoundaryTokenPressure({
-                systemPrompt: systemPromptText,
-                prompt: contextEngineAssemblePrompt,
-              });
-            const contextEngineAssembleMessageBudget = Math.max(
-              1,
-              contextEngineAssemblePromptBudget - contextEngineAssembleRenderedPromptTokens,
-            );
-            const assembled = await assembleAttemptContextEngine({
-              contextEngine: activeContextEngine,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              messages: activeSession.messages,
-              tokenBudget: contextEngineAssembleMessageBudget,
-              availableTools: new Set(capabilityToolNames),
-              citationsMode: params.config?.memory?.citations,
-              modelId: params.modelId,
-              maxOutputTokens: contextEngineAssembleReserveTokens,
-              contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-              providerId: params.provider,
-              requestedModelId: params.requestedModelId,
-              fallbackReason: params.fallbackReason,
-              degradedReason: params.degradedReason,
-              ...(params.prompt !== undefined ? { prompt: contextEngineAssemblePrompt } : {}),
-            });
-            if (!assembled) {
-              throw new Error("context engine assemble returned no result");
-            }
-            const assembledMessages = transcriptPolicy.repairToolUseResultPairing
-              ? repairAttemptToolUseResultPairing(assembled.messages, isOpenAIResponsesApi)
-              : assembled.messages;
-            if (assembledMessages !== activeSession.messages) {
-              activeSession.agent.state.messages = assembledMessages;
-            }
-            contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
-            contextEngineAssemblySucceeded = true;
-            if (contextEnginePromptAuthority === "preassembly_may_overflow") {
-              unwindowedContextEngineMessagesForPrecheck =
-                preassemblyContextEngineMessagesForPrecheck;
-            }
-            if (assembled.systemPromptAddition) {
-              setActiveSessionSystemPrompt(
-                prependSystemPromptAddition({
-                  systemPrompt: systemPromptText,
-                  systemPromptAddition: assembled.systemPromptAddition,
-                }),
-              );
-              log.debug(
-                `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
-              );
-            }
-          } catch (assembleErr) {
-            log.warn(
-              `context engine assemble failed, using pipeline messages: ${String(assembleErr)}`,
-            );
-          }
-        }
+        preparedHistory = await prepareEmbeddedAttemptHistory({
+          attempt: params,
+          activeSession,
+          sessionManager,
+          ...(activeContextEngine ? { activeContextEngine } : {}),
+          cacheTrace,
+          capabilityToolNames,
+          effectiveWorkspace,
+          isOpenAIResponsesApi,
+          isRawModelRun,
+          ...(orphanRepair ? { orphanRepair } : {}),
+          replayAllowedToolNames,
+          sessionAgentId,
+          settingsManager,
+          systemPromptText,
+          transcriptPolicy,
+          setActiveSessionSystemPrompt,
+        });
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
@@ -1547,6 +1337,11 @@ export async function runEmbeddedAttempt(
         activeSession.dispose();
         throw err;
       }
+      const {
+        contextEnginePromptAuthority,
+        contextEngineAssemblySucceeded,
+        unwindowedContextEngineMessagesForPrecheck,
+      } = preparedHistory;
 
       let yieldAborted = false;
       const abortCompaction = () => {
@@ -1748,6 +1543,7 @@ export async function runEmbeddedAttempt(
           shouldEmitToolOutput: params.shouldEmitToolOutput,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           hasDeliveredMessageToolOnlySourceReply: () => didDeliverSourceReplyViaMessageTool,
+          onDeliveredMessageToolOnlySourceReply: markSourceReplyDelivered,
           onAgentToolResult: params.onAgentToolResult,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
