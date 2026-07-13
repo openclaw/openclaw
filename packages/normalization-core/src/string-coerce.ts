@@ -3,11 +3,6 @@ export function readStringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/** Reads a nonblank string while preserving its original whitespace. */
-export function readNonBlankStringPreservingWhitespace(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
 /** Trims string input and returns null for non-strings or empty strings. */
 export function normalizeNullableString(value: unknown): string | null {
   if (typeof value !== "string") {
