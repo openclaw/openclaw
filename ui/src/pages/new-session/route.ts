@@ -9,22 +9,26 @@ async function loadNewSessionData(
   context: ApplicationContext,
   search: string,
 ): Promise<NewSessionRouteData> {
-  const location = newSessionLocationFromSearch(search);
-  const plain = { ...location, model: "", catalogLabel: "" };
-  if (!location.catalogId) {
-    return plain;
+  const requestedLocation = newSessionLocationFromSearch(search);
+  if (!requestedLocation.catalogId) {
+    return { ...requestedLocation, model: "", catalogLabel: "" };
   }
+  const agentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
+  const availableAgents =
+    agentsList?.agents ?? (requestedLocation.agentId ? [{ id: requestedLocation.agentId }] : []);
+  const agentId = resolveAgentId(
+    requestedLocation,
+    availableAgents,
+    agentsList?.defaultId ?? agentsList?.agents[0]?.id ?? "main",
+  );
+  const location = { ...requestedLocation, agentId };
+  const plain = { ...location, model: "", catalogLabel: "" };
   const gateway = context.gateway.snapshot;
   if (!gateway.connected || !gateway.client) {
     return plain;
   }
-  const agentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
-  const agents = agentsList?.agents ?? [];
-  const fallback = agentsList?.defaultId ?? agents[0]?.id ?? "main";
-  const agentId = resolveAgentId(plain, agents, fallback);
-  const scoped = { ...plain, agentId };
   const target = await resolveCreateTarget(gateway.client, location.catalogId, agentId);
-  return target ? { ...scoped, ...target } : scoped;
+  return target ? { ...plain, ...target } : plain;
 }
 
 export const page = definePage({

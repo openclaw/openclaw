@@ -156,10 +156,14 @@ describe("session catalog Gateway methods", () => {
       },
     ];
 
-    const available = await call("sessions.catalog.list", {
-      agentId: "research",
-      catalogId: "claude",
-    });
+    const available = await call(
+      "sessions.catalog.list",
+      {
+        agentId: "research",
+        catalogId: "claude",
+      },
+      { agents: { list: [{ id: "main" }, { id: "research" }] } },
+    );
     expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
     expect(available).toHaveBeenCalledWith(true, {
       catalogs: [

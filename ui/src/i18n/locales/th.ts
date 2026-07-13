@@ -403,6 +403,7 @@ export const th: TranslationMap = {
     working: "กำลังทำงาน…",
     ready: "พร้อมแชต",
     whatCanAgentDo: "{name} ทำอะไรได้บ้าง?",
+    help: "วิธีใช้",
     getHelp: "ขอความช่วยเหลือ",
     discord: "ชุมชน Discord",
     viewChangelog: "ดูบันทึกการเปลี่ยนแปลง",

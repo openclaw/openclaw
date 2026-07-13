@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -16,6 +17,7 @@ import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
+import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -121,7 +123,7 @@ function catalogResult(
 }
 
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
-  "sessions.catalog.list": async ({ params, respond }) => {
+  "sessions.catalog.list": async ({ params, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -143,9 +145,19 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     } else {
       selected = providers();
     }
+    const config = context.getRuntimeConfig();
+    const resolvedAgent = resolveAgentIdOrRespondError({
+      rawAgentId: request.agentId,
+      respond,
+      cfg: config,
+      normalize: normalizeOptionalString,
+    });
+    if (!resolvedAgent) {
+      return;
+    }
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
-        const createTarget = resolveProviderCreateTarget(provider, request.agentId);
+        const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
         const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
         try {
           const hosts = await provider.list({

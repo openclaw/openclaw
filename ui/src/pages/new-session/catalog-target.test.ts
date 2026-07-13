@@ -8,6 +8,8 @@ import {
 } from "./catalog-target.ts";
 
 describe("new-session catalog target", () => {
+  const agents = [{ id: "main" }, { id: "research" }];
+
   it("keeps the draft identity stable while target metadata resolves", () => {
     const pending = { agentId: "main", catalogId: "claude", model: "", catalogLabel: "" };
     const ready = {
@@ -49,23 +51,15 @@ describe("new-session catalog target", () => {
         {
           agentId: "research",
           catalogId: "claude",
-          model: "anthropic/claude-opus-4-8",
-          catalogLabel: "Claude Code",
         },
-        [{ id: "main" }, { id: "research" }],
+        agents,
         "main",
       ),
     ).toBe("research");
   });
 
   it("canonicalizes the requested agent or falls back before catalog resolution", () => {
-    const agents = [{ id: "main" }, { id: "research" }];
-    const target = {
-      agentId: "Research",
-      catalogId: "claude",
-      model: "",
-      catalogLabel: "",
-    };
+    const target = { agentId: "Research", catalogId: "claude" };
 
     expect(resolveAgentId(target, agents, "main")).toBe("research");
     expect(resolveAgentId({ ...target, agentId: "retired" }, agents, "main")).toBe("main");

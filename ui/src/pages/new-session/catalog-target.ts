@@ -19,7 +19,7 @@ export function isResolvedTarget(data?: NewSessionRouteData): boolean {
 }
 
 export function resolveAgentId(
-  data: NewSessionRouteData | undefined,
+  data: Pick<NewSessionRouteData, "agentId" | "catalogId"> | undefined,
   availableAgents: readonly { id: string }[],
   fallback: string,
 ): string {

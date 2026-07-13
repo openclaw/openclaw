@@ -475,7 +475,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
             },
           ],
         },
-        "sessions.create": { key: "agent:main:claude-reconnect" },
+        "sessions.create": { key: "agent:research:claude-reconnect" },
       },
     });
 

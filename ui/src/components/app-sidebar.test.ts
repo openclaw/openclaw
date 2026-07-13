@@ -423,15 +423,33 @@ describe("AppSidebar agent chip", () => {
     expect(menu?.querySelector(".sidebar-pair-mobile")).not.toBeNull();
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
-    const linkHrefs = [...(menu?.querySelectorAll('a[role="menuitem"]') ?? [])].map((link) =>
-      link.getAttribute("href"),
-    );
+    // External help links fold into the Help flyout; they only render open.
+    expect(menu?.querySelector('a[role="menuitem"]')).toBeNull();
+    const helpRow = [
+      ...(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []),
+    ].find((row) => row.textContent?.includes("Help"));
+    expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
+    helpRow?.click();
+    await sidebar.updateComplete;
+
+    const linkHrefs = [
+      ...(menu?.querySelectorAll('.sidebar-customize-menu__submenu a[role="menuitem"]') ?? []),
+    ].map((link) => link.getAttribute("href"));
     expect(linkHrefs).toEqual([
       "https://docs.openclaw.ai",
       "https://docs.openclaw.ai/help",
       "https://discord.gg/clawd",
       "https://docs.openclaw.ai/releases",
     ]);
+
+    // Real mouse flow fires pointerenter before the click; the click must not
+    // invert the hover-opened state back to closed.
+    const helpHost = menu?.querySelector(".sidebar-customize-menu__submenu-host");
+    helpHost?.dispatchEvent(Object.assign(new Event("pointerenter"), { pointerType: "mouse" }));
+    await sidebar.updateComplete;
+    helpRow?.click();
+    await sidebar.updateComplete;
+    expect(menu?.querySelector(".sidebar-customize-menu__submenu")).not.toBeNull();
 
     const agentRows = [...(menu?.querySelectorAll('[role="menuitemradio"]') ?? [])];
     expect(agentRows).toHaveLength(2);
