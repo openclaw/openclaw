@@ -106,7 +106,11 @@ export async function clearFinalizableDraftMessage<T>(
   }
   try {
     await params.deleteMessage(messageId);
-    params.clearMessageId();
+    // Only clear if the stored id still matches the one we just deleted.
+    // A concurrent replacement may have stored a newer preview id.
+    if (params.readMessageId() === messageId) {
+      params.clearMessageId();
+    }
     params.onDeleteSuccess?.(messageId);
   } catch (err) {
     params.warn?.(`${params.warnPrefix}: ${err instanceof Error ? err.message : String(err)}`);

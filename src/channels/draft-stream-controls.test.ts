@@ -127,6 +127,30 @@ describe("draft-stream-controls", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("clearFinalizableDraftMessage does not clear a replaced preview id", async () => {
+    let messageId: string | undefined = "m-old";
+    const deleteMessage = vi.fn(async () => {
+      // Simulate a concurrent replacement: during the DELETE network
+      // request a new preview message was created.
+      messageId = "m-new";
+    });
+
+    await clearFinalizableDraftMessage({
+      stopForClear: async () => {},
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
+      warnPrefix: "cleanup failed",
+    });
+
+    expect(deleteMessage).toHaveBeenCalledWith("m-old");
+    // The newer preview id must survive.
+    expect(messageId).toBe("m-new");
+  });
+
   it("controls ignore updates after final", async () => {
     const sendOrEditStreamMessage = vi.fn(async () => true);
     const controls = createFinalizableDraftStreamControlsForState({
