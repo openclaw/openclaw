@@ -17,7 +17,7 @@ type SourceReplyTranscriptMirror = NonNullable<
   NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"]
 >;
 
-export type TranscriptMirror = SourceReplyTranscriptMirror & {
+type TranscriptMirror = SourceReplyTranscriptMirror & {
   expectedSessionId?: string;
   storePath?: string;
   preferText?: boolean;

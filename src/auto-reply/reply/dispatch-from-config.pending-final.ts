@@ -14,7 +14,7 @@ type SettledFinalDelivery = {
   payload: ReplyPayload;
 };
 
-export type PendingFinalDeliveryIdentity = {
+type PendingFinalDeliveryIdentity = {
   createdAt?: number;
   intentId?: string;
   present: boolean;

@@ -25,7 +25,7 @@ import {
   runWithReplyOperationLifecycleAdmission,
 } from "./reply-turn-admission.js";
 
-export type DispatchReplyOperationAcquisition =
+type DispatchReplyOperationAcquisition =
   | { status: "ready" }
   | { status: "busy" }
   | { status: "aborted" };
