@@ -1,10 +1,29 @@
 import path from "node:path";
 import process from "node:process";
+import { Readable } from "node:stream";
 import { execa, type Options as ExecaOptions, type ResultPromise } from "execa";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
+const COMMAND_INPUT_CHUNK_BYTES = 64 * 1024;
+
+/** Convert large binary command input into bounded, backpressure-aware writes. */
+export function createChunkedCommandInput(
+  input?: string | Uint8Array,
+): string | Uint8Array | Readable {
+  const resolvedInput = input ?? new Uint8Array();
+  if (typeof resolvedInput === "string" || resolvedInput.byteLength <= COMMAND_INPUT_CHUNK_BYTES) {
+    return resolvedInput;
+  }
+  return Readable.from(chunkCommandInput(resolvedInput));
+}
+
+function* chunkCommandInput(input: Uint8Array): Generator<Uint8Array> {
+  for (let offset = 0; offset < input.byteLength; offset += COMMAND_INPUT_CHUNK_BYTES) {
+    yield input.subarray(offset, offset + COMMAND_INPUT_CHUNK_BYTES);
+  }
+}
 
 function assignChildEnvValue(params: {
   env: NodeJS.ProcessEnv;

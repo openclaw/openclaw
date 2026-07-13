@@ -6,7 +6,7 @@
 import { createAbortError } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
+import * as commandExec from "../../process/exec.js";
 import {
   sanitizeEnvVars,
   sanitizeExplicitSandboxEnvVars,
@@ -37,10 +37,10 @@ export async function execDockerRaw(
 ): Promise<ExecDockerRawResult> {
   let result;
   try {
-    result = await spawnCommand(["docker", ...args], {
+    result = await commandExec.spawnCommand(["docker", ...args], {
       cancelSignal: opts?.signal,
       encoding: "buffer",
-      input: opts?.input ?? Buffer.alloc(0),
+      input: commandExec.createChunkedCommandInput(opts?.input),
       maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
       reject: false,
       stripFinalNewline: false,
@@ -62,7 +62,7 @@ export async function execDockerRaw(
   if (opts?.signal?.aborted || result.isCanceled) {
     throw createAbortError("Aborted");
   }
-  if (result.failed && !isPlainCommandExitFailure(result)) {
+  if (result.failed && !commandExec.isPlainCommandExitFailure(result)) {
     if (result.code === "ENOENT") {
       throw Object.assign(
         new Error(

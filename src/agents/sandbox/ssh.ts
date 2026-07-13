@@ -12,7 +12,7 @@ import { resolveRootPath } from "../../infra/boundary-path.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
+import * as commandExec from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
@@ -684,11 +684,11 @@ export async function runSshSandboxCommand(
     throw new Error("SSH command argv is empty");
   }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
-  const result = await spawnCommand([executable, ...args], {
+  const result = await commandExec.spawnCommand([executable, ...args], {
     baseEnv: sshEnv,
     cancelSignal: params.signal,
     encoding: "buffer",
-    input: params.stdin ?? Buffer.alloc(0),
+    input: commandExec.createChunkedCommandInput(params.stdin),
     maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
     reject: false,
     stripFinalNewline: false,
@@ -696,7 +696,7 @@ export async function runSshSandboxCommand(
   if (params.signal?.aborted || result.isCanceled) {
     throw createAbortError("Aborted");
   }
-  if (result.failed && !isPlainCommandExitFailure(result)) {
+  if (result.failed && !commandExec.isPlainCommandExitFailure(result)) {
     throw toErrorObject(result, "SSH command execution failed");
   }
   const stdout = Buffer.from(result.stdout);
