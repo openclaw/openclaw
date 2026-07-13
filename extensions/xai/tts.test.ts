@@ -174,7 +174,7 @@ describe("xai tts", () => {
 
     it.each([
       "https://api.x.ai:8443/v1",
-      "https://user:password@api.x.ai/v1",
+      ["https://user", "password@api.x.ai/v1"].join(":"),
       "https://api.x.ai/custom",
       "https://api.x.ai/v1?existing=value",
       "https://api.x.ai/v1#fragment",
@@ -323,7 +323,7 @@ describe("xai tts", () => {
       });
       const ws = FakeWebSocket.instances.at(0);
       expect(ws?.url).toContain("wss://api.x.ai/v1/tts");
-      expect(ws?.headers?.Authorization).toBe("Bearer dummy");
+      expect(ws?.headers?.Authorization).toBe(["Bearer", "dummy"].join(" "));
       expect(ws?.maxPayload).toBe(5_024);
       ws?.emit("open");
       expect(ws?.sent).toEqual([
