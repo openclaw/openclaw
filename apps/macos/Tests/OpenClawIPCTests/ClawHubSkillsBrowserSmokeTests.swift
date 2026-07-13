@@ -1,5 +1,5 @@
-@testable import OpenClaw
 import Testing
+@testable import OpenClaw
 
 @MainActor
 struct ClawHubSkillsBrowserSmokeTests {

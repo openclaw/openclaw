@@ -25,8 +25,8 @@ struct ClawHubSkillsBrowser: View {
                 SettingsCardRow(
                     title: "Discover skills",
                     subtitle: "The Gateway verifies the exact reviewed release before download.",
-                    showsDivider: false
-                ) {
+                    showsDivider: false)
+                {
                     TextField("Search ClawHub", text: self.$model.query)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 260)
@@ -54,8 +54,8 @@ struct ClawHubSkillsBrowser: View {
                     SettingsCardRow(
                         title: "No skills found",
                         subtitle: "Try another search or refresh the catalog.",
-                        showsDivider: false
-                    ) {
+                        showsDivider: false)
+                    {
                         EmptyView()
                     }
                 } else {
@@ -65,11 +65,10 @@ struct ClawHubSkillsBrowser: View {
                                 skill: skill,
                                 installed: SkillManagementContract.installed(
                                     self.installedSkills,
-                                    slug: skill.slug
-                                ),
+                                    slug: skill.slug),
                                 isBusy: self.model.reviewingSlug == skill.slug,
-                                showsDivider: index != self.model.results.count - 1
-                            ) {
+                                showsDivider: index != self.model.results.count - 1)
+                            {
                                 Task { await self.model.review(skill) }
                             }
                         }
@@ -78,7 +77,7 @@ struct ClawHubSkillsBrowser: View {
             }
         }
         .task { await self.model.searchIfNeeded() }
-        .sheet(item: $model.sheet) { sheet in
+        .sheet(item: self.$model.sheet) { sheet in
             switch sheet {
             case let .install(review, route):
                 ClawHubInstallReviewSheet(
@@ -91,8 +90,7 @@ struct ClawHubSkillsBrowser: View {
                                 self.onInstalled(skills)
                             }
                         }
-                    }
-                )
+                    })
             case let .risk(review, route, message, warning):
                 ClawHubRiskReviewSheet(
                     review: review,
@@ -106,8 +104,7 @@ struct ClawHubSkillsBrowser: View {
                                 self.onInstalled(skills)
                             }
                         }
-                    }
-                )
+                    })
             }
         }
     }
@@ -122,10 +119,10 @@ private struct ClawHubSkillResultRow: View {
 
     var body: some View {
         SettingsCardRow(
-            title: skill.displayName,
-            subtitle: skill.summary ?? skill.slug,
-            showsDivider: showsDivider
-        ) {
+            title: self.skill.displayName,
+            subtitle: self.skill.summary ?? self.skill.slug,
+            showsDivider: self.showsDivider)
+        {
             if let version = self.skill.version {
                 Text(version)
                     .font(.caption.monospacedDigit())
@@ -258,35 +255,34 @@ private final class ClawHubSkillsBrowserModel {
     private var hasSearched = false
 
     func searchIfNeeded() async {
-        guard !hasSearched else { return }
-        await search()
+        guard !self.hasSearched else { return }
+        await self.search()
     }
 
     func search() async {
-        guard !isSearching else { return }
-        isSearching = true
-        notice = nil
+        guard !self.isSearching else { return }
+        self.isSearching = true
+        self.notice = nil
         defer { self.isSearching = false }
         do {
             guard let route = await GatewayConnection.shared.captureRoute() else {
                 throw ClawHubSkillsBrowserError.gatewayUnavailable
             }
-            results = try await GatewayConnection.shared.skillsSearch(query: query, on: route)
-            hasSearched = true
+            self.results = try await GatewayConnection.shared.skillsSearch(query: self.query, on: route)
+            self.hasSearched = true
         } catch {
-            notice = Notice(
+            self.notice = Notice(
                 title: "ClawHub unavailable",
                 message: error.localizedDescription,
                 warning: nil,
-                isError: true
-            )
+                isError: true)
         }
     }
 
     func review(_ skill: ClawHubSkillSummary) async {
-        guard reviewingSlug == nil else { return }
-        reviewingSlug = skill.slug
-        notice = nil
+        guard self.reviewingSlug == nil else { return }
+        self.reviewingSlug = skill.slug
+        self.notice = nil
         defer { self.reviewingSlug = nil }
         do {
             guard let route = await GatewayConnection.shared.captureRoute() else {
@@ -296,51 +292,47 @@ private final class ClawHubSkillsBrowserModel {
             guard let review = ClawHubSkillInstallReview(detail: detail, fallback: skill) else {
                 throw ClawHubSkillsBrowserError.missingInstallVersion
             }
-            sheet = .install(review, route: route)
+            self.sheet = .install(review, route: route)
         } catch {
-            notice = Notice(
+            self.notice = Notice(
                 title: "Could not review skill",
                 message: error.localizedDescription,
                 warning: nil,
-                isError: true
-            )
+                isError: true)
         }
     }
 
     func install(
         _ review: ClawHubSkillInstallReview,
         route: GatewayConnection.Route,
-        acknowledgeRisk: Bool
-    ) async -> [SkillStatus]? {
-        guard installingSlug == nil else { return nil }
-        installingSlug = review.slug
-        notice = nil
+        acknowledgeRisk: Bool) async -> [SkillStatus]?
+    {
+        guard self.installingSlug == nil else { return nil }
+        self.installingSlug = review.slug
+        self.notice = nil
         defer { self.installingSlug = nil }
         do {
             let result = try await GatewayConnection.shared.skillsInstallClawHub(
                 slug: review.slug,
                 version: review.version,
                 acknowledgeRisk: acknowledgeRisk,
-                on: route
-            )
+                on: route)
             let report = try await GatewayConnection.shared.skillsStatus(on: route)
             guard SkillManagementContract.installed(report.skills, slug: review.slug, version: review.version) else {
-                sheet = nil
-                notice = Notice(
+                self.sheet = nil
+                self.notice = Notice(
                     title: "Install result unknown",
                     message: "Reconnect, refresh Skills, then retry. The Gateway safely joins a matching install still running.",
                     warning: result.warning,
-                    isError: true
-                )
+                    isError: true)
                 return nil
             }
-            sheet = nil
-            notice = Notice(
+            self.sheet = nil
+            self.notice = Notice(
                 title: "Installed",
                 message: result.message,
                 warning: result.warning,
-                isError: false
-            )
+                isError: false)
             return report.skills
         } catch let error as GatewayResponseError {
             let rejection = SkillManagementContract.rejection(from: error, attemptedVersion: review.version)
@@ -349,38 +341,34 @@ private final class ClawHubSkillsBrowserModel {
                     review,
                     route: route,
                     message: rejection.message,
-                    warning: rejection.warning
-                )
+                    warning: rejection.warning)
             } else {
                 self.sheet = nil
                 self.notice = Notice(
                     title: "Gateway blocked install",
                     message: rejection.message,
                     warning: rejection.warning,
-                    isError: true
-                )
+                    isError: true)
             }
             return nil
         } catch {
             if let report = try? await GatewayConnection.shared.skillsStatus(on: route),
                SkillManagementContract.installed(report.skills, slug: review.slug, version: review.version)
             {
-                sheet = nil
-                notice = Notice(
+                self.sheet = nil
+                self.notice = Notice(
                     title: "Installed",
                     message: "The Gateway installed the reviewed version.",
                     warning: nil,
-                    isError: false
-                )
+                    isError: false)
                 return report.skills
             }
-            sheet = nil
-            notice = Notice(
+            self.sheet = nil
+            self.notice = Notice(
                 title: "Install result unknown",
                 message: error.localizedDescription,
                 warning: nil,
-                isError: true
-            )
+                isError: true)
             return nil
         }
     }

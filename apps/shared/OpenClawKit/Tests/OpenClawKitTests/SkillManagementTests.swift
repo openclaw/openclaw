@@ -1,14 +1,13 @@
 import Foundation
 import OpenClawProtocol
-@testable import OpenClawKit
 import Testing
+@testable import OpenClawKit
 
 struct SkillManagementTests {
     @Test func `detail review uses exact detail version and publisher`() throws {
         let data = Data(
             #"{"skill":{"displayName":"Weather","summary":"Forecasts"},"latestVersion":{"version":"2.0.0"},"owner":{"handle":"molly","displayName":"Molly"}}"#
-                .utf8
-        )
+                .utf8)
         let detail = try JSONDecoder().decode(ClawHubSkillDetail.self, from: data)
         let review = try #require(ClawHubSkillInstallReview(
             detail: detail,
@@ -16,9 +15,7 @@ struct SkillManagementTests {
                 slug: "weather",
                 displayName: "Old Weather",
                 summary: nil,
-                version: "1.0.0"
-            )
-        ))
+                version: "1.0.0")))
 
         #expect(review.slug == "@molly/weather")
         #expect(review.displayName == "Weather")
@@ -35,8 +32,7 @@ struct SkillManagementTests {
                 "clawhubTrustCode": AnyCodable("clawhub_risk_acknowledgement_required"),
                 "version": AnyCodable("2.0.0"),
                 "warning": AnyCodable("Automated analysis found risky behavior."),
-            ]
-        )
+            ])
         let accepted = SkillManagementContract.rejection(from: matching, attemptedVersion: "2.0.0")
         #expect(accepted.requiresAcknowledgement)
         #expect(accepted.acknowledgeVersion == "2.0.0")
@@ -55,9 +51,7 @@ struct SkillManagementTests {
                 slug: "@molly/weather",
                 ownerHandle: "molly",
                 installedVersion: "2.0.0",
-                reason: nil
-            )
-        )
+                reason: nil))
         #expect(SkillManagementContract.installed([linked], slug: "weather", version: "2.0.0"))
         #expect(!SkillManagementContract.installed([linked], slug: "weather", version: "2.0.1"))
         #expect(SkillManagementContract.installed([linked], slug: "weather"))
@@ -71,9 +65,7 @@ struct SkillManagementTests {
                 slug: "weather",
                 ownerHandle: "molly",
                 installedVersion: "2.0.0",
-                reason: nil
-            )
-        )
+                reason: nil))
         #expect(SkillManagementContract.installed([linked], slug: "@molly/weather", version: "2.0.0"))
         #expect(!SkillManagementContract.installed([linked], slug: "@other/weather", version: "2.0.0"))
     }
@@ -93,8 +85,8 @@ struct SkillManagementTests {
     private static func skill(
         clawhub: ClawHubInstalledSkillLink?,
         blockedByAgentFilter: Bool? = nil,
-        platformIncompatible: Bool? = nil
-    ) -> SkillStatus {
+        platformIncompatible: Bool? = nil) -> SkillStatus
+    {
         SkillStatus(
             name: "Weather",
             description: "Forecasts",
@@ -114,7 +106,6 @@ struct SkillManagementTests {
             missing: SkillMissing(bins: [], env: [], config: []),
             configChecks: [],
             install: [],
-            clawhub: clawhub
-        )
+            clawhub: clawhub)
     }
 }

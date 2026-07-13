@@ -19395,7 +19395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 153,
+      "line": 151,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Skills",
       "surface": "apple",
@@ -19403,7 +19403,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 167,
+      "line": 165,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Connect to manage Gateway skills.",
       "surface": "apple",
@@ -19411,7 +19411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 169,
+      "line": 167,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Loading installed skills and readiness.",
       "surface": "apple",
@@ -19419,7 +19419,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 172,
+      "line": 170,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "%@ ready · %@ need setup",
       "surface": "apple",
@@ -19427,7 +19427,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 179,
+      "line": 176,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "offline",
       "surface": "apple",
@@ -19435,7 +19435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 181,
+      "line": 178,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "loading",
       "surface": "apple",
@@ -19443,7 +19443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 197,
+      "line": 194,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Skills section",
       "surface": "apple",
@@ -19451,7 +19451,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 212,
+      "line": 209,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Installed",
       "surface": "apple",
@@ -19459,7 +19459,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 215,
+      "line": 212,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Refresh Skills",
       "surface": "apple",
@@ -19467,7 +19467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 233,
+      "line": 229,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Search installed skills",
       "surface": "apple",
@@ -19475,7 +19475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 242,
+      "line": 238,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Installed skill filter",
       "surface": "apple",
@@ -19483,7 +19483,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 256,
+      "line": 252,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Connect to load and manage installed skills.",
       "surface": "apple",
@@ -19491,7 +19491,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 263,
+      "line": 258,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Loading skills",
       "surface": "apple",
@@ -19499,7 +19499,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 264,
+      "line": 259,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Reading the Gateway skill catalog.",
       "surface": "apple",
@@ -19507,7 +19507,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 271,
+      "line": 265,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "No matching skills",
       "surface": "apple",
@@ -19515,7 +19515,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 271,
+      "line": 265,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "No skills installed",
       "surface": "apple",
@@ -19523,7 +19523,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 273,
+      "line": 267,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Browse ClawHub to discover and install skills.",
       "surface": "apple",
@@ -19531,7 +19531,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 274,
+      "line": 268,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Change the search or readiness filter.",
       "surface": "apple",
@@ -19539,7 +19539,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 319,
+      "line": 311,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "ClawHub",
       "surface": "apple",
@@ -19547,7 +19547,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 322,
+      "line": 314,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Search ClawHub",
       "surface": "apple",
@@ -19555,7 +19555,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 349,
+      "line": 340,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Search",
       "surface": "apple",
@@ -19563,7 +19563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 353,
+      "line": 344,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "The Gateway verifies the exact reviewed release before download.",
       "surface": "apple",
@@ -19571,7 +19571,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 366,
+      "line": 357,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Gateway offline",
       "surface": "apple",
@@ -19579,7 +19579,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 367,
+      "line": 358,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Connect to search and install ClawHub skills.",
       "surface": "apple",
@@ -19587,7 +19587,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 374,
+      "line": 364,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Gateway update required",
       "surface": "apple",
@@ -19595,7 +19595,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 375,
+      "line": 365,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Update the Gateway to search and install ClawHub skills from iOS.",
       "surface": "apple",
@@ -19603,7 +19603,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 382,
+      "line": 371,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Searching ClawHub",
       "surface": "apple",
@@ -19611,7 +19611,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 383,
+      "line": 372,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Loading verified skill releases.",
       "surface": "apple",
@@ -19619,7 +19619,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 390,
+      "line": 378,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "No skills found",
       "surface": "apple",
@@ -19627,7 +19627,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 391,
+      "line": 379,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Try another search or refresh the catalog.",
       "surface": "apple",
@@ -19635,7 +19635,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 478,
+      "line": 463,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Could not load skills",
       "surface": "apple",
@@ -19643,7 +19643,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 519,
+      "line": 501,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "ClawHub unavailable",
       "surface": "apple",
@@ -19651,7 +19651,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 560,
+      "line": 540,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Could not review skill",
       "surface": "apple",
@@ -19659,7 +19659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 617,
+      "line": 593,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Reconnect, refresh Skills, then retry. The Gateway safely joins a matching install still running.",
       "surface": "apple",
@@ -19667,7 +19667,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 644,
+      "line": 616,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Gateway blocked install",
       "surface": "apple",
@@ -19675,7 +19675,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 660,
+      "line": 631,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "The Gateway installed the reviewed version.",
       "surface": "apple",
@@ -19683,7 +19683,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 669,
+      "line": 639,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Install result unknown",
       "surface": "apple",
@@ -19691,7 +19691,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 704,
+      "line": 672,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Skill disabled",
       "surface": "apple",
@@ -19699,7 +19699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 704,
+      "line": 672,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Skill enabled",
       "surface": "apple",
@@ -19707,7 +19707,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 712,
+      "line": 679,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Could not enable skill",
       "surface": "apple",
@@ -19715,7 +19715,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 713,
+      "line": 680,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Could not disable skill",
       "surface": "apple",
@@ -19723,7 +19723,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 823,
+      "line": 787,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Disable",
       "surface": "apple",
@@ -19731,7 +19731,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 823,
+      "line": 787,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Enable",
       "surface": "apple",
@@ -19739,7 +19739,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 835,
+      "line": 799,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Off",
       "surface": "apple",
@@ -19747,7 +19747,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 838,
+      "line": 802,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Ready",
       "surface": "apple",
@@ -19755,7 +19755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 839,
+      "line": 803,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Needs Setup",
       "surface": "apple",
@@ -19763,7 +19763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 851,
+      "line": 815,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Missing: %@",
       "surface": "apple",
@@ -19771,7 +19771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 879,
+      "line": 843,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Install",
       "surface": "apple",
@@ -19779,7 +19779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 936,
+      "line": 899,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "The Gateway will verify this exact release with ClawHub before download.",
       "surface": "apple",
@@ -19787,7 +19787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 940,
+      "line": 903,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "This gateway connection needs operator.admin to install skills.",
       "surface": "apple",
@@ -19795,7 +19795,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 947,
+      "line": 910,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Review ClawHub skill",
       "surface": "apple",
@@ -19803,7 +19803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 955,
+      "line": 918,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Verify and install",
       "surface": "apple",
@@ -19811,7 +19811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 979,
+      "line": 942,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Gateway warning",
       "surface": "apple",
@@ -19819,7 +19819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 989,
+      "line": 952,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "The Gateway requires explicit acknowledgement for this release.",
       "surface": "apple",
@@ -19827,7 +19827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 994,
+      "line": 957,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Review warning details",
       "surface": "apple",
@@ -19835,7 +19835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 996,
+      "line": 959,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Expand and review the Gateway warning before acknowledging this exact version.",
       "surface": "apple",
@@ -19843,7 +19843,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1002,
+      "line": 965,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Review Gateway warning",
       "surface": "apple",
@@ -19851,7 +19851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1006,
+      "line": 969,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -19859,7 +19859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1010,
+      "line": 973,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Acknowledge and install",
       "surface": "apple",
@@ -19867,7 +19867,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1030,
+      "line": 993,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Version",
       "surface": "apple",
@@ -19875,7 +19875,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1031,
+      "line": 994,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Publisher",
       "surface": "apple",
@@ -19883,7 +19883,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1078,
+      "line": 1041,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "The connected Gateway changed. Refresh Skills and try again.",
       "surface": "apple",
@@ -19891,7 +19891,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1079,
+      "line": 1042,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "Could not encode the Gateway request.",
       "surface": "apple",
@@ -19899,7 +19899,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1080,
+      "line": 1043,
       "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift",
       "source": "ClawHub did not report an installable version for this skill.",
       "surface": "apple",
@@ -25787,7 +25787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 134,
+      "line": 131,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Installed",
       "surface": "apple",
@@ -25795,7 +25795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 134,
+      "line": 131,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Review",
       "surface": "apple",
@@ -25803,7 +25803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 149,
+      "line": 146,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Review ClawHub skill",
       "surface": "apple",
@@ -25811,7 +25811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 151,
+      "line": 148,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "The Gateway will verify this exact release with ClawHub before download.",
       "surface": "apple",
@@ -25819,7 +25819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 157,
+      "line": 154,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Verify and install",
       "surface": "apple",
@@ -25827,7 +25827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 178,
+      "line": 175,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Gateway warning",
       "surface": "apple",
@@ -25835,7 +25835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 183,
+      "line": 180,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Review warning details",
       "surface": "apple",
@@ -25843,7 +25843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 189,
+      "line": 186,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Expand and review the Gateway warning before acknowledging this exact version.",
       "surface": "apple",
@@ -25851,7 +25851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 194,
+      "line": 191,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -25859,7 +25859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 195,
+      "line": 192,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Acknowledge and install",
       "surface": "apple",
@@ -25867,7 +25867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 214,
+      "line": 211,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Version",
       "surface": "apple",
@@ -25875,7 +25875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 215,
+      "line": 212,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Publisher",
       "surface": "apple",
@@ -34339,7 +34339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 332,
+      "line": 331,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/SkillManagement.swift",
       "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
       "surface": "apple",

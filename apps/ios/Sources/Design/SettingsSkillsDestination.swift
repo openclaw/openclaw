@@ -81,16 +81,16 @@ struct SettingsSkillsDestination: View {
             .padding(.vertical, 12)
         }
         .font(OpenClawType.body)
-        .task(id: refreshID) { await self.loadInitialState() }
+        .task(id: self.refreshID) { await self.loadInitialState() }
         .refreshable { await self.refreshVisibleSection() }
-        .onChange(of: appModel.connectedGatewayID) { _, _ in
+        .onChange(of: self.appModel.connectedGatewayID) { _, _ in
             self.resetGatewayState()
         }
-        .onChange(of: section) { _, section in
+        .onChange(of: self.section) { _, section in
             guard section == .browse, self.searchResults.isEmpty else { return }
             Task { await self.searchClawHub() }
         }
-        .sheet(item: $reviewSheet) { sheet in
+        .sheet(item: self.$reviewSheet) { sheet in
             switch sheet {
             case let .install(review, route):
                 SkillsInstallReviewSheet(
@@ -98,8 +98,7 @@ struct SettingsSkillsDestination: View {
                     canInstall: self.canAdmin,
                     isInstalling: self.installingSlug == review.slug,
                     onCancel: { self.reviewSheet = nil },
-                    onInstall: { Task { await self.install(review, route: route, acknowledgeRisk: false) } }
-                )
+                    onInstall: { Task { await self.install(review, route: route, acknowledgeRisk: false) } })
             case let .risk(review, route, message, warning):
                 SkillsRiskReviewSheet(
                     review: review,
@@ -107,42 +106,41 @@ struct SettingsSkillsDestination: View {
                     warning: warning,
                     isInstalling: self.installingSlug == review.slug,
                     onCancel: { self.reviewSheet = nil },
-                    onInstall: { Task { await self.install(review, route: route, acknowledgeRisk: true) } }
-                )
+                    onInstall: { Task { await self.install(review, route: route, acknowledgeRisk: true) } })
             }
         }
     }
 
     private var refreshID: String {
         [
-            canRead ? "connected" : "offline",
-            scenePhase == .active ? "active" : "inactive",
-            appModel.connectedGatewayID ?? "no-gateway",
+            self.canRead ? "connected" : "offline",
+            self.scenePhase == .active ? "active" : "inactive",
+            self.appModel.connectedGatewayID ?? "no-gateway",
         ].joined(separator: ":")
     }
 
     private var canRead: Bool {
-        appModel.isOperatorGatewayConnected
+        self.appModel.isOperatorGatewayConnected
     }
 
     private var canAdmin: Bool {
-        appModel.hasOperatorAdminScope
+        self.appModel.hasOperatorAdminScope
     }
 
     private var isLoadingInstalled: Bool {
-        installedLoadID != nil
+        self.installedLoadID != nil
     }
 
     private var isSearching: Bool {
-        searchID != nil
+        self.searchID != nil
     }
 
     private var readyCount: Int {
-        installedSkills.count(where: Self.isReady)
+        self.installedSkills.count(where: Self.isReady)
     }
 
     private var setupCount: Int {
-        installedSkills.count(where: Self.needsSetup)
+        self.installedSkills.count(where: Self.needsSetup)
     }
 
     private var summaryCard: some View {
@@ -164,32 +162,31 @@ struct SettingsSkillsDestination: View {
     }
 
     private var summaryText: String {
-        guard canRead else { return String(localized: "Connect to manage Gateway skills.") }
-        if isLoadingInstalled, installedSkills.isEmpty {
+        guard self.canRead else { return String(localized: "Connect to manage Gateway skills.") }
+        if self.isLoadingInstalled, self.installedSkills.isEmpty {
             return String(localized: "Loading installed skills and readiness.")
         }
         return String(
             format: String(localized: "%@ ready · %@ need setup"),
-            readyCount.formatted(),
-            setupCount.formatted()
-        )
+            self.readyCount.formatted(),
+            self.setupCount.formatted())
     }
 
     private var summaryValue: String {
-        guard canRead else { return String(localized: "offline") }
-        if isLoadingInstalled, installedSkills.isEmpty {
+        guard self.canRead else { return String(localized: "offline") }
+        if self.isLoadingInstalled, self.installedSkills.isEmpty {
             return String(localized: "loading")
         }
-        return installedSkills.count.formatted()
+        return self.installedSkills.count.formatted()
     }
 
     private var summaryColor: Color {
-        guard canRead else { return .secondary }
-        return setupCount > 0 ? OpenClawBrand.warn : OpenClawBrand.ok
+        guard self.canRead else { return .secondary }
+        return self.setupCount > 0 ? OpenClawBrand.warn : OpenClawBrand.ok
     }
 
     private var sectionPicker: some View {
-        Picker(selection: $section) {
+        Picker(selection: self.$section) {
             ForEach(SkillsSettingsSection.allCases) { section in
                 Text(verbatim: section.title).font(OpenClawType.captionSemiBold).tag(section)
             }
@@ -214,8 +211,7 @@ struct SettingsSkillsDestination: View {
                         actionIcon: self.isLoadingInstalled ? "hourglass" : "arrow.clockwise",
                         actionAccessibilityLabel: "Refresh Skills",
                         isActionDisabled: self.isLoadingInstalled,
-                        action: { Task { await self.loadInstalled() } }
-                    )
+                        action: { Task { await self.loadInstalled() } })
                     self.installedRows
                 }
             }
@@ -228,8 +224,8 @@ struct SettingsSkillsDestination: View {
             VStack(alignment: .leading, spacing: 10) {
                 TextField(
                     text: self.$installedQuery,
-                    prompt: Text("Search installed skills").font(OpenClawType.body)
-                ) {
+                    prompt: Text("Search installed skills").font(OpenClawType.body))
+                {
                     Text("Search installed skills").font(OpenClawType.body)
                 }
                 .font(OpenClawType.body)
@@ -249,34 +245,31 @@ struct SettingsSkillsDestination: View {
 
     @ViewBuilder
     private var installedRows: some View {
-        if !canRead {
+        if !self.canRead {
             ProStatusRow(
                 icon: "wifi.slash",
                 title: "Gateway offline",
                 detail: "Connect to load and manage installed skills.",
                 value: "offline",
-                color: .secondary
-            )
-        } else if isLoadingInstalled, installedSkills.isEmpty {
+                color: .secondary)
+        } else if self.isLoadingInstalled, self.installedSkills.isEmpty {
             ProStatusRow(
                 icon: "hourglass",
                 title: "Loading skills",
                 detail: "Reading the Gateway skill catalog.",
                 value: "loading",
-                color: OpenClawBrand.accent
-            )
-        } else if filteredInstalledSkills.isEmpty {
+                color: OpenClawBrand.accent)
+        } else if self.filteredInstalledSkills.isEmpty {
             ProStatusRow(
                 icon: "tray",
-                title: installedSkills.isEmpty ? "No skills installed" : "No matching skills",
-                detail: installedSkills.isEmpty
+                title: self.installedSkills.isEmpty ? "No skills installed" : "No matching skills",
+                detail: self.installedSkills.isEmpty
                     ? "Browse ClawHub to discover and install skills."
                     : "Change the search or readiness filter.",
                 value: "empty",
-                color: .secondary
-            )
+                color: .secondary)
         } else {
-            ForEach(Array(filteredInstalledSkills.enumerated()), id: \.element.id) { index, skill in
+            ForEach(Array(self.filteredInstalledSkills.enumerated()), id: \.element.id) { index, skill in
                 if index > 0 {
                     Divider().padding(.leading, 58)
                 }
@@ -284,15 +277,14 @@ struct SettingsSkillsDestination: View {
                     skill: skill,
                     canAdmin: self.canAdmin,
                     isBusy: self.mutationIDs[skill.skillKey] != nil,
-                    onToggle: { enabled in Task { await self.setEnabled(skill, enabled: enabled) } }
-                )
+                    onToggle: { enabled in Task { await self.setEnabled(skill, enabled: enabled) } })
             }
         }
     }
 
     private var filteredInstalledSkills: [SkillStatus] {
-        let query = installedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        return installedSkills.filter { skill in
+        let query = self.installedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return self.installedSkills.filter { skill in
             let matchesQuery = query.isEmpty
                 || skill.name.localizedCaseInsensitiveContains(query)
                 || skill.skillKey.localizedCaseInsensitiveContains(query)
@@ -321,8 +313,7 @@ struct SettingsSkillsDestination: View {
                         actionIcon: self.isSearching ? "hourglass" : "arrow.clockwise",
                         actionAccessibilityLabel: "Search ClawHub",
                         isActionDisabled: self.isSearching || self.clawHubSupported == false,
-                        action: { Task { await self.searchClawHub() } }
-                    )
+                        action: { Task { await self.searchClawHub() } })
                     self.browseRows
                 }
             }
@@ -335,8 +326,8 @@ struct SettingsSkillsDestination: View {
             VStack(alignment: .leading, spacing: 10) {
                 TextField(
                     text: self.$browseQuery,
-                    prompt: Text("Search ClawHub").font(OpenClawType.body)
-                ) {
+                    prompt: Text("Search ClawHub").font(OpenClawType.body))
+                {
                     Text("Search ClawHub").font(OpenClawType.body)
                 }
                 .font(OpenClawType.body)
@@ -360,40 +351,36 @@ struct SettingsSkillsDestination: View {
 
     @ViewBuilder
     private var browseRows: some View {
-        if !canRead {
+        if !self.canRead {
             ProStatusRow(
                 icon: "wifi.slash",
                 title: "Gateway offline",
                 detail: "Connect to search and install ClawHub skills.",
                 value: "offline",
-                color: .secondary
-            )
-        } else if clawHubSupported == false {
+                color: .secondary)
+        } else if self.clawHubSupported == false {
             ProStatusRow(
                 icon: "arrow.up.circle",
                 title: "Gateway update required",
                 detail: "Update the Gateway to search and install ClawHub skills from iOS.",
                 value: "update",
-                color: OpenClawBrand.warn
-            )
-        } else if isSearching, searchResults.isEmpty {
+                color: OpenClawBrand.warn)
+        } else if self.isSearching, self.searchResults.isEmpty {
             ProStatusRow(
                 icon: "hourglass",
                 title: "Searching ClawHub",
                 detail: "Loading verified skill releases.",
                 value: "loading",
-                color: OpenClawBrand.accent
-            )
-        } else if searchResults.isEmpty {
+                color: OpenClawBrand.accent)
+        } else if self.searchResults.isEmpty {
             ProStatusRow(
                 icon: "magnifyingglass",
                 title: "No skills found",
                 detail: "Try another search or refresh the catalog.",
                 value: "empty",
-                color: .secondary
-            )
+                color: .secondary)
         } else {
-            ForEach(Array(searchResults.enumerated()), id: \.element.id) { index, skill in
+            ForEach(Array(self.searchResults.enumerated()), id: \.element.id) { index, skill in
                 if index > 0 {
                     Divider().padding(.leading, 58)
                 }
@@ -401,67 +388,65 @@ struct SettingsSkillsDestination: View {
                     skill: skill,
                     installed: SkillManagementContract.installed(self.installedSkills, slug: skill.slug),
                     isBusy: self.reviewingSlug == skill.slug,
-                    onReview: { Task { await self.review(skill) } }
-                )
+                    onReview: { Task { await self.review(skill) } })
             }
         }
     }
 
     private func loadInitialState() async {
-        guard scenePhase == .active else { return }
-        guard canRead else {
-            resetGatewayState()
+        guard self.scenePhase == .active else { return }
+        guard self.canRead else {
+            self.resetGatewayState()
             return
         }
-        let gatewayID = appModel.connectedGatewayID
-        if loadedGatewayID != gatewayID {
-            resetGatewayState()
-            loadedGatewayID = gatewayID
+        let gatewayID = self.appModel.connectedGatewayID
+        if self.loadedGatewayID != gatewayID {
+            self.resetGatewayState()
+            self.loadedGatewayID = gatewayID
         }
-        await updateClawHubSupport()
-        await loadInstalled()
+        await self.updateClawHubSupport()
+        await self.loadInstalled()
     }
 
     private func refreshVisibleSection() async {
-        await updateClawHubSupport()
-        if section == .installed {
-            await loadInstalled()
+        await self.updateClawHubSupport()
+        if self.section == .installed {
+            await self.loadInstalled()
         } else {
-            await loadInstalled()
-            await searchClawHub()
+            await self.loadInstalled()
+            await self.searchClawHub()
         }
     }
 
     private func updateClawHubSupport() async {
-        let gatewayID = appModel.connectedGatewayID
+        let gatewayID = self.appModel.connectedGatewayID
         guard let route = await appModel.operatorSession.currentRoute(ifGatewayID: gatewayID) else {
-            clawHubSupported = nil
+            self.clawHubSupported = nil
             return
         }
         var values: [Bool?] = []
         for method in clawHubSkillGatewayMethods.sorted() {
             let supported = await appModel.operatorSession.supportsServerMethod(
                 method,
-                ifCurrentRoute: route
-            )
+                ifCurrentRoute: route)
             values.append(supported)
         }
-        guard appModel.connectedGatewayID == gatewayID else { return }
+        guard self.appModel.connectedGatewayID == gatewayID else { return }
         if values.contains(false) {
-            clawHubSupported = false
+            self.clawHubSupported = false
         } else if values.allSatisfy({ $0 == true }) {
-            clawHubSupported = true
+            self.clawHubSupported = true
         } else {
-            clawHubSupported = nil
+            self.clawHubSupported = nil
         }
     }
 
     private func loadInstalled() async {
-        guard canRead, installedLoadID == nil else { return }
-        let gatewayID = appModel.connectedGatewayID
+        guard self.canRead, self.installedLoadID == nil else { return }
+        let gatewayID = self.appModel.connectedGatewayID
         let operationID = UUID()
-        installedLoadID = operationID
-        notice = nil
+        self.installedLoadID = operationID
+        self.notice = nil
         defer {
             if self.installedLoadID == operationID {
                 self.installedLoadID = nil
@@ -470,29 +455,28 @@ struct SettingsSkillsDestination: View {
         do {
             let route = try await gatewayRoute()
             let skills = try await fetchInstalledSkills(route: route)
-            guard appModel.connectedGatewayID == gatewayID else { return }
-            installedSkills = skills
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
+            self.installedSkills = skills
         } catch {
-            guard appModel.connectedGatewayID == gatewayID else { return }
-            notice = SkillsNotice(
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
+            self.notice = SkillsNotice(
                 title: String(localized: "Could not load skills"),
                 message: error.localizedDescription,
                 warning: nil,
-                isError: true
-            )
+                isError: true)
         }
     }
 
     private func searchClawHub() async {
-        guard canRead,
-              loadedGatewayID == appModel.connectedGatewayID,
-              clawHubSupported != false,
-              searchID == nil
+        guard self.canRead,
+              self.loadedGatewayID == self.appModel.connectedGatewayID,
+              self.clawHubSupported != false,
+              self.searchID == nil
         else { return }
-        let gatewayID = appModel.connectedGatewayID
+        let gatewayID = self.appModel.connectedGatewayID
         let operationID = UUID()
-        searchID = operationID
-        notice = nil
+        self.searchID = operationID
+        self.notice = nil
         defer {
             if self.searchID == operationID {
                 self.searchID = nil
@@ -502,38 +486,35 @@ struct SettingsSkillsDestination: View {
             let route = try await gatewayRoute()
             let request = ClawHubSearchRequest(
                 query: browseQuery.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-                limit: 25
-            )
+                limit: 25)
             let data = try await self.request(
                 method: "skills.search",
                 params: request,
                 timeoutSeconds: 20,
-                route: route
-            )
+                route: route)
             let results = try JSONDecoder().decode(ClawHubSkillSearchResult.self, from: data).results
-            guard appModel.connectedGatewayID == gatewayID else { return }
-            searchResults = results
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
+            self.searchResults = results
         } catch {
-            guard appModel.connectedGatewayID == gatewayID else { return }
-            notice = SkillsNotice(
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
+            self.notice = SkillsNotice(
                 title: String(localized: "ClawHub unavailable"),
                 message: error.localizedDescription,
                 warning: nil,
-                isError: true
-            )
+                isError: true)
         }
     }
 
     private func review(_ skill: ClawHubSkillSummary) async {
-        guard canRead,
-              loadedGatewayID == appModel.connectedGatewayID,
-              reviewID == nil
+        guard self.canRead,
+              self.loadedGatewayID == self.appModel.connectedGatewayID,
+              self.reviewID == nil
         else { return }
-        let gatewayID = appModel.connectedGatewayID
+        let gatewayID = self.appModel.connectedGatewayID
         let operationID = UUID()
-        reviewID = operationID
-        reviewingSlug = skill.slug
-        notice = nil
+        self.reviewID = operationID
+        self.reviewingSlug = skill.slug
+        self.notice = nil
         defer {
             if self.reviewID == operationID {
                 self.reviewID = nil
@@ -546,39 +527,37 @@ struct SettingsSkillsDestination: View {
                 method: "skills.detail",
                 params: ClawHubDetailRequest(slug: skill.slug),
                 timeoutSeconds: 20,
-                route: route
-            )
+                route: route)
             let detail = try JSONDecoder().decode(ClawHubSkillDetail.self, from: data)
-            guard appModel.connectedGatewayID == gatewayID else { return }
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
             guard let review = ClawHubSkillInstallReview(detail: detail, fallback: skill) else {
                 throw SkillsSettingsError.missingInstallVersion
             }
-            reviewSheet = .install(review, route: route)
+            self.reviewSheet = .install(review, route: route)
         } catch {
-            guard appModel.connectedGatewayID == gatewayID else { return }
-            notice = SkillsNotice(
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
+            self.notice = SkillsNotice(
                 title: String(localized: "Could not review skill"),
                 message: error.localizedDescription,
                 warning: nil,
-                isError: true
-            )
+                isError: true)
         }
     }
 
     private func install(
         _ review: ClawHubSkillInstallReview,
         route: GatewayNodeSessionRoute,
-        acknowledgeRisk: Bool
-    ) async {
-        guard canAdmin,
-              loadedGatewayID == appModel.connectedGatewayID,
-              installID == nil
+        acknowledgeRisk: Bool) async
+    {
+        guard self.canAdmin,
+              self.loadedGatewayID == self.appModel.connectedGatewayID,
+              self.installID == nil
         else { return }
-        let gatewayID = appModel.connectedGatewayID
+        let gatewayID = self.appModel.connectedGatewayID
         let operationID = UUID()
-        installID = operationID
-        installingSlug = review.slug
-        notice = nil
+        self.installID = operationID
+        self.installingSlug = review.slug
+        self.notice = nil
         defer {
             if self.installID == operationID {
                 self.installID = nil
@@ -591,43 +570,37 @@ struct SettingsSkillsDestination: View {
                 slug: review.slug,
                 version: review.version,
                 acknowledgeClawHubRisk: acknowledgeRisk ? true : nil,
-                timeoutMs: clawHubInstallTimeoutMilliseconds
-            )
+                timeoutMs: clawHubInstallTimeoutMilliseconds)
             let data = try await self.request(
                 method: "skills.install",
                 params: request,
                 timeoutSeconds: 125,
-                route: route
-            )
+                route: route)
             let result = try JSONDecoder().decode(SkillInstallResult.self, from: data)
-            guard appModel.connectedGatewayID == gatewayID else { return }
-            installedSkills = try await fetchInstalledSkills(route: route)
-            guard appModel.connectedGatewayID == gatewayID else { return }
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
+            self.installedSkills = try await self.fetchInstalledSkills(route: route)
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
             guard SkillManagementContract.installed(
-                installedSkills,
+                self.installedSkills,
                 slug: review.slug,
-                version: review.version
-            )
+                version: review.version)
             else {
-                reviewSheet = nil
-                notice = SkillsNotice(
+                self.reviewSheet = nil
+                self.notice = SkillsNotice(
                     title: String(localized: "Install result unknown"),
                     message: String(
                         localized:
-                        "Reconnect, refresh Skills, then retry. The Gateway safely joins a matching install still running."
-                    ),
+                        "Reconnect, refresh Skills, then retry. The Gateway safely joins a matching install still running."),
                     warning: result.warning,
-                    isError: true
-                )
+                    isError: true)
                 return
             }
-            reviewSheet = nil
-            notice = SkillsNotice(
+            self.reviewSheet = nil
+            self.notice = SkillsNotice(
                 title: String(localized: "Installed"),
                 message: result.message,
                 warning: result.warning,
-                isError: false
-            )
+                isError: false)
         } catch let error as GatewayResponseError {
             guard self.appModel.connectedGatewayID == gatewayID else { return }
             let rejection = SkillManagementContract.rejection(from: error, attemptedVersion: review.version)
@@ -636,53 +609,49 @@ struct SettingsSkillsDestination: View {
                     review,
                     route: route,
                     message: rejection.message,
-                    warning: rejection.warning
-                )
+                    warning: rejection.warning)
             } else {
                 self.reviewSheet = nil
                 self.notice = SkillsNotice(
                     title: String(localized: "Gateway blocked install"),
                     message: rejection.message,
                     warning: rejection.warning,
-                    isError: true
-                )
+                    isError: true)
             }
         } catch {
-            guard appModel.connectedGatewayID == gatewayID else { return }
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
             if let skills = try? await fetchInstalledSkills(route: route),
                appModel.connectedGatewayID == gatewayID
             {
-                installedSkills = skills
+                self.installedSkills = skills
                 if SkillManagementContract.installed(skills, slug: review.slug, version: review.version) {
-                    reviewSheet = nil
-                    notice = SkillsNotice(
+                    self.reviewSheet = nil
+                    self.notice = SkillsNotice(
                         title: String(localized: "Installed"),
                         message: String(localized: "The Gateway installed the reviewed version."),
                         warning: nil,
-                        isError: false
-                    )
+                        isError: false)
                     return
                 }
             }
-            reviewSheet = nil
-            notice = SkillsNotice(
+            self.reviewSheet = nil
+            self.notice = SkillsNotice(
                 title: String(localized: "Install result unknown"),
                 message: error.localizedDescription,
                 warning: nil,
-                isError: true
-            )
+                isError: true)
         }
     }
 
     private func setEnabled(_ skill: SkillStatus, enabled: Bool) async {
-        guard canAdmin,
-              loadedGatewayID == appModel.connectedGatewayID,
-              mutationIDs[skill.skillKey] == nil
+        guard self.canAdmin,
+              self.loadedGatewayID == self.appModel.connectedGatewayID,
+              self.mutationIDs[skill.skillKey] == nil
         else { return }
-        let gatewayID = appModel.connectedGatewayID
+        let gatewayID = self.appModel.connectedGatewayID
         let operationID = UUID()
-        mutationIDs[skill.skillKey] = operationID
-        notice = nil
+        self.mutationIDs[skill.skillKey] = operationID
+        self.notice = nil
         defer {
             if self.mutationIDs[skill.skillKey] == operationID {
                 self.mutationIDs.removeValue(forKey: skill.skillKey)
@@ -690,31 +659,28 @@ struct SettingsSkillsDestination: View {
         }
         do {
             let route = try await gatewayRoute()
-            _ = try await request(
+            _ = try await self.request(
                 method: "skills.update",
                 params: SkillEnabledRequest(skillKey: skill.skillKey, enabled: enabled),
                 timeoutSeconds: 20,
-                route: route
-            )
-            guard appModel.connectedGatewayID == gatewayID else { return }
+                route: route)
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
             let skills = try await fetchInstalledSkills(route: route)
-            guard appModel.connectedGatewayID == gatewayID else { return }
-            installedSkills = skills
-            notice = SkillsNotice(
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
+            self.installedSkills = skills
+            self.notice = SkillsNotice(
                 title: enabled ? String(localized: "Skill enabled") : String(localized: "Skill disabled"),
                 message: skill.name,
                 warning: nil,
-                isError: false
-            )
+                isError: false)
         } catch {
-            guard appModel.connectedGatewayID == gatewayID else { return }
-            notice = SkillsNotice(
+            guard self.appModel.connectedGatewayID == gatewayID else { return }
+            self.notice = SkillsNotice(
                 title: enabled ? String(localized: "Could not enable skill") :
                     String(localized: "Could not disable skill"),
                 message: error.localizedDescription,
                 warning: nil,
-                isError: true
-            )
+                isError: true)
         }
     }
 
@@ -723,8 +689,7 @@ struct SettingsSkillsDestination: View {
             method: "skills.status",
             params: EmptySkillsRequest(),
             timeoutSeconds: 20,
-            route: route
-        )
+            route: route)
         return try JSONDecoder().decode(SkillsStatusReport.self, from: data).skills.sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
@@ -734,21 +699,20 @@ struct SettingsSkillsDestination: View {
         method: String,
         params: some Encodable,
         timeoutSeconds: Int,
-        route: GatewayNodeSessionRoute
-    ) async throws -> Data {
+        route: GatewayNodeSessionRoute) async throws -> Data
+    {
         let data = try JSONEncoder().encode(params)
         guard let json = String(data: data, encoding: .utf8) else { throw SkillsSettingsError.invalidPayload }
-        return try await appModel.operatorSession.request(
+        return try await self.appModel.operatorSession.request(
             method: method,
             paramsJSON: json,
             timeoutSeconds: timeoutSeconds,
             ifCurrentRoute: route,
-            distinguishPreDispatchRouteChange: true
-        )
+            distinguishPreDispatchRouteChange: true)
     }
 
     private func gatewayRoute() async throws -> GatewayNodeSessionRoute {
-        let gatewayID = appModel.connectedGatewayID
+        let gatewayID = self.appModel.connectedGatewayID
         guard let route = await appModel.operatorSession.currentRoute(ifGatewayID: gatewayID),
               appModel.connectedGatewayID == gatewayID
         else {
@@ -758,19 +722,19 @@ struct SettingsSkillsDestination: View {
     }
 
     private func resetGatewayState() {
-        loadedGatewayID = nil
-        installedSkills = []
-        searchResults = []
-        clawHubSupported = nil
-        notice = nil
-        reviewSheet = nil
-        installedLoadID = nil
-        searchID = nil
-        reviewID = nil
-        reviewingSlug = nil
-        installID = nil
-        installingSlug = nil
-        mutationIDs = [:]
+        self.loadedGatewayID = nil
+        self.installedSkills = []
+        self.searchResults = []
+        self.clawHubSupported = nil
+        self.notice = nil
+        self.reviewSheet = nil
+        self.installedLoadID = nil
+        self.searchID = nil
+        self.reviewID = nil
+        self.reviewingSlug = nil
+        self.installID = nil
+        self.installingSlug = nil
+        self.mutationIDs = [:]
     }
 
     static func isReady(_ skill: SkillStatus) -> Bool {
@@ -831,23 +795,23 @@ private struct InstalledSkillRow: View {
     }
 
     private var statusLabel: String {
-        if skill.disabled {
+        if self.skill.disabled {
             return String(localized: "Off")
         }
-        return SettingsSkillsDestination.isReady(skill)
+        return SettingsSkillsDestination.isReady(self.skill)
             ? String(localized: "Ready")
             : String(localized: "Needs Setup")
     }
 
     private var statusColor: Color {
-        if skill.disabled {
+        if self.skill.disabled {
             return .secondary
         }
-        return SettingsSkillsDestination.isReady(skill) ? OpenClawBrand.ok : OpenClawBrand.warn
+        return SettingsSkillsDestination.isReady(self.skill) ? OpenClawBrand.ok : OpenClawBrand.warn
     }
 
     private var missingSummary: String {
-        let values = skill.missing.bins + skill.missing.env + skill.missing.config
+        let values = self.skill.missing.bins + self.skill.missing.env + self.skill.missing.config
         return values.isEmpty ? "" : String(format: String(localized: "Missing: %@"), values.joined(separator: ", "))
     }
 }
@@ -902,8 +866,7 @@ private struct SkillsNoticeCard: View {
             HStack(alignment: .top, spacing: 12) {
                 ProIconBadge(
                     systemName: self.notice.isError ? "exclamationmark.triangle" : "checkmark.circle",
-                    color: self.notice.isError ? OpenClawBrand.warn : OpenClawBrand.ok
-                )
+                    color: self.notice.isError ? OpenClawBrand.warn : OpenClawBrand.ok)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(self.notice.title).font(OpenClawType.subheadSemiBold)
                     Text(self.notice.message).font(OpenClawType.caption).textSelection(.enabled)
@@ -1082,8 +1045,8 @@ private enum SkillsSettingsError: LocalizedError {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? {
+extension String {
+    fileprivate var nilIfEmpty: String? {
         isEmpty ? nil : self
     }
 }

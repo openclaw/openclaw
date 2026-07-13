@@ -40,7 +40,7 @@ public struct SkillStatus: Codable, Identifiable, Sendable {
     public let clawhub: ClawHubInstalledSkillLink?
 
     public var id: String {
-        skillKey
+        self.skillKey
     }
 
     public init(
@@ -64,8 +64,8 @@ public struct SkillStatus: Codable, Identifiable, Sendable {
         missing: SkillMissing,
         configChecks: [SkillStatusConfigCheck],
         install: [SkillInstallOption],
-        clawhub: ClawHubInstalledSkillLink? = nil
-    ) {
+        clawhub: ClawHubInstalledSkillLink? = nil)
+    {
         self.name = name
         self.description = description
         self.source = source
@@ -120,7 +120,7 @@ public struct SkillStatusConfigCheck: Codable, Identifiable, Sendable {
     public let satisfied: Bool
 
     public var id: String {
-        path
+        self.path
     }
 
     public init(path: String, value: OpenClawProtocol.AnyCodable?, satisfied: Bool) {
@@ -162,8 +162,8 @@ public struct SkillInstallResult: Codable, Sendable {
         code: Int? = nil,
         slug: String? = nil,
         version: String? = nil,
-        warning: String? = nil
-    ) {
+        warning: String? = nil)
+    {
         self.ok = ok
         self.message = message
         self.stdout = stdout
@@ -197,7 +197,7 @@ public struct ClawHubSkillSummary: Codable, Identifiable, Hashable, Sendable {
     public let version: String?
 
     public var id: String {
-        slug
+        self.slug
     }
 
     public init(slug: String, displayName: String, summary: String?, version: String?) {
@@ -241,7 +241,7 @@ public struct ClawHubSkillInstallReview: Identifiable, Hashable, Sendable {
     public let author: String
 
     public var id: String {
-        "\(slug)@\(version)"
+        "\(self.slug)@\(self.version)"
     }
 
     public init(slug: String, displayName: String, summary: String?, version: String, author: String) {
@@ -258,23 +258,22 @@ public struct ClawHubSkillInstallReview: Identifiable, Hashable, Sendable {
         let handle = detail.owner?.handle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         guard let reviewedSlug = SkillManagementContract.canonicalClawHubReference(
             slug: detailSlug ?? fallback.slug,
-            ownerHandle: handle
-        )
+            ownerHandle: handle)
         else { return nil }
-        slug = reviewedSlug
+        self.slug = reviewedSlug
         self.displayName = detail.skill?.displayName ?? fallback.displayName
-        summary = detail.skill?.summary ?? fallback.summary
+        self.summary = detail.skill?.summary ?? fallback.summary
         self.version = version
         let displayName = detail.owner?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         switch (displayName?.nilIfEmpty, handle?.nilIfEmpty) {
         case let (.some(name), .some(handle)) where name.caseInsensitiveCompare(handle) != .orderedSame:
-            author = "\(name) (@\(handle))"
+            self.author = "\(name) (@\(handle))"
         case let (.some(name), _):
-            author = name
+            self.author = name
         case let (_, .some(handle)):
-            author = "@\(handle)"
+            self.author = "@\(handle)"
         default:
-            author = "Unknown publisher"
+            self.author = "Unknown publisher"
         }
     }
 }
@@ -312,17 +311,17 @@ public enum SkillManagementContract {
     }
 
     public static func needsSetup(_ skill: SkillStatus) -> Bool {
-        !skill.disabled && !ready(skill)
+        !skill.disabled && !self.ready(skill)
     }
 
     public static func rejection(
         from error: GatewayResponseError,
-        attemptedVersion: String?
-    ) -> ClawHubSkillInstallRejection {
+        attemptedVersion: String?) -> ClawHubSkillInstallRejection
+    {
         let reviewedVersion = attemptedVersion?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let gatewayVersion = string(error.details["version"]?.value)
-        let warning = string(error.details["warning"]?.value)
-        let acknowledgementRequested = string(error.details["clawhubTrustCode"]?.value)
+        let gatewayVersion = self.string(error.details["version"]?.value)
+        let warning = self.string(error.details["warning"]?.value)
+        let acknowledgementRequested = self.string(error.details["clawhubTrustCode"]?.value)
             == "clawhub_risk_acknowledgement_required"
         // Bind consent to the exact detail response version. A moving ClawHub release
         // must be reviewed again instead of inheriting acknowledgement for older bytes.
@@ -335,8 +334,7 @@ public enum SkillManagementContract {
             message: message,
             warning: warning,
             acknowledgeVersion: requiresAcknowledgement ? reviewedVersion : nil,
-            requiresAcknowledgement: requiresAcknowledgement
-        )
+            requiresAcknowledgement: requiresAcknowledgement)
     }
 
     private static func string(_ value: Any?) -> String? {
@@ -363,8 +361,8 @@ public enum SkillManagementContract {
 
     private static func matches(
         _ installed: ClawHubInstalledSkillLink?,
-        reference: (slug: String, ownerHandle: String?)
-    ) -> Bool {
+        reference: (slug: String, ownerHandle: String?)) -> Bool
+    {
         guard installed?.valid == true,
               let installedSlug = installed?.slug,
               let installedReference = clawHubReference(installedSlug),
@@ -376,8 +374,8 @@ public enum SkillManagementContract {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? {
+extension String {
+    fileprivate var nilIfEmpty: String? {
         isEmpty ? nil : self
     }
 }
