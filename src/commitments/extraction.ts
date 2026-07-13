@@ -253,7 +253,11 @@ function parseDueMs(raw: string | undefined): number | undefined {
     return undefined;
   }
   const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) && parseAbsoluteTimeMs(raw) !== null ? parsed : undefined;
+  if (!Number.isFinite(parsed) || parseAbsoluteTimeMs(raw) === null) {
+    return undefined;
+  }
+  // Strict parsing validates the calendar only; preserve Date.parse's existing interpretation.
+  return parsed;
 }
 
 function resolveMinimumDueMs(params: {
