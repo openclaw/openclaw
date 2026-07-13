@@ -16,7 +16,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
-import { shouldRestoreDropdownTriggerFocus } from "./web-awesome.ts";
+import { createDropdownDismissalFocusController } from "./web-awesome.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
 
@@ -195,6 +195,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
   const moreRoutes = sidebarMoreRoutes(params.pinnedRoutes).filter((routeId) =>
     params.isRouteEnabled(routeId),
   );
+  const dismissalFocus = createDropdownDismissalFocusController();
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
@@ -203,7 +204,8 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
         placement="bottom-start"
         .distance=${0}
         aria-label=${t("nav.more")}
-        @wa-after-hide=${(event: Event) => params.onClose(shouldRestoreDropdownTriggerFocus(event))}
+        @keydown=${dismissalFocus.onKeydown}
+        @wa-after-hide=${() => params.onClose(dismissalFocus.shouldRestoreFocus())}
       >
         <button
           slot="trigger"
@@ -242,6 +244,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
   if (!position) {
     return nothing;
   }
+  const dismissalFocus = createDropdownDismissalFocusController();
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
@@ -251,7 +254,8 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         .distance=${0}
         aria-label=${t("nav.customize")}
         @wa-select=${(event: Event) => event.preventDefault()}
-        @wa-after-hide=${(event: Event) => params.onClose(shouldRestoreDropdownTriggerFocus(event))}
+        @keydown=${dismissalFocus.onKeydown}
+        @wa-after-hide=${() => params.onClose(dismissalFocus.shouldRestoreFocus())}
       >
         <button
           slot="trigger"

@@ -12,16 +12,18 @@ import "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import "@awesome.me/webawesome/dist/components/tab/tab.js";
 import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 
-/** Web Awesome focuses its slotted trigger on Escape. Transient menus use a
- * hidden trigger, so adapters can hand focus back to the durable opener only
- * when that hidden trigger actually owns focus. */
-export function shouldRestoreDropdownTriggerFocus(event: Event): boolean {
-  const dropdown = event.currentTarget;
-  if (!(dropdown instanceof HTMLElement)) {
-    return false;
-  }
-  const trigger = dropdown.querySelector<HTMLElement>('[slot="trigger"]');
-  return trigger !== null && document.activeElement === trigger;
+/** Transient menus use hidden triggers. Track Escape explicitly so pointer
+ * dismissal never steals focus while keyboard dismissal restores the opener. */
+export function createDropdownDismissalFocusController() {
+  let restoreFocus = false;
+  return {
+    onKeydown(event: KeyboardEvent) {
+      restoreFocus ||= event.key === "Escape";
+    },
+    shouldRestoreFocus() {
+      return restoreFocus;
+    },
+  };
 }
 
 // Web Awesome labels its trigger but leaves the internal menu unnamed. Copy

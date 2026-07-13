@@ -10,7 +10,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { icons, type IconName } from "./icons.ts";
-import { shouldRestoreDropdownTriggerFocus } from "./web-awesome.ts";
+import { createDropdownDismissalFocusController } from "./web-awesome.ts";
 
 // External rows of the footer agent menu. Docs-first: public docs pages over
 // raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
@@ -174,6 +174,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
   }
   const { activeId, activeName, agents } = params;
   const { rows, showFilter } = sidebarAgentMenuRows(params);
+  const dismissalFocus = createDropdownDismissalFocusController();
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
@@ -189,7 +190,8 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               ?.focus();
           }
         }}
-        @wa-after-hide=${(event: Event) => params.onClose(shouldRestoreDropdownTriggerFocus(event))}
+        @keydown=${dismissalFocus.onKeydown}
+        @wa-after-hide=${() => params.onClose(dismissalFocus.shouldRestoreFocus())}
       >
         <button
           slot="trigger"

@@ -114,7 +114,7 @@ import {
 } from "./lobster-pet.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
-import { shouldRestoreDropdownTriggerFocus } from "./web-awesome.ts";
+import { createDropdownDismissalFocusController } from "./web-awesome.ts";
 
 type SidebarRecentSession = {
   key: string;
@@ -2155,6 +2155,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (!menu) {
       return nothing;
     }
+    const dismissalFocus = createDropdownDismissalFocusController();
     return html`
       <openclaw-menu-surface>
         <wa-dropdown
@@ -2163,10 +2164,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           placement="bottom-start"
           .distance=${0}
           aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
-          @wa-after-hide=${(event: Event) =>
-            this.closeSessionGroupMenu({
-              restoreFocus: shouldRestoreDropdownTriggerFocus(event),
-            })}
+          @keydown=${dismissalFocus.onKeydown}
+          @wa-after-hide=${() =>
+            this.closeSessionGroupMenu({ restoreFocus: dismissalFocus.shouldRestoreFocus() })}
         >
           <button
             slot="trigger"
@@ -2226,6 +2226,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       { grouping: "category", label: t("sessionsView.groupByCategory") },
       { grouping: "none", label: t("sessionsView.groupByNone") },
     ] as const satisfies ReadonlyArray<{ grouping: SidebarSessionsGrouping; label: string }>;
+    const dismissalFocus = createDropdownDismissalFocusController();
     return html`
       <openclaw-menu-surface>
         <wa-dropdown
@@ -2234,10 +2235,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           placement="bottom-end"
           .distance=${0}
           aria-label=${t("chat.sidebar.sortSessions")}
-          @wa-after-hide=${(event: Event) =>
-            this.closeSessionSortMenu({
-              restoreFocus: shouldRestoreDropdownTriggerFocus(event),
-            })}
+          @keydown=${dismissalFocus.onKeydown}
+          @wa-after-hide=${() =>
+            this.closeSessionSortMenu({ restoreFocus: dismissalFocus.shouldRestoreFocus() })}
         >
           <button
             slot="trigger"

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it } from "vitest";
-import { shouldRestoreDropdownTriggerFocus } from "./web-awesome.ts";
+import { createDropdownDismissalFocusController } from "./web-awesome.ts";
 
 type DropdownElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
 
@@ -42,21 +42,12 @@ describe("Web Awesome adapters", () => {
     ).toBe(trigger.id);
   });
 
-  it("restores a durable trigger only after keyboard dismissal", async () => {
-    const { dropdown, trigger } = await createDropdown();
-    const outside = document.createElement("input");
-    document.body.append(outside);
-    let restoreFocus = false;
-    dropdown.addEventListener("wa-after-hide", (event) => {
-      restoreFocus = shouldRestoreDropdownTriggerFocus(event);
-    });
+  it("restores a durable trigger only after keyboard dismissal", () => {
+    const pointerDismissal = createDropdownDismissalFocusController();
+    expect(pointerDismissal.shouldRestoreFocus()).toBe(false);
 
-    trigger.focus();
-    dropdown.dispatchEvent(new CustomEvent("wa-after-hide"));
-    expect(restoreFocus).toBe(true);
-
-    outside.focus();
-    dropdown.dispatchEvent(new CustomEvent("wa-after-hide"));
-    expect(restoreFocus).toBe(false);
+    const keyboardDismissal = createDropdownDismissalFocusController();
+    keyboardDismissal.onKeydown(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(keyboardDismissal.shouldRestoreFocus()).toBe(true);
   });
 });
