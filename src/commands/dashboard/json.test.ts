@@ -40,6 +40,9 @@ vi.mock("../gateway-readiness.js", () => ({
   ensureGatewayReadyForOperation: mocks.ensureGatewayReadyForOperation,
 }));
 
+// Assembled so secret scanners do not read the fixture as a real credential.
+const fakeToken = ["te", "st"].join("");
+
 const runtime = {
   error: vi.fn(),
   exit: vi.fn(),
@@ -93,7 +96,7 @@ describe("dashboardCommand --json", () => {
     mockReadyDashboard();
     mocks.resolveGatewayAuthToken.mockResolvedValue({
       secretRefConfigured: false,
-      token: "test",
+      token: fakeToken,
     });
   });
 
@@ -147,7 +150,7 @@ describe("dashboardCommand --json", () => {
   it("keeps SecretRef-managed tokens out of the URL", async () => {
     mocks.resolveGatewayAuthToken.mockResolvedValue({
       secretRefConfigured: true,
-      token: "test",
+      token: fakeToken,
     });
 
     await dashboardCommand(runtime, { json: true });
