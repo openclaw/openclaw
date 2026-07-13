@@ -16,13 +16,13 @@ Cloud workers are opt-in and invisible until you configure a profile. Unconfigur
 
 ## What runs where
 
-| Concern | Location |
-| --- | --- |
-| Agent loop + tools (`exec`, `read`, `write`, `edit`, …) | Cloud worker box |
-| Model inference and provider credentials | Gateway (proxied by `{provider, model}` reference) |
-| Transcript (durable, session store) | Gateway |
-| Live streaming into the sidebar | Gateway fanout, fed by the worker's replayable event stream |
-| Workspace git history | Authored on the box credential-free; the Gateway adopts commits and owns push/PR |
+| Concern                                                 | Location                                                                         |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Agent loop + tools (`exec`, `read`, `write`, `edit`, …) | Cloud worker box                                                                 |
+| Model inference and provider credentials                | Gateway (proxied by `{provider, model}` reference)                               |
+| Transcript (durable, session store)                     | Gateway                                                                          |
+| Live streaming into the sidebar                         | Gateway fanout, fed by the worker's replayable event stream                      |
+| Workspace git history                                   | Authored on the box credential-free; the Gateway adopts commits and owns push/PR |
 
 The box needs no inbound ports except `sshd` and no egress beyond what your setup command uses: the Gateway connects out via SSH and a reverse tunnel carries the worker's WebSocket back. No Tailscale or VPN required.
 
@@ -58,12 +58,12 @@ Add a profile under `cloudWorkers.profiles` in `openclaw.json`:
 
 Profile fields:
 
-| Key | Meaning |
-| --- | --- |
-| `provider` | Worker provider id registered by a plugin (`crabbox` for the bundled plugin). |
-| `install` | `bundle` (default) ships the running Gateway's build; `npm` installs the exact released Gateway version with pinned integrity. `npm` requires the Gateway to run from a packaged release. |
-| `settings` | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `ttl`, `idleTimeout` (Go durations), optional `setup` and absolute `binary` path. |
-| `lifetime` | Optional stored policy (`idleTimeoutMinutes`, `maxLifetimeMinutes`). |
+| Key        | Meaning                                                                                                                                                                                   |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | Worker provider id registered by a plugin (`crabbox` for the bundled plugin).                                                                                                             |
+| `install`  | `bundle` (default) ships the running Gateway's build; `npm` installs the exact released Gateway version with pinned integrity. `npm` requires the Gateway to run from a packaged release. |
+| `settings` | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `ttl`, `idleTimeout` (Go durations), optional `setup` and absolute `binary` path.                        |
+| `lifetime` | Optional stored policy (`idleTimeoutMinutes`, `maxLifetimeMinutes`).                                                                                                                      |
 
 ### The setup command
 

@@ -3,23 +3,34 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
+type RuntimePluginInstallResult = {
+  cfg: OpenClawConfig;
+  required: boolean;
+  installed: boolean;
+  status?: "installed" | "skipped" | "failed" | "timed_out";
+};
+
 const ensureCodexRuntimePluginForModelSelection = vi.hoisted(() =>
-  vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
-    cfg,
-    required: false,
-    installed: false,
-  })),
+  vi.fn(
+    async ({ cfg }: { cfg: OpenClawConfig }): Promise<RuntimePluginInstallResult> => ({
+      cfg,
+      required: false,
+      installed: false,
+    }),
+  ),
 );
 vi.mock("../../codex-runtime-plugin-install.js", () => ({
   CODEX_RUNTIME_PLUGIN_ID: "codex",
   ensureCodexRuntimePluginForModelSelection,
 }));
 const ensureCopilotRuntimePluginForModelSelection = vi.hoisted(() =>
-  vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
-    cfg,
-    required: false,
-    installed: false,
-  })),
+  vi.fn(
+    async ({ cfg }: { cfg: OpenClawConfig }): Promise<RuntimePluginInstallResult> => ({
+      cfg,
+      required: false,
+      installed: false,
+    }),
+  ),
 );
 vi.mock("../../copilot-runtime-plugin-install.js", () => ({
   ensureCopilotRuntimePluginForModelSelection,
