@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { sweepOrphanedBundleMcpTempDirs } from "./bundle-mcp-sweep.js";
+import { bundleMcpOwnedMkdtempPrefix, sweepOrphanedBundleMcpTempDirs } from "./bundle-mcp-sweep.js";
 
 // Kept in sync with the module-private prefix in bundle-mcp-sweep.ts.
 const BUNDLE_MCP_TEMP_PREFIX = "openclaw-cli-mcp-";
@@ -152,6 +152,34 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     });
     expect(result.removed).toEqual([]);
     expect(result.kept).toEqual([queued]);
+  });
+
+  it("keeps a live-owned dir whose creation start was unknown (encoded 0), even when a real start is now readable (fail-closed)", async () => {
+    // If creation could not record a start time it encodes "0"; the sweep must
+    // NOT compare that against a real start and delete the live owner's config.
+    const queued = await createDir(root, "unknown-start", { owner: { pid: 4242, start: "0" } });
+    const result = await sweep(root, {
+      isPidAlive: () => true,
+      readStartTicks: async () => "999999", // a real, DIFFERENT start — must not be read as reuse
+    });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([queued]);
+    await expect(fs.stat(queued)).resolves.toBeDefined();
+  });
+
+  it("recognizes a name produced by bundleMcpOwnedMkdtempPrefix as owned by the live gateway", async () => {
+    // Producer -> consumer round-trip against real defaults: the running test
+    // process is the "owner" and is alive, so its own generated dir is kept.
+    const dir = await fs.mkdtemp(await bundleMcpOwnedMkdtempPrefix(root));
+    await fs.writeFile(path.join(dir, "mcp.json"), `{"mcpServers":{}}\n`, "utf-8");
+    await fs.utimes(dir, OLD_MTIME, OLD_MTIME); // aged, so the grace window cannot mask the result
+    const result = await sweepOrphanedBundleMcpTempDirs({
+      tmpRoot: root,
+      listCommandLines: () => ["node /usr/bin/unrelated"],
+    });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([dir]);
+    await expect(fs.stat(dir)).resolves.toBeDefined();
   });
 
   it("reclaims a FRESH dead-owner dir despite the spawn grace window", async () => {

@@ -55,6 +55,12 @@ const PROCESS_SCAN_TIMEOUT_MS = 10_000;
  * reuse; `boot8` (a Linux boot-id prefix) detects a reboot.
  */
 const NO_BOOT_ID = "nobootid";
+// Encoded when the creating gateway could not read its own start time. A real
+// Linux process start time (ticks since boot) is never 0, so this is an unused
+// sentinel meaning "unverifiable" — it must never be compared as a real value
+// (that would fail OPEN: a live owner with an unknown creation start could be
+// mistaken for a reused pid and deleted).
+const UNKNOWN_START = "0";
 
 function defaultIsPidAlive(pid: number): boolean {
   try {
@@ -110,7 +116,7 @@ async function defaultReadStartTicks(pid: number): Promise<string | undefined> {
  */
 export async function bundleMcpOwnedMkdtempPrefix(root: string): Promise<string> {
   const boot = await readBootTag();
-  const start = (await defaultReadStartTicks(process.pid)) ?? "0";
+  const start = (await defaultReadStartTicks(process.pid)) ?? UNKNOWN_START;
   return path.join(root, `${BUNDLE_MCP_TEMP_PREFIX}${process.pid}-${boot}-${start}-`);
 }
 
@@ -161,6 +167,11 @@ async function resolveBundleMcpOwner(
   }
   if (!isPidAlive(owner.pid)) {
     return "dead";
+  }
+  if (owner.start === UNKNOWN_START) {
+    // Creation could not record a start time, so pid reuse cannot be proven —
+    // trust the live pid (fail closed) rather than risk deleting a live config.
+    return "alive";
   }
   const actualStart = await readStartTicks(owner.pid);
   if (actualStart === undefined) {
