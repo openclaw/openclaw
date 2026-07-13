@@ -383,6 +383,8 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/msteams/src/polls.ts: normalizeMSTeamsPollSelections",
   "extensions/msteams/src/reply-dispatcher.ts: pickInformativeStatusText",
   "extensions/msteams/src/reply-stream-controller.ts: pickInformativeStatusText",
+  "extensions/msteams/src/request-timeout.ts: MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS",
+  "extensions/msteams/src/request-timeout.ts: MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND",
   "extensions/msteams/src/sdk.ts: createMSTeamsApp",
   "extensions/msteams/src/send-context.ts: resolveMSTeamsProactiveReplyStyle",
   "extensions/msteams/src/sent-message-cache.ts: clearMSTeamsSentMessageCache",
