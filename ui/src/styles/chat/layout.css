@@ -2254,9 +2254,11 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
+/* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
+   overrides can never swallow the keyboard focus indicator. */
 .chat-send-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 /* Muted fill (not a ghost outline) while there is nothing to send, so the
