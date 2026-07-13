@@ -246,7 +246,7 @@ by default, plus git-checkout installs under the same prefix flow.
 | `--git`, `--github`         | Shortcut for git method                                                         |
 | `--git-dir <path>`          | Git checkout directory (default: `~/openclaw`). Alias: `--dir`                  |
 | `--version <ver>`           | OpenClaw version or dist-tag (default: `latest`)                                |
-| `--node-version <ver>`      | Node version (default: `22.22.0`)                                               |
+| `--node-version <ver>`      | Node version (default: `22.22.3`)                                               |
 | `--json`                    | Emit NDJSON events                                                              |
 | `--onboard`                 | Run `openclaw onboard` after install                                            |
 | `--no-onboard`              | Skip onboarding (default)                                                       |

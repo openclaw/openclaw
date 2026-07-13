@@ -52,11 +52,7 @@ resolve_openclaw_effective_home() {
 OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
-NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.0}"
-NODE_VERSION_REQUESTED=0
-if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
-  NODE_VERSION_REQUESTED=1
-fi
+NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.3}"
 MIN_NODE_VERSION="22.19.0"
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
@@ -78,7 +74,7 @@ Usage: install-cli.sh [options]
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
-  --node-version <ver>                Node version (default: 22.22.0)
+  --node-version <ver>                Node version (default: 22.22.3)
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -273,7 +269,6 @@ parse_args() {
           fail "Missing value for $1"
         fi
         NODE_VERSION="$2"
-        NODE_VERSION_REQUESTED=1
         shift 2
         ;;
       --install-method|--method)
@@ -461,7 +456,7 @@ semver_at_least() {
 }
 
 required_node_version() {
-  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && semver_at_least "$NODE_VERSION" "$MIN_NODE_VERSION"; then
+  if semver_at_least "$NODE_VERSION" "$MIN_NODE_VERSION"; then
     printf '%s\n' "$NODE_VERSION"
     return
   fi
@@ -804,7 +799,7 @@ install_node() {
     local required_version
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.0 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.3 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }

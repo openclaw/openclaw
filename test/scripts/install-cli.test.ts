@@ -149,6 +149,21 @@ describe("install-cli.sh", () => {
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
   });
 
+  it("defaults user-space Node installs to the current supported Node 22 patch", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      printf 'node=%s\n' "$NODE_VERSION"
+      printf 'required=%s\n' "$(required_node_version)"
+      print_usage
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("node=22.22.3");
+    expect(result.stdout).toContain("required=22.22.3");
+    expect(result.stdout).toContain("Node version (default: 22.22.3)");
+  });
+
   it("resolves requested git install versions to checkout refs", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
@@ -382,7 +397,6 @@ describe("install-cli.sh", () => {
           "is_root() { return 1; }",
           `PREFIX=${JSON.stringify(prefix)}`,
           "NODE_VERSION=22.22.0",
-          "NODE_VERSION_REQUESTED=1",
           "install_node",
         ].join("\n"),
         {
@@ -465,7 +479,6 @@ describe("install-cli.sh", () => {
           `PREFIX=${JSON.stringify(prefix)}`,
           `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
           "NODE_VERSION=22.22.0",
-          "NODE_VERSION_REQUESTED=1",
           "install_node",
         ].join("\n"),
         {
@@ -538,7 +551,6 @@ describe("install-cli.sh", () => {
           `PREFIX=${JSON.stringify(prefix)}`,
           `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
           "NODE_VERSION=22.22.0",
-          "NODE_VERSION_REQUESTED=1",
           "install_node",
         ].join("\n"),
         {
@@ -634,7 +646,6 @@ describe("install-cli.sh", () => {
           "}",
           `PREFIX=${JSON.stringify(prefix)}`,
           "NODE_VERSION=22.22.0",
-          "NODE_VERSION_REQUESTED=1",
           "install_node",
         ].join("\n"),
         {
@@ -706,7 +717,6 @@ describe("install-cli.sh", () => {
           "}",
           `PREFIX=${JSON.stringify(prefix)}`,
           "NODE_VERSION=22.18.0",
-          "NODE_VERSION_REQUESTED=1",
           "install_node",
         ].join("\n"),
         {
@@ -967,7 +977,7 @@ describe("install-cli.sh", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-freshness-"));
     const prefix = join(tmp, "prefix");
     const home = join(tmp, "home");
-    const nodeBin = join(prefix, "tools/node-v22.22.0/bin");
+    const nodeBin = join(prefix, "tools/node-v22.22.3/bin");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });
@@ -1003,7 +1013,7 @@ describe("install-cli.sh", () => {
     const prefix = join(tmp, "prefix");
     const home = join(tmp, "home");
     const project = join(tmp, "project");
-    const nodeBin = join(prefix, "tools/node-v22.22.0/bin");
+    const nodeBin = join(prefix, "tools/node-v22.22.3/bin");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });
