@@ -2186,6 +2186,12 @@ export const en: TranslationMap = {
       activity: {
         empty: "No recent activity.",
       },
+      notes: {
+        placeholder: "Write a note…",
+        readonlyHint: "Connect to the gateway to edit and save notes.",
+        saveError: "Your note couldn’t be saved. Keep editing and try again.",
+        conflict: "This note changed somewhere else. Copy your edits before reloading.",
+      },
       embed: {
         missing: "This embed has no URL yet.",
         blockedExternal: "External embeds are disabled by your gateway policy.",

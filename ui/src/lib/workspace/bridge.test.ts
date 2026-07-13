@@ -148,6 +148,87 @@ describe("getTheme", () => {
   });
 });
 
+describe("widget state capability", () => {
+  it("denies state access before invoking host dependencies when capability is absent", async () => {
+    const getWidgetState = vi.fn(async () => ({ state: { secret: true }, version: 1 }));
+    const setWidgetState = vi.fn(async () => ({ version: 2 }));
+    const { bridge, posted } = makeBridge({ getWidgetState, setWidgetState });
+
+    bridge.handleMessage({ v: 1, type: "workspace:getState", requestId: "g1" });
+    bridge.handleMessage({
+      v: 1,
+      type: "workspace:setState",
+      requestId: "s1",
+      state: { text: "nope" },
+    });
+
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted).toEqual([
+      expect.objectContaining({
+        type: "workspace:error",
+        code: "capability_denied",
+        requestId: "g1",
+      }),
+      expect.objectContaining({
+        type: "workspace:error",
+        code: "capability_denied",
+        requestId: "s1",
+      }),
+    ]);
+    expect(getWidgetState).not.toHaveBeenCalled();
+    expect(setWidgetState).not.toHaveBeenCalled();
+  });
+
+  it("gets and sets state while forwarding an optional expectedVersion", async () => {
+    const getWidgetState = vi.fn(async () => ({ state: { text: "old" }, version: 3 }));
+    const setWidgetState = vi.fn(async (_state: unknown, _expectedVersion?: number) => ({
+      version: 4,
+    }));
+    const { bridge, posted } = makeBridge({
+      manifest: manifest({ capabilities: ["state:persist"] }),
+      getWidgetState,
+      setWidgetState,
+    });
+
+    bridge.handleMessage({ v: 1, type: "workspace:getState", requestId: "g1" });
+    bridge.handleMessage({
+      v: 1,
+      type: "workspace:setState",
+      requestId: "s1",
+      state: { text: "new" },
+      expectedVersion: 3,
+      widgetId: "ignored-child-id",
+    });
+
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
+    expect(getWidgetState).toHaveBeenCalledOnce();
+    expect(setWidgetState).toHaveBeenCalledWith({ text: "new" }, 3);
+    expect(posted).toEqual([
+      { v: 1, type: "workspace:state", requestId: "g1", state: { text: "old" }, version: 3 },
+      { v: 1, type: "workspace:state", requestId: "s1", state: { text: "new" }, version: 4 },
+    ]);
+  });
+
+  it("drops malformed expectedVersion without invoking the state writer", () => {
+    const setWidgetState = vi.fn(async () => ({ version: 1 }));
+    const { bridge } = makeBridge({
+      manifest: manifest({ capabilities: ["state:persist"] }),
+      setWidgetState,
+    });
+
+    expect(
+      bridge.handleMessage({
+        v: 1,
+        type: "workspace:setState",
+        requestId: "s1",
+        state: {},
+        expectedVersion: -1,
+      }),
+    ).toBe(false);
+    expect(setWidgetState).not.toHaveBeenCalled();
+  });
+});
+
 describe("sendPrompt capability + confirm + rate limit", () => {
   it("denies without a dialog when the capability is absent", async () => {
     const confirmPrompt = vi.fn(async () => true);

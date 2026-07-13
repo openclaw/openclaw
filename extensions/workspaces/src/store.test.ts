@@ -27,6 +27,111 @@ function docWithPendingWidget(store: WorkspaceStore): WorkspaceDoc {
 }
 
 describe("WorkspaceStore", () => {
+  it("persists size-capped widget state in SQLite with monotonic versions", async () => {
+    await withStore((store) => {
+      expect(store.readWidgetState("cost-today")).toBeNull();
+
+      expect(store.writeWidgetState("cost-today", { text: "hello" })).toMatchObject({ version: 1 });
+      expect(store.readWidgetState("cost-today")).toMatchObject({
+        state: { text: "hello" },
+        version: 1,
+        updatedAt: expect.any(String),
+      });
+
+      expect(
+        store.writeWidgetState("cost-today", { text: "updated" }, { expectedVersion: 1 }),
+      ).toMatchObject({ version: 2 });
+      expect(store.readWidgetState("cost-today")).toMatchObject({
+        state: { text: "updated" },
+        version: 2,
+      });
+    });
+  });
+
+  it("keeps widget state after the store is reopened", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-reopen-"));
+    try {
+      const first = new WorkspaceStore({ stateDir });
+      first.writeWidgetState("cost-today", { text: "durable" });
+      first.close();
+
+      const reopened = new WorkspaceStore({ stateDir });
+      try {
+        expect(reopened.readWidgetState("cost-today")).toMatchObject({
+          state: { text: "durable" },
+          version: 1,
+        });
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects stale, invalid, and oversized widget state without changing prior state", async () => {
+    await withStore((store) => {
+      store.writeWidgetState("cost-today", { text: "safe" }, { expectedVersion: 0 });
+
+      expect(() =>
+        store.writeWidgetState("cost-today", { text: "stale" }, { expectedVersion: 0 }),
+      ).toThrow("widget state version conflict: expected 0, found 1");
+      expect(() => store.writeWidgetState("../escape", { nope: true })).toThrow(
+        "widget id is invalid",
+      );
+      expect(() => store.writeWidgetState("cost-today", { text: "x".repeat(70 * 1024) })).toThrow(
+        "widget state exceeds 64 KB",
+      );
+      expect(() => store.writeWidgetState("cost-today", { bad: undefined } as never)).toThrow(
+        "widget state must be valid JSON",
+      );
+
+      expect(store.readWidgetState("cost-today")).toMatchObject({
+        state: { text: "safe" },
+        version: 1,
+      });
+    });
+  });
+
+  it("deletes state when a widget is removed or replaced with a different kind", async () => {
+    await withStore((store) => {
+      store.writeWidgetState("cost-today", { text: "private" });
+      store.mutate(
+        (draft) => {
+          draft.tabs[0]!.widgets = draft.tabs[0]!.widgets.filter(
+            (widget) => widget.id !== "cost-today",
+          );
+        },
+        { actor: "user" },
+      );
+      expect(store.readWidgetState("cost-today")).toBeNull();
+      expect(() => store.writeWidgetState("cost-today", { text: "orphan" })).toThrow(
+        "workspace widget not found",
+      );
+
+      store.mutate(
+        (draft) => {
+          draft.tabs[0]!.widgets.push({
+            id: "cost-today",
+            kind: "builtin:markdown",
+            title: "Replacement",
+            grid: { x: 0, y: 0, w: 4, h: 2 },
+            collapsed: false,
+            hidden: false,
+            createdBy: "user",
+          });
+        },
+        { actor: "user" },
+      );
+      expect(store.readWidgetState("cost-today")).toBeNull();
+      expect(
+        store.writeWidgetState("cost-today", { text: "fresh" }, { expectedVersion: 0 }),
+      ).toEqual({
+        version: 1,
+      });
+    });
+  });
+
   it("seeds the default workspace on first read", async () => {
     await withStore((store) => {
       const doc = store.read();

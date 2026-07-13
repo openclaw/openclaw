@@ -383,6 +383,49 @@
   font-size: 0.85em;
 }
 
+.workspace-notes {
+  display: flex;
+  min-height: 120px;
+  height: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-notes__pad {
+  flex: 1;
+  width: 100%;
+  min-height: 112px;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--card) 86%, var(--bg));
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.workspace-notes__pad:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 1px;
+}
+
+.workspace-notes__pad:read-only {
+  color: var(--text-muted, var(--text));
+  cursor: default;
+}
+
+.workspace-notes__status {
+  min-height: 1.25em;
+  color: var(--text-muted, var(--text));
+  font-size: 0.78em;
+}
+
+.workspace-notes__status[data-state="error"] {
+  color: var(--danger);
+}
+
 .workspace-widget__error {
   display: flex;
   flex-direction: column;

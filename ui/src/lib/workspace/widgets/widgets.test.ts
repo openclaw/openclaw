@@ -3,19 +3,24 @@
 // separately (empty/populated) to lock the empty/loading/error affordances.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { html, nothing, render } from "lit";
+import { describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { WorkspaceWidget } from "../types.ts";
 import { mapActivity, renderActivity } from "./activity.ts";
+import { buildBuiltinContext } from "./context.ts";
 import { mapCron, renderCron } from "./cron.ts";
 import { evaluateEmbedUrl, renderIframeEmbed } from "./iframe-embed.ts";
 import { mapInstances, renderInstances } from "./instances.ts";
 import { mapMarkdownSource, renderMarkdown } from "./markdown.ts";
+import { renderNotes } from "./notes.ts";
 import { mapSessions, renderSessions } from "./sessions.ts";
 import { mapStatCard, renderStatCard } from "./stat-card.ts";
 import { mapTable, renderTable } from "./table.ts";
-import type { BuiltinWidgetContext } from "./types.ts";
+import type { BuiltinWidgetContext, BuiltinWidgetState } from "./types.ts";
 import { mapUsage, renderUsage } from "./usage.ts";
+
+const NOTES_PERSIST_DEBOUNCE_MS = 500;
 
 function widget(overrides: Partial<WorkspaceWidget> = {}): WorkspaceWidget {
   return {
@@ -322,5 +327,330 @@ describe("iframe-embed render × sandbox mode", () => {
     );
     expect(container.querySelector('[data-test-id="workspace-embed-blocked"]')).not.toBeNull();
     expect(container.querySelector('[data-test-id="workspace-embed-frame"]')).toBeNull();
+  });
+});
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("notes builtin", () => {
+  it("hydrates persisted text without overwriting an early user edit", async () => {
+    const load = deferred<{ state: unknown; version: number }>();
+    const state: BuiltinWidgetState = {
+      get: () => load.promise,
+      set: async () => ({ version: 2 }),
+    };
+    const container = renderToContainer(
+      renderNotes(widget({ kind: "builtin:notes", props: { text: "seed" } }), null, {
+        ...STRICT_EMBED,
+        state,
+      }),
+    );
+    const pad = container.querySelector<HTMLTextAreaElement>(
+      "[data-test-id='workspace-notes-pad']",
+    )!;
+    expect(pad.value).toBe("seed");
+
+    pad.value = "typed before load";
+    pad.dispatchEvent(new Event("input"));
+    load.resolve({ state: "persisted", version: 7 });
+    await flushMicrotasks();
+
+    expect(pad.value).toBe("typed before load");
+  });
+
+  it("persists an early edit after the version finishes loading", async () => {
+    vi.useFakeTimers();
+    try {
+      const load = deferred<{ state: unknown; version: number }>();
+      const set = vi.fn<BuiltinWidgetState["set"]>(async () => ({ version: 8 }));
+      const container = renderToContainer(
+        renderNotes(widget({ kind: "builtin:notes" }), null, {
+          ...STRICT_EMBED,
+          state: { get: () => load.promise, set },
+        }),
+      );
+      const pad = container.querySelector<HTMLTextAreaElement>(
+        "[data-test-id='workspace-notes-pad']",
+      )!;
+      pad.value = "typed while loading";
+      pad.dispatchEvent(new Event("input"));
+      vi.advanceTimersByTime(NOTES_PERSIST_DEBOUNCE_MS);
+      await flushMicrotasks();
+      expect(set).not.toHaveBeenCalled();
+
+      load.resolve({ state: "old", version: 7 });
+      await flushMicrotasks();
+      expect(set).toHaveBeenCalledWith("typed while loading", 7);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("debounces edits, coalesces an in-flight save, and forwards versions", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstSave = deferred<{ version: number }>();
+      const set = vi
+        .fn<BuiltinWidgetState["set"]>()
+        .mockImplementationOnce(() => firstSave.promise)
+        .mockResolvedValueOnce({ version: 6 });
+      const state: BuiltinWidgetState = {
+        get: async () => ({ state: "old", version: 4 }),
+        set,
+      };
+      const container = renderToContainer(
+        renderNotes(widget({ kind: "builtin:notes" }), null, { ...STRICT_EMBED, state }),
+      );
+      const pad = container.querySelector<HTMLTextAreaElement>(
+        "[data-test-id='workspace-notes-pad']",
+      )!;
+      await flushMicrotasks();
+
+      pad.value = "first";
+      pad.dispatchEvent(new Event("input"));
+      pad.value = "coalesced";
+      pad.dispatchEvent(new Event("input"));
+      vi.advanceTimersByTime(NOTES_PERSIST_DEBOUNCE_MS);
+      await flushMicrotasks();
+      expect(set).toHaveBeenCalledTimes(1);
+      expect(set).toHaveBeenNthCalledWith(1, "coalesced", 4);
+
+      pad.value = "latest";
+      pad.dispatchEvent(new Event("input"));
+      vi.advanceTimersByTime(NOTES_PERSIST_DEBOUNCE_MS);
+      await flushMicrotasks();
+      expect(set).toHaveBeenCalledTimes(1);
+
+      firstSave.resolve({ version: 5 });
+      await flushMicrotasks();
+      expect(set).toHaveBeenNthCalledWith(2, "latest", 5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows save failures and version conflicts", async () => {
+    vi.useFakeTimers();
+    try {
+      const state: BuiltinWidgetState = {
+        get: async () => ({ state: null, version: 2 }),
+        set: vi
+          .fn<BuiltinWidgetState["set"]>()
+          .mockRejectedValueOnce(new Error("disk unavailable"))
+          .mockRejectedValueOnce(new Error("widget state version conflict")),
+      };
+      const container = renderToContainer(
+        renderNotes(widget({ kind: "builtin:notes" }), null, { ...STRICT_EMBED, state }),
+      );
+      const pad = container.querySelector<HTMLTextAreaElement>(
+        "[data-test-id='workspace-notes-pad']",
+      )!;
+      await flushMicrotasks();
+
+      pad.value = "one";
+      pad.dispatchEvent(new Event("input"));
+      vi.advanceTimersByTime(NOTES_PERSIST_DEBOUNCE_MS);
+      await flushMicrotasks();
+      expect(
+        container.querySelector("[data-test-id='workspace-notes-status']")?.textContent,
+      ).toContain("couldn’t be saved");
+
+      pad.value = "two";
+      pad.dispatchEvent(new Event("input"));
+      vi.advanceTimersByTime(NOTES_PERSIST_DEBOUNCE_MS);
+      await flushMicrotasks();
+      expect(
+        container.querySelector("[data-test-id='workspace-notes-status']")?.textContent,
+      ).toContain("changed somewhere else");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels pending persistence while disconnected and retries it after reconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      const set = vi.fn<BuiltinWidgetState["set"]>(async () => ({ version: 1 }));
+      const state: BuiltinWidgetState = {
+        get: async () => ({ state: null, version: 0 }),
+        set,
+      };
+      const container = document.createElement("div");
+      render(
+        renderNotes(widget({ kind: "builtin:notes" }), null, {
+          ...STRICT_EMBED,
+          state,
+        }),
+        container,
+      );
+      const pad = container.querySelector<HTMLTextAreaElement>(
+        "[data-test-id='workspace-notes-pad']",
+      )!;
+      pad.value = "do not save";
+      pad.dispatchEvent(new Event("input"));
+      render(nothing, container);
+      vi.advanceTimersByTime(NOTES_PERSIST_DEBOUNCE_MS);
+      await flushMicrotasks();
+
+      expect(set).not.toHaveBeenCalled();
+
+      render(
+        renderNotes(widget({ kind: "builtin:notes" }), null, {
+          ...STRICT_EMBED,
+          state,
+        }),
+        container,
+      );
+      vi.advanceTimersByTime(NOTES_PERSIST_DEBOUNCE_MS);
+      await flushMicrotasks();
+      expect(set).toHaveBeenCalledWith("do not save", 0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending persistence timer across an unrelated rerender", async () => {
+    vi.useFakeTimers();
+    try {
+      const set = vi.fn<BuiltinWidgetState["set"]>(async () => ({ version: 2 }));
+      const state: BuiltinWidgetState = {
+        get: async () => ({ state: null, version: 1 }),
+        set,
+      };
+      const container = document.createElement("div");
+      const note = widget({ kind: "builtin:notes" });
+      render(html`${renderNotes(note, null, { ...STRICT_EMBED, state })}`, container);
+      await flushMicrotasks();
+      const pad = container.querySelector<HTMLTextAreaElement>(
+        "[data-test-id='workspace-notes-pad']",
+      )!;
+      pad.value = "survives rerender";
+      pad.dispatchEvent(new Event("input"));
+
+      render(html`${renderNotes(note, null, { ...STRICT_EMBED, state })}`, container);
+      vi.advanceTimersByTime(NOTES_PERSIST_DEBOUNCE_MS);
+      await flushMicrotasks();
+
+      expect(set).toHaveBeenCalledWith("survives rerender", 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed instead of writing without a loaded version", async () => {
+    vi.useFakeTimers();
+    try {
+      const set = vi.fn<BuiltinWidgetState["set"]>(async () => ({ version: 1 }));
+      const container = renderToContainer(
+        renderNotes(widget({ kind: "builtin:notes" }), null, {
+          ...STRICT_EMBED,
+          state: {
+            get: async () => {
+              throw new Error("invalid version");
+            },
+            set,
+          },
+        }),
+      );
+      const pad = container.querySelector<HTMLTextAreaElement>(
+        "[data-test-id='workspace-notes-pad']",
+      )!;
+      pad.value = "must not overwrite";
+      pad.dispatchEvent(new Event("input"));
+      await vi.advanceTimersByTimeAsync(NOTES_PERSIST_DEBOUNCE_MS);
+
+      expect(set).not.toHaveBeenCalled();
+      expect(
+        container.querySelector("[data-test-id='workspace-notes-status']")?.textContent,
+      ).toContain("couldn’t be saved");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries hydration after a failed mount", async () => {
+    const get = vi
+      .fn<BuiltinWidgetState["get"]>()
+      .mockRejectedValueOnce(new Error("gateway interrupted"))
+      .mockResolvedValueOnce({ state: "recovered", version: 3 });
+    const state: BuiltinWidgetState = {
+      get,
+      set: async () => ({ version: 4 }),
+    };
+    const container = document.createElement("div");
+    const note = widget({ kind: "builtin:notes" });
+    render(renderNotes(note, null, { ...STRICT_EMBED, state }), container);
+    await flushMicrotasks();
+    render(nothing, container);
+    await flushMicrotasks();
+    render(renderNotes(note, null, { ...STRICT_EMBED, state }), container);
+    await flushMicrotasks();
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(
+      container.querySelector<HTMLInputElement>("[data-test-id='workspace-notes-pad']")?.value,
+    ).toBe("recovered");
+  });
+
+  it("renders a read-only seeded pad without a gateway state client", () => {
+    const container = renderToContainer(
+      renderNotes(
+        widget({ kind: "builtin:notes", props: { text: "seed note" } }),
+        null,
+        STRICT_EMBED,
+      ),
+    );
+    const pad = container.querySelector<HTMLTextAreaElement>(
+      "[data-test-id='workspace-notes-pad']",
+    )!;
+    expect(pad.readOnly).toBe(true);
+    expect(pad.value).toBe("seed note");
+    expect(
+      container.querySelector("[data-test-id='workspace-notes-status']")?.textContent,
+    ).toContain("Connect to the gateway");
+  });
+
+  it("binds state RPCs to the host widget id and forwards expectedVersion", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client = {
+      request: async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        return method.endsWith(".get") ? { state: "note", version: 3 } : { version: 4 };
+      },
+    } as unknown as GatewayBrowserClient;
+    const props = { client, connected: true };
+    const context = buildBuiltinContext(props, widget({ id: "trusted-notes-id" }));
+
+    await context.state?.get();
+    await context.state?.set("next", 3);
+
+    expect(requests).toEqual([
+      { method: "workspaces.widget.state.get", params: { widgetId: "trusted-notes-id" } },
+      {
+        method: "workspaces.widget.state.set",
+        params: { widgetId: "trusted-notes-id", state: "next", expectedVersion: 3 },
+      },
+    ]);
+    expect(buildBuiltinContext(props, widget({ id: "trusted-notes-id" })).state).toBe(
+      context.state,
+    );
+    expect(buildBuiltinContext({ ...props, connected: false }, widget()).state).toBeUndefined();
   });
 });

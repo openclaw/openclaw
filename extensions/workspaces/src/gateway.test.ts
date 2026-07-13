@@ -69,6 +69,8 @@ describe("workspace gateway methods", () => {
       "workspaces.widget.setLayout",
       "workspaces.widget.scaffold",
       "workspaces.widget.approve",
+      "workspaces.widget.state.get",
+      "workspaces.widget.state.set",
       "workspaces.replace",
       "workspaces.undo",
       "workspaces.data.read",
@@ -81,13 +83,78 @@ describe("workspace gateway methods", () => {
     expect(methods.get("workspaces.widget.approve")?.opts).toEqual({
       scope: "operator.approvals",
     });
-    const readOnly = new Set(["workspaces.get", "workspaces.widget.frame", "workspaces.data.read"]);
+    const readOnly = new Set([
+      "workspaces.get",
+      "workspaces.widget.frame",
+      "workspaces.widget.state.get",
+      "workspaces.data.read",
+    ]);
     for (const [name, method] of methods) {
       if (readOnly.has(name) || name === "workspaces.widget.approve") {
         continue;
       }
       expect(method.opts).toEqual({ scope: "operator.write" });
     }
+  });
+
+  it("persists only the trusted-parent widget id with optimistic concurrency", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { api, methods } = createApi();
+      registerWorkspaceGatewayMethods({ api, store: new WorkspaceStore({ stateDir }) });
+      const broadcast = vi.fn();
+
+      const empty = await callMethod(
+        methods.get("workspaces.widget.state.get")!,
+        { widgetId: "cost-today" },
+        broadcast,
+      );
+      expect(empty.response?.[1]).toEqual({ state: null, version: 0 });
+
+      const first = await callMethod(
+        methods.get("workspaces.widget.state.set")!,
+        { widgetId: "cost-today", state: { text: "a" }, expectedVersion: 0 },
+        broadcast,
+      );
+      expect(first.response?.[0]).toBe(true);
+      expect(first.response?.[1]).toEqual({ widgetId: "cost-today", version: 1 });
+      expect(broadcast).toHaveBeenCalledWith("plugin.workspaces.widget-state.changed", {
+        widgetId: "cost-today",
+        version: 1,
+      });
+
+      const read = await callMethod(
+        methods.get("workspaces.widget.state.get")!,
+        { widgetId: "cost-today" },
+        broadcast,
+      );
+      expect(read.response?.[1]).toMatchObject({ state: { text: "a" }, version: 1 });
+
+      broadcast.mockClear();
+      const stale = await callMethod(
+        methods.get("workspaces.widget.state.set")!,
+        { widgetId: "cost-today", state: { text: "clobber" }, expectedVersion: 0 },
+        broadcast,
+      );
+      expect(stale.response?.[0]).toBe(false);
+      expect(stale.response?.[2]?.message).toContain("version conflict");
+      expect(broadcast).not.toHaveBeenCalled();
+
+      const malformed = await callMethod(
+        methods.get("workspaces.widget.state.set")!,
+        { widgetId: "cost-today", state: null, expectedVersion: -1 },
+        broadcast,
+      );
+      expect(malformed.response?.[0]).toBe(false);
+      expect(malformed.response?.[2]?.message).toContain("non-negative integer");
+
+      const smuggled = await callMethod(
+        methods.get("workspaces.widget.state.set")!,
+        { widgetId: "cost-today", state: {}, targetWidgetId: "other" },
+        broadcast,
+      );
+      expect(smuggled.response?.[0]).toBe(false);
+      expect(smuggled.response?.[2]?.message).toContain("unexpected param");
+    });
   });
 
   it("returns the workspace without broadcasting and broadcasts successful writes", async () => {

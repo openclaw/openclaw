@@ -59,7 +59,7 @@ const WIDGET_KIND_DESCRIPTION = [
   "builtin:markdown (props {markdown} or {text}, or a file binding of a .md file),",
   "builtin:table (binding id `rows`; props {columns: string[]}),",
   "builtin:iframe-embed (props {url}),",
-  "builtin:sessions, builtin:usage, builtin:cron, builtin:instances, builtin:activity",
+  "builtin:sessions, builtin:usage, builtin:cron, builtin:instances, builtin:activity, builtin:notes",
   "(each reads its own rpc binding; see workspace_get for a worked example).",
   "Charts are not builtins — author one with workspace_widget_scaffold and use custom:<name>.",
 ].join(" ");

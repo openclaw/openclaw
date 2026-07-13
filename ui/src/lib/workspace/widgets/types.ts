@@ -13,6 +13,11 @@ import type { TemplateResult } from "lit";
 import type { ApplicationConfigCapability } from "../../../app/config.ts";
 import type { WorkspaceWidget } from "../types.ts";
 
+export type BuiltinWidgetState = {
+  get(): Promise<{ state: unknown; version: number }>;
+  set(state: unknown, expectedVersion: number): Promise<{ version: number }>;
+};
+
 /** Ambient context a builtin may need beyond its own binding value. */
 export type BuiltinWidgetContext = {
   /** Control UI mount path used by builtins that link to another app route. */
@@ -22,6 +27,8 @@ export type BuiltinWidgetContext = {
     ApplicationConfigCapability["current"],
     "embedSandboxMode" | "allowExternalEmbedUrls"
   >;
+  /** Host-bound persistence for trusted builtins; absent without a gateway client. */
+  state?: BuiltinWidgetState;
 };
 
 /** A builtin widget renderer: pure, side-effect-free, throws only on real bugs. */

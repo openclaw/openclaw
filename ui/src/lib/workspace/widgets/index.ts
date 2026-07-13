@@ -9,6 +9,7 @@ import { renderCron } from "./cron.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
 import { renderInstances } from "./instances.ts";
 import { renderMarkdown } from "./markdown.ts";
+import { renderNotes } from "./notes.ts";
 import { renderSessions } from "./sessions.ts";
 import { renderStatCard } from "./stat-card.ts";
 import { renderTable } from "./table.ts";
@@ -25,6 +26,7 @@ export const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinWidgetRenderer> = {
   cron: (widget, value) => renderCron(widget, value),
   instances: (widget, value) => renderInstances(widget, value),
   activity: (widget, value) => renderActivity(widget, value),
+  notes: renderNotes,
 };
 
 export function getBuiltinRenderer(kind: string): BuiltinWidgetRenderer | undefined {
