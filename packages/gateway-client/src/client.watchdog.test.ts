@@ -138,6 +138,8 @@ describe("GatewayClient", () => {
   let httpsServer: ReturnType<typeof createHttpsServer> | null = null;
 
   afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     if (wss) {
       for (const client of wss.clients) {
         client.terminate();
@@ -357,25 +359,21 @@ describe("GatewayClient", () => {
 
   test("lets finite pending requests own their timeout when ticks are missing", async () => {
     vi.useFakeTimers();
-    try {
-      const { client, close } = createWatchedGatewayClient();
-      const request = client.request("status", undefined, { timeoutMs: 100 });
-      const requestExpectation = expect(request).rejects.toThrow(
-        "gateway request timeout for status",
-      );
-      await vi.advanceTimersByTimeAsync(20);
+    const { client, close } = createWatchedGatewayClient();
+    const request = client.request("status", undefined, { timeoutMs: 100 });
+    const requestExpectation = expect(request).rejects.toThrow(
+      "gateway request timeout for status",
+    );
+    await vi.advanceTimersByTimeAsync(20);
 
-      expect(close).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(80);
-      await requestExpectation;
-      await vi.advanceTimersByTimeAsync(5);
+    await vi.advanceTimersByTimeAsync(80);
+    await requestExpectation;
+    await vi.advanceTimersByTimeAsync(5);
 
-      expect(close).toHaveBeenCalledWith(4000, "tick timeout");
-      await stopSyntheticClient(client);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(close).toHaveBeenCalledWith(4000, "tick timeout");
+    await stopSyntheticClient(client);
   });
 
   test.each([
@@ -391,132 +389,109 @@ describe("GatewayClient", () => {
     },
   ])("keeps the watchdog active for $label request", async ({ method, options }) => {
     vi.useFakeTimers();
-    try {
-      const { client, close } = createWatchedGatewayClient();
-      const request = client.request(method, undefined, options);
-      const requestExpectation = expect(request).rejects.toThrow("gateway client stopped");
+    const { client, close } = createWatchedGatewayClient();
+    const request = client.request(method, undefined, options);
+    const requestExpectation = expect(request).rejects.toThrow("gateway client stopped");
 
-      await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(20);
 
-      expect(close).toHaveBeenCalledWith(4000, "tick timeout");
-      await stopSyntheticClient(client);
-      await requestExpectation;
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(close).toHaveBeenCalledWith(4000, "tick timeout");
+    await stopSyntheticClient(client);
+    await requestExpectation;
   });
 
   test("keeps the watchdog active for mixed finite and unbounded requests", async () => {
     vi.useFakeTimers();
-    try {
-      const { client, close } = createWatchedGatewayClient();
-      const requests = [
-        client.request("status", undefined, { timeoutMs: 100 }),
-        client.request("chat.send", undefined, { expectFinal: true }),
-      ];
-      const settlements = Promise.allSettled(requests);
+    const { client, close } = createWatchedGatewayClient();
+    const requests = [
+      client.request("status", undefined, { timeoutMs: 100 }),
+      client.request("chat.send", undefined, { expectFinal: true }),
+    ];
+    const settlements = Promise.allSettled(requests);
 
-      await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(20);
 
-      expect(close).toHaveBeenCalledWith(4000, "tick timeout");
-      await stopSyntheticClient(client);
-      await expect(settlements).resolves.toEqual([
-        expect.objectContaining({ status: "rejected" }),
-        expect.objectContaining({ status: "rejected" }),
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(close).toHaveBeenCalledWith(4000, "tick timeout");
+    await stopSyntheticClient(client);
+    await expect(settlements).resolves.toEqual([
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ status: "rejected" }),
+    ]);
   });
 
   test("keeps an unbounded request alive while inbound ticks continue", async () => {
     vi.useFakeTimers();
-    try {
-      const { client, close, send } = createWatchedGatewayClient();
-      const request = client.request<{ status: string }>("chat.send", undefined, {
-        expectFinal: true,
-      });
-      const requestFrame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
+    const { client, close, send } = createWatchedGatewayClient();
+    const request = client.request<{ status: string }>("chat.send", undefined, {
+      expectFinal: true,
+    });
+    const requestFrame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
 
-      for (let seq = 1; seq <= 4; seq += 1) {
-        await vi.advanceTimersByTimeAsync(5);
-        handleGatewayMessage(client, { type: "event", event: "tick", seq, payload: {} });
-      }
-
-      expect(close).not.toHaveBeenCalled();
-      handleGatewayMessage(client, {
-        type: "res",
-        id: requestFrame.id,
-        ok: true,
-        payload: { status: "ok" },
-      });
-      await expect(request).resolves.toEqual({ status: "ok" });
-      await stopSyntheticClient(client);
-    } finally {
-      vi.useRealTimers();
+    for (let seq = 1; seq <= 4; seq += 1) {
+      await vi.advanceTimersByTimeAsync(5);
+      handleGatewayMessage(client, { type: "event", event: "tick", seq, payload: {} });
     }
+
+    expect(close).not.toHaveBeenCalled();
+    handleGatewayMessage(client, {
+      type: "res",
+      id: requestFrame.id,
+      ok: true,
+      payload: { status: "ok" },
+    });
+    await expect(request).resolves.toEqual({ status: "ok" });
+    await stopSyntheticClient(client);
   });
 
   test("honors explicit tick watchdog timeout threshold", async () => {
     vi.useFakeTimers();
-    try {
-      const client = new GatewayClient({
-        tickWatchMinIntervalMs: 5,
-        tickWatchTimeoutMs: 50,
-      });
-      const close = vi.fn();
-      installSyntheticSocket(client, vi.fn(), close);
-      Object.assign(client as unknown as { tickIntervalMs: number; lastTick: number }, {
-        tickIntervalMs: 5,
-        lastTick: Date.now(),
-      });
+    const client = new GatewayClient({
+      tickWatchMinIntervalMs: 5,
+      tickWatchTimeoutMs: 50,
+    });
+    const close = vi.fn();
+    installSyntheticSocket(client, vi.fn(), close);
+    Object.assign(client as unknown as { tickIntervalMs: number; lastTick: number }, {
+      tickIntervalMs: 5,
+      lastTick: Date.now(),
+    });
 
-      (
-        client as unknown as {
-          startTickWatch: () => void;
-        }
-      ).startTickWatch();
-      await vi.advanceTimersByTimeAsync(20);
-      expect(close).not.toHaveBeenCalled();
+    (
+      client as unknown as {
+        startTickWatch: () => void;
+      }
+    ).startTickWatch();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(close).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(35);
-      expect(close).toHaveBeenCalledWith(4000, "tick timeout");
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(35);
+    expect(close).toHaveBeenCalledWith(4000, "tick timeout");
   });
 
   test("clamps oversized tick watchdog intervals before scheduling", () => {
     vi.useFakeTimers();
-    try {
-      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-      const client = new GatewayClient({
-        tickWatchMinIntervalMs: 5,
-      });
-      Object.assign(
-        client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number },
-        {
-          ws: {
-            readyState: WebSocket.OPEN,
-            send: vi.fn(),
-            close: vi.fn(),
-          },
-          tickIntervalMs: Number.MAX_SAFE_INTEGER,
-          lastTick: Date.now(),
-        },
-      );
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const client = new GatewayClient({
+      tickWatchMinIntervalMs: 5,
+    });
+    Object.assign(client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number }, {
+      ws: {
+        readyState: WebSocket.OPEN,
+        send: vi.fn(),
+        close: vi.fn(),
+      },
+      tickIntervalMs: Number.MAX_SAFE_INTEGER,
+      lastTick: Date.now(),
+    });
 
-      (
-        client as unknown as {
-          startTickWatch: () => void;
-        }
-      ).startTickWatch();
+    (
+      client as unknown as {
+        startTickWatch: () => void;
+      }
+    ).startTickWatch();
 
-      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
-      client.stop();
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+    client.stop();
   });
 
   test("cleans pending request state when websocket send throws", async () => {
@@ -584,50 +559,41 @@ describe("GatewayClient", () => {
     "clamps oversized request timeouts before scheduling",
     async ({ defaultTimeoutMs, options }) => {
       vi.useFakeTimers();
-      try {
-        const { client } = createOpenGatewayClient(defaultTimeoutMs);
+      const { client } = createOpenGatewayClient(defaultTimeoutMs);
 
-        const requestPromise = client.request("status", undefined, options);
-        const isSettled = trackSettlement(requestPromise);
+      const requestPromise = client.request("status", undefined, options);
+      const isSettled = trackSettlement(requestPromise);
 
-        await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(1);
 
-        expect(isSettled()).toBe(false);
-        expect(getPendingCount(client)).toBe(1);
+      expect(isSettled()).toBe(false);
+      expect(getPendingCount(client)).toBe(1);
 
-        client.stop();
-        await expect(requestPromise).rejects.toThrow("gateway client stopped");
-      } finally {
-        vi.useRealTimers();
-      }
+      client.stop();
+      await expect(requestPromise).rejects.toThrow("gateway client stopped");
     },
   );
 
   test("clamps oversized stopAndWait timeouts before scheduling", async () => {
     vi.useFakeTimers();
-    try {
-      const client = new GatewayClient({});
-      const ws = {
-        readyState: WebSocket.OPEN,
-        close: vi.fn(),
-        terminate: vi.fn(),
-      };
-      (client as unknown as { ws: unknown }).ws = ws;
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const client = new GatewayClient({});
+    const ws = {
+      readyState: WebSocket.OPEN,
+      close: vi.fn(),
+      terminate: vi.fn(),
+    };
+    (client as unknown as { ws: unknown }).ws = ws;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-      const stopPromise = client.stopAndWait({ timeoutMs: Number.MAX_SAFE_INTEGER });
+    const stopPromise = client.stopAndWait({ timeoutMs: Number.MAX_SAFE_INTEGER });
 
-      await vi.advanceTimersByTimeAsync(1);
-      expect(ws.terminate).not.toHaveBeenCalled();
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.terminate).not.toHaveBeenCalled();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
 
-      await vi.advanceTimersByTimeAsync(249);
-      await expect(stopPromise).resolves.toBeUndefined();
-      expect(ws.terminate).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-    }
+    await vi.advanceTimersByTimeAsync(249);
+    await expect(stopPromise).resolves.toBeUndefined();
+    expect(ws.terminate).toHaveBeenCalledTimes(1);
   });
 
   test("rejects mismatched tls fingerprint", async () => {

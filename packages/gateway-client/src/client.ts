@@ -537,6 +537,7 @@ export class GatewayClient {
           this.opts.onClose?.(context.code, context.reason, this.closeInfo(context));
         }
       },
+      notifyStoppedClose: true,
       onConnectError: (error) => this.notifyConnectError(error),
       onParseError: (error) =>
         this.logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(error)}`),
@@ -1045,7 +1046,10 @@ export class GatewayClient {
         pendingError: new GatewayClientTransientPreHelloCloseError(),
       };
     }
-    if (info.transientPreHelloCleanClose) {
+    if (
+      info.transientPreHelloCleanClose ||
+      (context.connectRequestSent && !context.helloReceived && !context.connectFailure)
+    ) {
       const error = new Error(`gateway closed (${context.code}): ${context.reason}`);
       this.notifyConnectError(error);
       this.logError(`gateway connect failed: ${formatGatewayClientErrorForLog(error)}`);

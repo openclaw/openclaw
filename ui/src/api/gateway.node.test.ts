@@ -646,6 +646,9 @@ describe("GatewayBrowserClient", () => {
 
   it("reports connect phase timing without credentials or nonce values", async () => {
     const onConnectTiming = vi.fn();
+    vi.stubGlobal("performance", {
+      now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(35).mockReturnValue(40),
+    });
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -661,6 +664,8 @@ describe("GatewayBrowserClient", () => {
       "connect-plan-ready",
       "request-sent",
     ]);
+    expect(sentPayloads[0]?.durationMs).toBe(25);
+    expect(sentPayloads[0]?.phaseDurationMs).toBe(25);
     for (const payload of sentPayloads) {
       expect(payload.generation).toBe(1);
       expect(payload.durationMs).toBeTypeOf("number");
@@ -1594,6 +1599,8 @@ describe("GatewayBrowserClient", () => {
     expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
       phase: "failed",
       errorCode: "INVALID_REQUEST",
+      hasDeviceIdentity: true,
+      hasPassword: true,
     });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);

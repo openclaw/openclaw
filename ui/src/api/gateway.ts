@@ -16,6 +16,7 @@ import {
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
   type ConnectParams,
+  type ErrorShape,
   type EventFrame,
   type HelloOk,
   shouldPauseGatewayReconnect,
@@ -38,13 +39,7 @@ import { generateUUID } from "../lib/uuid.ts";
 
 export type GatewayEventFrame = EventFrame;
 
-type GatewayErrorInfo = {
-  code: string;
-  message: string;
-  details?: unknown;
-  retryable?: boolean;
-  retryAfterMs?: number;
-};
+type GatewayErrorInfo = ErrorShape;
 
 export class GatewayRequestError extends GatewayProtocolRequestError {
   readonly gatewayCode: string;
@@ -428,7 +423,12 @@ export class GatewayBrowserClient {
       buildConnectParams: (plan) => this.buildConnectParams(plan),
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
       onHello: (hello) => this.opts.onHello?.(hello),
-      onConnectFailure: (error, context) => this.handleConnectFailure(error, context.plan),
+      onConnectFailure: (error, context) => {
+        this.client.recordTiming("failed", context.generation, context.plan, {
+          errorCode: error.code,
+        });
+        return this.handleConnectFailure(error, context.plan);
+      },
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
         const error = context.connectFailure?.error;

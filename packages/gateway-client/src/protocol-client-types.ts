@@ -27,6 +27,7 @@ export type GatewayProtocolCloseContext = {
   generation: number;
   socketOpened: boolean;
   helloReceived: boolean;
+  connectRequestSent: boolean;
   connectFailure?: { error: Error; reconnectDelayMs?: number };
 };
 export type GatewayProtocolConnectDecision = {
@@ -90,6 +91,7 @@ export type GatewayProtocolClientOptions<TPlan> = {
   ) => GatewayProtocolConnectDecision;
   resolveClose: (context: GatewayProtocolCloseContext) => GatewayProtocolCloseDecision;
   onClose?: (context: GatewayProtocolCloseContext, decision: GatewayProtocolCloseDecision) => void;
+  notifyStoppedClose?: boolean;
   onConnectError?: (error: Error) => void;
   onSocketFactoryError?: (error: Error) => void;
   onParseError?: (error: unknown) => void;

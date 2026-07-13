@@ -22,6 +22,7 @@ type ConnectTimingState = {
   hasChallenge: boolean;
   usedFallback: boolean;
 };
+type CloseSnapshot = Omit<GatewayProtocolCloseContext, "code" | "reason">;
 
 /**
  * Browser-safe gateway wire client. Environment adapters own transport and auth
@@ -36,6 +37,7 @@ export class GatewayProtocolClient<TPlan> {
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
   private connectSent = false;
+  private connectRequestSent = false;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private backoffMs: number;
@@ -43,6 +45,7 @@ export class GatewayProtocolClient<TPlan> {
   private helloReceived = false;
   private connectFailure: GatewayProtocolCloseContext["connectFailure"];
   private connectTiming: ConnectTimingState | null = null;
+  private stoppedSocket?: { socket: GatewayProtocolSocket; context: CloseSnapshot };
 
   constructor(private readonly opts: GatewayProtocolClientOptions<TPlan>) {
     this.backoffMs = opts.reconnect.initialMs;
@@ -75,6 +78,11 @@ export class GatewayProtocolClient<TPlan> {
     this.clearTimer("handshakeTimer");
     this.clearTimer("reconnectTimer");
     const socket = this.socket;
+    if (socket && this.opts.notifyStoppedClose) {
+      // Node callers observe the transport's final close during explicit stop;
+      // browser callers intentionally suppress it.
+      this.stoppedSocket = { socket, context: this.closeContext() };
+    }
     this.socket = null;
     this.connectFailure = undefined;
     this.connectTiming = null;
@@ -120,15 +128,6 @@ export class GatewayProtocolClient<TPlan> {
     detail?: unknown,
   ): void {
     const now = this.nowMs();
-    if (phase === "socket-open") {
-      this.connectTiming = {
-        generation,
-        startedAtMs: now,
-        lastAtMs: now,
-        hasChallenge: false,
-        usedFallback: false,
-      };
-    }
     const state = this.connectTiming;
     if (!state || state.generation !== generation) {
       return;
@@ -158,9 +157,10 @@ export class GatewayProtocolClient<TPlan> {
       return;
     }
     this.clearTimer("reconnectTimer");
-    const generation = ++this.generation;
+    const generation = this.generation + 1;
     this.connectNonce = null;
     this.connectSent = false;
+    this.connectRequestSent = false;
     this.socketOpened = false;
     this.helloReceived = false;
     this.connectFailure = undefined;
@@ -181,7 +181,16 @@ export class GatewayProtocolClient<TPlan> {
       }
       return;
     }
+    this.generation = generation;
     this.socket = socket;
+    const now = this.nowMs();
+    this.connectTiming = {
+      generation,
+      startedAtMs: now,
+      lastAtMs: now,
+      hasChallenge: false,
+      usedFallback: false,
+    };
   }
 
   private handleOpen(socket: GatewayProtocolSocket, generation: number): void {
@@ -270,6 +279,7 @@ export class GatewayProtocolClient<TPlan> {
     const context = { generation, nonce: this.connectNonce, plan };
     this.recordTiming("connect-plan-ready", generation, plan);
     this.recordTiming("request-sent", generation, plan);
+    this.connectRequestSent = true;
     void this.requests
       .request<HelloOk>(socket, "connect", this.opts.buildConnectParams(plan))
       .then((hello) => {
@@ -361,17 +371,20 @@ export class GatewayProtocolClient<TPlan> {
     reason: string,
   ): void {
     if (this.socket !== socket) {
+      if (this.stoppedSocket?.socket === socket) {
+        const context = { ...this.stoppedSocket.context, code, reason };
+        this.stoppedSocket = undefined;
+        this.invoke("close", () => this.opts.onClose?.(context, { retry: false, notify: true }));
+      }
       return;
     }
     this.socket = null;
     this.clearTimer("handshakeTimer");
     const context: GatewayProtocolCloseContext = {
+      ...this.closeContext(),
       code,
       reason,
       generation,
-      socketOpened: this.socketOpened,
-      helloReceived: this.helloReceived,
-      connectFailure: this.connectFailure,
     };
     this.connectFailure = undefined;
     const decision = this.opts.resolveClose(context);
@@ -406,7 +419,16 @@ export class GatewayProtocolClient<TPlan> {
       this.reconnectTimer = null;
       this.connect();
     }, delay);
-    this.reconnectTimer.unref?.();
+  }
+
+  private closeContext(): CloseSnapshot {
+    return {
+      generation: this.generation,
+      socketOpened: this.socketOpened,
+      helloReceived: this.helloReceived,
+      connectRequestSent: this.connectRequestSent,
+      connectFailure: this.connectFailure,
+    };
   }
 
   private isActive(socket: GatewayProtocolSocket, generation: number): boolean {
