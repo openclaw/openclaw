@@ -155,7 +155,8 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
         config: ctx.config,
         startOptions: appServer.start,
       });
-      return buildCodexAppServerUsageSnapshot(rateLimits);
+      const snapshot = buildCodexAppServerUsageSnapshot(rateLimits);
+      return ctx.email && !snapshot.error ? { ...snapshot, accountEmail: ctx.email } : snapshot;
     },
     resolveThinkingProfile: ({ modelId, compat }) => {
       const efforts = resolveCodexThinkingEfforts({
