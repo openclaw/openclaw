@@ -48,12 +48,11 @@ function modelGroups(models: ModelPickerEntry[]): ModelOptionGroup[] {
     group.models.push({ ref, label: model.name || ref });
     groups.set(groupKey, group);
   }
-  return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      models: group.models.toSorted((a, b) => a.label.localeCompare(b.label)),
-    }))
-    .toSorted((a, b) => a.label.localeCompare(b.label));
+  const sortedGroups = [...groups.values()];
+  for (const group of sortedGroups) {
+    group.models = group.models.toSorted((a, b) => a.label.localeCompare(b.label));
+  }
+  return sortedGroups.toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
 function renderModelOptions(models: ModelPickerEntry[], selected = "") {
