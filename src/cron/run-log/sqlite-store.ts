@@ -1,6 +1,7 @@
 /** SQLite-backed cron run-log storage helpers. */
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable, SelectQueryBuilder } from "kysely";
+import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -73,14 +74,20 @@ function bindCronRunLogRow(params: {
 }
 
 /** Rehydrates a cron run-log row, preferring indexed SQLite columns over JSON payload values. */
-export function parseStoredRunLogEntry(row: CronRunLogRow): CronRunLogEntry | null {
+export function parseStoredRunLogEntry(
+  row: CronRunLogRow,
+  resolveReason?: (
+    error: string | undefined,
+    provider: string | undefined,
+  ) => FailoverReason | undefined,
+): CronRunLogEntry | null {
   let rawEntry: unknown;
   try {
     rawEntry = JSON.parse(row.entry_json);
   } catch {
     return null;
   }
-  const parsed = parseCronRunLogEntryObject(rawEntry, { jobId: row.job_id });
+  const parsed = parseCronRunLogEntryObject(rawEntry, { jobId: row.job_id }, resolveReason);
   if (!parsed) {
     return null;
   }

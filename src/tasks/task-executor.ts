@@ -14,10 +14,13 @@ import {
   assertTaskCancellationReadyById,
   cancelTaskById,
   createTaskRecord,
+  findTaskByRunId as findTaskByRunIdInRegistry,
   getTaskById,
   isParentFlowLinkError,
   linkTaskToFlowById,
+  listTaskRecordsUnsorted as listTaskRecordsUnsortedInRegistry,
   listTasksForFlowId,
+  markTaskTerminalById as markTaskTerminalByIdInRegistry,
   markTaskRunningByRunId,
   finalizeTaskRunByRunId as finalizeTaskRunByRunIdInRegistry,
   recordTaskProgressByRunId,
@@ -129,6 +132,14 @@ export function createRunningTaskRun(params: DetachedRunningTaskCreateParams): T
   });
 }
 
+export function findTaskByRunId(runId: string): TaskRecord | undefined {
+  return findTaskByRunIdInRegistry(runId);
+}
+
+export function listTaskRecordsUnsorted(): TaskRecord[] {
+  return listTaskRecordsUnsortedInRegistry();
+}
+
 type RunTaskInFlowParams = {
   flowId: string;
   runtime: TaskRuntime;
@@ -180,6 +191,12 @@ export function completeTaskRunByRunId(params: DetachedTaskCompleteParams) {
 
 export function finalizeTaskRunByRunId(params: DetachedTaskFinalizeParams) {
   return finalizeTaskRunByRunIdInRegistry(params);
+}
+
+export function finalizeTaskRunById(
+  params: Parameters<typeof markTaskTerminalByIdInRegistry>[0],
+): TaskRecord | null {
+  return markTaskTerminalByIdInRegistry(params);
 }
 
 export function failTaskRunByRunId(params: DetachedTaskFailParams) {

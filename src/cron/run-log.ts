@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import {
@@ -62,6 +63,10 @@ type AppendCronRunLogOptions = {
 };
 
 const INVALID_CRON_RUN_LOG_JOB_ID_MESSAGE = "invalid cron run log job id";
+
+function resolveStoredRunLogReason(error: string | undefined, provider: string | undefined) {
+  return resolveFailoverReasonFromError(error, provider) ?? undefined;
+}
 
 export function normalizeCronRunLogJobId(jobId: string): string {
   const trimmed = jobId.trim();
@@ -183,7 +188,7 @@ export function readCronRunLogEntriesSync(params: {
   const jobId = params.jobId ? normalizeCronRunLogJobId(params.jobId) : undefined;
   const rows = readCronRunLogRows(openOpenClawStateDatabase().db, storeKey, jobId);
   return rows
-    .map(parseStoredRunLogEntry)
+    .map((row) => parseStoredRunLogEntry(row, resolveStoredRunLogReason))
     .filter((entry): entry is CronRunLogEntry => entry !== null)
     .slice(-limit);
 }
@@ -317,7 +322,7 @@ export async function readCronRunLogEntriesPage(
       offset: boundedOffset,
       limit,
     })
-      .map(parseStoredRunLogEntry)
+      .map((row) => parseStoredRunLogEntry(row, resolveStoredRunLogReason))
       .filter((entry): entry is CronRunLogEntry => entry !== null);
     if (opts.jobNameById) {
       for (const entry of entries) {
@@ -348,7 +353,7 @@ export async function readCronRunLogEntriesPage(
     runId: opts.runId,
     sortDir,
   })
-    .map(parseStoredRunLogEntry)
+    .map((row) => parseStoredRunLogEntry(row, resolveStoredRunLogReason))
     .filter((entry): entry is CronRunLogEntry => entry !== null);
   const filtered = filterRunLogEntries(all, {
     runId: opts.runId,

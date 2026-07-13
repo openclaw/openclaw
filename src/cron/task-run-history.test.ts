@@ -10,11 +10,11 @@ import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
 import {
-  cronRunLogEntryFromEvent,
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronTaskRecordToRunLogEntry,
 } from "./task-run-detail.js";
+import { cronRunLogEntryFromEvent } from "./task-run-event-codec.js";
 import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 const JOB_ID = "history-job";
@@ -239,6 +239,7 @@ describe("cron task run history", () => {
             action: "finished",
             status: "error",
             error: "provider overloaded",
+            errorReason: "overloaded",
             deliveryStatus: "not-delivered",
             deliveryError: "send failed",
             runId: "manual:history:error",
@@ -253,6 +254,7 @@ describe("cron task run history", () => {
             action: "finished",
             status: "error",
             error: "cron: job execution timed out",
+            errorReason: "timeout",
             runId: "manual:history:timeout",
             runAtMs: 3_000,
             durationMs: 500,

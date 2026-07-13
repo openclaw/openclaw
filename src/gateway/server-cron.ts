@@ -31,7 +31,7 @@ import {
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
-import { cronRunLogEntryFromEvent } from "../cron/task-run-detail.js";
+import { cronRunLogEntryFromEvent } from "../cron/task-run-event-codec.js";
 import { createCronTriggerEvaluator } from "../cron/trigger-script.js";
 import type { CronJob, CronPayload } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";

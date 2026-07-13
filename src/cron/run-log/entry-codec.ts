@@ -1,7 +1,6 @@
 /** Parses and normalizes persisted cron run-log entry payloads. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
-import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { normalizeCronRunDiagnostics } from "../run-diagnostics.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { CronDeliveryStatus } from "../types.js";
@@ -34,6 +33,10 @@ function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefi
 export function parseCronRunLogEntryObject(
   obj: unknown,
   opts?: { jobId?: string },
+  resolveReason?: (
+    error: string | undefined,
+    provider: string | undefined,
+  ) => FailoverReason | undefined,
 ): CronRunLogEntry | null {
   const jobId = normalizeOptionalString(opts?.jobId);
   if (!obj || typeof obj !== "object") {
@@ -64,10 +67,10 @@ export function parseCronRunLogEntryObject(
       : undefined;
   const normalizedErrorReason =
     normalizeCronRunLogErrorReason(entryObj.errorReason) ??
-    resolveFailoverReasonFromError(normalizedError, normalizedProvider) ??
+    resolveReason?.(normalizedError, normalizedProvider) ??
     undefined;
-  // Recompute missing/legacy error reasons from the stored error text so old
-  // run-log rows can still drive retry/status filtering.
+  // Live readers inject a resolver so missing/legacy reasons can still drive
+  // retry/status filtering without pulling the agent graph into migration reads.
   const entry: CronRunLogEntry = {
     ts: entryObj.ts,
     jobId: entryObj.jobId,

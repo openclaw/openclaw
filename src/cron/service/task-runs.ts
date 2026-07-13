@@ -6,25 +6,26 @@ import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { createRunningTaskRun, finalizeTaskRunByRunId } from "../../tasks/task-executor.js";
 import {
+  createRunningTaskRun,
+  finalizeTaskRunById,
+  finalizeTaskRunByRunId,
   findTaskByRunId,
   listTaskRecordsUnsorted,
-  markTaskTerminalById,
-} from "../../tasks/task-registry.js";
+} from "../../tasks/task-executor.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { resolveCronAgentSessionKey } from "../isolated-agent/session-key.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  cronRunLogEntryFromEvent,
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronTaskRecordStoreKey,
   cronTaskRecordToRunLogEntry,
   cronTaskRecordToTriggerEval,
 } from "../task-run-detail.js";
+import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { normalizeCronRunErrorText, timeoutErrorMessage } from "./execution-errors.js";
 import type { CronEvent, CronServiceState } from "./state.js";
@@ -352,7 +353,7 @@ export function tryFinishCronTaskRun(
       ) {
         // Pre-persist markers and exact legacy identities contain no history detail.
         // Startup recovery replaces them with the durable interrupted outcome.
-        const recovered = markTaskTerminalById({
+        const recovered = finalizeTaskRunById({
           taskId: existing.taskId,
           status: cronRunStatusToTaskStatus(entry),
           childSessionKey: entry.sessionKey ?? null,

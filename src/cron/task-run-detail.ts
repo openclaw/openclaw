@@ -1,15 +1,13 @@
-/** Cron-owned codec between task-ledger detail and the stable run-history wire shape. */
-import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
+/** Read-side cron codec between task-ledger detail and the stable run-history wire shape.
+ * Deliberately free of agent/runtime imports so history reads stay dependency-light;
+ * the event->entry write codec lives in task-run-event-codec.ts. */
 import type { JsonValue, TaskRecord, TaskStatus } from "../tasks/task-registry.types.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import { parseCronRunLogEntryObject } from "./run-log/entry-codec.js";
 import { timeoutErrorMessage } from "./service/execution-errors.js";
-import type { CronEvent } from "./service/state.js";
 import type { CronRunStatus } from "./types.js";
 
 const CRON_TASK_DETAIL_KIND = "cron-run";
-
-type CronFinishedEvent = CronEvent & { action: "finished" };
 
 function toJsonValue(value: unknown): JsonValue | undefined {
   const serialized = JSON.stringify(value);
@@ -22,52 +20,6 @@ function isJsonObject(value: JsonValue | undefined): value is { [key: string]: J
 
 function isCronRunStatus(value: unknown): value is CronRunStatus {
   return value === "ok" || value === "error" || value === "skipped";
-}
-
-/** Uses execution timing for one timestamp shared by ledger and legacy dual-write paths. */
-export function resolveCronRunEndedAt(event: CronFinishedEvent, fallbackTs: number): number {
-  if (
-    typeof event.runAtMs === "number" &&
-    Number.isFinite(event.runAtMs) &&
-    typeof event.durationMs === "number" &&
-    Number.isFinite(event.durationMs)
-  ) {
-    return event.runAtMs + event.durationMs;
-  }
-  return fallbackTs;
-}
-
-/** Builds the legacy run-history record from one finished service event. */
-export function cronRunLogEntryFromEvent(
-  event: CronFinishedEvent,
-  fallbackTs: number,
-): CronRunLogEntry {
-  const errorReason = resolveFailoverReasonFromError(event.error, event.provider) ?? undefined;
-  return {
-    ts: resolveCronRunEndedAt(event, fallbackTs),
-    jobId: event.jobId,
-    action: "finished",
-    status: event.status,
-    error: event.error,
-    errorReason,
-    summary: event.summary,
-    diagnostics: event.diagnostics,
-    delivered: event.delivered,
-    deliveryStatus: event.deliveryStatus,
-    deliveryError: event.deliveryError,
-    failureNotificationDelivery: event.failureNotificationDelivery,
-    delivery: event.delivery,
-    sessionId: event.sessionId,
-    sessionKey: event.sessionKey,
-    runId: event.runId,
-    runAtMs: event.runAtMs,
-    durationMs: event.durationMs,
-    nextRunAtMs: event.nextRunAtMs,
-    triggerFired: event.triggerFired,
-    model: event.model,
-    provider: event.provider,
-    usage: event.usage,
-  };
 }
 
 /** Encodes cron-only outcome fields; generic lifecycle fields stay on TaskRecord. */
@@ -152,6 +104,7 @@ export function cronTaskRecordToRunLogEntry(task: TaskRecord): CronRunLogEntry |
   }
   const wireDetail = { ...task.detail };
   delete wireDetail.storeKey;
+  // Task detail is canonical write-time state; history reads do not rederive error reasons.
   const entry = parseCronRunLogEntryObject(
     {
       ...wireDetail,

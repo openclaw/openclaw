@@ -1,6 +1,11 @@
 /** Legacy JSONL run-log parser used during migrations/imports. */
+import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import { parseCronRunLogEntryObject } from "./run-log/entry-codec.js";
+
+function resolveStoredRunLogReason(error: string | undefined, provider: string | undefined) {
+  return resolveFailoverReasonFromError(error, provider) ?? undefined;
+}
 
 /** Parses legacy cron run-log JSONL, skipping malformed or non-matching rows. */
 export function parseCronRunLogEntriesFromJsonl(
@@ -17,7 +22,12 @@ export function parseCronRunLogEntriesFromJsonl(
       continue;
     }
     try {
-      const entry = parseCronRunLogEntryObject(JSON.parse(trimmed), opts);
+      // JSONL import preserves shipped read normalization; state-db row migration does not inject.
+      const entry = parseCronRunLogEntryObject(
+        JSON.parse(trimmed),
+        opts,
+        resolveStoredRunLogReason,
+      );
       if (entry) {
         parsed.push(entry);
       }

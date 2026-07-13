@@ -8,7 +8,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
-import { appendCronRunLog } from "../cron/run-log.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -1324,10 +1323,15 @@ describe("gateway server cron", () => {
         payload: { kind: "agentTurn", message: "writer hello" },
       });
       const writerJobId = ("job" in writerAddResult ? writerAddResult.job : writerAddResult).id;
-      await appendCronRunLog({
-        storePath: cronState.storePath,
-        entry: { ts: Date.now(), jobId: writerJobId, action: "finished", status: "ok" },
+      const writerFinished = events.wait(
+        (payload) => payload?.jobId === writerJobId && payload?.action === "finished",
+      );
+      const writerRunResult = await directCronReq(cronState, "cron.run", {
+        id: writerJobId,
+        mode: "force",
       });
+      expect(writerRunResult.ok).toBe(true);
+      await writerFinished;
 
       const mainRuns = await directCronReq(cronState, "cron.runs", {
         scope: "all",

@@ -120,6 +120,11 @@ export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLog
   let alreadyMirroredCount = 0;
   let malformed = 0;
   for (const row of rows) {
+    // No failover resolver is injected here on purpose: this migration runs inside the
+    // synchronous state-db schema transaction, and the run-log error-reason classifier
+    // pulls the agents/sandbox module tree (which state-db must not statically depend on).
+    // Legacy rows that never stored an errorReason are imported without one; new runs
+    // always author errorReason at write time, so the gap is bounded to pre-upgrade history.
     const entry = parseStoredRunLogEntry(row);
     if (!entry) {
       malformed++;
