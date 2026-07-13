@@ -456,12 +456,24 @@ export async function handleNotifyCommand(params: {
 
 export function createPairingNotifierService(api: OpenClawPluginApi): OpenClawPluginService {
   let notifyInterval: ReturnType<typeof setInterval> | null = null;
+  // stop() cannot cancel an active delivery, so keep this guard across restarts
+  // until that poll settles rather than overlapping it with a new initial poll.
+  let notifyPollInFlight = false;
 
   return {
     id: "device-pair-notifier",
     start: async () => {
       const tick = async () => {
-        await notifyPendingPairingRequests({ api });
+        // Keep slow polls from racing notification state reads and delivery.
+        if (notifyPollInFlight) {
+          return;
+        }
+        notifyPollInFlight = true;
+        try {
+          await notifyPendingPairingRequests({ api });
+        } finally {
+          notifyPollInFlight = false;
+        }
       };
 
       await tick().catch((err: unknown) => {

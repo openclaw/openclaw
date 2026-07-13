@@ -18,16 +18,27 @@ import {
 
 const listDevicePairingMock = vi.hoisted(() => vi.fn(async () => ({ pending: [] })));
 
-vi.mock("./api.js", () => ({
+vi.mock("openclaw/plugin-sdk/device-bootstrap", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/device-bootstrap")>()),
   listDevicePairing: listDevicePairingMock,
 }));
 
-import { handleNotifyCommand } from "./notify.js";
+import { createPairingNotifierService, handleNotifyCommand } from "./notify.js";
 
 afterAll(() => {
-  vi.doUnmock("./api.js");
+  vi.doUnmock("openclaw/plugin-sdk/device-bootstrap");
   vi.resetModules();
 });
+
+function createDeferred<T>() {
+  let resolve: (value: T) => void;
+  let reject: (reason?: unknown) => void;
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, resolve: resolve!, reject: reject! };
+}
 
 describe("device-pair notify persistence", () => {
   let stateDir: string;
@@ -42,6 +53,7 @@ describe("device-pair notify persistence", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -69,6 +81,45 @@ describe("device-pair notify persistence", () => {
       maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
     });
   }
+
+  it("skips interval ticks while a notify poll is pending and resumes after it settles", async () => {
+    vi.useFakeTimers();
+    const firstPoll = createDeferred<Awaited<ReturnType<typeof listDevicePairingMock>>>();
+    const failedPoll = createDeferred<Awaited<ReturnType<typeof listDevicePairingMock>>>();
+    listDevicePairingMock
+      .mockResolvedValueOnce({ pending: [] })
+      .mockImplementationOnce(() => firstPoll.promise)
+      .mockImplementationOnce(() => failedPoll.promise)
+      .mockResolvedValue({ pending: [] });
+    const api = createApi();
+    const service = createPairingNotifierService(api);
+
+    await service.start({} as never);
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
+
+    await service.stop?.({} as never);
+    await service.start({} as never);
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
+
+    firstPoll.resolve({ pending: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(3);
+
+    failedPoll.reject(new Error("poll failed"));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(4);
+
+    await service.stop?.({} as never);
+  });
 
   it("matches persisted telegram thread ids across number and string roundtrips", async () => {
     const subscriber: NotifySubscription = {
