@@ -47,7 +47,7 @@ type EnvVarSanitizationResult = {
   warnings: string[];
 };
 
-type EnvSanitizationOptions = {
+export type EnvSanitizationOptions = {
   strictMode?: boolean;
   customBlockedPatterns?: ReadonlyArray<RegExp>;
   customAllowedPatterns?: ReadonlyArray<RegExp>;
