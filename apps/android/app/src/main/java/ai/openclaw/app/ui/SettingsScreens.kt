@@ -1339,6 +1339,7 @@ private fun GatewaySettingsScreen(
   onBack: () -> Unit,
 ) {
   val isNodeConnected by viewModel.isNodeConnected.collectAsState()
+  val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -1438,6 +1439,13 @@ private fun GatewaySettingsScreen(
         listOf(
           SettingsMetric(nativeString("Connection"), if (gatewayConnectionDisplay.isConnected) nativeString("Connected") else nativeString("Offline")),
           SettingsMetric(nativeString("Node"), if (isNodeConnected) nativeString("Online") else nativeString("Not paired")),
+          SettingsMetric(
+            nativeString("Access"),
+            gatewayAccessLabel(
+              isConnected = gatewayConnectionDisplay.isConnected,
+              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+            ),
+          ),
           SettingsMetric(nativeString("Gateway"), serverName?.takeIf { it.isNotBlank() } ?: nativeString("Home Gateway")),
           SettingsMetric(nativeString("Address"), remoteAddress?.takeIf { it.isNotBlank() } ?: nativeString("Not available")),
           SettingsMetric(
@@ -1446,6 +1454,22 @@ private fun GatewaySettingsScreen(
           ),
         ),
     )
+    if (gatewayConnectionDisplay.isConnected && !operatorAdminScopeAvailable) {
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          Text(
+            text = nativeString("Limited Gateway access"),
+            style = ClawTheme.type.section,
+            color = ClawTheme.colors.text,
+          )
+          Text(
+            text = gatewayLimitedAccessUpgradeText(),
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+      }
+    }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawPrimaryButton(text = nativeString("Reconnect"), onClick = viewModel::refreshGatewayConnection, modifier = Modifier.weight(1f))
       ClawSecondaryButton(text = nativeString("Disconnect"), onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
@@ -1586,6 +1610,21 @@ private fun GatewaySettingsScreen(
     }
   }
 }
+
+internal fun gatewayAccessLabel(
+  isConnected: Boolean,
+  operatorAdminScopeAvailable: Boolean,
+): String =
+  when {
+    !isConnected -> nativeString("Not available")
+    operatorAdminScopeAvailable -> nativeString("Full")
+    else -> nativeString("Limited")
+  }
+
+internal fun gatewayLimitedAccessUpgradeText(): String =
+  nativeString(
+    "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+  )
 
 @Composable
 private fun AppearanceSettingsScreen(

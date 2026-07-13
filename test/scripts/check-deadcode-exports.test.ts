@@ -10,12 +10,18 @@ import {
 
 describe("check-deadcode-exports", () => {
   it("excludes test support from every Knip issue type", () => {
+    expect(knipConfig.ignore).toContain("dist/**");
     expect(knipConfig.ignore).toContain("**/test-helpers/**");
     expect(knipConfig.ignore).toContain("**/*.test-utils.ts");
     expect(knipConfig.ignoreFiles).not.toContain("**/test-helpers/**");
     expect(knipConfig.ignoreFiles).toContain("scripts/**");
+    expect(knipConfig.ignoreFiles).toContain("dist/**");
     expect(knipConfig.ignore).not.toContain("**/live-*.ts");
     expect(knipConfig.ignoreFiles).toContain("**/live-*.ts");
+  });
+
+  it("tracks production script consumers of plugin exports", () => {
+    expect(knipConfig.workspaces["."].entry).toContain("scripts/qa/render-maturity-docs.ts!");
   });
 
   it("parses all compact export sections and expands symbol lists", () => {

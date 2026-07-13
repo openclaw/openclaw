@@ -14,9 +14,9 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   hasCompletedSourceReplyDeliveryEvidence,
+  hasCompletedTerminalDeliveryEvidence,
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
-  resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   hasDeliberateSilentTerminalReply,
@@ -1774,7 +1774,6 @@ export function createFollowupRunner(params: {
         }
         return true;
       };
-
       if (storePath && replySessionKey) {
         await persistRunSessionUsage({
           storePath,
@@ -1798,18 +1797,11 @@ export function createFollowupRunner(params: {
           logLabel: "followup",
         });
       }
-
       const hasCommittedDelivery =
         hasVisibleOutboundDeliveryEvidence(runResult) ||
         hasCommittedSourceReplyDeliveryEvidence(runResult) ||
         runResult.didSendDeterministicApprovalPrompt === true;
-      const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
-      const hasExplicitSourceReplyCompletion =
-        resolveExplicitFinalSourceReplyDeliveryEvidence(runResult) !== undefined;
-      const hasCompletedTerminalDelivery =
-        completedSourceReplyDelivery ||
-        (!hasExplicitSourceReplyCompletion && hasVisibleOutboundDeliveryEvidence(runResult)) ||
-        runResult.didSendDeterministicApprovalPrompt === true;
+      const hasCompletedTerminalDelivery = hasCompletedTerminalDeliveryEvidence(runResult);
       const hasDeliveryDestination = Boolean(
         (isRoutableChannel(queued.originatingChannel) && queued.originatingTo) ||
         opts?.onBlockReply,
@@ -1882,7 +1874,6 @@ export function createFollowupRunner(params: {
       if (!hasTerminalReplyPayload && fallbackPayload) {
         finalPayloads = [...finalPayloads, ...resolveDeliveryPayloads([fallbackPayload])];
       }
-
       if (finalPayloads.length === 0) {
         if (await enqueueStrandedReplyRecoveryRetry()) {
           return;
@@ -1904,7 +1895,6 @@ export function createFollowupRunner(params: {
           new Error("interactive follow-up completed without a visible reply"),
         );
       }
-
       let deliveryPayloads = finalPayloads;
       const responseUsageSessionRaw =
         activeSessionEntry?.responseUsage ??
@@ -1998,7 +1988,6 @@ export function createFollowupRunner(params: {
           ];
         }
       }
-
       if (run.sourceReplyDeliveryMode === "message_tool_only") {
         const suppressionDeliverablePayloads = deliveryPayloads.filter(
           (payload) =>
@@ -2027,7 +2016,6 @@ export function createFollowupRunner(params: {
         );
         return;
       }
-
       await sendRunPayloads(
         deliveryPayloads,
         effectiveQueued,

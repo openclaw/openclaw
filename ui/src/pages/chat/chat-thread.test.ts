@@ -1646,6 +1646,28 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("keeps restored in-flight sends visible without process-local timing", () => {
+    const restored = {
+      id: "restored-send-1",
+      text: "stay visible across reconnect",
+      createdAt: 2,
+      sendAttempts: 1,
+    };
+
+    expect(
+      messageGroups({
+        queue: [{ ...restored, sendAttempts: 0, sendState: "waiting-reconnect" }],
+      }),
+    ).toStrictEqual([]);
+    for (const sendState of ["waiting-reconnect", "sending"] as const) {
+      const groups = messageGroups({ queue: [{ ...restored, sendState }] });
+      expect(groups).toHaveLength(1);
+      expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
+        { type: "text", text: "stay visible across reconnect" },
+      ]);
+    }
+  });
+
   it("keeps steerable queued sends out of the thread until sending starts", () => {
     const queued = {
       id: "pending-send-1",

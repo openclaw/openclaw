@@ -31,7 +31,7 @@ type QaParentWatchdogDeps = {
   setInterval?: (callback: () => void, ms: number) => QaParentWatchdogTimer;
 };
 
-export type QaParentWatchdogHandle = {
+type QaParentWatchdogHandle = {
   parentPid: number;
   stop: () => void;
 };
