@@ -83,6 +83,16 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+// Asserts the array produced a first element so a regression that drops the
+// tracked task/promise fails loudly here instead of reading through undefined.
+function requireFirst<T>(items: readonly T[], label: string): T {
+  const [first] = items;
+  if (first === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return first;
+}
+
 function firstMaintainParams(maintain: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   return requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
 }
@@ -1274,7 +1284,7 @@ describe("runContextEngineMaintenance", () => {
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
         expect(deferredPromises).toHaveLength(1);
         let deferredSettled = false;
-        const tracked = deferredPromises[0].then(() => {
+        const tracked = requireFirst(deferredPromises, "deferred maintenance promise").then(() => {
           deferredSettled = true;
         });
 
@@ -1295,7 +1305,10 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(1);
-        const task = requireRecord(getTaskById(tasks[0].taskId), "timed-out task");
+        const task = requireRecord(
+          getTaskById(requireFirst(tasks, "turn-maintenance task").taskId),
+          "timed-out task",
+        );
         expect(task.status).toBe("cancelled");
         expect(String(task.terminalSummary)).toContain("timed out after 5000ms");
       } finally {
@@ -1375,7 +1388,10 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(1);
-        const task = requireRecord(getTaskById(tasks[0].taskId), "fenced task");
+        const task = requireRecord(
+          getTaskById(requireFirst(tasks, "turn-maintenance task").taskId),
+          "fenced task",
+        );
         expect(task.status).toBe("cancelled");
       } finally {
         vi.useRealTimers();
@@ -1428,7 +1444,10 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(1);
-        const task = requireRecord(getTaskById(tasks[0].taskId), "fenced task");
+        const task = requireRecord(
+          getTaskById(requireFirst(tasks, "turn-maintenance task").taskId),
+          "fenced task",
+        );
         expect(task.status).toBe("cancelled");
         expect(String(task.terminalSummary)).toContain("timed out after 5000ms");
       } finally {
@@ -1482,7 +1501,10 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(1);
-        const task = requireRecord(getTaskById(tasks[0].taskId), "fenced task");
+        const task = requireRecord(
+          getTaskById(requireFirst(tasks, "turn-maintenance task").taskId),
+          "fenced task",
+        );
         expect(task.status).toBe("cancelled");
         expect(String(task.terminalSummary)).toContain("timed out after 5000ms");
       } finally {
@@ -1629,7 +1651,7 @@ describe("runContextEngineMaintenance", () => {
         await waitForAssertion(() => expect(events).toContain("persist-start"));
         expect(deferredPromises).toHaveLength(1);
         let barrierSettled = false;
-        const tracked = deferredPromises[0].then(() => {
+        const tracked = requireFirst(deferredPromises, "deferred maintenance promise").then(() => {
           barrierSettled = true;
         });
 
@@ -1655,7 +1677,10 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(1);
-        const task = requireRecord(getTaskById(tasks[0].taskId), "timed-out task");
+        const task = requireRecord(
+          getTaskById(requireFirst(tasks, "turn-maintenance task").taskId),
+          "timed-out task",
+        );
         expect(task.status).toBe("cancelled");
       } finally {
         vi.useRealTimers();
