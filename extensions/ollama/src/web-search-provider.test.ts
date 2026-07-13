@@ -181,6 +181,16 @@ function expectSingleSearchResultUrl(results: unknown, url: string) {
   expect((result as { url?: unknown }).url).toBe(url);
 }
 
+async function expectConfiguredRefFailure(input: SecretInput, message: string) {
+  await expect(
+    runOllamaWebSearch({
+      config: createOllamaConfig({ apiKey: input }),
+      query: "openclaw",
+    }),
+  ).rejects.toThrow(message);
+  expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+}
+
 describe("ollama web search provider", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -495,6 +505,37 @@ describe("ollama web search provider", () => {
       expect(fetchRequest(0).init?.headers?.Authorization).toBe("Bearer configured-host-key");
       expect(fetchRequest(1).init?.headers?.Authorization).toBe("Bearer configured-host-key");
       expect(fetchRequest(2).init?.headers?.Authorization).toBe("Bearer ambient-cloud-key");
+    });
+  });
+
+  it("does not use ambient env fallback when a configured apiKey SecretRef is unavailable", async () => {
+    const refEnvVar = "OLLAMA_WEB_SEARCH_REF";
+    const ambientEnvVar = ["OLLAMA_API", "KEY"].join("_");
+    const ambientKey = ["ambient", "cloud", "value"].join("-");
+    await withEnvAsync({ [refEnvVar]: undefined, [ambientEnvVar]: ambientKey }, async () => {
+      await expectConfiguredRefFailure(
+        {
+          source: "env",
+          provider: "default",
+          id: refEnvVar,
+        },
+        "models.providers.ollama.apiKey env SecretRef OLLAMA_WEB_SEARCH_REF is not available",
+      );
+    });
+  });
+
+  it("does not use ambient env fallback for non-env apiKey SecretRefs", async () => {
+    const ambientEnvVar = ["OLLAMA_API", "KEY"].join("_");
+    const ambientKey = ["ambient", "cloud", "value"].join("-");
+    await withEnvAsync({ [ambientEnvVar]: ambientKey }, async () => {
+      await expectConfiguredRefFailure(
+        {
+          source: "file",
+          provider: "vault",
+          id: "/providers/ollama/web-search",
+        },
+        "models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search",
+      );
     });
   });
 

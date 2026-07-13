@@ -19,6 +19,7 @@ import {
   wrapWebContent,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
@@ -90,21 +91,33 @@ function resolveEnvOllamaWebSearchApiKey(): string | undefined {
   return normalizeOllamaWebSearchApiKey(resolveEnvApiKey("ollama")?.apiKey);
 }
 
+function createOllamaWebSearchCredentialError(ref: { source: string; id: string }): Error {
+  return new Error(
+    ref.source === "env"
+      ? `models.providers.ollama.apiKey env SecretRef ${ref.id} is not available for Ollama web search.`
+      : "models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search. Use an env SecretRef for this path.",
+  );
+}
+
 // Delegate configured-key resolution (literal value or env-backed SecretRef) to the shared
 // web-search resolver, then apply Ollama's marker filter so persisted non-secret placeholders
 // (e.g. the OAuth/signin marker) fall through to the ambient OLLAMA_API_KEY instead of being sent.
 function resolveConfiguredOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
-  return normalizeOllamaWebSearchApiKey(
+  const credentialValue = config?.models?.providers?.ollama?.apiKey;
+  const credentialRef = coerceSecretRef(credentialValue);
+  const resolvedValue = normalizeOllamaWebSearchApiKey(
     resolveWebSearchProviderCredential({
-      credentialValue: config?.models?.providers?.ollama?.apiKey,
+      credentialValue,
       path: "models.providers.ollama.apiKey",
       envVars: [],
     }),
   );
-}
-
-function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
-  return resolveConfiguredOllamaWebSearchApiKey(config) ?? resolveEnvOllamaWebSearchApiKey();
+  // An explicit ref selects one credential. Do not reinterpret an unavailable ref as no config,
+  // which would permit an unrelated ambient key and potentially route the query to Ollama Cloud.
+  if (credentialRef && !resolvedValue) {
+    throw createOllamaWebSearchCredentialError(credentialRef);
+  }
+  return resolvedValue;
 }
 
 function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
@@ -350,15 +363,3 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
     }),
   };
 }
-
-export const testing = {
-  buildOllamaWebSearchAttempts,
-  normalizeOllamaWebSearchResult,
-  resolveEnvOllamaWebSearchApiKey,
-  resolveOllamaWebSearchApiKey,
-  resolveOllamaWebSearchBaseUrl,
-  isOllamaCloudBaseUrl,
-  readOllamaWebSearchResponse,
-  warnOllamaWebSearchPrereqs,
-};
-export { testing as __testing };
