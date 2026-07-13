@@ -102,7 +102,8 @@ export function renderAgentOverview(params: {
   const thinkingDefault = agent.thinkingDefault ?? "-";
 
   const identityDraft = params.identityDraft;
-  const identityName = identityDraft.name ?? agent.identity?.name ?? agent.name ?? "";
+  const identityName =
+    identityDraft.name ?? params.agentIdentity?.name ?? agent.identity?.name ?? agent.name ?? "";
   const identityEmoji =
     identityDraft.emoji ?? params.agentIdentity?.emoji ?? agent.identity?.emoji ?? "";
   const identityAvatarUrl =
@@ -111,6 +112,9 @@ export function renderAgentOverview(params: {
     resolveAgentTextAvatar(agent) ?? (identityName || agent.id).slice(0, 1).toUpperCase();
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
+  const identityInvalid =
+    (identityDraft.name !== null && !identityDraft.name.trim()) ||
+    (identityDraft.emoji !== null && !identityDraft.emoji.trim());
   const identityBusy = params.identitySaving;
 
   const handleAvatarFileSelect = (e: Event) => {
@@ -198,7 +202,7 @@ export function renderAgentOverview(params: {
         <button
           type="button"
           class="btn btn--sm primary"
-          ?disabled=${identityBusy || !identityDirty}
+          ?disabled=${identityBusy || !identityDirty || identityInvalid}
           @click=${() => params.onIdentitySave()}
         >
           ${identityBusy ? t("common.saving") : t("common.save")}

@@ -204,6 +204,7 @@ function createContext(
   sessions: SessionCapability,
   agentsList: AgentsListResult | null = null,
 ): ApplicationContext<RouteId> {
+  const selectedAgentId = sessions.state.agentId ?? "main";
   return {
     gateway,
     sessions,
@@ -212,8 +213,9 @@ function createContext(
       subscribe: () => () => undefined,
     },
     agentSelection: {
-      state: { selectedId: "main" },
+      state: { selectedId: selectedAgentId, scopeId: selectedAgentId },
       set: () => undefined,
+      setScope: () => undefined,
       subscribe: () => () => undefined,
     },
   } as unknown as ApplicationContext<RouteId>;
@@ -544,6 +546,44 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
     expect(sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')).toHaveLength(10);
+  });
+
+  it("ignores stale pins when choosing the large-roster fallback", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("agent-1", ["agent:agent-1:main"]),
+      "panel",
+      manyAgents(12),
+    );
+    sidebar.connected = true;
+    sidebar.pinnedAgentIds = ["deleted-agent"];
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')).toHaveLength(10);
+  });
+
+  it("keeps an active agent outside the first ten reachable when nothing is pinned", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("agent-12", ["agent:agent-12:main"]),
+      "panel",
+      manyAgents(12),
+    );
+    context.agentSelection.state.selectedId = "agent-12";
+    context.agentSelection.state.scopeId = "agent-12";
+    sidebar.sessionKey = "agent:agent-12:main";
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const rows = [...sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')];
+    expect(rows).toHaveLength(10);
+    expect(rows.some((row) => row.textContent?.includes("agent-12"))).toBe(true);
   });
 });
 

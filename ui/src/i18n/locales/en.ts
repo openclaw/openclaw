@@ -1,5 +1,6 @@
 // Control UI English locale strings are the i18n source bundle.
 import type { TranslationMap } from "../lib/types.ts";
+import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap = {
   common: {
@@ -398,19 +399,8 @@ export const en: TranslationMap = {
     confirmDelete: "Snapshot and delete {name}?",
     confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
   },
-  agentChip: {
-    menuLabel: "Agent menu",
-    agents: "Agents",
-    working: "Working…",
-    ready: "Ready to chat",
-    whatCanAgentDo: "What can {name} do?",
-    getHelp: "Get help",
-    discord: "Discord community",
-    viewChangelog: "View changelog",
-    agentSettings: "Agent settings",
-    filterAgents: "Find agent…",
-    noAgentMatches: "No matching agents",
-  },
+  agentChip: agentEn.agentChip,
+  agentScope: agentEn.agentScope,
   newSession: {
     title: "New session",
     hint: "Pick where this session works, then say what to do.",
@@ -618,8 +608,7 @@ export const en: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
-    pinToSwitcher: "Pin to switcher",
-    unpinFromSwitcher: "Unpin from switcher",
+    ...agentEn.pinning,
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -645,17 +634,7 @@ export const en: TranslationMap = {
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
     },
-    identity: {
-      title: "Identity",
-      subtitle: "Name, emoji, and avatar shown in chats and the sidebar.",
-      name: "Display name",
-      namePlaceholder: "Agent name",
-      emoji: "Emoji",
-      chooseImage: "Choose image…",
-      replaceImage: "Replace image…",
-      imageUnusable: "That image can't be used. Pick an image file up to 2 MB.",
-      fileHint: "Agents can set this themselves by editing IDENTITY.md in their workspace.",
-    },
+    identity: agentEn.identity,
     overview: {
       title: "Overview",
       subtitle: "Workspace paths and identity metadata.",

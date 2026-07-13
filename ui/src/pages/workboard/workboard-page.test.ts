@@ -56,6 +56,12 @@ function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContex
       state: { result: null, loading: false },
       subscribe,
     } as unknown as ApplicationContext["sessions"],
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      set: () => undefined,
+      setScope: () => undefined,
+      subscribe,
+    },
     workboard,
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),

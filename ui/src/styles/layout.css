@@ -2393,6 +2393,14 @@ openclaw-session-menu[popover] {
   margin-top: 20px;
 }
 
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
 .content--chat .content-header.content-header--chat-hidden {
   opacity: 0;
   transform: translateY(-10px);

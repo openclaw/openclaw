@@ -63,7 +63,12 @@ function sidebarAgentMenuRows(params: {
   pinnedAgentIds: readonly string[];
 }) {
   const { agents, activeId } = params;
-  const pinnedIds = new Set(params.pinnedAgentIds.map((agentId) => normalizeAgentId(agentId)));
+  const availableIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
+  const pinnedIds = new Set(
+    params.pinnedAgentIds
+      .map((agentId) => normalizeAgentId(agentId))
+      .filter((agentId) => availableIds.has(agentId)),
+  );
   const sorted = agents.toSorted((a, b) => {
     const aPinned = pinnedIds.has(normalizeAgentId(a.id)) ? 0 : 1;
     const bPinned = pinnedIds.has(normalizeAgentId(b.id)) ? 0 : 1;
@@ -83,13 +88,22 @@ function sidebarAgentMenuRows(params: {
     });
     return { rows, showFilter: true };
   }
-  const rows =
-    pinnedIds.size > 0
-      ? sorted.filter((entry) => {
-          const agentId = normalizeAgentId(entry.id);
-          return pinnedIds.has(agentId) || agentId === activeId;
-        })
-      : sorted.slice(0, QUICK_SWITCH_AGENT_LIMIT);
+  if (pinnedIds.size > 0) {
+    return {
+      rows: sorted.filter((entry) => {
+        const agentId = normalizeAgentId(entry.id);
+        return pinnedIds.has(agentId) || agentId === activeId;
+      }),
+      showFilter: true,
+    };
+  }
+  let rows = sorted.slice(0, QUICK_SWITCH_AGENT_LIMIT);
+  if (!rows.some((entry) => normalizeAgentId(entry.id) === activeId)) {
+    const activeAgent = sorted.find((entry) => normalizeAgentId(entry.id) === activeId);
+    if (activeAgent) {
+      rows = [...rows.slice(0, QUICK_SWITCH_AGENT_LIMIT - 1), activeAgent];
+    }
+  }
   return { rows, showFilter: true };
 }
 

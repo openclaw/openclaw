@@ -12,7 +12,16 @@ type AgentIdentityEditorHost = {
   identityError: string | null;
 };
 
+const avatarSelectionEpochs = new WeakMap<AgentIdentityEditorHost, number>();
+
+function advanceAvatarSelectionEpoch(host: AgentIdentityEditorHost): number {
+  const epoch = (avatarSelectionEpochs.get(host) ?? 0) + 1;
+  avatarSelectionEpochs.set(host, epoch);
+  return epoch;
+}
+
 export function resetIdentityDraft(host: AgentIdentityEditorHost) {
+  advanceAvatarSelectionEpoch(host);
   host.identityDraft = { name: null, emoji: null, avatar: null };
   host.identitySaving = false;
   host.identityError = null;
@@ -24,10 +33,15 @@ export function setIdentityDraftField(
   value: string,
 ) {
   host.identityDraft = { ...host.identityDraft, [field]: value };
+  host.identityError = null;
 }
 
 export function selectIdentityAvatar(host: AgentIdentityEditorHost, file: File) {
+  const epoch = advanceAvatarSelectionEpoch(host);
   void fileToAvatarDataUrl(file).then((dataUrl) => {
+    if (avatarSelectionEpochs.get(host) !== epoch) {
+      return;
+    }
     if (dataUrl) {
       host.identityDraft = { ...host.identityDraft, avatar: dataUrl };
       host.identityError = null;
@@ -50,12 +64,14 @@ export async function saveIdentityDraft(params: {
 }) {
   const { host, agentId, agents, agentIdentity } = params;
   const draft = host.identityDraft;
-  // Set/replace only: agents.update merges identity server-side, so empty
-  // strings cannot unset a field. Cleared inputs revert on save until the
-  // protocol grows an explicit clear.
+  // Set/replace only: agents.update has no explicit clear operation. Keep a
+  // blank edit visible and unsaved instead of pretending it removed a field.
   const name = draft.name?.trim();
   const emoji = draft.emoji?.trim();
   const avatar = draft.avatar ?? undefined;
+  if ((draft.name !== null && !name) || (draft.emoji !== null && !emoji)) {
+    return;
+  }
   if (!name && !emoji && !avatar) {
     resetIdentityDraft(host);
     return;

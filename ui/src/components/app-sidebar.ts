@@ -1077,6 +1077,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     const nextAgentId = normalizeAgentId(agentId);
     if (nextAgentId === normalizeAgentId(this.expandedAgentId())) {
+      context.agentSelection.setScope(nextAgentId);
       return;
     }
     this.clearSessionSelection();

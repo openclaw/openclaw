@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import {
@@ -21,10 +22,19 @@ class WorkboardPage extends OpenClawLightDomElement {
   private context?: ApplicationContext;
 
   private readonly requestPageUpdate = () => this.context?.workboard.notify();
+  private observedAgentScopeId: string | null | undefined;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.agents,
       (agents, notify) => agents.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.agentSelection,
+      (selection) => {
+        const sync = () => this.syncWorkboardAgentScope();
+        sync();
+        return selection.subscribe(sync);
+      },
     )
     .effect(
       () => this.context?.runtimeConfig,
@@ -44,6 +54,7 @@ class WorkboardPage extends OpenClawLightDomElement {
     .effect(
       () => this.context?.workboard,
       (workboard) => {
+        this.syncWorkboardAgentScope();
         const unsubscribe = workboard.subscribe(() => this.requestUpdate());
         return () => {
           unsubscribe();
@@ -146,6 +157,21 @@ class WorkboardPage extends OpenClawLightDomElement {
     void context.runtimeConfig.refresh({ discardPendingChanges: true });
   }
 
+  private syncWorkboardAgentScope() {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const nextScopeId = context.agentSelection.state.scopeId;
+    if (this.observedAgentScopeId !== nextScopeId) {
+      this.observedAgentScopeId = nextScopeId;
+      // The board's richer agent filter is a secondary control available only
+      // in all-agent scope; a chip switch must not retain a hidden subfilter.
+      context.workboard.state.agentFilter = "all";
+      context.workboard.notify();
+    }
+  }
+
   override render() {
     const context = this.context;
     if (!context) {
@@ -161,6 +187,10 @@ class WorkboardPage extends OpenClawLightDomElement {
           <div class="page-title">${titleForRoute("workboard")}</div>
           <div class="page-sub">${subtitleForRoute("workboard")}</div>
         </div>
+        ${renderAgentScopeControl({
+          agents: context.agents.state.agentsList?.agents ?? [],
+          selection: context.agentSelection,
+        })}
       </section>
       ${renderWorkboard({
         host: context.workboard,
@@ -173,6 +203,8 @@ class WorkboardPage extends OpenClawLightDomElement {
           !config.configSnapshot && !config.configLoading ? config.lastError : null,
         agentsList: context.agents.state.agentsList,
         sessions: context.sessions.state.result?.sessions ?? [],
+        scopeAgentId: context.agentSelection.state.scopeId,
+        showAgentFilter: context.agentSelection.state.scopeId === null,
         onOpenSession: (sessionKey) => {
           context.navigate("chat", { search: searchForSession(sessionKey), hash: "" });
         },
