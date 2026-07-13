@@ -1867,6 +1867,10 @@ export const pt_BR: TranslationMap = {
       useCurrentChatAria: "Usar conversa atual para solicitações de revisão",
       useCurrentChatTooltip:
         "Enviar solicitações de revisão para a sessão de conversa atual em vez da sessão de workshop da proposta.",
+      selfLearning: "Autoaprendizado",
+      selfLearningAria: "Ativar ou desativar propostas de Skills por autoaprendizado",
+      selfLearningTooltip:
+        "Capture correções e revise trabalhos substanciais concluídos para criar propostas de skills pendentes. Consome tokens adicionais em segundo plano; os rascunhos chegam a este quadro como propostas pendentes.",
       view: "Visualização da oficina",
       board: "Quadro",
       today: "Hoje",
@@ -1946,6 +1950,14 @@ export const pt_BR: TranslationMap = {
       noProposalsTitle: "Nenhuma proposta ainda",
       noProposalsBody: "{agent} não elaborou nenhuma proposta de skill.",
       noProposalsFooter: "Novas propostas aparecerão aqui para revisão.",
+    },
+    selfLearning: {
+      pitchTitle: "Ativar o autoaprendizado",
+      pitchBody:
+        "O OpenClaw revisa correções e execuções substanciais concluídas e, em seguida, cria rascunhos de propostas de skills para este quadro. Ele consome tokens adicionais em segundo plano, e os rascunhos chegam como propostas pendentes.",
+      enable: "Ativar autoaprendizado",
+      enabling: "Ativando…",
+      updateError: "Não foi possível atualizar a configuração de autoaprendizado.",
     },
     today: {
       emptyTitle: "Nada aguardando hoje",

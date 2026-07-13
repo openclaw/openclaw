@@ -127,9 +127,6 @@ importers:
       file-type:
         specifier: 22.0.1
         version: 22.0.1
-      glob:
-        specifier: 13.0.6
-        version: 13.0.6
       grammy:
         specifier: 1.44.0
         version: 1.44.0

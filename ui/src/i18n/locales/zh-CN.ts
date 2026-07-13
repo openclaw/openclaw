@@ -1834,6 +1834,10 @@ export const zh_CN: TranslationMap = {
       useCurrentChat: "使用当前聊天",
       useCurrentChatAria: "将当前聊天用于修订请求",
       useCurrentChatTooltip: "将修订请求发送到当前聊天会话，而不是提案的工作坊会话。",
+      selfLearning: "自学习",
+      selfLearningAria: "切换自学习技能提案",
+      selfLearningTooltip:
+        "捕捉纠正内容并审查已完成的重要工作，将其转化为待处理的技能提案。此过程会消耗额外的后台 token；草案将作为待处理提案显示在此面板上。",
       view: "工坊视图",
       board: "看板",
       today: "今天",
@@ -1910,6 +1914,14 @@ export const zh_CN: TranslationMap = {
       noProposalsTitle: "尚无提案",
       noProposalsBody: "{agent} 尚未起草任何技能提案。",
       noProposalsFooter: "新提案将显示在此处以供审核。",
+    },
+    selfLearning: {
+      pitchTitle: "开启自学习",
+      pitchBody:
+        "OpenClaw 会审查纠正内容和已完成的重要运行任务，然后为此面板起草技能提案。此过程会消耗额外的后台 token，草案将作为待处理提案显示。",
+      enable: "启用自学习",
+      enabling: "正在启用…",
+      updateError: "无法更新自学习设置。",
     },
     today: {
       emptyTitle: "今天没有待处理的内容",

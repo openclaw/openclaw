@@ -37,7 +37,6 @@
         "entities": "8.0.0",
         "express": "5.2.1",
         "file-type": "22.0.1",
-        "glob": "13.0.6",
         "grammy": "1.44.0",
         "highlight.js": "11.11.1",
         "hosted-git-info": "10.1.1",
@@ -1667,23 +1666,6 @@
         "node": ">= 0.4"
       }
     },
-    "node_modules/glob": {
-      "version": "13.0.6",
-      "resolved": "https://registry.npmjs.org/glob/-/glob-13.0.6.tgz",
-      "integrity": "sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==",
-      "license": "BlueOak-1.0.0",
-      "dependencies": {
-        "minimatch": "^10.2.2",
-        "minipass": "^7.1.3",
-        "path-scurry": "^2.0.2"
-      },
-      "engines": {
-        "node": "18 || 20 || >=22"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/isaacs"
-      }
-    },
     "node_modules/google-auth-library": {
       "version": "10.9.0",
       "resolved": "https://registry.npmjs.org/google-auth-library/-/google-auth-library-10.9.0.tgz",
@@ -2541,22 +2523,6 @@
       "license": "MIT",
       "engines": {
         "node": ">=8"
-      }
-    },
-    "node_modules/path-scurry": {
-      "version": "2.0.2",
-      "resolved": "https://registry.npmjs.org/path-scurry/-/path-scurry-2.0.2.tgz",
-      "integrity": "sha512-3O/iVVsJAPsOnpwWIeD+d6z/7PmqApyQePUtCndjatj/9I5LylHvt5qluFaBT3I5h3r1ejfR056c+FCv+NnNXg==",
-      "license": "BlueOak-1.0.0",
-      "dependencies": {
-        "lru-cache": "^11.0.0",
-        "minipass": "^7.1.2"
-      },
-      "engines": {
-        "node": "18 || 20 || >=22"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/isaacs"
       }
     },
     "node_modules/path-to-regexp": {

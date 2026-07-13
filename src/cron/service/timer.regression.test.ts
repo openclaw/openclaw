@@ -40,8 +40,8 @@ import type {
 import { computeJobNextRunAtMs } from "./jobs.js";
 import { run as runManualCronJob } from "./ops.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
+import { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 import {
-  DEFAULT_JOB_TIMEOUT_MS,
   applyJobResult,
   executeJobCore,
   executeJobCoreWithTimeout,

@@ -235,7 +235,9 @@ OpenClaw detects durable instructions such as “next time,” “remember to,�
 when an interactive turn ends, including failed turns. On the next turn, the agent offers to save
 the most recent detected workflow through `skill_workshop`; the user decides whether to create a
 proposal. This built-in suggestion does not create or change a skill by itself. Enable
-`skills.workshop.autonomous.enabled` to create pending proposals directly instead.
+`skills.workshop.autonomous.enabled` to create pending proposals directly instead. In the Control
+UI, the Workshop tab offers the same setting as a **Self-learning** toggle in the page header, and
+as an enable button on the empty proposal board.
 
 With autonomous capture enabled, OpenClaw can also perform a conservative review after successful,
 substantial work and after the whole agent system becomes idle. That isolated review can create or

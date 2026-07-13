@@ -442,6 +442,30 @@
   font-size: 12px;
 }
 
+.sw-empty-state__selflearn {
+  margin-top: 16px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  text-align: center;
+}
+
+.sw-empty-state__selflearn h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.sw-empty-state__selflearn p {
+  margin: 8px auto 0;
+  font-size: 13px;
+}
+
+.sw-empty-state__selflearn .sw-btn {
+  margin-top: 12px;
+}
+
 .sw-detail__head {
   padding: 18px 24px 14px;
   border-bottom: 1px solid var(--border);
