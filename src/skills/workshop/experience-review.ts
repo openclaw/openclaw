@@ -354,7 +354,6 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         pending.candidate = candidate;
         pendingBySession.set(sessionKey, pending);
         arm(sessionKey, pending, EXPERIENCE_REVIEW_IDLE_MS);
-        return;
       }
     },
     clear(): void {

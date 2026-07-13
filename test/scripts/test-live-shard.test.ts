@@ -88,6 +88,9 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
       "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
     );
+    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
+      "src/skills/workshop/experience-review.live.test.ts",
+    );
     expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
       "src/agents/zai.live.test.ts",
     ]);
