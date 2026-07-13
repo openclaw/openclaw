@@ -31,7 +31,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Apple shared chat build:** use non-macro SwiftUI environment keys and keep iOS-only previews out of macOS SwiftPM builds so unavailable macro plugins no longer break the signed Mac app build.
 - **Provider network retries:** align provider read/poll/download and agent-wait recovery for transient connection errors, retry bounded provider `ENOTFOUND` failures while leaving gateway `ENOTFOUND` and non-idempotent create operations fail-fast. (#101496) Thanks @xialonglee.
 - **Session retry classification:** stop permanent provider errors whose identifiers or payload details merely contain 429/5xx digit sequences from re-sending full context, and share bounded rate-limit-window parsing across retry paths. (#105258) Thanks @destire-mio.
 - **LINE directive templates:** suppress confirms and buttons with blank required fields or unlabeled actions while preserving valid titleless buttons and surrounding reply text. (#105520) Thanks @edenfunf.
