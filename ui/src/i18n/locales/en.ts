@@ -216,10 +216,10 @@ export const en: TranslationMap = {
   lazyView: {
     loadingTitle: "Loading panel",
     errorTitle: "Panel failed to load",
-    errorSubtitle:
-      "Reload the page to load the latest Control UI bundle, or retry if the network request failed.",
+    genericSubtitle: "Something went wrong while loading this panel.",
+    staleTitle: "A new version is available",
+    staleSubtitle: "OpenClaw was updated in the background. Reload to get the latest panel.",
     retry: "Retry",
-    unknownError: "Unknown module load error.",
   },
   nodes: {
     pairing: {
@@ -387,6 +387,16 @@ export const en: TranslationMap = {
     restore: "Restore",
     confirmDelete: "Snapshot and delete {name}?",
     confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
+  },
+  agentChip: {
+    menuLabel: "Agent menu",
+    agents: "Agents",
+    working: "Working…",
+    ready: "Ready to chat",
+    whatCanAgentDo: "What can {name} do?",
+    getHelp: "Get help",
+    discord: "Discord community",
+    viewChangelog: "View changelog",
   },
   newSession: {
     title: "New session",
@@ -1440,6 +1450,8 @@ export const en: TranslationMap = {
     blockedAgentFilter: "blocked by agent filter",
   },
   nav: {
+    back: "Back",
+    forward: "Forward",
     chat: "Chat",
     settings: "Settings",
     settingsGeneral: "General",
@@ -1707,8 +1719,6 @@ export const en: TranslationMap = {
     cancel: "Cancel",
     removedRestart: "Removed {name}. A Gateway restart is required to apply the change.",
     verifiedSource: "Verified source",
-    menuLabel: "{name} actions",
-    menuDetails: "View details",
     enableAction: "Enable",
     disableAction: "Disable",
     working: "Working…",
@@ -1842,6 +1852,10 @@ export const en: TranslationMap = {
       useCurrentChatAria: "Use current chat for revision requests",
       useCurrentChatTooltip:
         "Send revision requests to the current chat session instead of the proposal's workshop session.",
+      selfLearning: "Self-learning",
+      selfLearningAria: "Toggle self-learning skill proposals",
+      selfLearningTooltip:
+        "Capture corrections and review substantial completed work into pending skill proposals. Spends extra background tokens; drafts land on this board as pending proposals.",
       view: "Workshop view",
       board: "Board",
       today: "Today",
@@ -1920,6 +1934,14 @@ export const en: TranslationMap = {
       noProposalsTitle: "No proposals yet",
       noProposalsBody: "{agent} hasn't drafted any skill proposals.",
       noProposalsFooter: "New proposals will appear here for review.",
+    },
+    selfLearning: {
+      pitchTitle: "Turn on self-learning",
+      pitchBody:
+        "OpenClaw reviews corrections and substantial completed runs, then drafts skill proposals for this board. It spends extra background tokens and drafts arrive as pending proposals.",
+      enable: "Enable self-learning",
+      enabling: "Enabling…",
+      updateError: "Could not update the self-learning setting.",
     },
     today: {
       emptyTitle: "Nothing waiting today",
@@ -3549,6 +3571,14 @@ export const en: TranslationMap = {
       remove: "Remove",
       more: "More actions",
       history: "History",
+    },
+    runNotStarted: {
+      notDue: "This automation is not due yet.",
+      alreadyRunning: "This automation is already running.",
+      recoveryPending: "Scheduler recovery is still in progress.",
+      invalidSpec: "This automation has an invalid schedule or payload.",
+      stopped: "The scheduler is stopped.",
+      unknown: "This automation could not be started.",
     },
     jobs: {
       schedule: "Schedule",

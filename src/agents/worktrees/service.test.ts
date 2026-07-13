@@ -143,6 +143,9 @@ describe("ManagedWorktreeService", () => {
       baseRef: remoteRef,
     });
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteCommit);
+    expect(
+      await git(created.path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
+    ).toBe("origin/remote-only");
   });
 
   it("lists local branches without a remote", async () => {
@@ -170,6 +173,100 @@ describe("ManagedWorktreeService", () => {
     expect(created.baseRef).toBe("base-branch");
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(baseCommit);
   });
+
+  it("normalizes dashed refs and revision expressions before creating branches", async () => {
+    const initialCommit = await git(repo, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(repo, "history.txt"), "second\n");
+    await git(repo, "add", "history.txt");
+    await git(repo, "commit", "-m", "second commit");
+    const secondCommit = await git(repo, "rev-parse", "HEAD");
+    await fs.appendFile(path.join(repo, "history.txt"), "third\n");
+    await git(repo, "add", "history.txt");
+    await git(repo, "commit", "-m", "third commit");
+    const thirdCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "update-ref", "refs/tags/--force", thirdCommit);
+    await git(repo, "reset", "--hard", initialCommit);
+
+    const fromRef = await service.create({
+      repoRoot: repo,
+      name: "dashed-ref",
+      baseRef: "--force",
+    });
+    const fromExpression = await service.create({
+      repoRoot: repo,
+      name: "dashed-expression",
+      baseRef: "--force~1",
+    });
+
+    expect(fromRef.baseRef).toBe("--force");
+    expect(await git(fromRef.path, "rev-parse", "HEAD")).toBe(thirdCommit);
+    expect(fromExpression.baseRef).toBe("--force~1");
+    expect(await git(fromExpression.path, "rev-parse", "HEAD")).toBe(secondCommit);
+  });
+
+  it("preserves Git's bare-dash previous-checkout shorthand", async () => {
+    await git(repo, "checkout", "-b", "previous");
+    await fs.writeFile(path.join(repo, "previous.txt"), "previous\n");
+    await git(repo, "add", "previous.txt");
+    await git(repo, "commit", "-m", "previous checkout commit");
+    const previousCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "checkout", "main");
+
+    const created = await service.create({
+      repoRoot: repo,
+      name: "previous-checkout",
+      baseRef: "-",
+    });
+
+    expect(created.baseRef).toBe("-");
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(previousCommit);
+  });
+
+  it("rejects ambiguous dashed refs instead of choosing by ref precedence", async () => {
+    const initialCommit = await git(repo, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(repo, "tag.txt"), "tag\n");
+    await git(repo, "add", "tag.txt");
+    await git(repo, "commit", "-m", "tag candidate");
+    const tagCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "reset", "--hard", initialCommit);
+    await fs.writeFile(path.join(repo, "branch.txt"), "branch\n");
+    await git(repo, "add", "branch.txt");
+    await git(repo, "commit", "-m", "branch candidate");
+    const branchCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "update-ref", "refs/tags/--ambiguous", tagCommit);
+    await git(repo, "update-ref", "refs/heads/--ambiguous", branchCommit);
+    await git(repo, "config", "core.warnAmbiguousRefs", "false");
+
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "ambiguous-ref",
+        baseRef: "--ambiguous",
+      }),
+    ).rejects.toThrow(/git rev-parse --symbolic-full-name --verify failed/);
+
+    expect(await git(repo, "branch", "--list", "openclaw/ambiguous-ref")).toBe("");
+    expect(await service.list()).toEqual([]);
+  });
+
+  it.each(["--lock", "--orphan"])(
+    "rejects absent dashed base %s without creating worktree state",
+    async (baseRef) => {
+      const before = await git(repo, "worktree", "list", "--porcelain");
+      const name = baseRef.slice(2);
+
+      await expect(service.create({ repoRoot: repo, name, baseRef })).rejects.toThrow(
+        /git rev-parse --symbolic-full-name --verify failed/,
+      );
+
+      expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);
+      expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
+      expect(await service.list()).toEqual([]);
+      await expect(fs.stat(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   it("rejects name reuse across owners instead of adopting a foreign worktree", async () => {
     await service.create({

@@ -216,9 +216,10 @@ export const zh_TW: TranslationMap = {
   lazyView: {
     loadingTitle: "正在載入面板",
     errorTitle: "面板載入失敗",
-    errorSubtitle: "重新載入頁面以載入最新的 Control UI bundle，或在網路請求失敗時重試。",
+    genericSubtitle: "載入此面板時發生錯誤。",
+    staleTitle: "有新版本可用",
+    staleSubtitle: "OpenClaw 已在背景更新。請重新載入以取得最新面板。",
     retry: "重試",
-    unknownError: "未知的模組載入錯誤。",
   },
   nodes: {
     pairing: {
@@ -385,6 +386,16 @@ export const zh_TW: TranslationMap = {
     restore: "還原",
     confirmDelete: "要建立快照並刪除 {name} 嗎？",
     confirmForceDelete: "快照失敗：{error}\n\n要在沒有快照的情況下刪除嗎？",
+  },
+  agentChip: {
+    menuLabel: "代理程式選單",
+    agents: "代理程式",
+    working: "處理中…",
+    ready: "可以開始聊天",
+    whatCanAgentDo: "{name} 能做什麼？",
+    getHelp: "取得協助",
+    discord: "Discord 社群",
+    viewChangelog: "查看變更記錄",
   },
   newSession: {
     title: "新工作階段",
@@ -1431,6 +1442,8 @@ export const zh_TW: TranslationMap = {
     blockedAgentFilter: "被代理程式篩選器封鎖",
   },
   nav: {
+    back: "返回",
+    forward: "前進",
     chat: "聊天",
     settings: "設置",
     settingsGeneral: "一般",
@@ -1693,8 +1706,6 @@ export const zh_TW: TranslationMap = {
     cancel: "取消",
     removedRestart: "已移除 {name}。需要重新啟動 Gateway 才能套用變更。",
     verifiedSource: "已驗證來源",
-    menuLabel: "{name} 動作",
-    menuDetails: "檢視詳細資料",
     enableAction: "啟用",
     disableAction: "停用",
     working: "處理中…",
@@ -1826,6 +1837,10 @@ export const zh_TW: TranslationMap = {
       useCurrentChat: "使用目前的對話",
       useCurrentChatAria: "使用目前的對話進行修訂請求",
       useCurrentChatTooltip: "將修訂請求傳送至目前的對話工作階段，而非提案的工作坊工作階段。",
+      selfLearning: "自我學習",
+      selfLearningAria: "切換自我學習技能提案",
+      selfLearningTooltip:
+        "擷取修正內容，並檢視已完成的重要工作，將其整理為待處理的技能提案。這會耗用額外的背景 token；草稿會以待處理提案的形式出現在此看板上。",
       view: "工作坊檢視",
       board: "看板",
       today: "今天",
@@ -1902,6 +1917,14 @@ export const zh_TW: TranslationMap = {
       noProposalsTitle: "尚無提案",
       noProposalsBody: "{agent} 尚未草擬任何技能提案。",
       noProposalsFooter: "新提案會顯示在此供審查。",
+    },
+    selfLearning: {
+      pitchTitle: "開啟自我學習",
+      pitchBody:
+        "OpenClaw 會檢視修正內容及已完成的重要執行結果，接著為此看板擬定技能提案。這會耗用額外的背景 token，而草稿會以待處理提案的形式送達。",
+      enable: "啟用自我學習",
+      enabling: "正在啟用…",
+      updateError: "無法更新自我學習設定。",
     },
     today: {
       emptyTitle: "今天沒有待處理項目",
@@ -3507,6 +3530,14 @@ export const zh_TW: TranslationMap = {
       remove: "移除",
       more: "更多動作",
       history: "歷史記錄",
+    },
+    runNotStarted: {
+      notDue: "此自動化尚未到執行時間。",
+      alreadyRunning: "此自動化已在執行中。",
+      recoveryPending: "排程器仍在復原中。",
+      invalidSpec: "此自動化的排程或承載資料無效。",
+      stopped: "排程器已停止。",
+      unknown: "無法啟動此自動化。",
     },
     jobs: {
       schedule: "排程",

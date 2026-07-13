@@ -73,7 +73,7 @@ export type ReplyPayload = {
 // through Plugin SDK; this is not a third-party plugin contract.
 const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
 
-export type PairingQrReplyChannelData = {
+type PairingQrReplyChannelData = {
   setupCode: string;
   expiresAtMs: number;
 };

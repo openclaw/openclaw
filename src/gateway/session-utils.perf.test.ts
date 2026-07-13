@@ -97,7 +97,6 @@ describe("listSessionsFromStore resolver cache", () => {
           "tuples[i % tuples.length] test invariant",
         );
         store[`agent:default:webchat:dm:${i}`] = {
-          sessionId: `sess-${i}`,
           updatedAt: now - i,
           modelProvider: tuple.modelProvider,
           model: tuple.model,

@@ -8,7 +8,7 @@ import { isFailoverError } from "../../agents/failover-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
 /** Provider request error classes that get a specialized user-facing reply. */
-export type ProviderRequestErrorCode =
+type ProviderRequestErrorCode =
   | "provider_authentication_error"
   | "provider_conversation_state_error"
   | "provider_internal_error"
@@ -16,7 +16,7 @@ export type ProviderRequestErrorCode =
   | "provider_rate_limit_or_quota_error";
 
 /** Structured provider error classification for reply failure handling. */
-export type ProviderRequestErrorClassification = {
+type ProviderRequestErrorClassification = {
   code: ProviderRequestErrorCode;
   userMessage: string;
   technicalMessage: string;

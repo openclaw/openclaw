@@ -17,6 +17,7 @@ import {
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
+import { createWorkerInferenceStore } from "./inference-store.js";
 import {
   createWorkerEnvironmentService,
   WorkerEnvironmentServiceError,
@@ -124,6 +125,7 @@ describe("worker environment service", () => {
         WorkerEnvironmentServiceOptions,
         | "applyTranscriptCommit"
         | "bootstrapCallTimeoutMs"
+        | "executeInference"
         | "providerCallTimeoutMs"
         | "resolveSshIdentity"
         | "resolveWorkerGateway"
@@ -144,6 +146,12 @@ describe("worker environment service", () => {
       resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
       resolveWorkerGateway: () => ({ host: "127.0.0.1", port: 18_789 }),
       generateWorkerCredential: () => CREDENTIAL,
+      executeInference: async () => ({
+        type: "error",
+        reason: "cancelled",
+        message: "Inference cancelled",
+      }),
+      inferenceStore: createWorkerInferenceStore({ database, now: () => nowMs }),
       now: () => nowMs,
       reconcileIntervalMs: 25,
       ...serviceOptions,
@@ -268,6 +276,20 @@ describe("worker environment service", () => {
       rpcSetVersion: credential.rpcSetVersion,
       protocolFeatures: [...attached.bootstrapReceipt.protocolFeatures],
       credentialExpiresAtMs: credential.expiresAtMs,
+    };
+  }
+
+  function inferenceRequest(
+    identity: WorkerConnectionIdentity,
+  ): Parameters<WorkerEnvironmentService["startInference"]>[1] {
+    return {
+      runEpoch: identity.ownerEpoch,
+      sessionId: identity.sessionId ?? "session-missing",
+      runId: "run-inference",
+      turnId: "turn-inference",
+      modelRef: { provider: "fake", model: "model-test" },
+      context: { messages: [] },
+      options: {},
     };
   }
 
@@ -416,12 +438,74 @@ describe("worker environment service", () => {
     expect(applyTranscriptCommit).toHaveBeenCalledOnce();
   });
 
+  it("fences inference by epoch and the durable session credential", async () => {
+    const identity = seedAttachedIdentity("worker-inference-fence", "session-inference-fence");
+    const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>(
+      async () => ({
+        type: "error",
+        reason: "provider-error",
+        message: "Provider request failed",
+      }),
+    );
+    const workerService = createService(createProvider(), { executeInference });
+    const request = inferenceRequest(identity);
+    expect(
+      workerService.startInference(
+        identity,
+        { ...request, sessionId: "session-other" },
+        { connectionId: "connection-a", send: vi.fn() },
+      ),
+    ).toEqual({ ok: false, reason: "session-not-attached" });
+    expect(
+      workerService.startInference(
+        identity,
+        { ...request, runEpoch: request.runEpoch + 1 },
+        { connectionId: "connection-b", send: vi.fn() },
+      ),
+    ).toEqual({ ok: false, reason: "epoch-mismatch" });
+
+    const send = vi.fn();
+    const started = workerService.startInference(identity, request, {
+      connectionId: "connection-c",
+      send,
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) {
+      throw new Error("inference fixture failed to start");
+    }
+    database.db
+      .prepare(
+        "UPDATE worker_environment_credentials SET credential_hash = ? WHERE environment_id = ?",
+      )
+      .run(
+        hashWorkerCredential(["replacement", identity.environmentId].join("-")),
+        identity.environmentId,
+      );
+    started.launch();
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(executeInference).not.toHaveBeenCalled();
+    expect(send.mock.calls[0]?.[0]).toMatchObject({
+      event: "worker.inference.terminal",
+      payload: { outcome: { reason: "session-not-attached" } },
+    });
+  });
+
   it("fences and rotates live credentials", async () => {
     const environmentId = "worker-live";
     const sessionId = "session-live";
     const identity = seedAttachedIdentity(environmentId, sessionId);
     const liveEvents = createLiveEvents();
-    const workerService = createService(createProvider(), { liveEvents });
+    let inferenceSignal: AbortSignal | undefined;
+    const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>(
+      async ({ signal }) => {
+        inferenceSignal = signal;
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { type: "error", reason: "cancelled", message: "Inference cancelled" };
+      },
+    );
+    const workerService = createService(createProvider(), { executeInference, liveEvents });
     const request = { ...LIVE_EVENT, runEpoch: identity.ownerEpoch };
     const push = workerService.pushLiveEvent.bind(workerService, identity);
     await push(request);
@@ -429,6 +513,15 @@ describe("worker environment service", () => {
       ok: false,
       details: { reason: "epoch-mismatch" },
     });
+    const started = workerService.startInference(identity, inferenceRequest(identity), {
+      connectionId: "connection-rotation",
+      send: vi.fn(),
+    });
+    if (!started.ok) {
+      throw new Error("inference fixture failed to start");
+    }
+    started.launch();
+    await vi.waitFor(() => expect(executeInference).toHaveBeenCalledOnce());
     database.db
       .prepare("UPDATE worker_environment_credentials SET session_id = ? WHERE environment_id = ?")
       .run("session-other", environmentId);
@@ -439,6 +532,7 @@ describe("worker environment service", () => {
     liveEvents.rotateCredential.mockClear();
     nowMs += 10_000;
     await workerService.reconcileOnce();
+    expect(inferenceSignal?.aborted).toBe(true);
     expect(liveEvents.rotateCredential).toHaveBeenCalledWith(
       expect.objectContaining({
         credentialHash: store.getCredential(environmentId)?.credentialHash,

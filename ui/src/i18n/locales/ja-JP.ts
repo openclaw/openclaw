@@ -219,10 +219,11 @@ export const ja_JP: TranslationMap = {
   lazyView: {
     loadingTitle: "パネルを読み込み中",
     errorTitle: "パネルの読み込みに失敗しました",
-    errorSubtitle:
-      "最新の Control UI バンドルを読み込むにはページを再読み込みしてください。ネットワークリクエストに失敗した場合は再試行してください。",
+    genericSubtitle: "このパネルの読み込み中に問題が発生しました。",
+    staleTitle: "新しいバージョンが利用可能です",
+    staleSubtitle:
+      "OpenClaw がバックグラウンドで更新されました。最新のパネルを表示するには再読み込みしてください。",
     retry: "再試行",
-    unknownError: "不明なモジュール読み込みエラーです。",
   },
   nodes: {
     pairing: {
@@ -395,6 +396,16 @@ export const ja_JP: TranslationMap = {
     confirmDelete: "{name} のスナップショットを作成して削除しますか？",
     confirmForceDelete:
       "スナップショットに失敗しました: {error}\n\nスナップショットなしで削除しますか？",
+  },
+  agentChip: {
+    menuLabel: "エージェントメニュー",
+    agents: "エージェント",
+    working: "作業中…",
+    ready: "チャットできます",
+    whatCanAgentDo: "{name}には何ができますか？",
+    getHelp: "ヘルプを表示",
+    discord: "Discord コミュニティ",
+    viewChangelog: "変更履歴を表示",
   },
   newSession: {
     title: "新しいセッション",
@@ -1455,6 +1466,8 @@ export const ja_JP: TranslationMap = {
     blockedAgentFilter: "エージェントフィルターによりブロック",
   },
   nav: {
+    back: "戻る",
+    forward: "進む",
     chat: "チャット",
     settings: "設定",
     settingsGeneral: "一般",
@@ -1726,8 +1739,6 @@ export const ja_JP: TranslationMap = {
     cancel: "キャンセル",
     removedRestart: "{name}を削除しました。変更を適用するにはGatewayの再起動が必要です。",
     verifiedSource: "確認済みのソース",
-    menuLabel: "{name} のアクション",
-    menuDetails: "詳細を表示",
     enableAction: "有効にする",
     disableAction: "無効にする",
     working: "処理中…",
@@ -1863,6 +1874,10 @@ export const ja_JP: TranslationMap = {
       useCurrentChatAria: "修正リクエストに現在のチャットを使用",
       useCurrentChatTooltip:
         "修正リクエストを提案のワークショップセッションではなく現在のチャットセッションに送信します。",
+      selfLearning: "自己学習",
+      selfLearningAria: "自己学習によるスキル提案を切り替える",
+      selfLearningTooltip:
+        "修正内容や完了した重要な作業を取り込み、レビューして、保留中のスキル提案を作成します。追加のバックグラウンドトークンを消費し、下書きは保留中の提案としてこのボードに追加されます。",
       view: "ワークショップビュー",
       board: "ボード",
       today: "今日",
@@ -1942,6 +1957,14 @@ export const ja_JP: TranslationMap = {
       noProposalsTitle: "まだ提案はありません",
       noProposalsBody: "{agent}はまだスキル提案をドラフトしていません。",
       noProposalsFooter: "新しい提案はレビューのためにここに表示されます。",
+    },
+    selfLearning: {
+      pitchTitle: "自己学習を有効にする",
+      pitchBody:
+        "OpenClaw は修正内容や完了した重要な実行をレビューし、このボード向けのスキル提案の下書きを作成します。追加のバックグラウンドトークンを消費し、下書きは保留中の提案として追加されます。",
+      enable: "自己学習を有効にする",
+      enabling: "有効化中…",
+      updateError: "自己学習の設定を更新できませんでした。",
     },
     today: {
       emptyTitle: "今日は待機中のものはありません",
@@ -3581,6 +3604,14 @@ export const ja_JP: TranslationMap = {
       remove: "削除",
       more: "その他の操作",
       history: "履歴",
+    },
+    runNotStarted: {
+      notDue: "この自動化はまだ実行時刻になっていません。",
+      alreadyRunning: "この自動化はすでに実行中です。",
+      recoveryPending: "スケジューラの復旧処理がまだ進行中です。",
+      invalidSpec: "この自動化のスケジュールまたはペイロードが無効です。",
+      stopped: "スケジューラは停止しています。",
+      unknown: "この自動化を開始できませんでした。",
     },
     jobs: {
       schedule: "スケジュール",

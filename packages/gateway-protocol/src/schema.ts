@@ -40,4 +40,5 @@ export * from "./schema/plugin-approvals.js";
 export * from "./schema/plugins.js";
 export * from "./schema/wizard.js";
 export * from "./schema/worker-admission.js";
+export * from "./schema/worker-inference.js";
 export * from "./schema/worktrees.js";

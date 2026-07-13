@@ -6,7 +6,6 @@ import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   SessionsCatalogContinueResult,
-  SessionsCatalogListResult,
   SessionsCatalogReadResult,
   TaskSuggestion,
   TaskSuggestionEvent,
@@ -43,7 +42,9 @@ import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
+  announceCatalogSessionContinued,
   buildCatalogSessionKey,
+  lookupCatalogSession,
   parseCatalogSessionKey,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
@@ -58,6 +59,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import {
   applyChatAgentsList,
@@ -218,9 +220,6 @@ type ChatPaneConnectionScope = {
   sessions: ChatPageContext["sessions"];
 };
 
-const CATALOG_SESSION_LOOKUP_PAGE_LIMIT = 100;
-const CATALOG_SESSION_LOOKUP_MAX_PAGES = 100;
-
 const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
@@ -256,6 +255,11 @@ function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boole
 }
 
 class ChatPane extends OpenClawLightDomElement {
+  // One lifecycle-owned minute tick refreshes both relative labels and external PR state.
+  readonly minutePoll = new PollController(this, 60_000, () => {
+    this.requestUpdate();
+    void this.refreshSessionPullRequests();
+  });
   @consume({ context: applicationContext, subscribe: true })
   private context!: ChatPageContext;
   @property({ attribute: false }) paneId = "single";
@@ -852,34 +856,12 @@ class ChatPane extends OpenClawLightDomElement {
     }
     try {
       if (!older) {
-        let cursor: string | undefined;
-        const seenCursors = new Set<string>();
-        // A sidebar row can come from any loaded page. Follow that host's cursor
-        // so continuation metadata is not lost when the selected row is past page one.
-        for (let pageIndex = 0; pageIndex < CATALOG_SESSION_LOOKUP_MAX_PAGES; pageIndex += 1) {
-          const listed = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-            catalogId: key.catalogId,
-            hostIds: [key.hostId],
-            limitPerHost: CATALOG_SESSION_LOOKUP_PAGE_LIMIT,
-            ...(cursor ? { cursors: { [key.hostId]: cursor } } : {}),
-          });
-          if (!isCurrent()) {
-            return false;
-          }
-          const catalog = listed.catalogs.find((candidate) => candidate.id === key.catalogId);
-          this.catalogHost = catalog?.hosts.find((host) => host.hostId === key.hostId) ?? null;
-          this.catalogSession =
-            this.catalogHost?.sessions.find((session) => session.threadId === key.threadId) ?? null;
-          if (this.catalogSession) {
-            break;
-          }
-          const nextCursor = this.catalogHost?.nextCursor;
-          if (!nextCursor || seenCursors.has(nextCursor)) {
-            break;
-          }
-          seenCursors.add(nextCursor);
-          cursor = nextCursor;
+        const lookup = await lookupCatalogSession({ client, key, isCurrent });
+        if (!lookup) {
+          return false;
         }
+        this.catalogHost = lookup.host;
+        this.catalogSession = lookup.session;
       }
       const requestedOlderCursor = older ? this.catalogCursor : undefined;
       if (requestedOlderCursor) {
@@ -1143,6 +1125,7 @@ class ChatPane extends OpenClawLightDomElement {
         "sessions.catalog.continue",
         key,
       );
+      announceCatalogSessionContinued({ ...key, sessionKey: result.sessionKey });
       this.onPaneSessionChange?.(this.paneId, result.sessionKey);
       this.switchPaneSession(result.sessionKey);
       state.handleChatDraftChange(draft);
@@ -1474,13 +1457,6 @@ class ChatPane extends OpenClawLightDomElement {
         this.applyGatewaySnapshot(snapshot);
       }),
     );
-    // PRs open, merge, and finish CI outside any gateway event stream, so the
-    // chip row refreshes on a coarse timer between session/connect refreshes.
-    const pullRequestTimer = window.setInterval(
-      () => void this.refreshSessionPullRequests(),
-      60_000,
-    );
-    chatState.addCleanup(() => window.clearInterval(pullRequestTimer));
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
@@ -1843,13 +1819,14 @@ class ChatPane extends OpenClawLightDomElement {
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
     const disabledReason = selectedSessionArchived ? t("chat.archivedSessionDisabled") : null;
-    const catalogDisabledReason = catalogKey
-      ? this.catalogSession?.canContinue
-        ? null
-        : this.catalogHost?.kind === "node"
+    // Never flash "view-only" while metadata loads; after loading, anything short
+    // of a continuable session (failed lookups too) explains the disabled composer.
+    const catalogDisabledReason =
+      catalogKey && !this.catalogLoading && this.catalogSession?.canContinue !== true
+        ? this.catalogHost?.kind === "node"
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
-      : null;
+        : null;
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );

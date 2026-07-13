@@ -218,10 +218,11 @@ export const fa: TranslationMap = {
   lazyView: {
     loadingTitle: "در حال بارگیری پنل",
     errorTitle: "پنل بارگیری نشد",
-    errorSubtitle:
-      "برای بارگیری آخرین بسته Control UI صفحه را دوباره بارگیری کنید، یا اگر درخواست شبکه ناموفق بود دوباره تلاش کنید.",
+    genericSubtitle: "هنگام بارگذاری این پنل مشکلی پیش آمد.",
+    staleTitle: "نسخه جدیدی در دسترس است",
+    staleSubtitle:
+      "OpenClaw در پس‌زمینه به‌روزرسانی شد. برای دریافت جدیدترین پنل، دوباره بارگذاری کنید.",
     retry: "تلاش دوباره",
-    unknownError: "خطای نامشخص در بارگیری ماژول.",
   },
   nodes: {
     pairing: {
@@ -390,6 +391,16 @@ export const fa: TranslationMap = {
     restore: "بازیابی",
     confirmDelete: "از {name} snapshot گرفته و حذف شود؟",
     confirmForceDelete: "snapshot ناموفق بود: {error}\n\nبدون snapshot حذف شود؟",
+  },
+  agentChip: {
+    menuLabel: "منوی عامل",
+    agents: "عامل‌ها",
+    working: "در حال کار…",
+    ready: "آماده گفت‌وگو",
+    whatCanAgentDo: "{name} چه کاری می‌تواند انجام دهد؟",
+    getHelp: "دریافت راهنمایی",
+    discord: "انجمن Discord",
+    viewChangelog: "مشاهده فهرست تغییرات",
   },
   newSession: {
     title: "جلسه جدید",
@@ -1446,6 +1457,8 @@ export const fa: TranslationMap = {
     blockedAgentFilter: "مسدودشده توسط فیلتر عامل",
   },
   nav: {
+    back: "بازگشت",
+    forward: "جلو",
     chat: "چت",
     settings: "تنظیمات",
     settingsGeneral: "عمومی",
@@ -1713,8 +1726,6 @@ export const fa: TranslationMap = {
     cancel: "لغو",
     removedRestart: "{name} حذف شد. برای اعمال تغییر، راه‌اندازی مجدد Gateway لازم است.",
     verifiedSource: "منبع تأییدشده",
-    menuLabel: "اقدامات {name}",
-    menuDetails: "مشاهده جزئیات",
     enableAction: "فعال کردن",
     disableAction: "غیرفعال کردن",
     working: "در حال انجام…",
@@ -1848,6 +1859,10 @@ export const fa: TranslationMap = {
       useCurrentChatAria: "استفاده از گفتگوی فعلی برای درخواست‌های بازبینی",
       useCurrentChatTooltip:
         "درخواست‌های بازبینی را به جای جلسه کارگاهی پیشنهاد، به جلسه گفتگوی فعلی ارسال کنید.",
+      selfLearning: "خودآموزی",
+      selfLearningAria: "فعال یا غیرفعال کردن پیشنهادهای مهارتِ خودآموزی",
+      selfLearningTooltip:
+        "اصلاحات و کارهای مهم تکمیل‌شده را ثبت و بررسی می‌کند و به پیشنهادهای مهارتِ در انتظار تبدیل می‌کند. توکن‌های پس‌زمینه بیشتری مصرف می‌کند؛ پیش‌نویس‌ها به‌صورت پیشنهادهای در انتظار روی این برد قرار می‌گیرند.",
       view: "نمای کارگاه",
       board: "تخته",
       today: "امروز",
@@ -1929,6 +1944,14 @@ export const fa: TranslationMap = {
       noProposalsTitle: "هنوز پیشنهادی وجود ندارد",
       noProposalsBody: "{agent} هنوز هیچ پیشنهاد مهارتی تهیه نکرده است.",
       noProposalsFooter: "پیشنهادهای جدید برای بررسی اینجا نمایش داده می‌شوند.",
+    },
+    selfLearning: {
+      pitchTitle: "فعال‌سازی خودآموزی",
+      pitchBody:
+        "OpenClaw اصلاحات و اجراهای مهم تکمیل‌شده را بررسی می‌کند و سپس برای این برد، پیش‌نویس پیشنهادهای مهارت را می‌سازد. این فرایند توکن‌های پس‌زمینه بیشتری مصرف می‌کند و پیش‌نویس‌ها به‌صورت پیشنهادهای در انتظار ارائه می‌شوند.",
+      enable: "فعال‌سازی خودآموزی",
+      enabling: "در حال فعال‌سازی…",
+      updateError: "تنظیمات خودآموزی به‌روزرسانی نشد.",
     },
     today: {
       emptyTitle: "امروز چیزی در انتظار نیست",
@@ -3567,6 +3590,14 @@ export const fa: TranslationMap = {
       remove: "حذف",
       more: "اقدامات بیشتر",
       history: "تاریخچه",
+    },
+    runNotStarted: {
+      notDue: "هنوز زمان اجرای این خودکارسازی نرسیده است.",
+      alreadyRunning: "این خودکارسازی در حال اجرا است.",
+      recoveryPending: "بازیابی زمان‌بند هنوز در حال انجام است.",
+      invalidSpec: "زمان‌بندی یا محتوای این خودکارسازی نامعتبر است.",
+      stopped: "زمان‌بند متوقف شده است.",
+      unknown: "این خودکارسازی راه‌اندازی نشد.",
     },
     jobs: {
       schedule: "زمان‌بندی",

@@ -216,10 +216,10 @@ export const ar: TranslationMap = {
   lazyView: {
     loadingTitle: "جارٍ تحميل اللوحة",
     errorTitle: "فشل تحميل اللوحة",
-    errorSubtitle:
-      "أعد تحميل الصفحة لتحميل أحدث حزمة Control UI، أو أعد المحاولة إذا فشل طلب الشبكة.",
+    genericSubtitle: "حدث خطأ ما أثناء تحميل هذه اللوحة.",
+    staleTitle: "يتوفر إصدار جديد",
+    staleSubtitle: "تم تحديث OpenClaw في الخلفية. أعد التحميل للحصول على أحدث لوحة.",
     retry: "إعادة المحاولة",
-    unknownError: "خطأ غير معروف في تحميل الوحدة.",
   },
   nodes: {
     pairing: {
@@ -387,6 +387,16 @@ export const ar: TranslationMap = {
     restore: "استعادة",
     confirmDelete: "هل تريد أخذ لقطة وحذف {name}؟",
     confirmForceDelete: "فشل أخذ اللقطة: {error}\n\nهل تريد الحذف دون لقطة؟",
+  },
+  agentChip: {
+    menuLabel: "قائمة الوكيل",
+    agents: "الوكلاء",
+    working: "جارٍ العمل…",
+    ready: "جاهز للدردشة",
+    whatCanAgentDo: "ما الذي يمكن لـ {name} فعله؟",
+    getHelp: "الحصول على المساعدة",
+    discord: "مجتمع Discord",
+    viewChangelog: "عرض سجل التغييرات",
   },
   newSession: {
     title: "جلسة جديدة",
@@ -1440,6 +1450,8 @@ export const ar: TranslationMap = {
     blockedAgentFilter: "محظور بواسطة عامل تصفية الوكيل",
   },
   nav: {
+    back: "رجوع",
+    forward: "تقدّم",
     chat: "الدردشة",
     settings: "الإعدادات",
     settingsGeneral: "عام",
@@ -1707,8 +1719,6 @@ export const ar: TranslationMap = {
     cancel: "إلغاء",
     removedRestart: "تمت إزالة {name}. يلزم إعادة تشغيل Gateway لتطبيق التغيير.",
     verifiedSource: "مصدر موثّق",
-    menuLabel: "إجراءات {name}",
-    menuDetails: "عرض التفاصيل",
     enableAction: "تمكين",
     disableAction: "تعطيل",
     working: "جارٍ العمل…",
@@ -1842,6 +1852,10 @@ export const ar: TranslationMap = {
       useCurrentChatAria: "استخدام المحادثة الحالية لطلبات المراجعة",
       useCurrentChatTooltip:
         "إرسال طلبات المراجعة إلى جلسة المحادثة الحالية بدلاً من جلسة workshop الخاصة بالمقترح.",
+      selfLearning: "التعلّم الذاتي",
+      selfLearningAria: "تبديل مقترحات مهارات التعلّم الذاتي",
+      selfLearningTooltip:
+        "التقط التصحيحات وراجع الأعمال المهمة المكتملة لتحويلها إلى مقترحات Skills معلّقة. يستهلك ذلك رموزًا إضافية في الخلفية، وتظهر المسودات على هذه اللوحة كمقترحات معلّقة.",
       view: "عرض ورشة العمل",
       board: "اللوحة",
       today: "اليوم",
@@ -1919,6 +1933,14 @@ export const ar: TranslationMap = {
       noProposalsTitle: "لا توجد مقترحات بعد",
       noProposalsBody: "لم يصغ {agent} أي مقترحات لمهارات.",
       noProposalsFooter: "ستظهر المقترحات الجديدة هنا لمراجعتها.",
+    },
+    selfLearning: {
+      pitchTitle: "تشغيل التعلّم الذاتي",
+      pitchBody:
+        "يراجع OpenClaw التصحيحات وعمليات التشغيل المهمة المكتملة، ثم يُعدّ مسودات لمقترحات Skills لهذه اللوحة. يستهلك رموزًا إضافية في الخلفية، وتصل المسودات كمقترحات معلّقة.",
+      enable: "تفعيل التعلّم الذاتي",
+      enabling: "جارٍ التفعيل…",
+      updateError: "تعذّر تحديث إعداد التعلّم الذاتي.",
     },
     today: {
       emptyTitle: "لا شيء ينتظر اليوم",
@@ -3544,6 +3566,14 @@ export const ar: TranslationMap = {
       remove: "إزالة",
       more: "إجراءات إضافية",
       history: "السجل",
+    },
+    runNotStarted: {
+      notDue: "لم يحن موعد تشغيل هذه العملية التلقائية بعد.",
+      alreadyRunning: "هذه العملية التلقائية قيد التشغيل بالفعل.",
+      recoveryPending: "لا تزال استعادة المجدول قيد التنفيذ.",
+      invalidSpec: "تحتوي هذه العملية التلقائية على جدول زمني أو حمولة غير صالحة.",
+      stopped: "المجدول متوقف.",
+      unknown: "تعذر بدء هذه العملية التلقائية.",
     },
     jobs: {
       schedule: "الجدول",

@@ -218,10 +218,11 @@ export const uk: TranslationMap = {
   lazyView: {
     loadingTitle: "Завантаження панелі",
     errorTitle: "Не вдалося завантажити панель",
-    errorSubtitle:
-      "Перезавантажте сторінку, щоб завантажити найновіший пакет Control UI, або повторіть спробу, якщо мережевий запит не вдався.",
+    genericSubtitle: "Під час завантаження цієї панелі сталася помилка.",
+    staleTitle: "Доступна нова версія",
+    staleSubtitle:
+      "OpenClaw оновлено у фоновому режимі. Перезавантажте, щоб отримати найновішу панель.",
     retry: "Повторити",
-    unknownError: "Невідома помилка завантаження модуля.",
   },
   nodes: {
     pairing: {
@@ -390,6 +391,16 @@ export const uk: TranslationMap = {
     restore: "Відновити",
     confirmDelete: "Створити знімок і видалити {name}?",
     confirmForceDelete: "Не вдалося створити знімок: {error}\n\nВидалити без знімка?",
+  },
+  agentChip: {
+    menuLabel: "Меню агента",
+    agents: "Агенти",
+    working: "Працює…",
+    ready: "Готовий до спілкування",
+    whatCanAgentDo: "Що може робити {name}?",
+    getHelp: "Отримати допомогу",
+    discord: "Спільнота Discord",
+    viewChangelog: "Переглянути журнал змін",
   },
   newSession: {
     title: "Новий сеанс",
@@ -1452,6 +1463,8 @@ export const uk: TranslationMap = {
     blockedAgentFilter: "заблоковано фільтром агента",
   },
   nav: {
+    back: "Назад",
+    forward: "Вперед",
     chat: "Чат",
     settings: "Налаштування",
     settingsGeneral: "Загальні",
@@ -1726,8 +1739,6 @@ export const uk: TranslationMap = {
     cancel: "Скасувати",
     removedRestart: "Видалено {name}. Щоб застосувати зміну, потрібен перезапуск Gateway.",
     verifiedSource: "Перевірене джерело",
-    menuLabel: "Дії для {name}",
-    menuDetails: "Переглянути деталі",
     enableAction: "Увімкнути",
     disableAction: "Вимкнути",
     working: "Обробка…",
@@ -1862,6 +1873,10 @@ export const uk: TranslationMap = {
       useCurrentChatAria: "Використовувати поточний чат для запитів на перегляд",
       useCurrentChatTooltip:
         "Надсилати запити на перегляд до поточної сесії чату замість сесії воркшопу пропозиції.",
+      selfLearning: "Самонавчання",
+      selfLearningAria: "Увімкнути або вимкнути пропозиції навичок на основі самонавчання",
+      selfLearningTooltip:
+        "Фіксує виправлення та аналізує суттєві завершені завдання, перетворюючи їх на чернетки пропозицій навичок. Використовує додаткові фонові токени; чернетки з’являються на цій дошці як пропозиції, що очікують розгляду.",
       view: "Вигляд майстерні",
       board: "Дошка",
       today: "Сьогодні",
@@ -1941,6 +1956,14 @@ export const uk: TranslationMap = {
       noProposalsTitle: "Пропозицій поки немає",
       noProposalsBody: "{agent} ще не створив жодної пропозиції навички.",
       noProposalsFooter: "Нові пропозиції з’являтимуться тут для перегляду.",
+    },
+    selfLearning: {
+      pitchTitle: "Увімкнути самонавчання",
+      pitchBody:
+        "OpenClaw аналізує виправлення та суттєві завершені запуски, а потім створює чернетки пропозицій навичок для цієї дошки. Він використовує додаткові фонові токени, а чернетки надходять як пропозиції, що очікують розгляду.",
+      enable: "Увімкнути самонавчання",
+      enabling: "Увімкнення…",
+      updateError: "Не вдалося оновити налаштування самонавчання.",
     },
     today: {
       emptyTitle: "Сьогодні нічого не очікує",
@@ -3579,6 +3602,14 @@ export const uk: TranslationMap = {
       remove: "Видалити",
       more: "Більше дій",
       history: "Історія",
+    },
+    runNotStarted: {
+      notDue: "Час запуску цієї автоматизації ще не настав.",
+      alreadyRunning: "Ця автоматизація вже виконується.",
+      recoveryPending: "Відновлення планувальника ще триває.",
+      invalidSpec: "Ця автоматизація має некоректний розклад або корисне навантаження.",
+      stopped: "Планувальник зупинено.",
+      unknown: "Не вдалося запустити цю автоматизацію.",
     },
     jobs: {
       schedule: "Розклад",

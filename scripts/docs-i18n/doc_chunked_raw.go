@@ -45,19 +45,27 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 	if strings.TrimSpace(body) == "" {
 		return body, nil
 	}
-	blocks := splitDocBodyIntoBlocks(body)
+	placeholderState := NewPlaceholderState(body)
+	placeholders := make([]string, 0, 8)
+	mapping := map[string]string{}
+	maskedBody := maskMarkdownFencedLiterals(body, placeholderState.Next, &placeholders, mapping)
+	blocks := splitDocBodyIntoBlocks(maskedBody)
 	groups := groupDocBlocks(blocks, docsI18nDocChunkMaxBytes())
 	logDocChunkPlan(relPath, blocks, groups)
 	out := strings.Builder{}
 	for index, group := range groups {
 		chunkID := fmt.Sprintf("%s.chunk-%03d", relPath, index+1)
-		translated, err := translateDocBlockGroup(ctx, translator, chunkID, group, srcLang, tgtLang)
+		translated, err := translateDocBlockGroup(ctx, translator, chunkID, group, placeholders, srcLang, tgtLang)
 		if err != nil {
 			return "", err
 		}
 		out.WriteString(translated)
 	}
 	translatedBody := out.String()
+	if err := validatePlaceholders(translatedBody, placeholders); err != nil {
+		return "", fmt.Errorf("%s: restore fenced literals: %w", relPath, err)
+	}
+	translatedBody = unmaskMarkdown(translatedBody, placeholders, mapping)
 	if err := validateDocBodyFencedLiterals(body, translatedBody); err != nil {
 		return "", fmt.Errorf("%s: final document validation: %w", relPath, err)
 	}
@@ -70,6 +78,9 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	}
 	sourceStructure := summarizeDocChunkStructure(source)
 	translatedStructure := summarizeDocChunkStructure(translated)
+	if !sameI18NProtocolMarkers(source, translated) {
+		return fmt.Errorf("i18n placeholder mismatch")
+	}
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
 	}
@@ -85,18 +96,21 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	return nil
 }
 
-func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chunkID string, blocks []string, srcLang, tgtLang string) (string, error) {
+func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chunkID string, blocks []string, protectedPlaceholders []string, srcLang, tgtLang string) (string, error) {
 	source := strings.Join(blocks, "")
 	if strings.TrimSpace(source) == "" {
 		return source, nil
 	}
 	if plan, ok := planDocChunkSplit(blocks, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
 		logDocChunkPlanSplit(chunkID, plan, source)
-		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, srcLang, tgtLang)
+		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, protectedPlaceholders, srcLang, tgtLang)
 	}
 	normalizedSource, commonIndent := stripCommonIndent(source)
 	log.Printf("docs-i18n: chunk start %s blocks=%d bytes=%d", chunkID, len(blocks), len(source))
 	translated, err := translator.TranslateRaw(ctx, normalizedSource, srcLang, tgtLang)
+	if err == nil {
+		err = validatePlaceholders(translated, placeholdersInText(normalizedSource, protectedPlaceholders))
+	}
 	if err == nil {
 		translated = sanitizeDocChunkProtocolWrappers(source, translated)
 		translated = reapplyCommonIndent(translated, commonIndent)
@@ -108,27 +122,27 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		}
 	}
 	if len(blocks) <= 1 {
-		if fallback, fallbackErr := translateDocLeafBlock(ctx, translator, chunkID, source, srcLang, tgtLang); fallbackErr == nil {
+		if fallback, fallbackErr := translateDocLeafBlock(ctx, translator, chunkID, source, protectedPlaceholders, srcLang, tgtLang); fallbackErr == nil {
 			return fallback, nil
 		}
 		if plan, ok := planSingletonDocChunkRetry(source, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
 			logDocChunkPlanSplit(chunkID, plan, source)
-			return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, srcLang, tgtLang)
+			return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, protectedPlaceholders, srcLang, tgtLang)
 		}
 		return "", fmt.Errorf("%s: %w", chunkID, err)
 	}
 	if plan, ok := planDocChunkSplit(blocks, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
 		logDocChunkSplit(chunkID, len(blocks), err)
-		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, srcLang, tgtLang)
+		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, protectedPlaceholders, srcLang, tgtLang)
 	}
 	if plan, ok := splitDocChunkBlocksMidpointSimple(blocks); ok {
 		logDocChunkSplit(chunkID, len(blocks), err)
-		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, srcLang, tgtLang)
+		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, protectedPlaceholders, srcLang, tgtLang)
 	}
 	return "", fmt.Errorf("%s: %w", chunkID, err)
 }
 
-func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunkID, source, srcLang, tgtLang string) (string, error) {
+func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunkID, source string, protectedPlaceholders []string, srcLang, tgtLang string) (string, error) {
 	sourceStructure := summarizeDocChunkStructure(source)
 	if sourceStructure.fenceCount != 0 {
 		return "", fmt.Errorf("%s: raw leaf fallback not applicable", chunkID)
@@ -137,6 +151,9 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 	maskedSource, placeholders := maskDocComponentTags(normalizedSource)
 	translated, err := translator.Translate(ctx, maskedSource, srcLang, tgtLang)
 	if err != nil {
+		return "", err
+	}
+	if err := validatePlaceholders(translated, placeholdersInText(maskedSource, protectedPlaceholders)); err != nil {
 		return "", err
 	}
 	translated, err = restoreDocComponentTags(translated, placeholders)
@@ -222,6 +239,12 @@ func validateDocChunkTranslation(source, translated string) error {
 	sourceLower := strings.ToLower(source)
 	translatedLower := strings.ToLower(translated)
 	for _, token := range docsProtocolTokens {
+		if token == "__OC_I18N_" {
+			if !sameI18NProtocolMarkers(source, translated) {
+				return fmt.Errorf("protocol token leaked: %s", token)
+			}
+			continue
+		}
 		tokenLower := strings.ToLower(token)
 		if strings.Contains(sourceLower, tokenLower) {
 			continue
@@ -262,6 +285,18 @@ func validateDocChunkTranslation(source, translated string) error {
 		}
 	}
 	return nil
+}
+
+func sameI18NProtocolMarkers(source, translated string) bool {
+	source = strings.ReplaceAll(source, `\_`, "_")
+	translated = strings.ReplaceAll(translated, `\_`, "_")
+	if !sameStringMultiset(placeholderRe.FindAllString(source, -1), placeholderRe.FindAllString(translated, -1)) {
+		return false
+	}
+	sourceResidual := placeholderRe.ReplaceAllString(source, "")
+	translatedResidual := placeholderRe.ReplaceAllString(translated, "")
+	return strings.Count(strings.ToLower(sourceResidual), "__oc_i18n_") ==
+		strings.Count(strings.ToLower(translatedResidual), "__oc_i18n_")
 }
 
 func sameStringMultiset(left, right []string) bool {
@@ -495,10 +530,10 @@ func containsProtocolWrapperToken(text string) bool {
 	return strings.Contains(lower, strings.ToLower(bodyTagStart)) || strings.Contains(lower, strings.ToLower(frontmatterTagStart))
 }
 
-func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslator, chunkID string, groups [][]string, srcLang, tgtLang string) (string, error) {
+func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslator, chunkID string, groups [][]string, protectedPlaceholders []string, srcLang, tgtLang string) (string, error) {
 	var out strings.Builder
 	for index, group := range groups {
-		translated, err := translateDocBlockGroup(ctx, translator, fmt.Sprintf("%s.%02d", chunkID, index+1), group, srcLang, tgtLang)
+		translated, err := translateDocBlockGroup(ctx, translator, fmt.Sprintf("%s.%02d", chunkID, index+1), group, protectedPlaceholders, srcLang, tgtLang)
 		if err != nil {
 			return "", err
 		}

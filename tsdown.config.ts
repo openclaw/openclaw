@@ -224,6 +224,7 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id.startsWith("@openclaw/fs-safe/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
+    id === "@openclaw/retry" ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
     id === "@openclaw/acp-core" ||
@@ -412,7 +413,6 @@ function buildMediaGenerationCoreDistEntries(): Record<string, string> {
 
 function buildMediaUnderstandingCoreDistEntries(): Record<string, string> {
   return {
-    index: "packages/media-understanding-common/src/index.ts",
     "active-model": "packages/media-understanding-common/src/active-model.ts",
     defaults: "packages/media-understanding-common/src/defaults.ts",
     errors: "packages/media-understanding-common/src/errors.ts",
@@ -441,31 +441,15 @@ function buildMarkdownCoreDistEntries(): Record<string, string> {
 }
 
 function buildNormalizationCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/normalization-core/src/index.ts",
-    "boolean-coercion": "packages/normalization-core/src/boolean-coercion.ts",
-    "error-coercion": "packages/normalization-core/src/error-coercion.ts",
-    "number-coercion": "packages/normalization-core/src/number-coercion.ts",
-    "record-coerce": "packages/normalization-core/src/record-coerce.ts",
-    "string-coerce": "packages/normalization-core/src/string-coerce.ts",
-    "string-normalization": "packages/normalization-core/src/string-normalization.ts",
-    "utf16-slice": "packages/normalization-core/src/utf16-slice.ts",
-  };
+  return buildPackageDistEntriesFromExports("normalization-core");
+}
+
+function buildRetryDistEntries(): Record<string, string> {
+  return buildPackageDistEntriesFromExports("retry");
 }
 
 function buildMediaCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/media-core/src/index.ts",
-    base64: "packages/media-core/src/base64.ts",
-    constants: "packages/media-core/src/constants.ts",
-    "content-length": "packages/media-core/src/content-length.ts",
-    "file-name": "packages/media-core/src/file-name.ts",
-    "inbound-path-policy": "packages/media-core/src/inbound-path-policy.ts",
-    "inline-image-data-url": "packages/media-core/src/inline-image-data-url.ts",
-    "media-source-url": "packages/media-core/src/media-source-url.ts",
-    mime: "packages/media-core/src/mime.ts",
-    "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
-  };
+  return buildPackageDistEntriesFromExports("media-core");
 }
 
 function buildPackageDistEntriesFromExports(packageDir: string): Record<string, string> {
@@ -524,7 +508,6 @@ function buildTerminalCoreDistEntries(): Record<string, string> {
 
 function buildWebContentCoreDistEntries(): Record<string, string> {
   return {
-    index: "packages/web-content-core/src/index.ts",
     "provider-runtime-shared": "packages/web-content-core/src/provider-runtime-shared.ts",
   };
 }
@@ -630,6 +613,9 @@ function buildUnifiedDistEntries(): Record<string, string> {
       ]),
     ),
     ...Object.fromEntries(
+      Object.entries(buildRetryDistEntries()).map(([entry, source]) => [`retry/${entry}`, source]),
+    ),
+    ...Object.fromEntries(
       Object.entries(buildMediaCoreDistEntries()).map(([entry, source]) => [
         `media-core/${entry}`,
         source,
@@ -732,6 +718,12 @@ const configs = [
     dts: TSDOWN_DECLARATIONS,
     entry: buildNormalizationCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("normalization-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: TSDOWN_DECLARATIONS,
+    entry: buildRetryDistEntries(),
+    outDir: tsdownPackageOutputRoot("retry"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

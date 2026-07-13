@@ -117,6 +117,50 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
+/* Shipped Mac app builds without web chrome still use openclaw-native-nav
+   above; new hosts render the replacement controls in this document. Unlike
+   that rule this keeps the drawer hamburger: the web toolbar hides at
+   <=1100px, so narrow windows still need the in-page toggle. */
+html.openclaw-native-web-chrome .shell-nav-expand,
+html.openclaw-native-web-chrome .sidebar-brand__collapse {
+  display: none;
+}
+
+.macos-titlebar-controls {
+  position: fixed;
+  top: 0;
+  /* Clear the traffic lights (~74px cluster) with breathing room before the
+     first hosted button, so the two groups read as separate. */
+  left: 92px;
+  /* Above app chrome (<=45), below dropdowns/dialogs (>=100). */
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 156px;
+  height: var(--openclaw-native-titlebar-height, 50px);
+}
+
+.macos-titlebar-controls__button.topbar-icon-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.macos-titlebar-controls__button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 96%, transparent);
+  color: var(--text);
+}
+
+.macos-titlebar-controls__button:disabled {
+  opacity: 0.38;
+}
+
+@media (max-width: 1100px) {
+  .macos-titlebar-controls {
+    display: none;
+  }
+}
+
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
@@ -1559,89 +1603,12 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   stroke-linejoin: round;
 }
 
-.nav-section {
-  display: grid;
-  gap: 4px;
-  margin-bottom: 10px;
-}
-
-.nav-section:last-child {
-  margin-bottom: 0;
-}
-
 .nav-section__items {
   display: grid;
   gap: 2px;
 }
 
-.nav-section--collapsed .nav-section__items {
-  display: none;
-}
-
-.nav-section__label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 0 10px;
-  min-height: 28px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-md);
-  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  text-align: left;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.nav-section__label:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
-}
-
-.nav-section__label-text {
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  opacity: 0.85;
-}
-
-.nav-section__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  min-width: 0;
-  flex: 0 0 26px;
-  opacity: 0.5;
-  transition: transform var(--duration-fast) ease;
-}
-
-.nav-section__chevron svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.nav-section--collapsed .nav-section__chevron {
-  transform: rotate(-90deg);
-}
-
-/* "More" holds every nav route the user has not pinned; the uppercase label
-   is the section separator, so no divider line above it. */
-.nav-section--more {
-  margin-top: 12px;
-}
-
-/* Button variant of .nav-item (e.g. "Customize sidebar"). */
+/* Button variant of .nav-item (e.g. the "More" menu row). */
 .nav-item--action {
   width: 100%;
   font: inherit;
@@ -1685,6 +1652,9 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   font: inherit;
   font-size: 13px;
   text-align: left;
+  /* More-menu route rows are anchors acting as chrome (see base.css cursor convention). */
+  cursor: default;
+  text-decoration: none;
 }
 
 .sidebar-customize-menu__item:hover {
@@ -1721,6 +1691,16 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
 .sidebar-customize-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+/* More-menu row for the route the app is currently on. */
+.sidebar-customize-menu__item--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
+}
+
+.sidebar-customize-menu__item--active .nav-item__icon {
+  color: var(--accent);
 }
 
 .session-menu {
@@ -1949,17 +1929,172 @@ openclaw-session-menu[popover] {
   color: var(--accent);
 }
 
-/* Single compact row: status, build identity, then utility icons right-aligned. */
-.sidebar-footer-bar {
+/* Footer agent chip: identity-first entrance to the active agent. The body
+   resumes the latest conversation; trailing actions create/open the menu. */
+.sidebar-agent-chip {
   display: flex;
   align-items: center;
   gap: 2px;
-  min-height: 34px;
-  padding: 0 10px;
+  padding: 2px 8px 6px;
 }
 
-.sidebar-footer-bar__spacer {
+.sidebar-agent-chip__main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: default;
+  transition: background var(--duration-fast) ease;
+}
+
+.sidebar-agent-chip__main:hover,
+.sidebar-agent-chip__main:focus-visible,
+.sidebar-agent-chip__main--open {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-agent-chip__main:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-agent-chip__avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sidebar-agent-chip__avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
+/* Presence fuses connection state into the identity: no separate online dot. */
+.sidebar-agent-chip__presence {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--sidebar-bg);
+}
+
+.sidebar-agent-chip__presence.sidebar-connection-status--online {
+  background: var(--ok);
+}
+
+.sidebar-agent-chip__presence.sidebar-connection-status--offline {
+  background: var(--danger);
+}
+
+.sidebar-agent-chip__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.sidebar-agent-chip__name {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-agent-chip__subtitle {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-agent-chip__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.sidebar-agent-chip__action:hover:not(:disabled),
+.sidebar-agent-chip__action:focus-visible {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-agent-chip__action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-agent-chip__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.sidebar-agent-chip__action svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-agent-chip__menu-unread {
+  flex: none;
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+}
+
+/* The docs row is the menu's only real hyperlink; keep it looking like a row. */
+.sidebar-agent-menu a.sidebar-customize-menu__item {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Footer menu row: build identity left, theme switch right. */
+.sidebar-agent-menu__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px 2px;
 }
 
 /* Host elements are display:contents, so the anchor itself is the flex item;
@@ -2021,75 +2156,11 @@ openclaw-session-menu[popover] {
   white-space: nowrap;
 }
 
-/* Footer icons mix in-app anchors, buttons, and one external docs link: the
-   chrome gets the default arrow; only the external (target=_blank) anchor is
-   a real hyperlink and keeps the pointer. */
-.sidebar-footer-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* 28px keeps the fixed-width footer row from ellipsizing "commit · age". */
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  cursor: default;
-  text-decoration: none;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.sidebar-footer-icon[target] {
-  cursor: pointer;
-}
-
-.sidebar-footer-icon:hover:not(:disabled),
-.sidebar-footer-icon:focus-visible {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  text-decoration: none;
-}
-
-.sidebar-footer-icon:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
-  outline-offset: 1px;
-}
-
-.sidebar-footer-icon:disabled {
-  cursor: not-allowed;
-  opacity: 0.42;
-}
-
-.sidebar-footer-icon--active {
-  color: var(--accent);
-}
-
-.sidebar-footer-icon svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .sidebar-status__dot {
   width: 8px;
   height: 8px;
   border-radius: var(--radius-full);
   flex-shrink: 0;
-}
-
-/* The online/offline glow spreads 4px beyond the dot; the footer bar's 2px gap
-   alone lets it collide with the build text. 6px + gap matches the 8px dot
-   spacing in the settings sidebar footer. */
-.sidebar-footer-bar .sidebar-status__dot {
-  margin-right: 6px;
 }
 
 .sidebar-status__dot.sidebar-connection-status--online {
@@ -2100,11 +2171,6 @@ openclaw-session-menu[popover] {
 .sidebar-status__dot.sidebar-connection-status--offline {
   background: var(--danger);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
-}
-
-.sidebar-pair-mobile svg * {
-  stroke: currentColor;
-  fill: none;
 }
 
 .sidebar-mode-switch {
@@ -2576,29 +2642,7 @@ openclaw-session-menu[popover] {
   color: var(--muted);
 }
 
-.sidebar-agent-section {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.sidebar-agent-section__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}
-
-.sidebar-agent-section__header:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-}
-
+/* Kept for the agent-chip menu switcher rows (sessions list is single-agent now). */
 .sidebar-agent-section__avatar {
   display: inline-flex;
   align-items: center;
@@ -2610,25 +2654,6 @@ openclaw-session-menu[popover] {
   color: var(--text-strong);
   font-size: 11px;
   font-weight: 600;
-  flex: none;
-}
-
-.sidebar-agent-section__name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.sidebar-agent-section--expanded > .sidebar-agent-section__header .sidebar-agent-section__name {
-  color: var(--text-strong);
-}
-
-.sidebar-agent-section__unread {
   flex: none;
 }
 

@@ -219,10 +219,11 @@ export const de: TranslationMap = {
   lazyView: {
     loadingTitle: "Panel wird geladen",
     errorTitle: "Panel konnte nicht geladen werden",
-    errorSubtitle:
-      "Laden Sie die Seite neu, um das neueste Control UI-Bundle zu laden, oder versuchen Sie es erneut, wenn die Netzwerkanfrage fehlgeschlagen ist.",
+    genericSubtitle: "Beim Laden dieses Bereichs ist ein Fehler aufgetreten.",
+    staleTitle: "Eine neue Version ist verfügbar",
+    staleSubtitle:
+      "OpenClaw wurde im Hintergrund aktualisiert. Laden Sie die Seite neu, um das neueste Panel zu erhalten.",
     retry: "Erneut versuchen",
-    unknownError: "Unbekannter Fehler beim Laden des Moduls.",
   },
   nodes: {
     pairing: {
@@ -392,6 +393,16 @@ export const de: TranslationMap = {
     restore: "Wiederherstellen",
     confirmDelete: "Snapshot erstellen und {name} löschen?",
     confirmForceDelete: "Snapshot fehlgeschlagen: {error}\n\nOhne Snapshot löschen?",
+  },
+  agentChip: {
+    menuLabel: "Agentenmenü",
+    agents: "Agents",
+    working: "Arbeitet…",
+    ready: "Bereit zum Chatten",
+    whatCanAgentDo: "Was kann {name} tun?",
+    getHelp: "Hilfe erhalten",
+    discord: "Discord-Community",
+    viewChangelog: "Änderungsprotokoll anzeigen",
   },
   newSession: {
     title: "Neue Sitzung",
@@ -1452,6 +1463,8 @@ export const de: TranslationMap = {
     blockedAgentFilter: "durch Agentenfilter blockiert",
   },
   nav: {
+    back: "Zurück",
+    forward: "Weiter",
     chat: "Chat",
     settings: "Einstellungen",
     settingsGeneral: "Allgemein",
@@ -1736,8 +1749,6 @@ export const de: TranslationMap = {
     removedRestart:
       "{name} wurde entfernt. Ein Neustart der Gateway ist erforderlich, um die Änderung anzuwenden.",
     verifiedSource: "Verifizierte Quelle",
-    menuLabel: "{name}-Aktionen",
-    menuDetails: "Details anzeigen",
     enableAction: "Aktivieren",
     disableAction: "Deaktivieren",
     working: "Wird ausgeführt…",
@@ -1875,6 +1886,10 @@ export const de: TranslationMap = {
       useCurrentChatAria: "Aktuellen Chat für Überarbeitungsanfragen verwenden",
       useCurrentChatTooltip:
         "Überarbeitungsanfragen an die aktuelle Chat-Sitzung statt an die Workshop-Sitzung des Vorschlags senden.",
+      selfLearning: "Selbstlernen",
+      selfLearningAria: "Vorschläge für selbstlernende Skills ein- oder ausschalten",
+      selfLearningTooltip:
+        "Erfasst Korrekturen und prüft umfangreiche abgeschlossene Arbeiten, um daraus ausstehende Skill-Vorschläge zu erstellen. Verbraucht zusätzliche Hintergrund-Tokens; Entwürfe erscheinen auf diesem Board als ausstehende Vorschläge.",
       view: "Workshop-Ansicht",
       board: "Board",
       today: "Heute",
@@ -1955,6 +1970,14 @@ export const de: TranslationMap = {
       noProposalsTitle: "Noch keine Vorschläge",
       noProposalsBody: "{agent} hat noch keine Skill-Vorschläge entworfen.",
       noProposalsFooter: "Neue Vorschläge werden hier zur Überprüfung angezeigt.",
+    },
+    selfLearning: {
+      pitchTitle: "Selbstlernen aktivieren",
+      pitchBody:
+        "OpenClaw prüft Korrekturen und umfangreiche abgeschlossene Durchläufe und erstellt anschließend Skill-Vorschläge für dieses Board. Dabei werden zusätzliche Hintergrund-Tokens verbraucht und die Entwürfe erscheinen als ausstehende Vorschläge.",
+      enable: "Selbstlernen aktivieren",
+      enabling: "Wird aktiviert…",
+      updateError: "Die Einstellung für das Selbstlernen konnte nicht aktualisiert werden.",
     },
     today: {
       emptyTitle: "Heute steht nichts an",
@@ -3603,6 +3626,15 @@ export const de: TranslationMap = {
       remove: "Entfernen",
       more: "Weitere Aktionen",
       history: "Verlauf",
+    },
+    runNotStarted: {
+      notDue: "Diese Automatisierung ist noch nicht fällig.",
+      alreadyRunning: "Diese Automatisierung wird bereits ausgeführt.",
+      recoveryPending: "Die Wiederherstellung des Schedulers läuft noch.",
+      invalidSpec:
+        "Diese Automatisierung hat einen ungültigen Zeitplan oder eine ungültige Nutzlast.",
+      stopped: "Der Scheduler wurde angehalten.",
+      unknown: "Diese Automatisierung konnte nicht gestartet werden.",
     },
     jobs: {
       schedule: "Zeitplan",

@@ -218,10 +218,10 @@ export const pl: TranslationMap = {
   lazyView: {
     loadingTitle: "Ładowanie panelu",
     errorTitle: "Nie udało się załadować panelu",
-    errorSubtitle:
-      "Odśwież stronę, aby załadować najnowszy pakiet Control UI, lub spróbuj ponownie, jeśli żądanie sieciowe się nie powiodło.",
+    genericSubtitle: "Coś poszło nie tak podczas ładowania tego panelu.",
+    staleTitle: "Dostępna jest nowa wersja",
+    staleSubtitle: "OpenClaw został zaktualizowany w tle. Odśwież, aby pobrać najnowszy panel.",
     retry: "Spróbuj ponownie",
-    unknownError: "Nieznany błąd ładowania modułu.",
   },
   nodes: {
     pairing: {
@@ -390,6 +390,16 @@ export const pl: TranslationMap = {
     restore: "Przywróć",
     confirmDelete: "Utworzyć migawkę i usunąć {name}?",
     confirmForceDelete: "Tworzenie migawki nie powiodło się: {error}\n\nUsunąć bez migawki?",
+  },
+  agentChip: {
+    menuLabel: "Menu agenta",
+    agents: "Agenci",
+    working: "Pracuje…",
+    ready: "Gotowy do rozmowy",
+    whatCanAgentDo: "Co potrafi {name}?",
+    getHelp: "Uzyskaj pomoc",
+    discord: "Społeczność Discord",
+    viewChangelog: "Wyświetl dziennik zmian",
   },
   newSession: {
     title: "Nowa sesja",
@@ -1453,6 +1463,8 @@ export const pl: TranslationMap = {
     blockedAgentFilter: "zablokowane przez filtr agenta",
   },
   nav: {
+    back: "Wstecz",
+    forward: "Dalej",
     chat: "Czat",
     settings: "Ustawienia",
     settingsGeneral: "Ogólne",
@@ -1730,8 +1742,6 @@ export const pl: TranslationMap = {
     removedRestart:
       "Usunięto {name}. Aby zastosować zmianę, wymagane jest ponowne uruchomienie Gateway.",
     verifiedSource: "Zweryfikowane źródło",
-    menuLabel: "Działania dla {name}",
-    menuDetails: "Zobacz szczegóły",
     enableAction: "Włącz",
     disableAction: "Wyłącz",
     working: "Przetwarzanie…",
@@ -1869,6 +1879,10 @@ export const pl: TranslationMap = {
       useCurrentChatAria: "Użyj bieżącego czatu do próśb o poprawki",
       useCurrentChatTooltip:
         "Wysyłaj prośby o poprawki do bieżącej sesji czatu zamiast do sesji warsztatu propozycji.",
+      selfLearning: "Samouczenie",
+      selfLearningAria: "Włącz lub wyłącz propozycje umiejętności tworzone przez samouczenie",
+      selfLearningTooltip:
+        "Zapisuje poprawki i analizuje istotne ukończone zadania, tworząc oczekujące propozycje umiejętności. Zużywa dodatkowe tokeny w tle; wersje robocze trafiają na tę tablicę jako oczekujące propozycje.",
       view: "Widok warsztatu",
       board: "Tablica",
       today: "Dzisiaj",
@@ -1948,6 +1962,14 @@ export const pl: TranslationMap = {
       noProposalsTitle: "Brak propozycji",
       noProposalsBody: "{agent} nie przygotował jeszcze żadnych propozycji umiejętności.",
       noProposalsFooter: "Nowe propozycje pojawią się tutaj do przeglądu.",
+    },
+    selfLearning: {
+      pitchTitle: "Włącz samouczenie",
+      pitchBody:
+        "OpenClaw analizuje poprawki i istotne ukończone zadania, a następnie tworzy propozycje umiejętności dla tej tablicy. Zużywa dodatkowe tokeny w tle, a wersje robocze trafiają tu jako oczekujące propozycje.",
+      enable: "Włącz samouczenie",
+      enabling: "Włączanie…",
+      updateError: "Nie udało się zaktualizować ustawienia samouczenia.",
     },
     today: {
       emptyTitle: "Nic nie czeka dzisiaj",
@@ -3593,6 +3615,14 @@ export const pl: TranslationMap = {
       remove: "Usuń",
       more: "Więcej akcji",
       history: "Historia",
+    },
+    runNotStarted: {
+      notDue: "Termin uruchomienia tej automatyzacji jeszcze nie nadszedł.",
+      alreadyRunning: "Ta automatyzacja jest już uruchomiona.",
+      recoveryPending: "Przywracanie harmonogramu jest nadal w toku.",
+      invalidSpec: "Ta automatyzacja ma nieprawidłowy harmonogram lub ładunek.",
+      stopped: "Harmonogram jest zatrzymany.",
+      unknown: "Nie udało się uruchomić tej automatyzacji.",
     },
     jobs: {
       schedule: "Harmonogram",
