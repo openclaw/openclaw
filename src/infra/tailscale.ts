@@ -1,5 +1,6 @@
 // Integrates with the local Tailscale CLI for tailnet setup and sharing.
 import { existsSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -21,6 +22,54 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
     return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
   }
   return JSON.parse(trimmed) as Record<string, unknown>;
+}
+
+const TAILSCALE_STATUS_ATTEMPTS = 3;
+const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
+
+function isTransientTailscaleStatusError(error: unknown): boolean {
+  const record = readRecord(error);
+  const timedOut = record?.killed === true && record.signal === "SIGTERM";
+  const detail = [
+    error instanceof Error ? error.message : undefined,
+    typeof record?.stderr === "string" ? record.stderr : undefined,
+    typeof record?.stdout === "string" ? record.stdout : undefined,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n")
+    .toLowerCase();
+
+  return (
+    timedOut ||
+    detail.includes("failed to connect to local tailscale") ||
+    detail.includes("connection refused") ||
+    detail.includes("503 service unavailable: no backend")
+  );
+}
+
+async function readTailscaleStatusJson(
+  candidate: string,
+  exec: typeof runExec,
+): Promise<Record<string, unknown>> {
+  for (let attempt = 1; attempt <= TAILSCALE_STATUS_ATTEMPTS; attempt += 1) {
+    let stdout: string;
+    try {
+      ({ stdout } = await exec(candidate, ["status", "--json"], {
+        timeoutMs: 5000,
+        maxBuffer: 400_000,
+      }));
+    } catch (error) {
+      if (!isTransientTailscaleStatusError(error) || attempt === TAILSCALE_STATUS_ATTEMPTS) {
+        throw toErrorObject(error, "Non-Error thrown");
+      }
+      // Serve startup can briefly race daemon status. Retry the same detected binary so
+      // binary fallback does not hide the transient failure or change installations.
+      await delay(TAILSCALE_STATUS_RETRY_DELAY_MS);
+      continue;
+    }
+    return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+  }
+  throw new Error("Tailscale status retry loop exhausted");
 }
 
 /**
@@ -117,11 +166,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
       continue;
     }
     try {
-      const { stdout } = await exec(candidate, ["status", "--json"], {
-        timeoutMs: 5000,
-        maxBuffer: 400_000,
-      });
-      const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+      const parsed = await readTailscaleStatusJson(candidate, exec);
       const self =
         typeof parsed.Self === "object" && parsed.Self !== null
           ? (parsed.Self as Record<string, unknown>)
