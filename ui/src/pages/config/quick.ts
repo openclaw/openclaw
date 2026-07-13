@@ -7,6 +7,7 @@
 
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
+import "../../components/web-awesome.ts";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
@@ -398,25 +399,48 @@ function renderModelCard(props: QuickSettingsProps) {
         </div>
         <div class="qs-row">
           <span class="qs-row__label">${t("quickSettings.model.thinking")}</span>
-          <div class="qs-segmented">
+          <wa-radio-group
+            class="qs-segmented"
+            label=${t("quickSettings.model.thinking")}
+            .value=${props.thinkingLevel}
+            orientation="horizontal"
+            ?disabled=${configBusy}
+            @change=${(event: Event) => {
+              const value = (event.currentTarget as HTMLElement & { value?: string }).value;
+              if (value) {
+                props.onThinkingChange?.(value);
+              }
+            }}
+          >
             ${THINKING_LEVELS.map(
               (level) => html`
-                <button
-                  class="qs-segmented__btn ${level === props.thinkingLevel
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  ?disabled=${configBusy}
-                  @click=${() => props.onThinkingChange?.(level)}
+                <wa-radio
+                  class="qs-segmented__btn"
+                  appearance="button"
+                  value=${level}
+                  .checked=${level === props.thinkingLevel}
                 >
                   ${t(`quickSettings.model.thinkingLevels.${level}`)}
-                </button>
+                </wa-radio>
               `,
             )}
-          </div>
+          </wa-radio-group>
         </div>
         <div class="qs-row">
           <span class="qs-row__label">${t("quickSettings.model.fastMode")}</span>
-          <div class="qs-segmented">
+          <wa-radio-group
+            class="qs-segmented"
+            label=${t("quickSettings.model.fastMode")}
+            .value=${fastMode}
+            orientation="horizontal"
+            ?disabled=${configBusy}
+            @change=${(event: Event) => {
+              const value = (event.currentTarget as HTMLElement & { value?: string }).value;
+              if (value === "auto" || value === "on" || value === "off") {
+                props.onFastModeChange?.(fastModeOptionValue(value));
+              }
+            }}
+          >
             ${(
               [
                 ["auto", "quickSettings.model.fastModes.auto"],
@@ -425,19 +449,17 @@ function renderModelCard(props: QuickSettingsProps) {
               ] as const
             ).map(
               ([value, labelKey]) => html`
-                <button
-                  class="qs-segmented__btn ${fastMode === value ? "qs-segmented__btn--active" : ""}"
-                  ?disabled=${configBusy}
-                  @click=${() =>
-                    fastMode === value
-                      ? undefined
-                      : props.onFastModeChange?.(fastModeOptionValue(value))}
+                <wa-radio
+                  class="qs-segmented__btn"
+                  appearance="button"
+                  value=${value}
+                  .checked=${fastMode === value}
                 >
                   ${t(labelKey)}
-                </button>
+                </wa-radio>
               `,
             )}
-          </div>
+          </wa-radio-group>
         </div>
       </div>
     </div>
@@ -583,22 +605,32 @@ function renderSecurityCard(props: QuickSettingsProps) {
         </div>
         <div class="qs-row qs-row--stacked">
           <span class="qs-row__label">${t("quickSettings.security.toolProfile")}</span>
-          <div class="qs-segmented">
+          <wa-radio-group
+            class="qs-segmented"
+            label=${t("quickSettings.security.toolProfile")}
+            .value=${normalizedToolProfile}
+            orientation="horizontal"
+            ?disabled=${configBusy}
+            @change=${(event: Event) => {
+              const value = (event.currentTarget as HTMLElement & { value?: string }).value;
+              if (value) {
+                props.onToolProfileChange?.(value);
+              }
+            }}
+          >
             ${toolProfiles.map(
               (profile) => html`
-                <button
-                  class="qs-segmented__btn qs-segmented__btn--compact ${profile ===
-                  normalizedToolProfile
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  ?disabled=${configBusy}
-                  @click=${() => props.onToolProfileChange?.(profile)}
+                <wa-radio
+                  class="qs-segmented__btn qs-segmented__btn--compact"
+                  appearance="button"
+                  value=${profile}
+                  .checked=${profile === normalizedToolProfile}
                 >
                   ${profile}
-                </button>
+                </wa-radio>
               `,
             )}
-          </div>
+          </wa-radio-group>
         </div>
         <div class="qs-row">
           <span class="qs-row__label">${t("quickSettings.security.deviceAuth")}</span>
@@ -819,71 +851,103 @@ function renderAppearanceCard(props: QuickSettingsProps) {
       <div class="qs-card__body qs-appearance">
         <div class="qs-row qs-row--stacked">
           <span class="qs-row__label">${t("quickSettings.appearance.theme")}</span>
-          <div class="qs-segmented">
+          <wa-radio-group
+            class="qs-segmented"
+            label=${t("quickSettings.appearance.theme")}
+            .value=${props.theme}
+            orientation="horizontal"
+            @change=${(event: Event) => {
+              const group = event.currentTarget as HTMLElement & { value?: ThemeName };
+              const theme = group.value;
+              if (!theme || theme === props.theme) {
+                return;
+              }
+              if (theme === "custom" && !props.hasCustomTheme) {
+                group.value = props.theme;
+                props.onOpenCustomThemeImport?.();
+                return;
+              }
+              props.setTheme(theme, {
+                element: group.querySelector<HTMLElement>(`wa-radio[value="${theme}"]`) ?? group,
+              });
+            }}
+          >
             ${themeOptions.map(
               (opt) => html`
-                <button
-                  class="qs-segmented__btn ${opt.id === props.theme
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  @click=${(e: Event) => {
-                    if (opt.id === "custom" && !props.hasCustomTheme) {
-                      props.onOpenCustomThemeImport?.();
-                      return;
-                    }
-                    if (opt.id !== props.theme) {
-                      props.setTheme(opt.id, {
-                        element: (e.currentTarget as HTMLElement) ?? undefined,
-                      });
-                    }
-                  }}
+                <wa-radio
+                  class="qs-segmented__btn"
+                  appearance="button"
+                  value=${opt.id}
+                  .checked=${opt.id === props.theme}
                 >
                   ${opt.label}
-                </button>
+                </wa-radio>
               `,
             )}
-          </div>
+          </wa-radio-group>
         </div>
         <div class="qs-row qs-row--stacked">
           <span class="qs-row__label">${t("common.mode")}</span>
-          <div class="qs-segmented">
+          <wa-radio-group
+            class="qs-segmented"
+            label=${t("common.mode")}
+            .value=${props.themeMode}
+            orientation="horizontal"
+            @change=${(event: Event) => {
+              const group = event.currentTarget as HTMLElement & { value?: ThemeMode };
+              const mode = group.value;
+              if (!mode || mode === props.themeMode) {
+                return;
+              }
+              props.setThemeMode(mode, {
+                element: group.querySelector<HTMLElement>(`wa-radio[value="${mode}"]`) ?? group,
+              });
+            }}
+          >
             ${(["light", "dark", "system"] as ThemeMode[]).map(
               (mode) => html`
-                <button
-                  class="qs-segmented__btn ${mode === props.themeMode
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  @click=${(e: Event) => {
-                    if (mode !== props.themeMode) {
-                      props.setThemeMode(mode, {
-                        element: (e.currentTarget as HTMLElement) ?? undefined,
-                      });
-                    }
-                  }}
+                <wa-radio
+                  class="qs-segmented__btn"
+                  appearance="button"
+                  value=${mode}
+                  .checked=${mode === props.themeMode}
                 >
                   ${t(`common.${mode}`)}
-                </button>
+                </wa-radio>
               `,
             )}
-          </div>
+          </wa-radio-group>
         </div>
         <div class="qs-row qs-row--stacked">
           <span class="qs-row__label">${t("quickSettings.appearance.textSize")}</span>
-          <div class="qs-segmented">
+          <wa-radio-group
+            class="qs-segmented"
+            label=${t("quickSettings.appearance.textSize")}
+            .value=${props.textScale}
+            orientation="horizontal"
+            @change=${(event: Event) => {
+              const value = Number(
+                (event.currentTarget as HTMLElement & { value?: string | number }).value,
+              );
+              if (TEXT_SCALE_OPTIONS.some((option) => option.value === value)) {
+                props.setTextScale(value);
+              }
+            }}
+          >
             ${TEXT_SCALE_OPTIONS.map(
               (stop) => html`
-                <button
-                  class="qs-segmented__btn ${stop.value === props.textScale
-                    ? "qs-segmented__btn--active"
-                    : ""}"
+                <wa-radio
+                  class="qs-segmented__btn"
+                  appearance="button"
+                  value=${stop.value}
+                  .checked=${stop.value === props.textScale}
                   title=${`${stop.value}%`}
-                  @click=${() => props.setTextScale(stop.value)}
                 >
                   ${t(stop.labelKey)}
-                </button>
+                </wa-radio>
               `,
             )}
-          </div>
+          </wa-radio-group>
         </div>
         <div class="qs-row">
           <span class="qs-row__label">${t("quickSettings.appearance.lobsterVisits")}</span>

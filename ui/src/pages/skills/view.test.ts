@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderSkills } from "./view.ts";
 
 type SkillsProps = Parameters<typeof renderSkills>[0];
@@ -335,10 +336,10 @@ describe("renderSkills", () => {
     document.body.append(container);
     dialogRestores.push(() => container.remove());
 
-    await Promise.resolve();
+    const { dialog } = await getRenderedModalDialog(container);
 
     expect(showModal).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("dialog")?.hasAttribute("open")).toBe(true);
+    expect(dialog.open).toBe(true);
   });
 
   it("opens detail dialogs and routes ClawHub actions", async () => {
@@ -367,10 +368,10 @@ describe("renderSkills", () => {
       ),
       container,
     );
-    await Promise.resolve();
+    const { dialog } = await getRenderedModalDialog(container);
 
     expect(showModal).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("dialog")?.hasAttribute("open")).toBe(true);
+    expect(dialog.open).toBe(true);
 
     const closeButton = container.querySelector<HTMLButtonElement>(
       ".md-preview-dialog__header .btn",
@@ -460,7 +461,7 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    expect(showModal).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(showModal).toHaveBeenCalledTimes(1));
     expect(
       Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
     ).toEqual(["rate limited", "Installed github"]);

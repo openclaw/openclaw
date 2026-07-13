@@ -358,7 +358,12 @@ class SkillsPage extends OpenClawLightDomElement {
       </section>
       ${renderSettingsWorkspace(html`
         ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
-        <div id="plugins-hub-panel" role="tabpanel" aria-labelledby="plugins-tab-skills">
+        <wa-tab-panel
+          id="plugins-hub-panel"
+          name="skills"
+          active
+          aria-labelledby="plugins-tab-skills"
+        >
           ${renderSkills({
             connected: this.connected,
             loading: this.skillsLoading || this.agentsLoading,
@@ -409,7 +414,7 @@ class SkillsPage extends OpenClawLightDomElement {
             onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
               void installFromClawHub(this, slug, acknowledgeClawHubRisk, version),
           })}
-        </div>
+        </wa-tab-panel>
       `)}
     `;
   }

@@ -132,21 +132,19 @@
 }
 
 .plugins-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  --track-width: 0;
+  --indicator-color: var(--accent);
+  display: block;
   margin-top: 18px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
 }
 
-.plugins-tabs::-webkit-scrollbar {
+.plugins-tabs::part(body) {
   display: none;
 }
 
-.plugins-tabs button {
+.plugins-tabs wa-tab::part(base) {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -165,17 +163,17 @@
     background var(--duration-fast) var(--ease-out);
 }
 
-.plugins-tabs button:hover {
+.plugins-tabs wa-tab:hover::part(base) {
   background: var(--bg-hover);
   color: var(--text-strong);
 }
 
-.plugins-tabs button.active {
+.plugins-tabs wa-tab[active]::part(base) {
   background: var(--accent-subtle);
   color: var(--text-strong);
 }
 
-.plugins-tabs button > span {
+.plugins-tabs wa-tab > span {
   min-width: 20px;
   border-radius: var(--radius-full);
   padding: 2px 6px;
@@ -763,30 +761,17 @@
 
 /* ---------- detail overlay ---------- */
 
-.plugins-detail-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: color-mix(in srgb, var(--bg) 62%, transparent);
-  backdrop-filter: blur(6px);
-  animation: fade-in var(--duration-fast) var(--ease-out);
-}
-
 .plugins-detail {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: min(680px, 100%);
+  width: 100%;
   max-height: min(85vh, 860px);
   overflow-y: auto;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
   background: var(--popover);
   box-shadow: var(--shadow-xl);
-  animation: scale-in var(--duration-normal) var(--ease-out);
 }
 
 .plugins-detail .plugins-cover {
@@ -1060,10 +1045,6 @@
 }
 
 @media (max-width: 560px) {
-  .plugins-detail-backdrop {
-    padding: 10px;
-  }
-
   .plugins-row {
     grid-template-columns: auto minmax(0, 1fr);
   }

@@ -16,6 +16,7 @@ import type {
 } from "../../api/types.ts";
 import { icon } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure, resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import type {
@@ -28,7 +29,6 @@ import type { CronFormState } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
-import { handleTabListKeydown } from "../../lib/tab-list.ts";
 import { renderCronStats } from "./stats.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
@@ -376,16 +376,17 @@ function renderListView(props: CronProps) {
         : nothing}
       ${props.error ? html`<div class="cron-error-banner">${props.error}</div>` : nothing}
       ${renderToolbar(props)}
-      <div
+      <wa-tab-panel
         id="cron-list-panel"
         class="cron-tab-panel"
-        role="tabpanel"
+        name=${props.listTab}
+        active
         aria-labelledby=${`cron-list-tab-${props.listTab}`}
       >
         ${props.listTab === "activity"
           ? html`<div class="cron-activity card">${renderRunsSection(props)}</div>`
           : renderTasksPanel(props)}
-      </div>
+      </wa-tab-panel>
     </section>
   `;
 }
@@ -404,26 +405,30 @@ function renderToolbar(props: CronProps) {
     props.jobsSortDir !== "asc";
   return html`
     <div class="cron-toolbar">
-      <div class="cron-tabs" role="tablist" aria-label=${t("cron.list.viewLabel")}>
+      <wa-tab-group
+        class="cron-tabs"
+        activation="manual"
+        .active=${props.listTab}
+        aria-label=${t("cron.list.viewLabel")}
+        @wa-tab-show=${(event: CustomEvent<{ name: CronListTab }>) =>
+          props.onListTabChange(event.detail.name)}
+      >
         ${viewTabs.map(
           (tab) => html`
-            <button
-              type="button"
-              role="tab"
+            <wa-tab
+              slot="nav"
               id=${`cron-list-tab-${tab.value}`}
-              class="cron-tab ${props.listTab === tab.value ? "cron-tab--active" : ""}"
-              aria-selected=${props.listTab === tab.value ? "true" : "false"}
+              class="cron-tab"
+              panel=${tab.value}
+              .active=${props.listTab === tab.value}
               aria-controls="cron-list-panel"
-              .tabIndex=${props.listTab === tab.value ? 0 : -1}
               data-test-id=${tab.testId}
-              @keydown=${handleTabListKeydown}
-              @click=${() => props.onListTabChange(tab.value)}
             >
               ${tab.label}
-            </button>
+            </wa-tab>
           `,
         )}
-      </div>
+      </wa-tab-group>
       ${props.listTab === "tasks"
         ? html`
             <div class="cron-tabs" role="group" aria-label=${t("cron.tabs.filterLabel")}>
@@ -501,14 +506,16 @@ function renderTasksPanel(props: CronProps) {
 
 function renderJobsFilterPopover(props: CronProps, active: boolean) {
   return html`
-    <details class="cron-filter-popover">
-      <summary
+    <wa-dropdown class="cron-filter-popover" placement="bottom-end">
+      <button
+        slot="trigger"
+        type="button"
         class="btn btn--sm cron-filter-popover__trigger ${active ? "active" : ""}"
         title=${t("cron.list.filters")}
         aria-label=${t("cron.list.filters")}
       >
         ${icon("listFilter")}
-      </summary>
+      </button>
       <div class="cron-filter-popover__panel">
         <label class="field">
           <span>${t("cron.jobs.schedule")}</span>
@@ -581,7 +588,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
           ${t("cron.jobs.reset")}
         </button>
       </div>
-    </details>
+    </wa-dropdown>
   `;
 }
 
@@ -725,24 +732,24 @@ function renderLastRunCell(job: CronJob) {
 // the menu only carries the low-traffic actions.
 function renderJobMenu(props: CronProps, job: CronJob) {
   return html`
-    <details class="cron-job-menu">
-      <summary
+    <wa-dropdown class="cron-job-menu" placement="bottom-end">
+      <button
+        slot="trigger"
+        type="button"
         class="btn btn--sm btn--ghost cron-job-menu__trigger"
-        role="button"
-        aria-haspopup="menu"
         aria-label=${t("cron.actions.more")}
         title=${t("cron.actions.more")}
       >
         ${icon("moreHorizontal")}
-      </summary>
-      <div class="cron-job-menu__panel" role="menu">
-        ${renderMenuItem(props, t("cron.actions.runIfDue"), () => props.onRun(job, "due"))}
-        ${renderMenuItem(props, t("cron.actions.clone"), () => props.onClone(job))}
-        ${renderMenuItem(props, t("cron.actions.remove"), () => props.onRemove(job), {
-          danger: true,
-        })}
-      </div>
-    </details>
+      </button>
+      ${renderMenuItem(props, "run-if-due", t("cron.actions.runIfDue"), () =>
+        props.onRun(job, "due"),
+      )}
+      ${renderMenuItem(props, "clone", t("cron.actions.clone"), () => props.onClone(job))}
+      ${renderMenuItem(props, "remove", t("cron.actions.remove"), () => props.onRemove(job), {
+        danger: true,
+      })}
+    </wa-dropdown>
   `;
 }
 
@@ -799,16 +806,23 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
       ${renderDetailHeader(props, mode, selectedJob)}
       ${hasDetailTabs ? renderDetailTabs(props) : nothing}
       ${props.error ? html`<div class="cron-error-banner">${props.error}</div>` : nothing}
-      <div
-        id="cron-detail-panel"
-        class="cron-tab-panel"
-        role=${hasDetailTabs ? "tabpanel" : nothing}
-        aria-labelledby=${hasDetailTabs ? `cron-detail-tab-${props.detailTab}` : nothing}
-      >
-        ${showHistory
-          ? html`<div class="cron-history card">${renderRunsSection(props)}</div>`
-          : renderEditor(props, mode)}
-      </div>
+      ${hasDetailTabs
+        ? html`
+            <wa-tab-panel
+              id="cron-detail-panel"
+              class="cron-tab-panel"
+              name=${props.detailTab}
+              active
+              aria-labelledby=${`cron-detail-tab-${props.detailTab}`}
+            >
+              ${showHistory
+                ? html`<div class="cron-history card">${renderRunsSection(props)}</div>`
+                : renderEditor(props, mode)}
+            </wa-tab-panel>
+          `
+        : html`<div id="cron-detail-panel" class="cron-tab-panel">
+            ${renderEditor(props, mode)}
+          </div>`}
     </section>
   `;
 }
@@ -888,26 +902,30 @@ function renderDetailTabs(props: CronProps) {
     { value: "history", label: t("cron.detail.historyTitle"), testId: "cron-detail-tab-history" },
   ];
   return html`
-    <div class="cron-tabs cron-view-tabs" role="tablist" aria-label=${t("cron.detail.tabsLabel")}>
+    <wa-tab-group
+      class="cron-tabs cron-view-tabs"
+      activation="manual"
+      .active=${props.detailTab}
+      aria-label=${t("cron.detail.tabsLabel")}
+      @wa-tab-show=${(event: CustomEvent<{ name: CronDetailTab }>) =>
+        props.onDetailTabChange(event.detail.name)}
+    >
       ${tabs.map(
         (tab) => html`
-          <button
-            type="button"
-            role="tab"
+          <wa-tab
+            slot="nav"
             id=${`cron-detail-tab-${tab.value}`}
-            class="cron-tab ${props.detailTab === tab.value ? "cron-tab--active" : ""}"
-            aria-selected=${props.detailTab === tab.value ? "true" : "false"}
+            class="cron-tab"
+            panel=${tab.value}
+            .active=${props.detailTab === tab.value}
             aria-controls="cron-detail-panel"
-            .tabIndex=${props.detailTab === tab.value ? 0 : -1}
             data-test-id=${tab.testId}
-            @keydown=${handleTabListKeydown}
-            @click=${() => props.onDetailTabChange(tab.value)}
           >
             ${tab.label}
-          </button>
+          </wa-tab>
         `,
       )}
-    </div>
+    </wa-tab-group>
   `;
 }
 
@@ -1000,23 +1018,21 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
 
 function renderMenuItem(
   props: CronProps,
+  value: string,
   label: string,
   action: () => void,
   options?: { danger?: boolean },
 ) {
   return html`
-    <button
+    <wa-dropdown-item
       class=${options?.danger ? "cron-job-menu__item danger" : "cron-job-menu__item"}
-      role="menuitem"
+      value=${value}
+      variant=${options?.danger ? "danger" : "default"}
       ?disabled=${props.busy}
-      @click=${(event: Event) => {
-        // Close the details-based menu before acting so it does not linger open.
-        (event.currentTarget as HTMLElement).closest("details")?.removeAttribute("open");
-        action();
-      }}
+      @click=${action}
     >
       ${label}
-    </button>
+    </wa-dropdown-item>
   `;
 }
 

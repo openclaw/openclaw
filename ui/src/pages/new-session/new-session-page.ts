@@ -9,6 +9,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -47,10 +48,6 @@ const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 function folderDisplayName(path: string): string {
   return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
 }
-
-/** Focusable rows for the menu keyboard contract (menu items + browser rows). */
-const MENU_ITEM_SELECTOR =
-  ".session-menu__item:not(:disabled), .new-session-page__browser-entry:not(:disabled)";
 
 function isAbsolutePath(path: string): boolean {
   return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
@@ -100,107 +97,10 @@ class NewSessionPage extends OpenClawLightDomElement {
       (sessions, notify) => sessions.subscribe(notify),
     );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
-  }
-
   override disconnectedCallback() {
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
-
-  private openMenus(): HTMLDetailsElement[] {
-    return [...this.querySelectorAll<HTMLDetailsElement>(".new-session-page__select[open]")];
-  }
-
-  // Same central dismissal contract as the chat composer's <details> menus:
-  // pointerdown outside an open menu closes it, Escape closes and restores
-  // trigger focus.
-  private readonly handleDocumentPointerDown = (event: PointerEvent) => {
-    const path = event.composedPath();
-    for (const details of this.openMenus()) {
-      if (!path.includes(details)) {
-        details.open = false;
-      }
-    }
-  };
-
-  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") {
-      return;
-    }
-    const open = this.openMenus().at(-1);
-    if (open) {
-      event.stopPropagation();
-      open.open = false;
-      open.querySelector<HTMLElement>("summary")?.focus();
-    }
-  };
-
-  // Mutual exclusion must hook the details toggle, not just pointerdown:
-  // keyboard activation (Enter/Space on a summary) opens without any pointer
-  // event, and two open panels would overlap.
-  private readonly handleMenuToggle = (event: Event) => {
-    const details = event.currentTarget as HTMLDetailsElement;
-    if (this.submitting) {
-      // Native details can reopen from keyboard or scripted activation even
-      // after the draft becomes inert. Submission owns one frozen snapshot.
-      details.open = false;
-      return;
-    }
-    if (!details.open) {
-      return;
-    }
-    for (const other of this.openMenus()) {
-      if (other !== details) {
-        other.open = false;
-      }
-    }
-    // Keyboard contract of the replaced native selects: opening moves focus
-    // into the menu (browser content renders on the next Lit update). The
-    // summary sits outside the menu div, so this only skips when the user
-    // already focused menu content (e.g. a field).
-    void this.updateComplete.then(() => {
-      if (!details.open) {
-        return;
-      }
-      const menu = details.querySelector(".new-session-page__menu");
-      if (menu && !menu.contains(document.activeElement)) {
-        menu.querySelector<HTMLElement>(MENU_ITEM_SELECTOR)?.focus();
-      }
-    });
-  };
-
-  /** ArrowUp/Down wrap through the menu's items; Home/End jump to the edges.
-      Text fields keep native caret/datalist behavior for these keys. */
-  private readonly handleMenuKeydown = (event: KeyboardEvent) => {
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-      return;
-    }
-    const origin = event.target as HTMLElement;
-    if (origin instanceof HTMLInputElement || origin instanceof HTMLTextAreaElement) {
-      return;
-    }
-    const items = [
-      ...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR),
-    ];
-    if (items.length === 0) {
-      return;
-    }
-    event.preventDefault();
-    const index = items.indexOf(document.activeElement as HTMLElement);
-    const target =
-      event.key === "Home"
-        ? items[0]
-        : event.key === "End"
-          ? items.at(-1)
-          : items[(index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length];
-    target?.focus();
-  };
 
   override updated() {
     const agentsReady = this.agents().length > 0;
@@ -419,8 +319,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     // Collapse menus and retire browser requests before awaiting the Gateway;
     // otherwise a now-hidden picker can keep mutating the submitted draft.
     this.closeBrowser();
-    for (const details of this.openMenus()) {
-      details.open = false;
+    for (const dropdown of this.querySelectorAll<HTMLElement & { open: boolean }>(
+      "wa-dropdown[open]",
+    )) {
+      dropdown.open = false;
     }
     try {
       const result = await context.sessions.createResult(
@@ -705,7 +607,11 @@ class NewSessionPage extends OpenClawLightDomElement {
         ${this.browserError
           ? html`<div class="new-session-page__error">${this.browserError}</div>`
           : nothing}
-        <div class="new-session-page__browser-list" role="listbox">
+        <div
+          class="new-session-page__browser-list"
+          role="group"
+          aria-label=${t("newSession.folder")}
+        >
           ${!target
             ? html`
                 <button
@@ -786,79 +692,57 @@ class NewSessionPage extends OpenClawLightDomElement {
     `;
   }
 
-  /** Closes the menu containing the clicked item and hands focus back. */
-  private closeMenuFrom(event: Event) {
-    const details = (event.currentTarget as HTMLElement).closest("details");
-    if (details?.open) {
-      details.open = false;
-      details.querySelector<HTMLElement>("summary")?.focus();
-    }
-  }
-
   private renderMenuItem(params: {
+    value: string;
     label: string;
     checked: boolean;
     disabled?: boolean;
     title?: string;
-    onSelect: (event: Event) => void;
+    onSelect: () => void;
   }) {
     return html`
-      <button
-        type="button"
+      <wa-dropdown-item
         class="session-menu__item"
-        role="menuitemradio"
-        aria-checked=${String(params.checked)}
+        type="checkbox"
+        value=${params.value}
+        .checked=${params.checked}
         title=${params.title ?? nothing}
         ?disabled=${this.submitting || (params.disabled ?? false)}
         @click=${params.onSelect}
       >
-        <span class="session-menu__check" aria-hidden="true"
-          >${params.checked ? icons.check : nothing}</span
-        >
         <span class="session-menu__text">${params.label}</span>
-      </button>
+      </wa-dropdown-item>
     `;
   }
 
   private renderAgentSelect(agents: ReturnType<NewSessionPage["agents"]>) {
-    const selected = this.selectedAgent();
-    const label = selected?.identity?.name ?? selected?.name ?? selected?.id ?? this.agentId;
     return html`
-      <details class="new-session-page__select" @toggle=${this.handleMenuToggle}>
-        <summary
-          class="new-session-page__trigger"
-          title=${t("newSession.agent")}
-          aria-disabled=${String(this.submitting)}
-          @click=${(event: Event) => {
-            if (this.submitting) {
-              event.preventDefault();
-            }
-          }}
+      <wa-select
+        class="new-session-page__select new-session-page__agent-select"
+        label=${t("newSession.agent")}
+        .value=${this.agentId}
+        ?disabled=${this.submitting}
+        @change=${(event: Event) => {
+          const value = (event.currentTarget as HTMLElement & { value?: string }).value;
+          if (value) {
+            this.selectAgentId(value);
+          }
+        }}
+      >
+        <span slot="start" class="new-session-page__target-icon" aria-hidden="true"
+          >${icons.bot}</span
         >
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.bot}</span>
-          <span class="new-session-page__trigger-label">${label}</span>
-          <span class="new-session-page__trigger-chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </summary>
-        <div
-          class="new-session-page__menu"
-          role="menu"
-          aria-label=${t("newSession.agent")}
-          @keydown=${this.handleMenuKeydown}
-        >
-          ${agents.map((option) =>
-            this.renderMenuItem({
-              label: option.identity?.name ?? option.name ?? option.id,
-              checked: normalizeAgentId(option.id) === this.agentId,
-              onSelect: (event) => {
-                this.selectAgentId(option.id);
-                this.closeMenuFrom(event);
-              },
-            }),
-          )}
-        </div>
-      </details>
+        ${agents.map(
+          (option) => html`
+            <wa-option
+              value=${normalizeAgentId(option.id)}
+              .label=${option.identity?.name ?? option.name ?? option.id}
+            >
+              ${option.identity?.name ?? option.name ?? option.id}
+            </wa-option>
+          `,
+        )}
+      </wa-select>
     `;
   }
 
@@ -874,17 +758,21 @@ class NewSessionPage extends OpenClawLightDomElement {
     const worktreeAvailable = this.worktreeAvailable();
     const branches = this.branches;
     return html`
-      <details class="new-session-page__select" @toggle=${this.handleMenuToggle}>
-        <summary
+      <wa-dropdown
+        class="new-session-page__select"
+        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+          if (event.detail.item.value === "worktree") {
+            event.preventDefault();
+          }
+        }}
+      >
+        <button
+          slot="trigger"
+          type="button"
           class="new-session-page__trigger"
           title=${t("newSession.where")}
           data-worktree=${String(this.worktree)}
-          aria-disabled=${String(this.submitting)}
-          @click=${(event: Event) => {
-            if (this.submitting) {
-              event.preventDefault();
-            }
-          }}
+          ?disabled=${this.submitting}
         >
           <span class="new-session-page__target-icon" aria-hidden="true">${icons.monitor}</span>
           <span class="new-session-page__trigger-label">${whereLabel}</span>
@@ -896,103 +784,97 @@ class NewSessionPage extends OpenClawLightDomElement {
           <span class="new-session-page__trigger-chevron" aria-hidden="true"
             >${icons.chevronDown}</span
           >
-        </summary>
-        <div
-          class="new-session-page__menu"
-          role="menu"
-          aria-label=${t("newSession.where")}
-          @keydown=${this.handleMenuKeydown}
-        >
-          ${showNodes
-            ? html`
-                <div class="new-session-page__menu-title">${t("newSession.where")}</div>
-                ${this.renderMenuItem({
-                  label: t("newSession.gateway"),
-                  checked: !this.execNode,
-                  onSelect: (event) => {
-                    this.selectExecNode("");
-                    this.closeMenuFrom(event);
-                  },
-                })}
-                ${execNodes.map((node) =>
-                  this.renderMenuItem({
-                    label: node.displayName,
-                    checked: this.execNode === node.nodeId,
-                    onSelect: (event) => {
-                      this.selectExecNode(node.nodeId);
-                      this.closeMenuFrom(event);
-                    },
-                  }),
-                )}
-              `
-            : nothing}
-          ${!this.execNode
-            ? html`
-                ${showNodes
-                  ? html`<div class="session-menu__separator" role="separator"></div>`
-                  : nothing}
-                ${this.renderMenuItem({
-                  label: t("newSession.worktree"),
-                  checked: this.worktree,
-                  disabled: !worktreeAvailable || customFolder,
-                  title: worktreeAvailable
-                    ? t("chat.runControls.newSessionWorktree")
-                    : t("newSession.worktreeUnavailable"),
+        </button>
+        ${showNodes
+          ? html`
+              <div class="new-session-page__menu-title">${t("newSession.where")}</div>
+              ${this.renderMenuItem({
+                value: "gateway",
+                label: t("newSession.gateway"),
+                checked: !this.execNode,
+                onSelect: () => {
+                  this.selectExecNode("");
+                },
+              })}
+              ${execNodes.map((node) =>
+                this.renderMenuItem({
+                  value: `node:${node.nodeId}`,
+                  label: node.displayName,
+                  checked: this.execNode === node.nodeId,
                   onSelect: () => {
-                    // Stays open: enabling reveals the branch/name fields below.
-                    this.worktree = !this.worktree;
-                    if (this.worktree) {
-                      this.maybeLoadBranches();
-                    }
+                    this.selectExecNode(node.nodeId);
                   },
-                })}
-                ${this.worktree
-                  ? html`
-                      <label class="new-session-page__menu-field">
-                        <span>${t("newSession.baseBranch")}</span>
-                        <input
-                          type="text"
-                          list="new-session-branches"
-                          ?disabled=${this.submitting}
-                          placeholder=${this.branchesLoading
-                            ? t("common.loading")
-                            : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
-                          .value=${this.baseRef}
-                          @input=${(event: Event) => {
-                            if (this.submitting) {
-                              return;
-                            }
-                            this.baseRefEditGeneration += 1;
-                            this.baseRef = (event.target as HTMLInputElement).value.trim();
-                          }}
-                        />
-                        <datalist id="new-session-branches">
-                          ${(branches?.branches ?? []).map(
-                            (branch) => html`<option value=${branch.name}></option>`,
-                          )}
-                        </datalist>
-                      </label>
-                      <label class="new-session-page__menu-field">
-                        <span>${t("newSession.worktreeName")}</span>
-                        <input
-                          type="text"
-                          ?disabled=${this.submitting}
-                          placeholder=${t("newSession.worktreeNamePlaceholder")}
-                          .value=${this.worktreeName}
-                          @input=${(event: Event) => {
-                            if (this.submitting) {
-                              return;
-                            }
-                            this.worktreeName = (event.target as HTMLInputElement).value.trim();
-                          }}
-                        />
-                      </label>
-                    `
-                  : nothing}
-              `
-            : nothing}
-        </div>
-      </details>
+                }),
+              )}
+            `
+          : nothing}
+        ${!this.execNode
+          ? html`
+              ${showNodes
+                ? html`<div class="session-menu__separator" role="separator"></div>`
+                : nothing}
+              ${this.renderMenuItem({
+                value: "worktree",
+                label: t("newSession.worktree"),
+                checked: this.worktree,
+                disabled: !worktreeAvailable || customFolder,
+                title: worktreeAvailable
+                  ? t("chat.runControls.newSessionWorktree")
+                  : t("newSession.worktreeUnavailable"),
+                onSelect: () => {
+                  // Stays open: enabling reveals the branch/name fields below.
+                  this.worktree = !this.worktree;
+                  if (this.worktree) {
+                    this.maybeLoadBranches();
+                  }
+                },
+              })}
+              ${this.worktree
+                ? html`
+                    <label class="new-session-page__menu-field">
+                      <span>${t("newSession.baseBranch")}</span>
+                      <input
+                        type="text"
+                        list="new-session-branches"
+                        ?disabled=${this.submitting}
+                        placeholder=${this.branchesLoading
+                          ? t("common.loading")
+                          : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
+                        .value=${this.baseRef}
+                        @input=${(event: Event) => {
+                          if (this.submitting) {
+                            return;
+                          }
+                          this.baseRefEditGeneration += 1;
+                          this.baseRef = (event.target as HTMLInputElement).value.trim();
+                        }}
+                      />
+                      <datalist id="new-session-branches">
+                        ${(branches?.branches ?? []).map(
+                          (branch) => html`<option value=${branch.name}></option>`,
+                        )}
+                      </datalist>
+                    </label>
+                    <label class="new-session-page__menu-field">
+                      <span>${t("newSession.worktreeName")}</span>
+                      <input
+                        type="text"
+                        ?disabled=${this.submitting}
+                        placeholder=${t("newSession.worktreeNamePlaceholder")}
+                        .value=${this.worktreeName}
+                        @input=${(event: Event) => {
+                          if (this.submitting) {
+                            return;
+                          }
+                          this.worktreeName = (event.target as HTMLInputElement).value.trim();
+                        }}
+                      />
+                    </label>
+                  `
+                : nothing}
+            `
+          : nothing}
+      </wa-dropdown>
     `;
   }
 
@@ -1007,47 +889,35 @@ class NewSessionPage extends OpenClawLightDomElement {
         ? t("newSession.folderPlaceholder")
         : folderDisplayName(this.workspacePath()) || t("newSession.folderPlaceholder");
     return html`
-      <details
+      <wa-dropdown
         class="new-session-page__select new-session-page__select--folder"
-        @toggle=${(event: Event) => {
-          // Browser state first: handleMenuToggle captures updateComplete for
-          // its focus hook, which must wait for the render these setters
-          // schedule (a bare details-attribute flip schedules none).
-          const details = event.currentTarget as HTMLDetailsElement;
-          if (details.open) {
-            this.browserOpen = true;
-            this.showBrowserRoot();
-          } else if (this.browserOpen) {
+        @wa-show=${() => {
+          this.browserOpen = true;
+          this.showBrowserRoot();
+        }}
+        @wa-hide=${() => {
+          if (this.browserOpen) {
             this.closeBrowser();
           }
-          this.handleMenuToggle(event);
         }}
       >
-        <summary
+        <button
+          slot="trigger"
+          type="button"
           class="new-session-page__trigger ${browseAvailable
             ? ""
             : "new-session-page__trigger--disabled"}"
           title=${browseAvailable ? t("newSession.browse") : t("newSession.browseRequiresAdmin")}
-          aria-disabled=${String(this.submitting || !browseAvailable)}
-          @click=${(event: Event) => {
-            if (this.submitting || !browseAvailable) {
-              event.preventDefault();
-            }
-          }}
+          ?disabled=${this.submitting || !browseAvailable}
         >
           <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
           <span class="new-session-page__trigger-label">${label}</span>
           <span class="new-session-page__trigger-chevron" aria-hidden="true"
             >${icons.chevronDown}</span
           >
-        </summary>
-        <div
-          class="new-session-page__menu new-session-page__menu--browser"
-          @keydown=${this.handleMenuKeydown}
-        >
-          ${this.renderBrowser()}
-        </div>
-      </details>
+        </button>
+        <div class="new-session-page__browser-menu">${this.renderBrowser()}</div>
+      </wa-dropdown>
     `;
   }
 

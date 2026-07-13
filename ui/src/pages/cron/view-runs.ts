@@ -7,6 +7,7 @@ import type { CronRunLogEntry } from "../../api/types.ts";
 import type { CronDeliveryStatus, CronRunsStatusValue, CronSortDir } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { icon } from "../../components/icons.ts";
+import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
@@ -82,8 +83,18 @@ function renderFilterDropdown(params: {
 }) {
   return html`
     <div class="cron-filter-dropdown" data-filter=${params.id}>
-      <details class="cron-filter-dropdown__details">
-        <summary
+      <wa-dropdown
+        class="cron-filter-dropdown__details"
+        placement="bottom-start"
+        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+          if (event.detail.item.value !== "clear") {
+            event.preventDefault();
+          }
+        }}
+      >
+        <button
+          slot="trigger"
+          type="button"
           class="btn btn--sm cron-filter-dropdown__trigger ${params.selected.length > 0
             ? "active"
             : ""}"
@@ -92,33 +103,25 @@ function renderFilterDropdown(params: {
         >
           <span>${params.summary}</span>
           ${icon("chevronDown")}
-        </summary>
-        <div class="cron-filter-dropdown__panel">
-          <div class="cron-filter-dropdown__list">
-            ${params.options.map(
-              (option) => html`
-                <label class="cron-filter-dropdown__option">
-                  <input
-                    type="checkbox"
-                    value=${option.value}
-                    .checked=${params.selected.includes(option.value)}
-                    @change=${(event: Event) => {
-                      const target = event.target as HTMLInputElement;
-                      params.onToggle(option.value, target.checked);
-                    }}
-                  />
-                  <span>${option.label}</span>
-                </label>
-              `,
-            )}
-          </div>
-          <div class="row">
-            <button class="btn" type="button" @click=${params.onClear}>
-              ${t("cron.runs.clear")}
-            </button>
-          </div>
-        </div>
-      </details>
+        </button>
+        ${params.options.map(
+          (option) => html`
+            <wa-dropdown-item
+              class="cron-filter-dropdown__option"
+              type="checkbox"
+              value=${option.value}
+              .checked=${params.selected.includes(option.value)}
+              @click=${() => params.onToggle(option.value, !params.selected.includes(option.value))}
+            >
+              ${option.label}
+            </wa-dropdown-item>
+          `,
+        )}
+        <div class="session-menu__separator" role="separator"></div>
+        <wa-dropdown-item value="clear" @click=${params.onClear}>
+          ${t("cron.runs.clear")}
+        </wa-dropdown-item>
+      </wa-dropdown>
     </div>
   `;
 }

@@ -4,14 +4,33 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderQuickSettings, type QuickSettingsProps } from "./quick.ts";
 
-function expectButtonByText(container: Element, text: string): HTMLButtonElement {
-  const button = Array.from(container.querySelectorAll("button")).find(
+type QuickControl = HTMLElement & { checked?: boolean; disabled: boolean };
+
+function expectButtonByText(container: Element, text: string): QuickControl {
+  const button = Array.from(container.querySelectorAll<QuickControl>("button, wa-radio")).find(
     (candidate) => candidate.textContent?.trim() === text,
   );
-  if (!(button instanceof HTMLButtonElement)) {
-    throw new Error(`Expected button labelled ${text}`);
+  if (!(button instanceof HTMLElement)) {
+    throw new Error(`Expected control labelled ${text}`);
   }
   return button;
+}
+
+function selectRadio(control: QuickControl) {
+  if (control.checked) {
+    return;
+  }
+  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
+  expect(group).not.toBeNull();
+  if (!group) {
+    return;
+  }
+  Object.defineProperty(group, "value", {
+    configurable: true,
+    value: control.getAttribute("value") ?? "",
+    writable: true,
+  });
+  group.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function expectRowByLabel(container: Element, text: string): HTMLElement {
@@ -356,15 +375,16 @@ describe("renderQuickSettings", () => {
       const fastModeRow = expectRowByLabel(container, "Fast mode");
       const browserRow = expectRowByLabel(container, "Browser enabled");
       const toolProfileRow = expectRowByLabel(container, "Tool profile");
-      expect([...thinkingRow.querySelectorAll("button")].every((button) => button.disabled)).toBe(
-        true,
-      );
-      expect([...fastModeRow.querySelectorAll("button")].every((button) => button.disabled)).toBe(
-        true,
-      );
+      expect(
+        thinkingRow.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group")?.disabled,
+      ).toBe(true);
+      expect(
+        fastModeRow.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group")?.disabled,
+      ).toBe(true);
       expect(browserRow.querySelector("input")?.hasAttribute("disabled")).toBe(true);
       expect(
-        [...toolProfileRow.querySelectorAll("button")].every((button) => button.disabled),
+        toolProfileRow.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group")
+          ?.disabled,
       ).toBe(true);
       expect(
         [...container.querySelectorAll<HTMLButtonElement>(".qs-pending__actions button")].every(
@@ -391,18 +411,18 @@ describe("renderQuickSettings", () => {
     render(renderQuickSettings(createProps({ fastMode: "auto", onFastModeChange })), container);
 
     const row = expectRowByLabel(container, "Fast mode");
-    const buttons = Array.from(row.querySelectorAll<HTMLButtonElement>("button"));
+    const buttons = Array.from(row.querySelectorAll<QuickControl>("wa-radio"));
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([
       "Auto",
       "Fast",
       "Standard",
     ]);
-    expect(row.querySelector(".qs-segmented__btn--active")?.textContent?.trim()).toBe("Auto");
+    expect(buttons.find((button) => button.checked)?.textContent?.trim()).toBe("Auto");
 
-    expectButtonByText(row, "Auto").click();
+    selectRadio(expectButtonByText(row, "Auto"));
     expect(onFastModeChange).not.toHaveBeenCalled();
 
-    expectButtonByText(row, "Standard").click();
+    selectRadio(expectButtonByText(row, "Standard"));
 
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
@@ -439,13 +459,11 @@ describe("renderQuickSettings", () => {
     browserInput?.dispatchEvent(new Event("change"));
     expect(onBrowserEnabledToggle).toHaveBeenCalledWith(true);
 
-    expectButtonByText(container, "full").click();
+    selectRadio(expectButtonByText(container, "full"));
     expect(onToolProfileChange).toHaveBeenCalledWith("full");
-    expect([...expectButtonByText(container, "messaging").classList]).toEqual([
-      "qs-segmented__btn",
-      "qs-segmented__btn--compact",
-      "qs-segmented__btn--active",
-    ]);
+    const messaging = expectButtonByText(container, "messaging");
+    expect([...messaging.classList]).toEqual(["qs-segmented__btn", "qs-segmented__btn--compact"]);
+    expect(messaging.checked).toBe(true);
   });
 
   it("opens mobile pairing from Security quick settings", () => {
@@ -468,12 +486,12 @@ describe("renderQuickSettings", () => {
     render(renderQuickSettings(createProps({ textScale: 125, setTextScale })), container);
 
     const textSizeRow = expectRowByLabel(container, "Text size");
-    const active = Array.from(textSizeRow.querySelectorAll("button")).find((button) =>
-      button.classList.contains("qs-segmented__btn--active"),
+    const active = Array.from(textSizeRow.querySelectorAll<QuickControl>("wa-radio")).find(
+      (button) => button.checked,
     );
     expect(active?.textContent?.trim()).toBe("XL");
 
-    expectButtonByText(textSizeRow, "XXL").click();
+    selectRadio(expectButtonByText(textSizeRow, "XXL"));
     expect(setTextScale).toHaveBeenCalledWith(140);
   });
 
@@ -769,7 +787,7 @@ describe("renderQuickSettings", () => {
       ),
     ).toBe(true);
     expect(
-      Array.from(container.querySelectorAll("button")).some(
+      Array.from(container.querySelectorAll("button, wa-radio")).some(
         (button) => button.textContent?.trim() === "Clear override",
       ),
     ).toBe(true);
@@ -811,7 +829,7 @@ describe("renderQuickSettings", () => {
     render(renderQuickSettings(createProps()), container);
 
     expect(
-      Array.from(container.querySelectorAll("button")).some(
+      Array.from(container.querySelectorAll("button, wa-radio")).some(
         (button) => button.textContent?.trim() === "Import",
       ),
     ).toBe(true);
@@ -833,7 +851,7 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expectButtonByText(container, "Import").click();
+    selectRadio(expectButtonByText(container, "Import"));
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
     expect(setTheme).not.toHaveBeenCalled();
@@ -858,7 +876,7 @@ describe("renderQuickSettings", () => {
     );
 
     const customThemeButton = expectButtonByText(container, "Light Green");
-    customThemeButton.click();
+    selectRadio(customThemeButton);
 
     expect(setTheme).toHaveBeenCalledWith("custom", { element: customThemeButton });
     expect(onOpenCustomThemeImport).not.toHaveBeenCalled();

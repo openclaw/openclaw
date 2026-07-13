@@ -356,7 +356,11 @@ describe("cron view list pane", () => {
     const tasks = renderView({ onListTabChange });
     expect(tasks.querySelector(".cron-table")).not.toBeNull();
     expect(tasks.querySelector(".cron-activity")).toBeNull();
-    getElement(tasks, '[data-test-id="cron-list-tab-activity"]', HTMLButtonElement).click();
+    tasks
+      .querySelector("wa-tab-group")
+      ?.dispatchEvent(
+        new CustomEvent("wa-tab-show", { detail: { name: "activity" }, bubbles: true }),
+      );
     expect(onListTabChange).toHaveBeenCalledWith("activity");
 
     const activity = renderView({ listTab: "activity" });
@@ -364,25 +368,21 @@ describe("cron view list pane", () => {
     expect(activity.querySelector(".cron-activity")).not.toBeNull();
   });
 
-  it("moves and activates list tabs with arrow keys", () => {
+  it("configures manual Web Awesome list tabs", () => {
     const onListTabChange = vi.fn();
     const container = renderView({ onListTabChange });
     document.body.append(container);
-    const tasks = getElement(container, '[data-test-id="cron-list-tab-tasks"]', HTMLButtonElement);
-    const activity = getElement(
-      container,
-      '[data-test-id="cron-list-tab-activity"]',
-      HTMLButtonElement,
+    const group = getElement(container, ".cron-toolbar > wa-tab-group", HTMLElement);
+    const tasks = getElement(container, '[data-test-id="cron-list-tab-tasks"]', HTMLElement);
+    const activity = getElement(container, '[data-test-id="cron-list-tab-activity"]', HTMLElement);
+
+    expect(group.getAttribute("activation")).toBe("manual");
+    expect((tasks as HTMLElement & { active: boolean }).active).toBe(true);
+    expect((activity as HTMLElement & { active: boolean }).active).toBe(false);
+    group.dispatchEvent(
+      new CustomEvent("wa-tab-show", { detail: { name: "activity" }, bubbles: true }),
     );
 
-    expect(tasks.tabIndex).toBe(0);
-    expect(activity.tabIndex).toBe(-1);
-    tasks.focus();
-    tasks.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
-    );
-
-    expect(document.activeElement).toBe(activity);
     expect(onListTabChange).toHaveBeenCalledWith("activity");
     expect(activity.getAttribute("aria-controls")).toBe("cron-list-panel");
     container.remove();
@@ -413,11 +413,11 @@ describe("cron view run history", () => {
     search.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsQuery: "fail" });
 
-    const statusOption = container.querySelector(
-      '[data-filter="status"] input[value="error"]',
-    ) as HTMLInputElement;
-    statusOption.checked = true;
-    statusOption.dispatchEvent(new Event("change", { bubbles: true }));
+    const statusOption = container.querySelector<HTMLElement & { checked: boolean }>(
+      '[data-filter="status"] wa-dropdown-item[value="error"]',
+    );
+    expect(statusOption).not.toBeNull();
+    statusOption?.click();
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] });
   });
 
@@ -681,14 +681,18 @@ describe("cron view editor", () => {
     toggle.click();
     expect(onToggle).toHaveBeenCalledWith(job, false);
 
-    getButtonByText(container, "Run if due").click();
+    container.querySelector<HTMLElement>('wa-dropdown-item[value="run-if-due"]')?.click();
     expect(onRun).toHaveBeenCalledWith(job, "due");
-    getButtonByText(container, "Clone").click();
+    container.querySelector<HTMLElement>('wa-dropdown-item[value="clone"]')?.click();
     expect(onClone).toHaveBeenCalledWith(job);
-    getButtonByText(container, "Remove").click();
+    container.querySelector<HTMLElement>('wa-dropdown-item[value="remove"]')?.click();
     expect(onRemove).toHaveBeenCalledWith(job);
 
-    getElement(container, '[data-test-id="cron-detail-tab-history"]', HTMLButtonElement).click();
+    container
+      .querySelector(".cron-view-tabs")
+      ?.dispatchEvent(
+        new CustomEvent("wa-tab-show", { detail: { name: "history" }, bubbles: true }),
+      );
     expect(onDetailTabChange).toHaveBeenCalledWith("history");
   });
 

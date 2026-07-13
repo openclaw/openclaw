@@ -538,14 +538,37 @@ openclaw-logs-page {
   padding: 2px;
 }
 
+.qs-segmented::part(form-control-label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.qs-segmented::part(form-control-input),
+.qs-segmented::part(radios) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: inherit;
+  gap: 2px;
+}
+
 .qs-segmented__btn {
   font-size: 0.75rem;
   font-weight: 550;
-  padding: 4px 12px;
-  border: none;
-  border-radius: calc(var(--radius-md) - 3px);
-  background: transparent;
   color: var(--muted);
+  --wa-form-control-toggle-size: 0;
+  --wa-color-neutral-fill-normal: transparent;
+  --wa-color-neutral-fill-quiet: transparent;
+  --wa-color-neutral-border-normal: transparent;
+  --wa-color-neutral-border-quiet: transparent;
+  --wa-border-radius-m: calc(var(--radius-md) - 3px);
   transition:
     color var(--duration-normal) var(--ease-out),
     background var(--duration-normal) var(--ease-out),
@@ -556,21 +579,34 @@ openclaw-logs-page {
   touch-action: manipulation;
 }
 
-.qs-segmented__btn--compact {
+.qs-segmented__btn::part(control) {
+  min-height: 0;
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+}
+
+.qs-segmented__btn::part(label) {
+  color: inherit;
+}
+
+.qs-segmented__btn--compact::part(control) {
   padding: 5px 10px;
 }
 
-.qs-segmented__btn:hover {
+.qs-segmented__btn:hover,
+.qs-segmented__btn[checked] {
   color: var(--text);
 }
 
-.qs-segmented__btn:focus-visible {
-  outline: none;
+.qs-segmented__btn:focus-within {
   color: var(--text);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.qs-segmented__btn--active {
+.qs-segmented__btn[checked]::part(control) {
   background: var(--bg-elevated);
   color: var(--text-strong);
   box-shadow: var(--shadow-sm);
