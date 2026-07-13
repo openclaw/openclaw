@@ -1,6 +1,5 @@
-// Control UI view renders the Automations (cron) screen: a full-width list
-// view (stats, task table, starter ideas) and a full-page detail view for
-// creating or editing a single automation.
+// Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
+// starter ideas) and a full-page detail view for creating or editing a single automation.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -304,10 +303,9 @@ function renderRequiredTitle(label: string) {
   `;
 }
 
-// Mirrors renderSettingsSegmented markup exactly; local only so options can
-// carry the stable data-test-id hooks used by colocated and e2e tests, and so
-// view switchers can opt into real tablist semantics (roving tabindex + arrow
-// keys) wired to the panel they control.
+// Mirrors renderSettingsSegmented markup exactly; local only so options can carry the stable
+// data-test-id hooks used by colocated and e2e tests, and so view switchers can opt into real
+// tablist semantics (roving tabindex + arrow keys) wired to the panel they control.
 function renderSegmented<T extends string>(params: {
   value: T;
   options: ReadonlyArray<{ value: T; label: string; testId?: string }>;
@@ -347,10 +345,9 @@ function renderSegmented<T extends string>(params: {
   `;
 }
 
-// Settings row whose control keeps its own validation message underneath.
-// Mirrors renderSettingsRow markup; local only so the title can be a real
-// <label for> that gives the wrapped control its accessible name (including
-// the visually-hidden required marker).
+// Settings row whose control keeps its own validation message underneath. Mirrors
+// renderSettingsRow markup; local only so the title can be a real <label for> that gives the
+// wrapped control its accessible name (including the visually-hidden required marker).
 function renderFieldRow(params: {
   label: string;
   controlId: string;
@@ -480,8 +477,7 @@ function renderListTabs(props: CronProps) {
   });
 }
 
-// One toolbar row for both list tabs: view switch on the left, tab-specific
-// filters in the middle, refresh + New automation pinned right.
+// One toolbar row for both list tabs: view switch left, tab filters middle, refresh + New right.
 function renderToolbar(props: CronProps, hasAdvancedJobsFilters: boolean) {
   return html`
     <div class="cron-toolbar">
