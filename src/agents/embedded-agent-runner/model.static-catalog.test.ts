@@ -236,6 +236,8 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       env,
       workspaceDir: undefined,
     });
+  });
+
   it("canonicalizes Azure manifest aliases without configured endpoints back to OpenAI", () => {
     const plugin = {
       id: "openai",
