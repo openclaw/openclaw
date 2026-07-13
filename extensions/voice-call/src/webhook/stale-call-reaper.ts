@@ -24,6 +24,7 @@ export function startStaleCallReaper(params: {
   }
 
   const maxAgeMs = maxAgeSeconds * 1000;
+  const callsBeingReaped = new Set<string>();
   const interval = setInterval(() => {
     const now = Date.now();
     for (const call of params.manager.getActiveCalls()) {
@@ -42,13 +43,20 @@ export function startStaleCallReaper(params: {
 
       // Unanswered provider calls can be stranded when callbacks are missed; end them explicitly.
       const age = now - call.startedAt;
-      if (age > maxAgeMs) {
+      if (age > maxAgeMs && !callsBeingReaped.has(call.callId)) {
+        // Keep one hangup attempt per call in flight; settlement releases the call for later retries.
+        callsBeingReaped.add(call.callId);
         console.log(
           `[voice-call] Reaping stale call ${call.callId} (age: ${Math.round(age / 1000)}s, state: ${call.state})`,
         );
-        void params.manager.endCall(call.callId).catch((err: unknown) => {
-          console.warn(`[voice-call] Reaper failed to end call ${call.callId}:`, err);
-        });
+        void params.manager
+          .endCall(call.callId)
+          .catch((err: unknown) => {
+            console.warn(`[voice-call] Reaper failed to end call ${call.callId}:`, err);
+          })
+          .finally(() => {
+            callsBeingReaped.delete(call.callId);
+          });
       }
     }
   }, CHECK_INTERVAL_MS);
