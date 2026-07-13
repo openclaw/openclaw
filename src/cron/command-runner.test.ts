@@ -27,7 +27,16 @@ function isProcessRunning(pid: number): boolean {
   if (result.error) {
     throw result.error;
   }
-  return result.status === 0 && !result.stdout.trimStart().startsWith("Z");
+  const state = result.stdout.trim();
+  if (result.status === 0) {
+    return !state.startsWith("Z");
+  }
+  if (result.status === 1 && state === "" && result.stderr.trim() === "") {
+    return false;
+  }
+  throw new Error(
+    `ps failed with status ${result.status ?? "unknown"}: ${result.stderr.trim() || "no output"}`,
+  );
 }
 
 describe("runCronCommandJob", () => {
