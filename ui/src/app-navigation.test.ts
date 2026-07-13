@@ -6,6 +6,7 @@ import {
   SIDEBAR_NAV_ROUTES,
   isPluginsHubRoute,
   navigationIconForRoute,
+  settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
 } from "./app-navigation.ts";
@@ -104,6 +105,14 @@ describe("navigationIconForRoute", () => {
     // TypeScript won't allow this normally, but runtime could receive unexpected values
     const unknownRouteId = "unknown" as RouteId;
     expect(navigationIconForRoute(unknownRouteId)).toBe("folder");
+  });
+});
+
+describe("settingsSearchTextMatches", () => {
+  it("uses locale-aware word prefixes for short queries", () => {
+    expect(settingsSearchTextMatches("CPU usage", "cp")).toBe(true);
+    expect(settingsSearchTextMatches("MCP", "cp")).toBe(false);
+    expect(settingsSearchTextMatches("外観設定", "設定")).toBe(true);
   });
 });
 

@@ -20,6 +20,7 @@ const markGatewaySigusr1RestartHandled = vi.fn();
 const peekGatewaySigusr1RestartReason = vi.fn<() => string | undefined>(() => undefined);
 const resetGatewayRestartStateForInProcessRestart = vi.fn();
 const rollbackGatewayRestartSignalAdmission = vi.fn();
+const requestGatewayRestartWithSignalAdmission = vi.fn(() => ({ status: "emitted" as const }));
 const writeGatewayRestartHandoffSync = vi.fn((_opts: unknown) => ({
   kind: "gateway-supervisor-restart-handoff" as const,
   version: 1 as const,
@@ -54,6 +55,10 @@ const getInspectableActiveTaskRestartBlockers = vi.fn(
 );
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
+const waitForActiveGatewayRootWork = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  active: 0,
+}));
 const resetAllLanes = vi.fn();
 const advanceCronActiveJobGeneration = vi.fn();
 const resetCronActiveJobs = vi.fn();
@@ -132,6 +137,7 @@ vi.mock("../../infra/restart.js", () => ({
   peekGatewaySigusr1RestartReason: () => peekGatewaySigusr1RestartReason(),
   resetGatewayRestartStateForInProcessRestart: () => resetGatewayRestartStateForInProcessRestart(),
   rollbackGatewayRestartSignalAdmission: () => rollbackGatewayRestartSignalAdmission(),
+  requestGatewayRestartWithSignalAdmission,
   resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
     if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
       return DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS;
@@ -165,6 +171,10 @@ vi.mock("../../process/command-queue.js", () => ({
   markGatewayDraining: () => markGatewayDraining(),
   waitForActiveTasks: (timeoutMs?: number) => waitForActiveTasks(timeoutMs),
   resetAllLanes: () => resetAllLanes(),
+}));
+
+vi.mock("../../process/gateway-work-admission.js", () => ({
+  waitForActiveGatewayRootWork: (timeoutMs?: number) => waitForActiveGatewayRootWork(timeoutMs),
 }));
 
 vi.mock("../../cron/active-jobs.js", () => ({
@@ -440,7 +450,7 @@ describe("runGatewayLoop", () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, runtime, exited } = await createSignaledLoopHarness();
+      const { close, start, runtime, exited } = await createSignaledLoopHarness();
       const sigterm = captureSignal("SIGTERM");
 
       sigterm();
@@ -449,6 +459,10 @@ describe("runGatewayLoop", () => {
       expect(close).toHaveBeenCalledWith({
         reason: "gateway stopping",
         restartExpectedMs: null,
+      });
+      expect(start).toHaveBeenCalledWith({
+        startupStartedAt: expect.any(Number),
+        requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
     });
@@ -672,6 +686,8 @@ describe("runGatewayLoop", () => {
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
+      expect(waitForActiveGatewayRootWork).toHaveBeenCalledOnce();
+      expect(waitForActiveGatewayRootWork.mock.calls[0]?.[0]).toBeLessThanOrEqual(90_000);
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "compacting",
         reason: "restart",
@@ -715,6 +731,7 @@ describe("runGatewayLoop", () => {
     getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
     listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-deferral-timeout"]);
     listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:deferral-timeout"]);
+    markRestartAbortedMainSessions.mockRejectedValueOnce(new Error("store read-only"));
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, exited } = await createSignaledLoopHarness();
@@ -731,6 +748,7 @@ describe("runGatewayLoop", () => {
 
       expect(waitForActiveTasks).not.toHaveBeenCalled();
       expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
+      expect(waitForActiveGatewayRootWork).not.toHaveBeenCalled();
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "compacting",
         reason: "restart",
@@ -751,6 +769,9 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:deferral-timeout"]),
         reason: "gateway restart drain",
       });
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "failed to mark interrupted main sessions for restart recovery: Error: store read-only",
+      );
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledOnce();
       expectRestartCloseCall(close, 0);
       expect(start).toHaveBeenCalledTimes(2);

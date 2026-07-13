@@ -324,6 +324,40 @@ describe("cron controller", () => {
     });
   });
 
+  it("omits a blank delivery accountId from cron.add payloads", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "job-blank-account-id" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "implicit account",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        sessionTarget: "isolated",
+        payloadKind: "agentTurn",
+        payloadText: "run this",
+        deliveryMode: "announce",
+        deliveryAccountId: "   ",
+      },
+    });
+
+    await addCronJob(state);
+
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expect(requireRecord(requestPayload(addCall).delivery, "delivery").accountId).toBeUndefined();
+  });
+
   it('omits delivery.channel when the form still uses the "last" sentinel', async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.add") {
@@ -687,7 +721,7 @@ describe("cron controller", () => {
     expect(state.cronEditingJobId).toBeNull();
   });
 
-  it("sends empty delivery.accountId in cron.update to clear persisted account routing", async () => {
+  it("sends null delivery.accountId in cron.update to clear persisted account routing", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {
         return { id: "job-clear-account-id" };
@@ -741,7 +775,7 @@ describe("cron controller", () => {
     });
     expectRecordFields(requireRecord(requestPatch(updateCall).delivery, "delivery"), {
       mode: "announce",
-      accountId: "",
+      accountId: null,
     });
   });
 

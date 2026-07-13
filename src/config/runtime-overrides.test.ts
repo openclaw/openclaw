@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyConfigOverrides,
+  captureConfigOverrideApplier,
   getConfigOverrides,
   resetConfigOverrides,
   setConfigOverride,
@@ -21,6 +22,15 @@ describe("runtime overrides", () => {
     setConfigOverride("messages.responsePrefix", "[debug]");
     const next = applyConfigOverrides(cfg);
     expect(next.messages?.responsePrefix).toBe("[debug]");
+  });
+
+  it("captures an immutable override applier", () => {
+    setConfigOverride("gateway.auth.token", "startup-token");
+    const applyStartupOverrides = captureConfigOverrideApplier();
+    setConfigOverride("gateway.auth.token", "later-token");
+
+    expect(applyStartupOverrides({}).gateway?.auth?.token).toBe("startup-token");
+    expect(applyConfigOverrides({}).gateway?.auth?.token).toBe("later-token");
   });
 
   it("merges object overrides without clobbering siblings", () => {
