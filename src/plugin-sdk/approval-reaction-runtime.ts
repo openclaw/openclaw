@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
@@ -396,7 +397,7 @@ function buildMetadataPayload(params: {
     buildApprovalPendingReplyPayload({
       approvalKind: params.view.approvalKind,
       approvalId: params.view.approvalId,
-      approvalSlug: params.view.approvalId.slice(0, 8),
+      approvalSlug: truncateUtf16Safe(params.view.approvalId, 8),
       text: params.text,
       agentId: params.view.agentId ?? null,
       allowedDecisions: params.allowedDecisions,
@@ -469,7 +470,7 @@ export function buildApprovalReactionPendingContent(params: {
       : withoutPresentation(
           buildExecApprovalPendingReplyPayload({
             approvalId: params.request.id,
-            approvalSlug: params.request.id.slice(0, 8),
+            approvalSlug: truncateUtf16Safe(params.request.id, 8),
             approvalCommandId: params.request.id,
             warningText: params.view.warningText ?? undefined,
             ask: params.view.ask ?? null,

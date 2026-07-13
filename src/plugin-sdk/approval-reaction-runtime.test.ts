@@ -408,4 +408,39 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       "React with:\n\n👎 Deny",
     );
   });
+
+  it("truncates reaction approval slugs without splitting surrogate pairs", () => {
+    const surrogateBoundaryId = "1234567😀890";
+
+    const execContent = buildApprovalReactionPendingContentForRequest({
+      request: { ...execRequest, id: surrogateBoundaryId },
+      nowMs: 1_000,
+    });
+    expect(execContent.reactionPayload.channelData?.execApproval).toMatchObject({
+      approvalId: surrogateBoundaryId,
+      approvalSlug: "1234567",
+    });
+    expect(execContent.manualFallbackPayload.channelData?.execApproval).toMatchObject({
+      approvalId: surrogateBoundaryId,
+      approvalSlug: "1234567",
+    });
+
+    const pluginContent = buildApprovalReactionPendingContentForRequest({
+      request: { ...pluginRequest, id: surrogateBoundaryId },
+      nowMs: 1_000,
+    });
+    expect(pluginContent.reactionPayload.channelData?.execApproval).toMatchObject({
+      approvalId: surrogateBoundaryId,
+      approvalSlug: "1234567",
+    });
+    expect(pluginContent.manualFallbackPayload.channelData?.execApproval).toMatchObject({
+      approvalId: surrogateBoundaryId,
+      approvalSlug: "1234567",
+    });
+
+    const execApproval = (
+      execContent.reactionPayload.channelData as Record<string, { approvalSlug: string }>
+    ).execApproval!;
+    expect(() => encodeURIComponent(execApproval.approvalSlug)).not.toThrow();
+  });
 });

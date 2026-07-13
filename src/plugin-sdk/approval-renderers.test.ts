@@ -331,4 +331,73 @@ describe("plugin-sdk/approval-renderers", () => {
       expect(payload.channelData).toEqual(channelDataExpected);
     }
   });
+
+  it("truncates default approval slugs without splitting surrogate pairs", () => {
+    const surrogateBoundaryId = "1234567😀890";
+
+    const pending = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: surrogateBoundaryId,
+        request: { title: "Sensitive action", description: "Needs approval" },
+        createdAtMs: 1_000,
+        expiresAtMs: 61_000,
+      },
+      nowMs: 1_000,
+    });
+    expect((pending.channelData as Record<string, unknown>).execApproval).toMatchObject({
+      approvalId: surrogateBoundaryId,
+      approvalSlug: "1234567",
+    });
+
+    const typedPending = buildTypedPluginApprovalPendingReplyPayload({
+      request: {
+        id: surrogateBoundaryId,
+        request: { title: "Sensitive action", description: "Needs approval" },
+        createdAtMs: 1_000,
+        expiresAtMs: 61_000,
+      },
+      nowMs: 1_000,
+    });
+    expect((typedPending.channelData as Record<string, unknown>).execApproval).toMatchObject({
+      approvalId: surrogateBoundaryId,
+      approvalSlug: "1234567",
+    });
+
+    const resolved = buildPluginApprovalResolvedReplyPayload({
+      resolved: {
+        id: surrogateBoundaryId,
+        decision: "allow-once",
+        resolvedBy: "discord:user:1",
+        ts: 2_000,
+      },
+    });
+    expect((resolved.channelData as Record<string, unknown>).execApproval).toMatchObject({
+      approvalId: surrogateBoundaryId,
+      approvalSlug: "1234567",
+    });
+
+    const custom = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: surrogateBoundaryId,
+        request: {
+          title: "Sensitive action",
+          description: "Needs approval",
+          allowedDecisions: ["allow-once"],
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 61_000,
+      },
+      nowMs: 1_000,
+      approvalSlug: "custom-slug",
+    });
+    expect((custom.channelData as Record<string, unknown>).execApproval).toMatchObject({
+      approvalId: surrogateBoundaryId,
+      approvalSlug: "custom-slug",
+    });
+
+    // A split surrogate would make encodeURIComponent throw; confirm the slug is well-formed.
+    const execApproval = (pending.channelData as Record<string, { approvalSlug: string }>)
+      .execApproval!;
+    expect(() => encodeURIComponent(execApproval.approvalSlug)).not.toThrow();
+  });
 });
