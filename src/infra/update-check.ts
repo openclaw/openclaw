@@ -677,12 +677,9 @@ export function compareSemverStrings(a: string | null, b: string | null): number
       return openClawReleaseCmp;
     }
   }
-  if (!a || !b) {
-    return null;
-  }
-  const normalizedA = normalizeLegacyDotBetaVersion(a);
-  const normalizedB = normalizeLegacyDotBetaVersion(b);
-  return compareValidSemver(normalizedA, normalizedB);
+  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
+  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
+  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
 }
 
 export async function checkUpdateStatus(params: {
