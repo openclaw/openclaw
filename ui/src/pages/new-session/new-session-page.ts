@@ -19,10 +19,10 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
+import * as catalog from "./catalog-target.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
-import { newSessionRouteKey, type NewSessionRouteData } from "./location.ts";
+import type { NewSessionRouteData } from "./location.ts";
 import { folderDisplayName, isAbsolutePath } from "./path.ts";
-import { renderNewSessionRuntimeTarget } from "./runtime-target.ts";
 
 type DraftBranches = {
   repoRoot: string;
@@ -196,7 +196,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   override updated() {
     const agentsReady = this.agents().length > 0;
-    const openKey = newSessionRouteKey(this.data);
+    const openKey = catalog.routeKey(this.data);
     if (this.openedFor !== openKey) {
       this.openedFor = openKey;
       this.agentsHydrated = agentsReady;
@@ -238,14 +238,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     return Boolean(folder) && folder !== this.workspacePath();
   }
 
-  /** Resolves the agent selection and workspace-derived fields; keeps user input. */
   private adoptAgentDefaults() {
     const agents = this.agents();
-    const requested = normalizeAgentId(this.data?.agentId || "");
     const fallback = this.context?.agents.state.agentsList?.defaultId ?? agents[0]?.id ?? "main";
-    this.agentId = agents.some((agent) => normalizeAgentId(agent.id) === requested)
-      ? requested
-      : normalizeAgentId(fallback);
+    this.agentId = catalog.resolveAgentId(this.data, agents, fallback);
     if (!this.folder.trim()) {
       this.folder = this.workspacePath();
     }
@@ -384,6 +380,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.agents().length === 0) {
       return false;
     }
+    if (!catalog.allowsSelectedAgent(this.data, this.selectedAgent())) {
+      return false;
+    }
     if (this.usesCustomFolder() && (!this.isAdmin() || (!this.execNode && !this.worktree))) {
       return false;
     }
@@ -470,7 +469,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private selectAgentId(agentId: string) {
-    if (this.submitting) {
+    if (this.submitting || catalog.isTarget(this.data)) {
       return;
     }
     // Re-picking the checked agent must not reset the draft (the native
@@ -1043,13 +1042,12 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private renderTargetBar() {
     const agents = this.agents();
-    return html`
-      <div class="new-session-page__triggers">
-        ${renderNewSessionRuntimeTarget(this.data)}
-        ${agents.length > 1 ? this.renderAgentSelect(agents) : nothing} ${this.renderFolderSelect()}
-        ${this.renderWhereSelect()}
-      </div>
-    `;
+    return catalog.renderBar({
+      data: this.data,
+      agentSelect: agents.length > 1 ? this.renderAgentSelect(agents) : nothing,
+      folderSelect: this.renderFolderSelect(),
+      whereSelect: this.renderWhereSelect(),
+    });
   }
 
   /** Target row + composer, rendered mid-screen between the hero and recents. */

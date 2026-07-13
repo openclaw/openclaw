@@ -184,7 +184,23 @@ describe("Claude session catalog", () => {
     expect(provider?.createSession).toBeUndefined();
   });
 
-  it("links a catalog row to an existing OpenClaw session with the same CLI binding", async () => {
+  it.each([
+    {
+      label: "CLI binding",
+      entry: (sessionId: string) => ({
+        cliSessionBindings: { "claude-cli": { sessionId } },
+      }),
+    },
+    {
+      label: "catalog marker when the CLI binding is empty",
+      entry: (sessionId: string) => ({
+        cliSessionBindings: { "claude-cli": { sessionId: "" } },
+        pluginOwnerId: "anthropic",
+        modelSelectionLocked: true,
+        pluginExtensions: { anthropic: { sessionCatalog: { sourceThreadId: sessionId } } },
+      }),
+    },
+  ])("links a catalog row to an existing OpenClaw session via $label", async ({ entry }) => {
     const home = await createHome();
     process.env.HOME = home;
     const sessionId = "claude-bound-session";
@@ -211,9 +227,7 @@ describe("Claude session catalog", () => {
             listSessionEntries: () => [
               {
                 sessionKey: "agent:main:claude-bound",
-                entry: {
-                  cliSessionBindings: { "claude-cli": { sessionId } },
-                },
+                entry: entry(sessionId),
               },
             ],
           },

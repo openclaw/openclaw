@@ -182,7 +182,7 @@ export function renderSidebarSessionCatalogs(params: RenderSidebarSessionCatalog
     const hasUnread = backingRows.some((row) => row.unread === true);
     const loadingMore = params.loadingCatalogIds.has(catalog.id);
     const hasMore = hosts.some((host) => Boolean(host.nextCursor));
-    const createTarget = catalog.capabilities.createSession;
+    const canCreateSession = catalog.capabilities.createSession !== undefined;
     return html`
       <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
         <div class="sidebar-recent-sessions__head">
@@ -200,7 +200,7 @@ export function renderSidebarSessionCatalogs(params: RenderSidebarSessionCatalog
             ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
             <span class="sidebar-session-group-count">${rows.length}</span>
           </button>
-          ${createTarget
+          ${canCreateSession
             ? html`<button
                 type="button"
                 class="sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
@@ -209,8 +209,7 @@ export function renderSidebarSessionCatalogs(params: RenderSidebarSessionCatalog
                 ?disabled=${!params.connected}
                 @click=${() =>
                   params.onOpenNewSession?.(params.newSessionAgentId, {
-                    model: createTarget.model,
-                    label: catalog.label,
+                    catalogId: catalog.id,
                   })}
               >
                 ${icons.plus}
