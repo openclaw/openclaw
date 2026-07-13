@@ -708,5 +708,3 @@ export function createHostRegistrars(state: PluginRegistryState) {
     registerConversationBindingResolvedHandler,
   };
 }
-
-export type HostRegistrars = ReturnType<typeof createHostRegistrars>;

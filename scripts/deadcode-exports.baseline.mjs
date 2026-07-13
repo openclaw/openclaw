@@ -4841,7 +4841,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/plugins/registry.ts: PluginWebFetchProviderRegistration",
   "src/plugins/registry.ts: PluginWebSearchProviderRegistration",
   "src/plugins/registry.ts: PluginWorkerProviderRegistration",
-  "src/plugins/registry.ts: resolvePluginPath",
   "src/plugins/roots.ts: PluginCacheInputs",
   "src/plugins/runtime-channel-state.ts: ActivePluginChannelRegistrySnapshot",
   "src/plugins/runtime-channel-state.ts: PLUGIN_REGISTRY_STATE",

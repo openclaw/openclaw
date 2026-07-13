@@ -499,5 +499,3 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerMigrationProvider,
   };
 }
-
-export type ProviderRegistrars = ReturnType<typeof createProviderRegistrars>;

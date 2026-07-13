@@ -158,5 +158,3 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     registerCompactionProvider,
   };
 }
-
-export type CapabilityRegistrars = ReturnType<typeof createCapabilityRegistrars>;
