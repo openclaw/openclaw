@@ -69,7 +69,7 @@ const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
   maxFileBytes: 0,
 };
 
-export function ensureMemoryHostDir(dir: string): string {
+function ensureMemoryHostDir(dir: string): string {
   fsSync.mkdirSync(dir, { recursive: true });
   return dir;
 }

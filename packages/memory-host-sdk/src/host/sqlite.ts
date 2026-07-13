@@ -14,7 +14,7 @@ import {
 const require = createRequire(import.meta.url);
 const sqliteWalMaintenanceByDb = new WeakMap<DatabaseSync, SqliteWalMaintenance>();
 
-export function requireMemoryHostNodeSqlite(): typeof import("node:sqlite") {
+function requireMemoryHostNodeSqlite(): typeof import("node:sqlite") {
   installProcessWarningFilter();
   try {
     return require("node:sqlite") as typeof import("node:sqlite");
