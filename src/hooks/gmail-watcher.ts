@@ -73,8 +73,10 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
   let addressInUse = false;
   // Carry a bounded tail across stderr chunks so split patterns such as
-  // "address alre" + "ady in use" are classified before the exit handler
-  // decides whether to stop restarts or to schedule a 5 s respawn.
+  // "address alre" + "ady in use" are classified before the close handler
+  // decides whether to stop restarts or to schedule a 5 s respawn. Restart
+  // policy waits for `close` (stdio drained) rather than `exit`, because Node
+  // can deliver the final stderr fragment after `exit`.
   let stderrTail = "";
   const invocation = resolveGogServeInvocation(args);
 
@@ -115,7 +117,7 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     log.error(`gog process error: ${String(err)}`);
   });
 
-  child.on("exit", (code, signal) => {
+  child.on("close", (code, signal) => {
     // If a newer watcher has replaced this child, do not respawn.
     if (watcherProcess !== null && watcherProcess !== child) {
       return;
