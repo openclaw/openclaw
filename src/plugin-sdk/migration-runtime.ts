@@ -386,6 +386,7 @@ export async function copyMemoryMigrationFileItem(
     }
     await safeRoot.write(relativeTarget, sourceBuffer, {
       mkdir: true,
+      mode: 0o600,
       overwrite: false,
     });
     targetCreated = true;

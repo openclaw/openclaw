@@ -200,6 +200,9 @@ describe("copyMemoryMigrationFileItem", () => {
     const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
     await writeFile(source, "new memory");
     await writeFile(target, "old memory");
+    if (process.platform !== "win32") {
+      await fs.chmod(target, 0o644);
+    }
 
     const result = await copyMemoryMigrationFileItem(
       createMigrationItem({
@@ -215,6 +218,9 @@ describe("copyMemoryMigrationFileItem", () => {
 
     expect(result.status).toBe("migrated");
     await expect(fs.readFile(target, "utf8")).resolves.toBe("new memory");
+    if (process.platform !== "win32") {
+      expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
+    }
     const backupPath = result.details?.backupPath;
     if (typeof backupPath !== "string") {
       throw new Error("expected memory backup path");
