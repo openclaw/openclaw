@@ -509,11 +509,11 @@ const cachedClaudeCliEmail = new Map<string, { value: string | undefined; readAt
 // token IS that login — enforced by comparing against the cached CLI
 // credential instead of trusting the ambient config.
 function readClaudeCliAccountEmail(env: NodeJS.ProcessEnv, usageToken: string): string | undefined {
-  const credential = readClaudeCliCredentialsCached({
+  const cliLogin = readClaudeCliCredentialsCached({
     allowKeychainPrompt: false,
     ttlMs: CLAUDE_CLI_CONFIG_EMAIL_TTL_MS,
   });
-  if (!credential || credential.type !== "oauth" || credential.access !== usageToken) {
+  if (!cliLogin || cliLogin.type !== "oauth" || cliLogin.access !== usageToken) {
     return undefined;
   }
   const configDir = env.CLAUDE_CONFIG_DIR?.trim();
