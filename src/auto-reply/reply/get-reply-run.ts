@@ -129,6 +129,7 @@ import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { resolveSourcePromptInput, stripPromptThinkingDirectives } from "./source-policy.js";
 import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
 import {
   buildChannelSourceTurnId,
@@ -400,18 +401,6 @@ function loadAgentRunnerRuntime() {
 
 function loadSessionUpdatesRuntime() {
   return sessionUpdatesRuntimeLoader.load();
-}
-
-function stripPromptThinkingDirectives(body: string): string {
-  return body
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(/(^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:\s*|\s+)?[A-Za-z-]*/gi, "$1")
-        .replace(/[ \t]{2,}/g, " ")
-        .trimEnd(),
-    )
-    .join("\n");
 }
 
 function hasInboundHistoryBody(ctx: TemplateContext): boolean {
@@ -702,11 +691,9 @@ export async function runPreparedReply(
     directChatContext || groupChatContext || sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
       : "generic";
-  const sourcePromptPolicy = opts?.sourcePromptPolicy;
-  const suppressConversationContext = sourcePromptPolicy?.suppressConversationContext === true;
-  const sourcePromptBody = normalizeOptionalString(sourcePromptPolicy?.promptBody);
   const transcriptBaseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  const baseBody = sourcePromptBody ?? transcriptBaseBody;
+  const sourcePrompt = resolveSourcePromptInput(opts?.sourcePromptPolicy, transcriptBaseBody);
+  const baseBody = sourcePrompt.body;
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
@@ -775,8 +762,9 @@ export async function runPreparedReply(
   const baseBodyFinal = isBareSessionReset
     ? (bareResetPromptState?.prompt ?? "")
     : stripPromptThinkingDirectives(baseBody);
-  const transcriptBaseBodyFinal =
-    sourcePromptBody !== undefined ? stripPromptThinkingDirectives(transcriptBaseBody) : undefined;
+  const transcriptBaseBodyFinal = sourcePrompt.transcriptBody
+    ? stripPromptThinkingDirectives(sourcePrompt.transcriptBody)
+    : undefined;
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||
@@ -960,11 +948,7 @@ export async function runPreparedReply(
       inboundUserContext,
       activeGoalContext,
       inboundUserContextPromptJoiner,
-      ...(suppressConversationContext
-        ? { currentInboundContext: null }
-        : sourcePromptPolicy && Object.hasOwn(sourcePromptPolicy, "currentInboundContext")
-          ? { currentInboundContext: sourcePromptPolicy.currentInboundContext ?? null }
-          : {}),
+      ...sourcePrompt.promptContextOverrides,
       isBareSessionReset,
       startupAction,
       startupContextPrelude,

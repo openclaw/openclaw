@@ -60,12 +60,17 @@ import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import {
+  applyOutboundDeliveryPolicy,
+  type OutboundDeliveryPolicyParams,
+} from "./deliver-policy.js";
+import {
   OutboundDeliveryError,
+  sessionKeyForDeliveryDiagnostics,
+  suppressedPayloadOutcome,
   type OutboundDeliveryFailureStage,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
   type OutboundPayloadDeliveryKind,
-  type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
 import {
   attachOutboundDeliveryCommitHook,
@@ -80,11 +85,6 @@ import {
 } from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
-import {
-  MAX_OUTBOUND_DELIVERY_POLICY_REROUTES,
-  runOutboundDeliveryPolicyHook,
-  type OutboundDeliveryPolicySource,
-} from "./delivery-policy-hook.js";
 import {
   ackDelivery,
   enqueueDelivery,
@@ -751,7 +751,7 @@ async function persistQueuedPostSendState(params: {
   }
 }
 
-type DeliverOutboundPayloadsCoreParams = {
+type DeliverOutboundPayloadsCoreParams = OutboundDeliveryPolicyParams & {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -767,17 +767,6 @@ type DeliverOutboundPayloadsCoreParams = {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
-  /** @internal Context for destination-aware outbound delivery policy hooks. */
-  deliveryPolicy?: {
-    path?: "durable_delivery" | "message_action";
-    action?: string;
-    source?: OutboundDeliveryPolicySource;
-    runId?: string;
-  };
-  /** @internal Caller already applied outbound delivery policy for this send. */
-  skipOutboundDeliveryPolicy?: boolean;
-  /** @internal Guard against policy reroute cycles. */
-  deliveryPolicyDepth?: number;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
@@ -838,22 +827,6 @@ type MessageSentEvent = {
   error?: string;
   messageId?: string;
 };
-
-/**
- * Best-effort session identifier for delivery telemetry only. Falls back to
- * `policyKey` as a last resort so diagnostic emission still has a stable
- * string when neither mirror nor canonical key are available. **Do not use
- * this value for hook-context correlation** — use `sessionKeyForInternalHooks`
- * (mirror.sessionKey ?? session.key, no policyKey fallback) instead, so we
- * never accidentally hand the policy key to plugins that expect the canonical
- * session key.
- */
-function sessionKeyForDeliveryDiagnostics(params: {
-  mirror?: DeliveryMirror;
-  session?: OutboundSessionContext;
-}): string | undefined {
-  return params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
-}
 
 function deliveryKindForPayload(
   payload: ReplyPayload,
@@ -1458,7 +1431,6 @@ function materializeQueueCustodyMedia(
     return { ...payload, mediaUrl: effective[0], mediaUrls: [...effective] };
   });
 }
-
 /**
  * @deprecated Direct outbound delivery is compatibility/runtime substrate.
  * New message lifecycle code should use `sendDurableMessageBatch` from
@@ -1472,166 +1444,22 @@ export async function deliverOutboundPayloads(
   return await deliverOutboundPayloadsInternal(params);
 }
 
-function mapPayloadOutcomeIndex(
-  outcome: OutboundPayloadDeliveryOutcome,
-  index: number,
-): OutboundPayloadDeliveryOutcome {
-  return { ...outcome, index };
-}
-
-function recordOutboundPolicySuppression(params: {
-  deliveryParams: DeliverOutboundPayloadsParams;
-  index: number;
-  reason?: string;
-}): void {
-  const hookEffect = params.reason ? { cancelReason: params.reason } : undefined;
-  params.deliveryParams.onPayloadDeliveryOutcome?.(
-    suppressedPayloadOutcome({
-      index: params.index,
-      reason: "cancelled_by_outbound_delivery_policy",
-      ...(hookEffect ? { hookEffect } : {}),
-    }),
-  );
-}
-
-function sourceFromDeliveryParams(
-  params: DeliverOutboundPayloadsParams,
-): OutboundDeliveryPolicySource | undefined {
-  return (
-    params.deliveryPolicy?.source ??
-    (params.session
-      ? {
-          ...(params.session.requesterAccountId
-            ? { accountId: params.session.requesterAccountId }
-            : {}),
-          ...(params.session.requesterSenderId
-            ? { senderId: params.session.requesterSenderId }
-            : {}),
-          ...(params.session.key ? { sessionKey: params.session.key } : {}),
-        }
-      : undefined)
-  );
-}
-
-async function applyOutboundDeliveryPolicy(
-  params: DeliverOutboundPayloadsParams,
-): Promise<OutboundDeliveryResult[] | null> {
-  const hookRunner = getGlobalHookRunner();
-  if (params.skipOutboundDeliveryPolicy || !hookRunner?.hasHooks("outbound_delivery_policy")) {
-    return null;
-  }
-  const policyDepth = params.deliveryPolicyDepth ?? 0;
-  if (policyDepth > MAX_OUTBOUND_DELIVERY_POLICY_REROUTES) {
-    throw new Error("Outbound delivery policy reroute depth exceeded.");
-  }
-
-  const originalPayloads: Array<{ index: number; payload: ReplyPayload }> = [];
-  const reroutedPayloads: Array<{
-    index: number;
-    payload: ReplyPayload;
-    channel: Exclude<OutboundChannel, "none">;
-    to: string;
-    accountId?: string;
-    threadId?: string | number;
-  }> = [];
-  let changed = false;
-
-  for (const [index, payload] of params.payloads.entries()) {
-    const source = sourceFromDeliveryParams(params);
-    const decision = await runOutboundDeliveryPolicyHook({
-      payload,
-      kind: params.deliveryPolicy?.action
-        ? "message_action"
-        : (params.replyPayloadSendingHook?.kind ?? "final"),
-      ...(params.deliveryPolicy?.action ? { action: params.deliveryPolicy.action } : {}),
-      ...(source ? { source } : {}),
-      destination: {
-        channel: params.channel,
-        to: params.to,
-        ...(params.accountId ? { accountId: params.accountId } : {}),
-        ...(params.threadId !== undefined && params.threadId !== null
-          ? { threadId: params.threadId }
-          : {}),
-        path: params.deliveryPolicy?.path ?? "durable_delivery",
-      },
-      sessionKey: params.mirror?.sessionKey ?? params.session?.key,
-      runId: params.deliveryPolicy?.runId ?? params.replyPayloadSendingHook?.runId,
-    });
-
-    if (decision.decision === "cancel") {
-      changed = true;
-      recordOutboundPolicySuppression({
-        deliveryParams: params,
-        index,
-        reason: decision.reason,
-      });
-      continue;
-    }
-    if (decision.decision === "reroute") {
-      changed = true;
-      reroutedPayloads.push({
-        index,
-        payload: decision.payload,
-        channel: decision.destination.channel as Exclude<OutboundChannel, "none">,
-        to: decision.destination.to,
-        ...(decision.destination.accountId ? { accountId: decision.destination.accountId } : {}),
-        ...(decision.destination.threadId !== undefined
-          ? { threadId: decision.destination.threadId }
-          : {}),
-      });
-      continue;
-    }
-    if (decision.payload !== payload) {
-      changed = true;
-    }
-    originalPayloads.push({ index, payload: decision.payload });
-  }
-
-  if (!changed) {
-    return null;
-  }
-
-  const results: OutboundDeliveryResult[] = [];
-  if (originalPayloads.length > 0) {
-    results.push(
-      ...(await deliverOutboundPayloadsAfterPolicy({
-        ...params,
-        payloads: originalPayloads.map((entry) => entry.payload),
-        onPayloadDeliveryOutcome: (outcome) => {
-          const original = originalPayloads[outcome.index];
-          params.onPayloadDeliveryOutcome?.(
-            mapPayloadOutcomeIndex(outcome, original?.index ?? outcome.index),
-          );
-        },
-      })),
-    );
-  }
-  for (const rerouted of reroutedPayloads) {
-    const { accountId: _oldAccountId, threadId: _oldThreadId, ...rerouteBaseParams } = params;
-    void _oldAccountId;
-    void _oldThreadId;
-    results.push(
-      ...(await deliverOutboundPayloadsInternal({
-        ...rerouteBaseParams,
-        channel: rerouted.channel,
-        to: rerouted.to,
-        ...(rerouted.accountId ? { accountId: rerouted.accountId } : {}),
-        ...(rerouted.threadId !== undefined ? { threadId: rerouted.threadId } : {}),
-        payloads: [rerouted.payload],
-        deliveryPolicyDepth: policyDepth + 1,
-        onPayloadDeliveryOutcome: (outcome) => {
-          params.onPayloadDeliveryOutcome?.(mapPayloadOutcomeIndex(outcome, rerouted.index));
-        },
-      })),
-    );
-  }
-  return results;
-}
-
 export async function deliverOutboundPayloadsInternal(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
-  const policyResults = await applyOutboundDeliveryPolicy(params);
+  const policyResults = await applyOutboundDeliveryPolicy({
+    delivery: params,
+    deliverAllowed: deliverOutboundPayloadsAfterPolicy,
+    deliverRerouted: deliverOutboundPayloadsInternal,
+    recordSuppression: (index, reason) =>
+      params.onPayloadDeliveryOutcome?.(
+        suppressedPayloadOutcome({
+          index,
+          reason: "cancelled_by_outbound_delivery_policy",
+          ...(reason ? { hookEffect: { cancelReason: reason } } : {}),
+        }),
+      ),
+  });
   if (policyResults) {
     return policyResults;
   }

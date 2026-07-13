@@ -181,6 +181,7 @@ import { extractShortModelName, type ResponsePrefixContext } from "./response-pr
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
+import { resolveSourcePolicy } from "./source-policy.js";
 import {
   isExplicitSourceReplyCommand,
   isUnauthorizedTextSlashCommand,
@@ -990,65 +991,26 @@ async function dispatchReplyFromConfigInner(
         })
       : undefined;
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
-  const sourcePolicyResult = hookRunner?.hasHooks("source_policy")
-    ? await traceReplyPhase("reply.source_policy_hooks", () =>
-        runWithDispatchAbortSignal(getPreDispatchAbortSignal(), () =>
-          hookRunner.runSourcePolicy(
-            {
-              content: hookContext.content,
-              body: hookContext.bodyForAgent ?? hookContext.body,
-              channel: hookContext.channelId,
-              accountId: hookContext.accountId,
-              conversationId: inboundClaimContext.conversationId,
-              sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-              runId: params.replyOptions?.runId,
-              senderId: hookContext.senderId,
-              replyToId: hookContext.replyToId,
-              replyToBody: hookContext.replyToBody,
-              replyToSender: hookContext.replyToSender,
-              isGroup: hookContext.isGroup,
-              chatType: ctx.ChatType,
-              inboundEventKind: ctx.InboundEventKind,
-              requestedSourceReplyDeliveryMode: params.replyOptions?.sourceReplyDeliveryMode,
-              configuredVisibleReplies,
-              defaultVisibleReplies: harnessDefaultVisibleReplies,
-              sendPolicy,
-            },
-            {
-              channelId: hookContext.channelId,
-              accountId: hookContext.accountId,
-              conversationId: inboundClaimContext.conversationId,
-              sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-              runId: params.replyOptions?.runId,
-              senderId: hookContext.senderId,
-              replyToId: hookContext.replyToId,
-              replyToBody: hookContext.replyToBody,
-              replyToSender: hookContext.replyToSender,
-            },
-          ),
-        ),
-      )
-    : undefined;
-  const sourcePolicyDeliveryMode =
-    sourcePolicyResult?.sourceReplyDeliveryMode === "message_tool_only"
-      ? "message_tool_only"
-      : params.replyOptions?.sourceReplyDeliveryMode;
-  const sourcePromptPolicy =
-    sourcePolicyResult?.promptBody !== undefined ||
-    sourcePolicyResult?.currentInboundContext !== undefined ||
-    sourcePolicyResult?.suppressConversationContext === true
-      ? {
-          ...(sourcePolicyResult.promptBody !== undefined
-            ? { promptBody: sourcePolicyResult.promptBody }
-            : {}),
-          ...(sourcePolicyResult.currentInboundContext !== undefined
-            ? { currentInboundContext: sourcePolicyResult.currentInboundContext }
-            : {}),
-          ...(sourcePolicyResult.suppressConversationContext === true
-            ? { suppressConversationContext: true as const }
-            : {}),
-        }
-      : params.replyOptions?.sourcePromptPolicy;
+  const sourcePolicy = await resolveSourcePolicy({
+    hookContext,
+    inboundClaimContext,
+    ctx,
+    sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+    replyOptions: params.replyOptions,
+    configuredVisibleReplies,
+    defaultVisibleReplies: harnessDefaultVisibleReplies,
+    sendPolicy,
+    runHook: hookRunner?.hasHooks("source_policy")
+      ? (event, context) =>
+          traceReplyPhase("reply.source_policy_hooks", () =>
+            runWithDispatchAbortSignal(getPreDispatchAbortSignal(), () =>
+              hookRunner.runSourcePolicy(event, context),
+            ),
+          )
+      : undefined,
+  });
+  const sourcePolicyDeliveryMode = sourcePolicy.deliveryMode;
+  const sourcePromptPolicy = sourcePolicy.promptPolicy;
   const prefersMessageToolDelivery =
     sourcePolicyDeliveryMode === "message_tool_only" ||
     (ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn) ||

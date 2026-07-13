@@ -4,7 +4,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -60,7 +59,6 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
-import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -71,14 +69,16 @@ import {
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
-import {
-  MAX_OUTBOUND_DELIVERY_POLICY_REROUTES,
-  runOutboundDeliveryPolicyHook,
-  type OutboundDeliveryPolicySource,
-} from "./delivery-policy-hook.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
+import { collectMessageAttachmentMediaHints } from "./message-action-attachment-hints.js";
+import {
+  applySendPayloadPartsToActionParams,
+  resolveInternalSourceReplyDeliveryPolicy,
+  resolveMessageActionDeliveryPolicy,
+  type SendPayloadParts,
+  updateSendPayloadPartsFromReplyPayload,
+} from "./message-action-delivery-policy.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
-import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
@@ -91,6 +91,10 @@ import {
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
+import {
+  hasExplicitTargetParam,
+  hasPotentialActionTargetInput,
+} from "./message-action-target-input.js";
 import {
   prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
@@ -662,320 +666,6 @@ type ResolvedActionContext = {
   resolvedTarget?: ResolvedMessagingTarget;
   abortSignal?: AbortSignal;
 };
-
-type SendPayloadParts = {
-  message: string;
-  payload: ReplyPayload;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  asVoice: boolean;
-  gifPlayback: boolean;
-  forceDocument: boolean;
-  bestEffort?: boolean;
-  silent?: boolean;
-};
-
-type PolicyResolvedSend = {
-  status: "allow";
-  channel: ChannelId;
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number;
-  params: Record<string, unknown>;
-  sendPayload: SendPayloadParts;
-  rerouted: boolean;
-};
-
-type PolicyCancelledSend = {
-  status: "cancel";
-  channel: ChannelId;
-  to: string;
-  reason?: string;
-  sendPayload: SendPayloadParts;
-};
-
-type InternalSourcePolicyResult =
-  | {
-      status: "allow";
-      sendPayload: SendPayloadParts;
-    }
-  | PolicyCancelledSend
-  | {
-      status: "reroute";
-      params: Record<string, unknown>;
-      sendPayload: SendPayloadParts;
-    };
-
-function updateSendPayloadPartsFromReplyPayload(
-  parts: SendPayloadParts,
-  payload: ReplyPayload,
-): SendPayloadParts {
-  const sendable = resolveSendableOutboundReplyParts(payload);
-  const mediaUrls = sendable.mediaUrls.length > 0 ? sendable.mediaUrls : undefined;
-  return {
-    ...parts,
-    message: payload.text ?? "",
-    payload,
-    mediaUrl: mediaUrls?.[0],
-    mediaUrls,
-    asVoice: payload.audioAsVoice === true,
-  };
-}
-
-function applySendPayloadPartsToActionParams(
-  actionParams: Record<string, unknown>,
-  parts: SendPayloadParts,
-) {
-  if (parts.message || !parts.payload.presentation) {
-    actionParams.message = parts.message;
-  } else {
-    // Presentation-only gateway handlers distinguish an omitted body from an
-    // explicit empty body when deciding whether to render semantic fallback.
-    delete actionParams.message;
-  }
-  actionParams.media = parts.mediaUrl;
-  actionParams.mediaUrl = parts.mediaUrl;
-  actionParams.mediaUrls = parts.mediaUrls;
-  actionParams.asVoice = parts.asVoice || undefined;
-  actionParams.audioAsVoice = parts.asVoice || undefined;
-  actionParams.asVideoNote = parts.payload.videoAsNote || undefined;
-  actionParams.location = parts.payload.location;
-}
-
-function sourceFromMessageActionInput(input: RunMessageActionParams): OutboundDeliveryPolicySource {
-  const currentChannel = normalizeOptionalLowercaseString(
-    input.toolContext?.currentChannelProvider,
-  );
-  const currentTarget = normalizeOptionalString(input.toolContext?.currentChannelId);
-  const currentThreadId =
-    normalizeOptionalString(input.toolContext?.currentThreadTs) ??
-    input.toolContext?.currentMessageId;
-  return {
-    ...(currentChannel ? { channel: currentChannel } : {}),
-    ...(currentTarget ? { conversationId: currentTarget } : {}),
-    ...(input.requesterAccountId ? { accountId: input.requesterAccountId } : {}),
-    ...(input.requesterSenderId ? { senderId: input.requesterSenderId } : {}),
-    ...(currentThreadId !== undefined ? { threadId: currentThreadId } : {}),
-    ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
-    ...(input.inboundEventKind ? { inboundEventKind: input.inboundEventKind } : {}),
-  };
-}
-
-async function resolveMessageActionDeliveryPolicy(params: {
-  actionParams: Record<string, unknown>;
-  channel: ChannelId;
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number;
-  sendPayload: SendPayloadParts;
-  input: RunMessageActionParams;
-}): Promise<PolicyResolvedSend | PolicyCancelledSend> {
-  let channel = params.channel;
-  let to = params.to;
-  let accountId = params.accountId;
-  let threadId = params.threadId;
-  let actionParams = params.actionParams;
-  let sendPayload = params.sendPayload;
-  let rerouted = false;
-  const copyActionParams = (): Record<string, unknown> => Object.assign({}, actionParams);
-
-  for (let depth = 0; depth <= MAX_OUTBOUND_DELIVERY_POLICY_REROUTES; depth += 1) {
-    const decision = await runOutboundDeliveryPolicyHook({
-      payload: sendPayload.payload,
-      kind: "message_action",
-      action: "send",
-      source: sourceFromMessageActionInput(params.input),
-      destination: {
-        channel,
-        to,
-        ...(accountId ? { accountId } : {}),
-        ...(threadId !== undefined ? { threadId } : {}),
-        path: "message_action",
-      },
-      ...(params.input.sessionKey ? { sessionKey: params.input.sessionKey } : {}),
-    });
-
-    const payloadChanged = decision.payload !== sendPayload.payload;
-    sendPayload = payloadChanged
-      ? updateSendPayloadPartsFromReplyPayload(sendPayload, decision.payload)
-      : sendPayload;
-    if (payloadChanged) {
-      actionParams = copyActionParams();
-      applySendPayloadPartsToActionParams(actionParams, sendPayload);
-    }
-
-    if (decision.decision === "cancel") {
-      return {
-        status: "cancel",
-        channel,
-        to,
-        ...(decision.reason ? { reason: decision.reason } : {}),
-        sendPayload,
-      };
-    }
-    if (decision.decision !== "reroute") {
-      return {
-        status: "allow",
-        channel,
-        to,
-        ...(accountId ? { accountId } : {}),
-        ...(threadId !== undefined ? { threadId } : {}),
-        params: actionParams,
-        sendPayload,
-        rerouted,
-      };
-    }
-
-    rerouted = true;
-    channel = decision.destination.channel as ChannelId;
-    to = decision.destination.to;
-    accountId = decision.destination.accountId;
-    threadId = decision.destination.threadId;
-    actionParams = copyActionParams();
-    actionParams.channel = channel;
-    actionParams.to = to;
-    actionParams.target = to;
-    if (accountId) {
-      actionParams.accountId = accountId;
-    } else {
-      delete actionParams.accountId;
-    }
-    if (threadId !== undefined) {
-      actionParams.threadId = threadId;
-    } else {
-      delete actionParams.threadId;
-    }
-    delete actionParams.replyTo;
-    applySendPayloadPartsToActionParams(actionParams, sendPayload);
-  }
-
-  throw new Error("Outbound delivery policy reroute depth exceeded.");
-}
-
-function resolveInternalSourceDestination(input: RunMessageActionParams): {
-  channel: ChannelId;
-  to: string;
-  threadId?: string | number;
-} {
-  const channel =
-    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider) ??
-    INTERNAL_MESSAGE_CHANNEL;
-  const to = normalizeOptionalString(input.toolContext?.currentChannelId) ?? "current-run";
-  const threadId =
-    normalizeOptionalString(input.toolContext?.currentThreadTs) ??
-    input.toolContext?.currentMessageId;
-  return {
-    channel,
-    to,
-    ...(threadId !== undefined ? { threadId } : {}),
-  };
-}
-
-async function resolveInternalSourceReplyDeliveryPolicy(params: {
-  actionParams: Record<string, unknown>;
-  sendPayload: SendPayloadParts;
-  input: RunMessageActionParams;
-}): Promise<InternalSourcePolicyResult> {
-  const destination = resolveInternalSourceDestination(params.input);
-  const decision = await runOutboundDeliveryPolicyHook({
-    payload: params.sendPayload.payload,
-    kind: "message_action",
-    action: "send",
-    source: sourceFromMessageActionInput(params.input),
-    destination: {
-      channel: destination.channel,
-      to: destination.to,
-      ...(destination.threadId !== undefined ? { threadId: destination.threadId } : {}),
-      path: "internal_source",
-    },
-    ...(params.input.sessionKey ? { sessionKey: params.input.sessionKey } : {}),
-  });
-  const sendPayload =
-    decision.payload !== params.sendPayload.payload
-      ? updateSendPayloadPartsFromReplyPayload(params.sendPayload, decision.payload)
-      : params.sendPayload;
-  if (decision.decision === "cancel") {
-    return {
-      status: "cancel",
-      channel: destination.channel,
-      to: destination.to,
-      ...(decision.reason ? { reason: decision.reason } : {}),
-      sendPayload,
-    };
-  }
-  if (decision.decision === "reroute") {
-    const actionParams = { ...params.actionParams };
-    actionParams.channel = decision.destination.channel;
-    actionParams.to = decision.destination.to;
-    actionParams.target = decision.destination.to;
-    if (decision.destination.accountId) {
-      actionParams.accountId = decision.destination.accountId;
-    }
-    if (decision.destination.threadId !== undefined) {
-      actionParams.threadId = decision.destination.threadId;
-    }
-    applySendPayloadPartsToActionParams(actionParams, sendPayload);
-    return {
-      status: "reroute",
-      params: actionParams,
-      sendPayload,
-    };
-  }
-  return { status: "allow", sendPayload };
-}
-
-function collectMessageAttachmentMediaHints(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const mediaUrls: string[] = [];
-  const seen = new Set<string>();
-  const pushMedia = (entry: unknown) => {
-    const normalized = normalizeOptionalString(entry);
-    if (!normalized || seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    mediaUrls.push(normalized);
-  };
-  for (const attachment of value) {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-      continue;
-    }
-    const record = attachment as Record<string, unknown>;
-    pushMedia(record.media);
-    pushMedia(record.mediaUrl);
-    pushMedia(record.path);
-    pushMedia(record.filePath);
-    pushMedia(record.fileUrl);
-    pushMedia(record.url);
-  }
-  return mediaUrls;
-}
-
-function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
-  return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
-}
-
-function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
-  return (
-    hasExplicitSingularTargetParam(params) ||
-    (Array.isArray(params.targets) &&
-      params.targets.some((value) => normalizeOptionalString(value)))
-  );
-}
-
-function hasPotentialActionTargetInput(
-  input: RunMessageActionParams,
-  params: Record<string, unknown>,
-): boolean {
-  return Boolean(
-    hasExplicitSingularTargetParam(params) ||
-    normalizeOptionalString(input.toolContext?.currentChannelId) ||
-    normalizeOptionalString(input.toolContext?.currentMessagingTarget) ||
-    hasPotentialPluginActionParam(params),
-  );
-}
 
 function isCurrentSourceTargetParam(
   input: RunMessageActionParams,

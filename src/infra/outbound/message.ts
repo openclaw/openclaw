@@ -111,7 +111,6 @@ type MessageSendParams = {
   onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   abortSignal?: AbortSignal;
   silent?: boolean;
-  /** True when an upstream send boundary already applied outbound delivery policy. */
   skipOutboundDeliveryPolicy?: boolean;
   parseMode?: "HTML";
 };
@@ -304,17 +303,13 @@ async function assertRequiredMessageSendDurability(params: {
   );
 }
 
-function resolveGatewayOptions(opts?: OutboundMessageGatewayOptionsInput) {
-  return resolveOutboundMessageGatewayOptions(opts);
-}
-
 async function callMessageGateway<T>(params: {
   gateway?: OutboundMessageGatewayOptionsInput;
   method: string;
   params: Record<string, unknown>;
 }): Promise<T> {
   const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
-  const gateway = resolveGatewayOptions(params.gateway);
+  const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
   return await callGatewayLeastPrivilege<T>({
     url: gateway.url,
     token: gateway.token,

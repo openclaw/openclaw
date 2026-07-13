@@ -6,7 +6,7 @@
  */
 
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
@@ -15,7 +15,17 @@ import {
   type InputGateDecision,
   isHookDecision,
 } from "./hook-decision-types.js";
-import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
+import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
+import {
+  mergeSourcePolicyResults,
+  runOutboundDeliveryPolicyHooks,
+} from "./hook-runner-delivery-policy.js";
+import {
+  getHooksForName,
+  getHooksForNameAndPlugin,
+  type PluginTargetedInboundClaimOutcome,
+} from "./hook-runner-list.js";
+import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-runner-reply-payload.js";
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
@@ -31,7 +41,6 @@ import type {
   PluginHookSourcePolicyContext,
   PluginHookSourcePolicyEvent,
   PluginHookSourcePolicyResult,
-  PluginHookOutboundDeliveryPolicyDestination,
   PluginHookOutboundDeliveryPolicyEvent,
   PluginHookOutboundDeliveryPolicyResult,
   PluginHookHandlerMap,
@@ -182,50 +191,11 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
 };
 
-type PluginTargetedInboundClaimOutcome =
-  | {
-      status: "handled";
-      result: PluginHookInboundClaimResult;
-    }
-  | {
-      status: "missing_plugin";
-    }
-  | {
-      status: "no_handler";
-    }
-  | {
-      status: "declined";
-    }
-  | {
-      status: "error";
-      error: string;
-    };
-
 type SyncHookName = "tool_result_persist" | "before_message_write";
 type SyncHookHandler<K extends SyncHookName> = NonNullable<PluginHookRegistration<K>["handler"]>;
 type SyncHookEvent<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[0];
 type SyncHookContext<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[1];
 type SyncHookResult<K extends SyncHookName> = ReturnType<SyncHookHandler<K>>;
-
-/**
- * Get hooks for a specific hook name, sorted by priority (higher first).
- */
-function getHooksForName<K extends PluginHookName>(
-  registry: HookRunnerRegistry,
-  hookName: K,
-): PluginHookRegistration<K>[] {
-  return (registry.typedHooks as PluginHookRegistration<K>[])
-    .filter((h) => h.hookName === hookName)
-    .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-}
-
-function getHooksForNameAndPlugin<K extends PluginHookName>(
-  registry: HookRunnerRegistry,
-  hookName: K,
-  pluginId: string,
-): PluginHookRegistration<K>[] {
-  return getHooksForName(registry, hookName).filter((hook) => hook.pluginId === pluginId);
-}
 
 /**
  * Create a hook runner for a specific registry.
@@ -256,43 +226,6 @@ export function createHookRunner(
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
-  const toPluginReplyPayload = (payload: ReplyPayload): PluginHookReplyPayload => {
-    const { trustedLocalMedia: _trustedLocalMedia, ...visiblePayload } = payload;
-    return structuredClone(visiblePayload);
-  };
-  const areMediaUrlArraysEqual = (
-    left: readonly string[] | undefined,
-    right: readonly string[] | undefined,
-  ): boolean => {
-    const normalizedLeft = left ?? [];
-    const normalizedRight = right ?? [];
-    return (
-      normalizedLeft.length === normalizedRight.length &&
-      normalizedLeft.every((value, index) => value === normalizedRight[index])
-    );
-  };
-  const preservesTrustedMediaRefs = (
-    previous: ReplyPayload,
-    next: PluginHookReplyPayload,
-  ): boolean => {
-    return (
-      previous.trustedLocalMedia === true &&
-      previous.mediaUrl === next.mediaUrl &&
-      areMediaUrlArraysEqual(previous.mediaUrls, next.mediaUrls)
-    );
-  };
-  const acceptPluginReplyPayload = (
-    previous: ReplyPayload,
-    next: PluginHookReplyPayload,
-  ): ReplyPayload => {
-    const { trustedLocalMedia: _trustedLocalMedia, ...safePayload } = next as ReplyPayload;
-    const clonedPayload = structuredClone(safePayload);
-    const acceptedPayload = preservesTrustedMediaRefs(previous, clonedPayload)
-      ? { ...clonedPayload, trustedLocalMedia: true }
-      : clonedPayload;
-    return copyReplyPayloadMetadata(previous, acceptedPayload);
-  };
-
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
     next: PluginHookBeforeModelResolveResult,
@@ -1035,22 +968,7 @@ export function createHookRunner(
       event,
       ctx,
       {
-        mergeResults: (acc, next) => ({
-          sourceReplyDeliveryMode:
-            acc?.sourceReplyDeliveryMode === "message_tool_only" ||
-            next.sourceReplyDeliveryMode === "message_tool_only"
-              ? "message_tool_only"
-              : undefined,
-          promptBody: lastDefined(acc?.promptBody, next.promptBody),
-          currentInboundContext: Object.hasOwn(next, "currentInboundContext")
-            ? next.currentInboundContext
-            : acc?.currentInboundContext,
-          suppressConversationContext: stickyTrue(
-            acc?.suppressConversationContext,
-            next.suppressConversationContext,
-          ),
-          reason: lastDefined(acc?.reason, next.reason),
-        }),
+        mergeResults: mergeSourcePolicyResults,
       },
     );
   }
@@ -1115,23 +1033,6 @@ export function createHookRunner(
     return result;
   }
 
-  function acceptOutboundDeliveryDestination(
-    previous: PluginHookOutboundDeliveryPolicyDestination,
-    next: PluginHookOutboundDeliveryPolicyDestination | undefined,
-  ): PluginHookOutboundDeliveryPolicyDestination {
-    if (!next) {
-      return previous;
-    }
-    return {
-      channel: next.channel,
-      to: next.to,
-      conversationId: next.conversationId || next.to,
-      ...(next.accountId ? { accountId: next.accountId } : {}),
-      ...(next.threadId !== undefined ? { threadId: next.threadId } : {}),
-      path: next.path,
-    };
-  }
-
   /**
    * Run outbound_delivery_policy hook.
    * Allows plugins to allow, cancel, or reroute resolved outbound deliveries.
@@ -1140,96 +1041,20 @@ export function createHookRunner(
     event: PluginHookOutboundDeliveryPolicyEvent,
     ctx: PluginHookMessageContext,
   ): Promise<PluginHookOutboundDeliveryPolicyResult | undefined> {
-    const hooks = getHooksForName(registry, "outbound_delivery_policy");
-    if (hooks.length === 0) {
-      return undefined;
-    }
-
-    logger?.debug?.(
-      `[hooks] running outbound_delivery_policy (${hooks.length} handlers, sequential)`,
-    );
-
-    let currentPayload: ReplyPayload = event.payload;
-    let currentDestination = event.destination;
-    let result: PluginHookOutboundDeliveryPolicyResult | undefined;
-    let currentDecision: "allow" | "cancel" | "reroute" | undefined;
-
-    for (const hook of hooks) {
-      try {
-        const handler = hook.handler as (
-          event: PluginHookOutboundDeliveryPolicyEvent,
-          ctx: PluginHookMessageContext,
-        ) => Promise<PluginHookOutboundDeliveryPolicyResult | void>;
-        const promise = Promise.resolve(
-          handler(
-            {
-              ...event,
-              payload: toPluginReplyPayload(currentPayload),
-              destination: currentDestination,
-            },
-            ctx,
-          ),
-        );
+    return runOutboundDeliveryPolicyHooks({
+      registry,
+      event,
+      ctx,
+      debug: logger?.debug,
+      invoke: async (hook, nextEvent, nextContext) => {
+        const handler = hook.handler;
+        const promise = Promise.resolve(handler(nextEvent, nextContext));
         const timeoutMs = getModifyingHookTimeoutMs("outbound_delivery_policy", hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
-
-        if (!handlerResult) {
-          continue;
-        }
-
-        if (handlerResult.payload !== undefined) {
-          currentPayload = acceptPluginReplyPayload(currentPayload, handlerResult.payload);
-        }
-        if (handlerResult.decision === "reroute") {
-          currentDestination = acceptOutboundDeliveryDestination(
-            currentDestination,
-            handlerResult.destination,
-          );
-          currentDecision = "reroute";
-        } else if (handlerResult.decision === "cancel") {
-          currentDecision = "cancel";
-        } else if (!currentDecision) {
-          currentDecision = "allow";
-        }
-
-        if (currentDecision === "reroute") {
-          result = {
-            decision: "reroute",
-            payload: currentPayload as PluginHookReplyPayload,
-            destination: currentDestination,
-            reason: lastDefined(result?.reason, handlerResult.reason),
-          };
-        } else if (currentDecision === "cancel") {
-          result = {
-            decision: "cancel",
-            payload: currentPayload as PluginHookReplyPayload,
-            reason: lastDefined(result?.reason, handlerResult.reason),
-          };
-        } else {
-          result = {
-            decision: "allow",
-            payload: currentPayload as PluginHookReplyPayload,
-            reason: lastDefined(result?.reason, handlerResult.reason),
-          };
-        }
-
-        if (handlerResult.decision === "cancel") {
-          const priority = hook.priority ?? 0;
-          logger?.debug?.(
-            `[hooks] outbound_delivery_policy cancel decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
-          );
-          break;
-        }
-      } catch (err) {
-        handleHookError({
-          hookName: "outbound_delivery_policy",
-          pluginId: hook.pluginId,
-          error: err,
-        });
-      }
-    }
-
-    return result;
+        return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+      },
+      onError: (hook, error) =>
+        handleHookError({ hookName: "outbound_delivery_policy", pluginId: hook.pluginId, error }),
+    });
   }
 
   /**

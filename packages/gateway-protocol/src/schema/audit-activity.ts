@@ -1,5 +1,6 @@
 // Versioned metadata-only activity audit query payloads.
 import { type TProperties, type TSchema, Type } from "typebox";
+import { AuditOutboundSuppressedReasonSchema } from "./audit-outbound-reasons.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -335,15 +336,6 @@ const outboundMessageProperties = {
   ),
 };
 
-const outboundSuppressedReasonSchema = Type.Union([
-  Type.Literal("cancelled_by_message_sending_hook"),
-  Type.Literal("cancelled_by_outbound_delivery_policy"),
-  Type.Literal("cancelled_by_reply_payload_sending_hook"),
-  Type.Literal("empty_after_message_sending_hook"),
-  Type.Literal("empty_after_reply_payload_sending_hook"),
-  Type.Literal("no_visible_payload"),
-]);
-
 const outboundFailureStageSchema = Type.Union([
   Type.Literal("platform_send"),
   Type.Literal("queue"),
@@ -372,7 +364,7 @@ export const AuditActivityOutboundMessageV1Schema: TSchema = correlatedObject(
       Type.Literal("unknown"),
     ]),
     errorCode: Type.Optional(outboundFailureErrorSchema),
-    reasonCode: Type.Optional(outboundSuppressedReasonSchema),
+    reasonCode: Type.Optional(AuditOutboundSuppressedReasonSchema),
     failureStage: Type.Optional(outboundFailureStageSchema),
   },
   Type.Union([
@@ -386,7 +378,7 @@ export const AuditActivityOutboundMessageV1Schema: TSchema = correlatedObject(
       Type.Object({
         status: Type.Literal("blocked"),
         outcome: Type.Literal("suppressed"),
-        reasonCode: outboundSuppressedReasonSchema,
+        reasonCode: AuditOutboundSuppressedReasonSchema,
       }),
       withoutErrorCode,
       withoutFailureStage,

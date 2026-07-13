@@ -110,6 +110,28 @@ export type OutboundPayloadDeliveryOutcome =
       deliveryKind?: OutboundPayloadDeliveryKind;
     };
 
+/** Build a normalized suppressed payload outcome. */
+export function suppressedPayloadOutcome(params: {
+  index: number;
+  reason: OutboundPayloadDeliverySuppressionReason;
+  hookEffect?: { cancelReason?: string; metadata?: Record<string, unknown> };
+}): OutboundPayloadDeliveryOutcome {
+  return {
+    index: params.index,
+    status: "suppressed",
+    reason: params.reason,
+    ...(params.hookEffect ? { hookEffect: params.hookEffect } : {}),
+  };
+}
+
+/** Resolve the best available session key for delivery diagnostics only. */
+export function sessionKeyForDeliveryDiagnostics(params: {
+  mirror?: { sessionKey?: string };
+  session?: { key?: string; policyKey?: string };
+}): string | undefined {
+  return params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
+}
+
 /** Error carrying partial delivery results when an outbound send fails mid-batch. */
 export class OutboundDeliveryError extends Error {
   readonly results: OutboundDeliveryResult[];
