@@ -384,9 +384,12 @@ async function resolveCliSkillsPrompt(params: {
       ...(sandboxWorkspace.workspaceAccess
         ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
         : {}),
+      ...(sandboxWorkspace.skipSkillsSync ? { skipSkillsSync: true } : {}),
     },
     effectiveWorkspace: sandboxWorkspace.workspaceDir,
     skillsSnapshot: params.skillsSnapshot,
+    config: params.config,
+    agentId: params.agentId,
   });
   const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
     workspaceDir: skillsWorkspaceDir,

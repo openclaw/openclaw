@@ -5,18 +5,32 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
-import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
-import type { SkillEntry } from "../../skills/types.js";
-import type { SandboxContext } from "../sandbox/types.js";
+import { resolveSkillsLimits } from "../../skills/loading/workspace.js";
+import type {
+  SkillEligibilityContext,
+  SkillEntry,
+  SkillSnapshot,
+  SkillUsagePath,
+} from "../../skills/types.js";
+
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
-type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
-  Partial<
-    Pick<
-      SandboxContext,
-      "skillsEligibility" | "skillsWorkspaceDir" | "containerWorkdir" | "workspaceAccess"
-    >
-  >;
+type SandboxSkillRuntimeContext = {
+  enabled: boolean;
+  skillsEligibility?: SkillEligibilityContext;
+  skillsWorkspaceDir?: string;
+  containerWorkdir?: string;
+  workspaceAccess?: string;
+  skipSkillsSync?: boolean;
+};
 
 function containerJoin(root: string, ...parts: string[]): string {
   const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
@@ -127,6 +141,8 @@ export function resolveSandboxSkillRuntimeInputs(params: {
   sandbox?: SandboxSkillRuntimeContext | null;
   effectiveWorkspace: string;
   skillsSnapshot?: SkillSnapshot;
+  config?: import("../../config/types.openclaw.js").OpenClawConfig;
+  agentId?: string;
 }): {
   skillsEligibility?: SkillEligibilityContext;
   skillsPromptWorkspaceDir: string;
@@ -145,12 +161,45 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
+    const sandboxSkillsSnapshot =
+      params.sandbox.skipSkillsSync && params.skillsSnapshot?.resolvedSkills
+        ? (() => {
+            const limits = resolveSkillsLimits(params.config, params.agentId);
+            const skills = params.skillsSnapshot!.resolvedSkills!.slice(
+              0,
+              limits.maxSkillsInPrompt,
+            );
+            // Build name-only lines and respect the char limit
+            const lines: string[] = [];
+            const remoteNote = params.sandbox?.skillsEligibility?.remote?.note?.trim();
+            if (remoteNote) {
+              lines.push(remoteNote);
+            }
+            lines.push("<available_skills>");
+            for (const s of skills) {
+              const line = `  <skill>\n    <name>${escapeXml(s.name)}</name>\n  </skill>`;
+              // Check if adding this line would exceed the limit
+              if (
+                [...lines, line, "</available_skills>"].join("\n").length >
+                limits.maxSkillsPromptChars
+              ) {
+                break;
+              }
+              lines.push(line);
+            }
+            lines.push("</available_skills>");
+            return {
+              prompt: lines.join("\n"),
+              skills: params.skillsSnapshot!.skills,
+            };
+          })()
+        : undefined;
     return {
       ...(params.sandbox.skillsEligibility
         ? { skillsEligibility: params.sandbox.skillsEligibility }
         : {}),
       skillsPromptWorkspaceDir,
-      skillsSnapshot: undefined,
+      skillsSnapshot: sandboxSkillsSnapshot ?? undefined,
       skillsWorkspaceDir,
       workspaceOnly: true,
     };

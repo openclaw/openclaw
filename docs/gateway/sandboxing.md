@@ -175,6 +175,8 @@ Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 
 <Note>
 **Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so they can be read. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
+
+Set `agents.defaults.sandbox.docker.skipSkillsSync` to `true` to skip the skill copy step entirely. Use this when skills are preinstalled in the sandbox image (e.g., via `docker.setupCommand` or a custom image). When enabled, the agent still sees a name-only skill list in its prompt (without readable `<location>` paths), so it knows which skills exist but cannot read SKILL.md files unless they are available at a sandbox-accessible path. The command/system-prompt skill inspection returns empty when sync is skipped.
 </Note>
 
 ## Custom bind mounts

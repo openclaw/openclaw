@@ -1361,6 +1361,8 @@ export async function runEmbeddedAttempt(
       sandbox,
       effectiveWorkspace,
       skillsSnapshot: params.skillsSnapshot,
+      config: params.config,
+      agentId: sessionAgentId,
     });
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveSkillsWorkspace,

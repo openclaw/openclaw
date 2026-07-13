@@ -121,4 +121,5 @@ export type SandboxWorkspaceInfo = {
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
   workspaceAccess?: SandboxWorkspaceAccess;
+  skipSkillsSync?: boolean;
 };

@@ -208,6 +208,21 @@ const SandboxDockerSchema = z
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
     dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
+    skipSkillsSync: z
+      .boolean()
+      .optional()
+      .describe(
+        "When true, skip copying skills into sandbox workspaces. " +
+          "Skills must be preinstalled in the sandbox image via setupCommand " +
+          "or docker.binds (the workspace bind mount at /workspace shadows " +
+          "image-baked content). " +
+          "The agent will still see a name-only skill list (without readable " +
+          "'<location>' paths) so it knows which skills exist by name, but it " +
+          "cannot read SKILL.md files unless preinstalled at a sandbox-accessible " +
+          "path. Use docker.setupCommand to copy skills from a preloaded image " +
+          "path into the workspace. The command/system-prompt skill inspection " +
+          "returns empty when sync is skipped.",
+      ),
   })
   .strict()
   .superRefine((data, ctx) => {

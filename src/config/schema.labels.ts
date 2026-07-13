@@ -783,6 +783,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Sandbox Docker Allow Container Namespace Join",
   "agents.defaults.sandbox.docker.gpus": "Sandbox Docker GPUs",
+  "agents.defaults.sandbox.docker.skipSkillsSync": "Skip Sandbox Skill Sync",
   commands: "Commands",
   "commands.native": "Native Commands",
   "commands.nativeSkills": "Native Skill Commands",
@@ -1103,6 +1104,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
   "agents.list[].sandbox.docker.gpus": "Agent Sandbox Docker GPUs",
+  "agents.list[].sandbox.docker.skipSkillsSync": "Agent Skip Sandbox Skill Sync",
   "discovery.mdns.mode": "mDNS Discovery Mode",
   plugins: "Plugins",
   "plugins.enabled": "Enable Plugins",

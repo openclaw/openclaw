@@ -62,6 +62,8 @@ export type SandboxDockerSettings = {
    * Default behavior blocks container namespace joins to preserve sandbox isolation.
    */
   dangerouslyAllowContainerNamespaceJoin?: boolean;
+  /** When true, skip syncing skills into sandbox workspaces. Docker setupCommand or binds must provide them. */
+  skipSkillsSync?: boolean;
 };
 
 export type SandboxBrowserSettings = {

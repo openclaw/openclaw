@@ -26,6 +26,35 @@ import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
+async function computeSandboxSkillsEligibility(params: {
+  config?: OpenClawConfig;
+  agentId: string;
+  rawSessionKey: string;
+}): Promise<{ eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] }> {
+  try {
+    const [{ getRemoteSkillEligibility }, { resolveNodeExecEligibility }] = await Promise.all([
+      import("../../skills/runtime/remote.js"),
+      import("../exec-defaults.js"),
+    ]);
+    const nodeSkills = resolveNodeExecEligibility({
+      cfg: params.config,
+      sessionKey: params.rawSessionKey,
+      agentId: params.agentId,
+    });
+    const eligibility: SkillEligibilityContext = {
+      nodeSkills,
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: nodeSkills.canExec,
+      }),
+    };
+    return { eligibility, skillUsagePaths: undefined };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : JSON.stringify(error);
+    defaultRuntime.error?.(`Sandbox skill eligibility failed: ${message}`);
+    return {};
+  }
+}
+
 async function syncSandboxSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
@@ -95,7 +124,8 @@ async function ensureSandboxWorkspaceLayout(params: {
       workspaceDir: params.workspaceDir,
     });
 
-  let syncedSkills: Awaited<ReturnType<typeof syncSandboxSkillsToWorkspace>>;
+  type SyncedSkills = { eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] };
+  let syncedSkills: SyncedSkills;
   if (cfg.workspaceAccess !== "rw") {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
@@ -103,24 +133,42 @@ async function ensureSandboxWorkspaceLayout(params: {
       params.config?.agents?.defaults?.skipBootstrap,
       params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
     );
-    syncedSkills = await syncSandboxSkillsToWorkspace({
-      sourceWorkspaceDir: agentWorkspaceDir,
-      targetWorkspaceDir: sandboxWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      rawSessionKey,
-      execOverrides: params.execOverrides,
-    });
+    if (cfg.docker.skipSkillsSync) {
+      const { eligibility: skillsElig } = await computeSandboxSkillsEligibility({
+        config: params.config,
+        agentId: params.agentId,
+        rawSessionKey,
+      });
+      syncedSkills = { eligibility: skillsElig, skillUsagePaths: undefined };
+    } else {
+      syncedSkills = await syncSandboxSkillsToWorkspace({
+        sourceWorkspaceDir: agentWorkspaceDir,
+        targetWorkspaceDir: sandboxWorkspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        rawSessionKey,
+        execOverrides: params.execOverrides,
+      });
+    }
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
-    syncedSkills = await syncSandboxSkillsToWorkspace({
-      sourceWorkspaceDir: agentWorkspaceDir,
-      targetWorkspaceDir: skillsWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      rawSessionKey,
-      execOverrides: params.execOverrides,
-    });
+    if (cfg.docker.skipSkillsSync) {
+      const { eligibility: skillsElig } = await computeSandboxSkillsEligibility({
+        config: params.config,
+        agentId: params.agentId,
+        rawSessionKey,
+      });
+      syncedSkills = { eligibility: skillsElig, skillUsagePaths: undefined };
+    } else {
+      syncedSkills = await syncSandboxSkillsToWorkspace({
+        sourceWorkspaceDir: agentWorkspaceDir,
+        targetWorkspaceDir: skillsWorkspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        rawSessionKey,
+        execOverrides: params.execOverrides,
+      });
+    }
   }
 
   return {
@@ -312,6 +360,7 @@ export async function resolveSandboxContext(params: {
     browserAllowHostControl: resolvedCfg.browser.allowHostControl,
     browser: browser ?? undefined,
     backend,
+    ...(resolvedCfg.docker.skipSkillsSync ? { skipSkillsSync: true } : {}),
   };
 
   sandboxContext.fsBridge =
@@ -362,5 +411,6 @@ export async function ensureSandboxWorkspaceForSession(params: {
     ...(skillsEligibility ? { skillsEligibility } : {}),
     ...(skillUsagePaths ? { skillUsagePaths } : {}),
     workspaceAccess: cfg.workspaceAccess,
+    ...(cfg.docker.skipSkillsSync ? { skipSkillsSync: true } : {}),
   };
 }

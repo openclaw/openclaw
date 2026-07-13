@@ -91,6 +91,13 @@ async function resolveCommandSkillsPrompt(params: {
       if (!sandboxWorkspace) {
         return "";
       }
+      if (sandboxWorkspace.skipSkillsSync) {
+        // Skills were not synced into the sandbox and are not inspectable
+        // from the host. Return empty so the caller does not fall through
+        // to resolveReusableWorkspaceSkillSnapshot, which would read host
+        // paths that are unreachable inside the container.
+        return "";
+      }
       if (sandboxWorkspace.containerWorkdir) {
         const {
           skillsEligibility,

@@ -603,6 +603,9 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.list[].sandbox.browser.cdpSourceRange":
     "Per-agent override for CDP source CIDR allowlist.",
+  "agents.defaults.sandbox.docker.skipSkillsSync":
+    "When true, skip copying skills into sandbox workspaces. Skills must be preinstalled via docker.setupCommand or docker.binds. The agent still sees a name-only skill list but cannot read SKILL.md unless preinstalled at a sandbox-accessible path.",
+  "agents.list[].sandbox.docker.skipSkillsSync": "Per-agent override for skipSkillsSync.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
