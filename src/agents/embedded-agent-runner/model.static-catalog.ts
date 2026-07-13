@@ -235,49 +235,6 @@ function hasConfiguredModelCatalogProviderEndpointSurface(params: {
   );
 }
 
-function hasConfiguredModelCatalogProviderModelRow(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  const modelId = params.modelId?.trim();
-  if (!provider || !modelId) {
-    return false;
-  }
-  const config = findConfiguredModelCatalogProviderConfig({ provider, cfg: params.cfg });
-  return (
-    Array.isArray(config?.models) &&
-    config.models.some((model) =>
-      staticModelIdMatches({
-        candidateId: model.id,
-        provider,
-        modelId,
-      }),
-    )
-  );
-}
-
-function hasManifestModelCatalogAliasModelRow(params: {
-  provider: string;
-  modelId?: string;
-  plugin: Pick<PluginManifestRecord, "id" | "providers" | "modelCatalog">;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  const modelId = params.modelId?.trim();
-  if (!provider || !modelId) {
-    return false;
-  }
-  return planManifestModelCatalogRows({
-    registry: { plugins: [params.plugin] },
-    providerFilter: provider,
-  }).entries.some(
-    (entry) =>
-      normalizeProviderId(entry.provider) === provider &&
-      entry.rows.some((row) => rowMatchesModel({ row, provider, modelId })),
-  );
-}
-
 function hasManifestModelCatalogSuppression(params: {
   provider: string;
   modelId?: string;
@@ -380,6 +337,13 @@ function resolveManifestModelCatalogProviderAlias(params: {
         continue;
       }
       const hasModelId = Boolean(params.modelId?.trim());
+      const hasApplicableSuppression =
+        hasModelId &&
+        hasManifestModelCatalogSuppression({
+          provider,
+          modelId: params.modelId,
+          plugin,
+        });
       const hasEndpointSurface =
         hasModelCatalogAliasEndpointSurface(alias) ||
         hasConfiguredModelCatalogProviderEndpointSurface({
@@ -390,22 +354,7 @@ function resolveManifestModelCatalogProviderAlias(params: {
       const retainsTransportAlias =
         hasModelCatalogAliasTransportOverride(alias) &&
         hasEndpointSurface &&
-        (!hasModelId ||
-          hasConfiguredModelCatalogProviderModelRow({
-            provider,
-            modelId: params.modelId,
-            cfg: params.cfg,
-          }) ||
-          hasManifestModelCatalogAliasModelRow({
-            provider,
-            modelId: params.modelId,
-            plugin,
-          }) ||
-          !hasManifestModelCatalogSuppression({
-            provider,
-            modelId: params.modelId,
-            plugin,
-          }));
+        !hasApplicableSuppression;
       const baseUrl = alias.baseUrl?.trim();
       claims.push({
         pluginId: plugin.id,
