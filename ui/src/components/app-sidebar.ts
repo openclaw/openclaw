@@ -29,6 +29,7 @@ import {
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
+import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import "./menu-surface.ts";
@@ -2935,7 +2936,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       (chipName || chipAgentId).slice(0, 1).toUpperCase();
     return html`
       <aside class="sidebar">
-        <div class="sidebar-shell">
+        <!-- The Mac app reserves this padding strip for the titlebar; presses
+             on the bare inset ask the host to move the window (the native
+             drag region that used to float here is gone). -->
+        <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
           ${this.renderBrand()}
           <div class="sidebar-shell__body">
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>

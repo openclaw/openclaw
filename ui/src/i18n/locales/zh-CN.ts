@@ -1437,6 +1437,8 @@ export const zh_CN: TranslationMap = {
     blockedAgentFilter: "被代理过滤器阻止",
   },
   nav: {
+    back: "后退",
+    forward: "前进",
     chat: "聊天",
     settings: "设置",
     settingsGeneral: "通用",
@@ -3508,6 +3510,14 @@ export const zh_CN: TranslationMap = {
       remove: "移除",
       more: "更多操作",
       history: "历史",
+    },
+    runNotStarted: {
+      notDue: "此自动化任务尚未到运行时间。",
+      alreadyRunning: "此自动化任务已在运行。",
+      recoveryPending: "调度程序仍在恢复中。",
+      invalidSpec: "此自动化任务的计划或负载无效。",
+      stopped: "调度程序已停止。",
+      unknown: "无法启动此自动化任务。",
     },
     jobs: {
       schedule: "计划",

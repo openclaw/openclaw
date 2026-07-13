@@ -1454,6 +1454,8 @@ export const pt_BR: TranslationMap = {
     blockedAgentFilter: "bloqueado pelo filtro de agente",
   },
   nav: {
+    back: "Voltar",
+    forward: "Avançar",
     chat: "Chat",
     settings: "Configurações",
     settingsGeneral: "Geral",
@@ -3588,6 +3590,14 @@ export const pt_BR: TranslationMap = {
       remove: "Remover",
       more: "Mais ações",
       history: "Histórico",
+    },
+    runNotStarted: {
+      notDue: "Esta automação ainda não está programada para ser executada.",
+      alreadyRunning: "Esta automação já está em execução.",
+      recoveryPending: "A recuperação do agendador ainda está em andamento.",
+      invalidSpec: "Esta automação tem um agendamento ou uma carga útil inválidos.",
+      stopped: "O agendador está parado.",
+      unknown: "Não foi possível iniciar esta automação.",
     },
     jobs: {
       schedule: "Agendamento",

@@ -1447,6 +1447,8 @@ export const en: TranslationMap = {
     blockedAgentFilter: "blocked by agent filter",
   },
   nav: {
+    back: "Back",
+    forward: "Forward",
     chat: "Chat",
     settings: "Settings",
     settingsGeneral: "General",
