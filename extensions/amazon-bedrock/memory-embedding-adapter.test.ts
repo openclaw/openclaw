@@ -68,6 +68,9 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
       bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
     ).rejects.toThrow(/AWS credentials are not available/);
 
+    expect(hasAwsCredentialsMock).toHaveBeenCalledWith(process.env, undefined, {
+      allowImds: false,
+    });
     expect(createBedrockEmbeddingProviderMock).not.toHaveBeenCalled();
   });
 
@@ -88,6 +91,173 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
       },
     });
     expect(createBedrockEmbeddingProviderMock).toHaveBeenCalledOnce();
+  });
+
+  it("allows IMDS credential probing for explicitly selected Bedrock", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    stubCreate({ region: "us-east-1", model: "amazon.titan-embed-text-v2:0" });
+
+    await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      provider: "bedrock",
+    });
+
+    expect(hasAwsCredentialsMock).toHaveBeenCalledWith(process.env, undefined, {
+      allowImds: true,
+    });
+  });
+
+  it("allows IMDS credential probing when Bedrock is explicitly configured in memorySearch", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    stubCreate({ region: "us-east-1", model: "amazon.titan-embed-text-v2:0" });
+
+    await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: "bedrock" },
+          },
+        },
+      },
+    });
+
+    expect(hasAwsCredentialsMock).toHaveBeenCalledWith(process.env, undefined, {
+      allowImds: true,
+    });
+  });
+
+  it("allows IMDS credential probing for a configured Bedrock provider alias selected by id", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    stubCreate({ region: "us-east-1", model: "amazon.titan-embed-text-v2:0" });
+
+    await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      provider: "my-bedrock",
+      config: {
+        models: {
+          providers: {
+            "my-bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              api: "bedrock-converse-stream",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(hasAwsCredentialsMock).toHaveBeenCalledWith(process.env, undefined, {
+      allowImds: true,
+    });
+  });
+
+  it("allows IMDS credential probing when a Bedrock alias config key differs by case from the selected id", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    stubCreate({ region: "us-east-1", model: "amazon.titan-embed-text-v2:0" });
+
+    await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      provider: "my-bedrock",
+      config: {
+        models: {
+          providers: {
+            "My-Bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              api: "bedrock-converse-stream",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(hasAwsCredentialsMock).toHaveBeenCalledWith(process.env, undefined, {
+      allowImds: true,
+    });
+  });
+
+  it("allows IMDS credential probing when memorySearch selects a normalized Bedrock alias id", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    stubCreate({ region: "us-east-1", model: "amazon.titan-embed-text-v2:0" });
+
+    await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: " my-bedrock " },
+          },
+        },
+        models: {
+          providers: {
+            "My-Bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              api: "bedrock-converse-stream",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(hasAwsCredentialsMock).toHaveBeenCalledWith(process.env, undefined, {
+      allowImds: true,
+    });
+  });
+
+  it("allows IMDS credential probing when a Bedrock provider alias is configured in memorySearch", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    stubCreate({ region: "us-east-1", model: "amazon.titan-embed-text-v2:0" });
+
+    await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: "my-bedrock" },
+          },
+        },
+        models: {
+          providers: {
+            "my-bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              api: "bedrock-converse-stream",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(hasAwsCredentialsMock).toHaveBeenCalledWith(process.env, undefined, {
+      allowImds: true,
+    });
+  });
+
+  it("does not allow IMDS probing for a non-Bedrock provider alias with the same selected id", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    stubCreate({ region: "us-east-1", model: "amazon.titan-embed-text-v2:0" });
+
+    await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      provider: "my-openai",
+      config: {
+        models: {
+          providers: {
+            "my-openai": {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(hasAwsCredentialsMock).toHaveBeenCalledWith(process.env, undefined, {
+      allowImds: false,
+    });
   });
 
   it("lets the auto-select loop skip bedrock when credentials are unavailable", async () => {
