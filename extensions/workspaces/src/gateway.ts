@@ -104,7 +104,6 @@ function createWorkspacePresenceRegistry(now: () => number) {
       tabId: string;
     }): WorkspacePresenceParticipant[] {
       const seenAt = now();
-      prune(seenAt);
       const current = {
         domainId: params.context.isolationDomainId,
         workspaceId: params.workspaceId,
@@ -115,6 +114,7 @@ function createWorkspacePresenceRegistry(now: () => number) {
       const key = presenceKey(current);
       // Delete before set so insertion order also tracks recency for bounded eviction.
       entries.delete(key);
+      prune(seenAt);
       entries.set(key, { ...current, seenAt });
       return [...entries.values()]
         .filter(

@@ -197,6 +197,45 @@ describe("Teams portal store", () => {
     }
   });
 
+  it("waits for an in-flight presence refresh before scheduling the next poll", async () => {
+    vi.useFakeTimers();
+    try {
+      let tabReads = 0;
+      let resolvePresence!: (value: ReturnType<typeof tabResult>) => void;
+      const pendingPresence = new Promise<ReturnType<typeof tabResult>>((resolve) => {
+        resolvePresence = resolve;
+      });
+      const gateway = {
+        request: vi.fn((method: string) => {
+          if (method === "workspaces.tab.get") {
+            tabReads += 1;
+            return tabReads === 1 ? Promise.resolve(tabResult()) : pendingPresence;
+          }
+          return Promise.resolve(tabResult());
+        }),
+        stop: vi.fn(),
+      };
+      const { store } = createStore({ gateway });
+      await store.start({ route: "login", workspaceId: "workspace-1", tabId: "tab-1" });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(tabReads).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(tabReads).toBe(2);
+
+      resolvePresence(tabResult());
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(tabReads).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(tabReads).toBe(3);
+      store.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("syncs owner sharing before loading the exact tab and selects that tab by default", async () => {
     const gateway = {
       request: vi.fn(async (method: string, _params?: unknown) => {
