@@ -307,9 +307,9 @@ describe("promptRemoteGatewayConfig", () => {
     process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {
-        expect(params.validate?.("ws://openclaw-gateway.ai:18789")).toBeUndefined();
+        expect(params.validate?.("ws://openclaw-gateway.internal:18789")).toBeUndefined();
         expect(params.validate?.("ws://1.1.1.1:18789")).toBe(INSECURE_WS_URL_MESSAGE);
-        return "ws://openclaw-gateway.ai:18789";
+        return "ws://openclaw-gateway.internal:18789";
       }
       return "";
     }) as WizardPrompter["text"];
@@ -321,7 +321,7 @@ describe("promptRemoteGatewayConfig", () => {
     });
 
     expect(next.gateway?.mode).toBe("remote");
-    expect(next.gateway?.remote?.url).toBe("ws://openclaw-gateway.ai:18789");
+    expect(next.gateway?.remote?.url).toBe("ws://openclaw-gateway.internal:18789");
   });
 
   it("supports storing remote auth as an external env secret ref", async () => {

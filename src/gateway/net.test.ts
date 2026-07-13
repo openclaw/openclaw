@@ -831,4 +831,12 @@ describe("isSecureWebSocketUrl", () => {
       expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
     }
   });
+
+  it("still rejects public DNS domains even when allowPrivateWs is enabled", () => {
+    const publicDomains = ["ws://evil.com:18789", "ws://google.com", "ws://github.com:80"];
+
+    for (const input of publicDomains) {
+      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
+    }
+  });
 });

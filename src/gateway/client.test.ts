@@ -557,7 +557,7 @@ describe("GatewayClient security checks", () => {
     process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
     const onConnectError = vi.fn();
     const client = new GatewayClient({
-      url: "ws://openclaw-gateway.ai:18789",
+      url: "ws://openclaw-gateway.internal:18789",
       onConnectError,
     });
 

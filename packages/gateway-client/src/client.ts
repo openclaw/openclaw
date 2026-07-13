@@ -202,14 +202,30 @@ function isPrivateOrLoopbackHost(host: string): boolean {
   return isPrivateOrLoopbackIpAddress(address);
 }
 
-function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
+function isTrustedPlaintextWebSocketHost(hostname: string, allowPrivateWs = false): boolean {
   if (isPrivateOrLoopbackHost(hostname)) {
     return true;
   }
   const normalized = hostname.toLowerCase().trim().replace(/\.+$/, "");
   // Plain ws:// is still useful for local discovery and Tailnet names. Public
   // hostnames must use wss:// unless the caller opts into the private break-glass.
-  return normalized.endsWith(".local") || normalized.endsWith(".ts.net");
+  if (normalized.endsWith(".local") || normalized.endsWith(".ts.net")) {
+    return true;
+  }
+  if (allowPrivateWs) {
+    return (
+      normalized.endsWith(".internal") ||
+      normalized.endsWith(".lan") ||
+      normalized.endsWith(".home") ||
+      normalized.endsWith(".corp") ||
+      normalized.endsWith(".onion") ||
+      normalized.endsWith(".test") ||
+      normalized.endsWith(".invalid") ||
+      normalized.endsWith(".localhost") ||
+      normalized.endsWith(".example")
+    );
+  }
+  return false;
 }
 
 function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boolean }): boolean {
@@ -223,17 +239,11 @@ function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boole
     if (protocol !== "ws:") {
       return false;
     }
-    if (isLoopbackHost(url.hostname) || isTrustedPlaintextWebSocketHost(url.hostname)) {
+    if (
+      isLoopbackHost(url.hostname) ||
+      isTrustedPlaintextWebSocketHost(url.hostname, options?.allowPrivateWs)
+    ) {
       return true;
-    }
-    if (options?.allowPrivateWs === true) {
-      const hostForIpCheck =
-        url.hostname.startsWith("[") && url.hostname.endsWith("]")
-          ? url.hostname.slice(1, -1)
-          : url.hostname;
-      return (
-        isPrivateOrLoopbackHost(url.hostname) || parseGatewayIpAddress(hostForIpCheck) === null
-      );
     }
     return false;
   } catch {
