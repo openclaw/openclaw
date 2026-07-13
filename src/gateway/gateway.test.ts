@@ -796,12 +796,12 @@ module.exports = {
         prefix: "openclaw-wizard-channels-home-",
         minimalGateway: true,
       });
-      const gatewayToken = nextGatewayId("wiz-chan-token");
+      const wizAuth = nextGatewayId("wiz-chan");
       const port = await getFreeGatewayPort();
       const channelRuns: Array<string | undefined> = [];
       const server = await startGatewayServer(port, {
         bind: "loopback",
-        auth: { mode: "token", token: gatewayToken },
+        auth: { mode: "token", token: wizAuth },
         controlUiEnabled: false,
         wizardRunner: async () => {
           throw new Error("setup wizard runner must not run for flow channels");
@@ -819,7 +819,7 @@ module.exports = {
 
       const client = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
-        token: gatewayToken,
+        token: wizAuth,
         clientDisplayName: "vitest-wizard-channels",
       });
 
