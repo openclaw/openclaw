@@ -292,35 +292,57 @@ describe("session suspension", () => {
     await suspension;
 
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
-    expect(sessionAccessorMocks.patchSessionEntry).toHaveBeenCalledTimes(2);
-    const cleanupPatch = sessionAccessorMocks.patchSessionEntry.mock.calls[1]?.[1] as (entry: {
-      quotaSuspension?: {
-        suspendedAt: number;
-        reason: string;
-        failedProvider: string;
-        failedModel: string;
-        laneId?: string;
-      };
-    }) => unknown;
-    expect(
-      cleanupPatch({
-        quotaSuspension: writtenQuotaSuspension,
-      }),
-    ).toEqual({ quotaSuspension: previousQuotaSuspension });
-    expect(
-      cleanupPatch({
-        quotaSuspension: {
-          suspendedAt: -1,
-          reason: "quota_exhausted",
-          failedProvider: "anthropic",
-          failedModel: "claude-opus-4-6",
-          laneId: CommandLane.Main,
-        },
-      }),
-    ).toBeNull();
+    expect(writtenQuotaSuspension).toBeUndefined();
+    expect(sessionAccessorMocks.patchSessionEntry).toHaveBeenCalledOnce();
 
     await vi.advanceTimersByTimeAsync(100);
 
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+  });
+
+  it("restores the pre-cleanup suspension when multiple writes race cleanup", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { clearSessionSuspensionTimers } = await import("./session-suspension.js");
+    const previousQuotaSuspension = {
+      schemaVersion: 1,
+      suspendedAt: 500,
+      reason: "circuit_open",
+      failedProvider: "openai",
+      failedModel: "gpt-5.5",
+      laneId: CommandLane.Main,
+      expectedResumeBy: 2_000,
+      state: "suspended",
+    };
+    let storeEntry = { quotaSuspension: previousQuotaSuspension };
+    let initialWrites = 0;
+    let releaseInitialWrites!: () => void;
+    const initialWritesReleased = new Promise<void>((resolve) => {
+      releaseInitialWrites = resolve;
+    });
+    sessionAccessorMocks.patchSessionEntry.mockImplementation(async (_scope, update) => {
+      const patch = update(storeEntry) as typeof storeEntry | null;
+      if (patch?.quotaSuspension !== undefined) {
+        storeEntry = { quotaSuspension: patch.quotaSuspension };
+      }
+      if (initialWrites < 2) {
+        initialWrites += 1;
+        await initialWritesReleased;
+      }
+      return storeEntry;
+    });
+
+    const first = suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
+    const second = suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
+    await vi.waitFor(() => {
+      expect(initialWrites).toBe(2);
+    });
+
+    expect(clearSessionSuspensionTimers()).toBe(0);
+    releaseInitialWrites();
+    await Promise.all([first, second]);
+
+    expect(storeEntry.quotaSuspension).toEqual(previousQuotaSuspension);
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
   });
 

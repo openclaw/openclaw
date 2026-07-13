@@ -40,6 +40,14 @@ type ClearedLaneResume = {
 type SessionSuspensionRuntimeState = {
   laneResumeTimers: Map<string, LaneResumeTimer>;
   clearedLaneResumes: Map<string, ClearedLaneResume>;
+  pendingSuspensionWrites: Map<
+    string,
+    {
+      generation: number;
+      previousQuotaSuspension: QuotaSuspension | undefined;
+      activeCount: number;
+    }
+  >;
   cleanupGeneration: number;
   cleanupActive: boolean;
 };
@@ -56,12 +64,30 @@ function getSessionSuspensionState(): SessionSuspensionRuntimeState {
     () => ({
       laneResumeTimers: new Map<string, LaneResumeTimer>(),
       clearedLaneResumes: new Map<string, ClearedLaneResume>(),
+      pendingSuspensionWrites: new Map<
+        string,
+        {
+          generation: number;
+          previousQuotaSuspension: QuotaSuspension | undefined;
+          activeCount: number;
+        }
+      >(),
       cleanupGeneration: 0,
       cleanupActive: false,
     }),
   );
   if (!state.clearedLaneResumes) {
     state.clearedLaneResumes = new Map<string, ClearedLaneResume>();
+  }
+  if (!state.pendingSuspensionWrites) {
+    state.pendingSuspensionWrites = new Map<
+      string,
+      {
+        generation: number;
+        previousQuotaSuspension: QuotaSuspension | undefined;
+        activeCount: number;
+      }
+    >();
   }
   return state;
 }
@@ -242,13 +268,35 @@ export async function suspendSession(params: SessionSuspensionParams) {
     return;
   }
   const suspensionGeneration = state.cleanupGeneration;
-  let previousQuotaSuspension: QuotaSuspension | undefined;
+  const pendingWriteKey = `${storePath}\0${sessionKey}`;
+  const existingPendingWrite = state.pendingSuspensionWrites.get(pendingWriteKey);
+  const pendingWrite =
+    existingPendingWrite?.generation === suspensionGeneration
+      ? existingPendingWrite
+      : {
+          generation: suspensionGeneration,
+          previousQuotaSuspension: undefined as QuotaSuspension | undefined,
+          activeCount: 0,
+        };
+  pendingWrite.activeCount += 1;
+  state.pendingSuspensionWrites.set(pendingWriteKey, pendingWrite);
+  const releasePendingWrite = () => {
+    pendingWrite.activeCount -= 1;
+    if (pendingWrite.activeCount <= 0) {
+      getSessionSuspensionState().pendingSuspensionWrites.delete(pendingWriteKey);
+    }
+  };
 
   try {
     await patchSessionEntry(
       { storePath, sessionKey },
       (entry) => {
-        previousQuotaSuspension = entry.quotaSuspension;
+        if (getSessionSuspensionState().cleanupGeneration !== suspensionGeneration) {
+          return null;
+        }
+        if (pendingWrite.previousQuotaSuspension === undefined) {
+          pendingWrite.previousQuotaSuspension = entry.quotaSuspension;
+        }
         return {
           quotaSuspension: {
             schemaVersion: 1,
@@ -271,6 +319,7 @@ export async function suspendSession(params: SessionSuspensionParams) {
       laneId: params.laneId,
       error: err instanceof Error ? err.message : String(err),
     });
+    releasePendingWrite();
     return;
   }
 
@@ -285,7 +334,7 @@ export async function suspendSession(params: SessionSuspensionParams) {
           entry.quotaSuspension.failedProvider === params.failedProvider &&
           entry.quotaSuspension.failedModel === params.failedModel &&
           entry.quotaSuspension.laneId === params.laneId
-            ? { quotaSuspension: previousQuotaSuspension }
+            ? { quotaSuspension: pendingWrite.previousQuotaSuspension }
             : null,
         {
           skipMaintenance: true,
@@ -299,6 +348,7 @@ export async function suspendSession(params: SessionSuspensionParams) {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+    releasePendingWrite();
     return;
   }
 
@@ -310,6 +360,7 @@ export async function suspendSession(params: SessionSuspensionParams) {
       resolveLaneResumeConcurrency(params.cfg, params.laneId),
     );
   }
+  releasePendingWrite();
 }
 
 export const testing = {
@@ -320,6 +371,7 @@ export const testing = {
     }
     state.laneResumeTimers.clear();
     state.clearedLaneResumes.clear();
+    state.pendingSuspensionWrites.clear();
     state.cleanupGeneration = 0;
     state.cleanupActive = false;
   },
