@@ -13339,6 +13339,11 @@
       "translated": "Fortfahren"
     },
     {
+      "id": "native.apple.5f425282ece878eb",
+      "source": "Limited",
+      "translated": "Eingeschränkt"
+    },
+    {
       "id": "native.apple.c5db9e6eae115f7a",
       "source": "Allow",
       "translated": "Erlauben"
@@ -13347,6 +13352,11 @@
       "id": "native.apple.f591e16105268e99",
       "source": "Open Settings",
       "translated": "Einstellungen öffnen"
+    },
+    {
+      "id": "native.apple.12ed416835c36555",
+      "source": "Manage",
+      "translated": "Verwalten"
     },
     {
       "id": "native.apple.11687a3d87afd0d7",
