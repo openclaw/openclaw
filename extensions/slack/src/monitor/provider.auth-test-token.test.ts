@@ -9,9 +9,9 @@ import {
   stopSlackMonitor,
 } from "../monitor.test-helpers.js";
 
-const { monitorSlackProvider, SLACK_STARTUP_AUTH_TEST_TIMEOUT_MS } = await import(
-  "./provider.js"
-);
+const { monitorSlackProvider } = await import("./provider.js");
+
+const STARTUP_AUTH_TEST_TIMEOUT_MS = 10_000;
 
 beforeEach(() => {
   resetSlackTestState();
@@ -27,9 +27,7 @@ describe("auth.test boot call", () => {
     // The SDK serializes every property from the call argument into the POST
     // body.  Passing { token } would leak the bot token into the request
     // payload alongside the Authorization header.
-    const firstArg = client.auth.test.mock.calls[0]?.[0] as
-      | Record<string, unknown>
-      | undefined;
+    const firstArg = client.auth.test.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
     if (firstArg != null) {
       expect(firstArg).not.toHaveProperty("token");
     }
@@ -152,7 +150,7 @@ describe("auth.test boot call", () => {
       expect(getSlackClient().auth.test).toHaveBeenCalledTimes(1);
       expect(appStartMock).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(SLACK_STARTUP_AUTH_TEST_TIMEOUT_MS - 1);
+      await vi.advanceTimersByTimeAsync(STARTUP_AUTH_TEST_TIMEOUT_MS - 1);
       expect(appStartMock).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);

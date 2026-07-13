@@ -103,7 +103,7 @@ const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-sourc
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
-export const SLACK_STARTUP_AUTH_TEST_TIMEOUT_MS = 10_000;
+const SLACK_STARTUP_AUTH_TEST_TIMEOUT_MS = 10_000;
 
 function resolveStableSlackUserIdEntry(raw: string): string | undefined {
   const trimmed = raw.trim();
