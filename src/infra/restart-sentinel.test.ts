@@ -1,7 +1,35 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Covers restart sentinel persistence, summaries, and messages.
+
+const { mockWarn, mockThrowOpen, mockThrowWrite } = vi.hoisted(() => ({
+  mockWarn: vi.fn(),
+  mockThrowOpen: vi.fn(),
+  mockThrowWrite: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: mockWarn }),
+}));
+
+vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db.js")>();
+  return {
+    ...actual,
+    openOpenClawStateDatabase: (...args: Parameters<typeof actual.openOpenClawStateDatabase>) => {
+      mockThrowOpen();
+      return actual.openOpenClawStateDatabase(...args);
+    },
+    runOpenClawStateWriteTransaction: (
+      ...args: Parameters<typeof actual.runOpenClawStateWriteTransaction>
+    ) => {
+      mockThrowWrite();
+      return actual.runOpenClawStateWriteTransaction(...args);
+    },
+  };
+});
+
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -33,6 +61,12 @@ import {
   isPendingControlPlaneUpdateRestartSentinel,
 } from "./update-control-plane-sentinel.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
+
+beforeEach(() => {
+  mockWarn.mockClear();
+  mockThrowOpen.mockReset();
+  mockThrowWrite.mockReset();
+});
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
   await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
@@ -458,6 +492,59 @@ describe("restart sentinel", () => {
           },
         },
       });
+    });
+  });
+});
+
+describe("restart sentinel error visibility", () => {
+  afterEach(() => {
+    mockWarn.mockClear();
+    mockThrowOpen.mockReset();
+    mockThrowWrite.mockReset();
+  });
+
+  it("logs a warning when clearRestartSentinel DB write fails", async () => {
+    mockThrowWrite.mockImplementationOnce(() => {
+      throw new Error("SQLITE_IOERR: disk I/O error");
+    });
+
+    await withRestartSentinelStateDir(async () => {
+      await expect(clearRestartSentinel()).resolves.toBeUndefined();
+
+      expect(mockWarn).toHaveBeenCalledTimes(1);
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to clear restart sentinel"),
+      );
+    });
+  });
+
+  it("logs a warning and returns null when readRestartSentinel DB read fails", async () => {
+    mockThrowOpen.mockImplementationOnce(() => {
+      throw new Error("SQLITE_CORRUPT: database disk image is malformed");
+    });
+
+    await withRestartSentinelStateDir(async () => {
+      await expect(readRestartSentinel()).resolves.toBeNull();
+
+      expect(mockWarn).toHaveBeenCalledTimes(1);
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to read restart sentinel"),
+      );
+    });
+  });
+
+  it("logs a warning and returns false when hasRestartSentinel DB read fails", async () => {
+    mockThrowOpen.mockImplementationOnce(() => {
+      throw new Error("SQLITE_BUSY: database is locked");
+    });
+
+    await withRestartSentinelStateDir(async () => {
+      await expect(hasRestartSentinel()).resolves.toBe(false);
+
+      expect(mockWarn).toHaveBeenCalledTimes(1);
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to check restart sentinel"),
+      );
     });
   });
 });
