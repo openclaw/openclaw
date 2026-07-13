@@ -1093,6 +1093,9 @@ importers:
       json5:
         specifier: 2.2.3
         version: 2.2.3
+      p-limit:
+        specifier: 7.3.0
+        version: 7.3.0
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1128,6 +1131,9 @@ importers:
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3
+      p-map:
+        specifier: 7.0.5
+        version: 7.0.5
       typebox:
         specifier: 1.3.3
         version: 1.3.3

@@ -29,7 +29,7 @@ const APP_ROUTE_DEFINITIONS = {
   plugins: { path: "/settings/plugins" },
   cron: { path: "/cron" },
   tasks: { path: "/tasks" },
-  nodes: { path: "/nodes" },
+  nodes: { path: "/settings/devices", aliases: ["/nodes"] },
   plugin: { path: "/plugin" },
 } as const;
 
