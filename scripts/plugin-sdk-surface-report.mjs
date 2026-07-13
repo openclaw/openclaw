@@ -208,7 +208,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     // The focused HTML entity runtime and quote-aware HTML tokenizer add one public function each.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10684,
+      // +3: registerMcpServerConnectionResolver context/result/resolver types (#106229).
+      10687,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

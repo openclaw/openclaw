@@ -35,6 +35,20 @@ export function sanitizeServerName(raw: string, usedNames: Set<string>): string 
   return candidate;
 }
 
+/**
+ * Assign safe server names from the full declared set (sorted), independent of
+ * which servers resolve for a requester. All runtimes in a session must share
+ * this map so tool names stay stable across partial resolution.
+ */
+export function assignSafeServerNames(serverNames: Iterable<string>): Map<string, string> {
+  const usedNames = new Set<string>();
+  const assignments = new Map<string, string>();
+  for (const serverName of [...serverNames].toSorted((a, b) => a.localeCompare(b))) {
+    assignments.set(serverName, sanitizeServerName(serverName, usedNames));
+  }
+  return assignments;
+}
+
 function sanitizeToolName(raw: string): string {
   return sanitizeToolFragment(raw, "tool");
 }

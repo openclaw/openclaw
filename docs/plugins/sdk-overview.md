@@ -185,28 +185,67 @@ advertised node command.
 
 ### Infrastructure
 
-| Method                                          | What it registers                                            |
-| ----------------------------------------------- | ------------------------------------------------------------ |
-| `api.registerHook(events, handler, opts?)`      | Event hook                                                   |
-| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                        |
-| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                           |
-| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                           |
-| `api.registerCli(registrar, opts?)`             | CLI subcommand                                               |
-| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                      |
-| `api.registerService(service)`                  | Background service                                           |
-| `api.registerInteractiveHandler(registration)`  | Interactive handler                                          |
-| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                               |
-| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                      |
-| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                           |
-| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                 |
-| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites      |
-| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads |
-| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                              |
-| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                |
-| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling    |
-| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                      |
-| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands          |
-| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`             |
+| Method                                          | What it registers                                                      |
+| ----------------------------------------------- | ---------------------------------------------------------------------- |
+| `api.registerHook(events, handler, opts?)`      | Event hook                                                             |
+| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                                  |
+| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                                     |
+| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                                     |
+| `api.registerCli(registrar, opts?)`             | CLI subcommand                                                         |
+| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                                |
+| `api.registerService(service)`                  | Background service                                                     |
+| `api.registerInteractiveHandler(registration)`  | Interactive handler                                                    |
+| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                                         |
+| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                                     |
+| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                           |
+| `api.registerMcpServerConnectionResolver(...)`  | Per-requester MCP transport (`url`/`headers`) for a static server name |
+| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites                |
+| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads           |
+| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                                        |
+| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                          |
+| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling              |
+| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                                |
+| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
+| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
+
+#### Requester-scoped MCP connections
+
+Keep the MCP server **identity** static (name, tool filter) in `mcp.servers` or a
+bundle manifest. Optionally register a connection resolver so each trusted
+message requester gets their own transport:
+
+```ts
+api.registerMcpServerConnectionResolver({
+  serverName: "user-email",
+  resolve: async (ctx) => {
+    // ctx.requesterSenderId is host-trusted; never invent sender identity here.
+    const token = await lookupUserToken(ctx.requesterSenderId);
+    if (!token) {
+      return null; // omit this server for the current run
+    }
+    return {
+      url: "https://mcp.example.com/email",
+      headers: { Authorization: `Bearer ${token}` },
+    };
+  },
+});
+```
+
+Contract notes:
+
+- Resolver context carries trusted host identity only (`requesterSenderId`,
+  optional `agentAccountId` / `messageChannel`). Future trusted fields (for
+  example cron/subagent user context) can be added additively.
+- Tool names and schemas stay requester-independent (prompt-cache stable).
+- Runs without a trusted `requesterSenderId` (cron, subagent, heartbeat, public
+  gateway) never materialize requester-scoped servers. There is no shared
+  fallback connection.
+- Resolved `headers` are never logged or persisted; core keeps only an ephemeral
+  in-memory keyed digest (process-local HMAC) to detect credential rotation.
+- Tool names are derived from the full declared server set so partial resolution
+  never changes safe server names between requesters or turns.
+- Static servers without a resolver keep the existing session-scoped lifecycle.
 
 Memory prompt supplement builders receive optional `agentId`,
 `agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
