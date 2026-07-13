@@ -50,6 +50,7 @@ const rawSqliteAllowPathGroups = {
   "read-only SQLite status probes": [
     "src/commands/doctor-db-bloat.ts",
     "src/commands/status.scan.shared.ts",
+    "src/state/openclaw-state-db-readonly.ts",
   ],
   "doctor SQLite maintenance and legacy state migration": [
     "src/commands/doctor/cron/migration-ledger.ts",
