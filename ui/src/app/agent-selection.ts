@@ -9,7 +9,7 @@ type AgentSelectionGateway = {
   subscribe: (listener: (snapshot: AgentSelectionGateway["snapshot"]) => void) => () => void;
 };
 
-export type AgentSelectionState = {
+type AgentSelectionState = {
   selectedId: string | null;
   /** Agent filter shared by agent-owned pages; null exposes all agents. */
   scopeId: string | null;

@@ -370,6 +370,22 @@ async function raceWithMacrotask(promise: Promise<unknown>): Promise<"resolved" 
   ]);
 }
 
+async function completesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 describe("refreshChat", () => {
   beforeAll(async () => {
     await loadChatHelpers();
@@ -4259,12 +4275,7 @@ describe("handleSendChat", () => {
     });
     admitHostQueueItems(host);
 
-    const completed = await Promise.race([
-      retryReconnectableQueuedChatSends(host).then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 500);
-      }),
-    ]);
+    const completed = await completesWithin(retryReconnectableQueuedChatSends(host), 500);
 
     expect(completed).toBe(true);
     expect(executeSlashCommandMock).toHaveBeenCalledTimes(1);

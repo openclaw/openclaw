@@ -49,6 +49,7 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 	placeholders := make([]string, 0, 8)
 	mapping := map[string]string{}
 	maskedBody := maskMarkdownFencedLiterals(body, placeholderState.Next, &placeholders, mapping)
+	maskedBody = maskMarkdownDocSyntax(maskedBody, placeholderState.Next, &placeholders, mapping)
 	blocks := splitDocBodyIntoBlocks(maskedBody)
 	groups := groupDocBlocks(blocks, docsI18nDocChunkMaxBytes())
 	logDocChunkPlan(relPath, blocks, groups)
