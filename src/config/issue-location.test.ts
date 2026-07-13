@@ -95,21 +95,12 @@ describe("resolveConfigIssueLineInRaw", () => {
   });
 
   it("handles JSON5 comments", () => {
-    const raw = [
-      "{",
-      '  // comment',
-      '  "key": "value"',
-      "}",
-    ].join("\n");
+    const raw = ["{", "  // comment", '  "key": "value"', "}"].join("\n");
     expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
   });
 
   it("handles single-quoted strings", () => {
-    const raw = [
-      "{",
-      "  'key': 'value'",
-      "}",
-    ].join("\n");
+    const raw = ["{", "  'key': 'value'", "}"].join("\n");
     expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(2);
   });
 });
@@ -126,15 +117,15 @@ describe("appendReceivedValueHint", () => {
   });
 
   it("skips when message already mentions received", () => {
-    expect(
-      appendReceivedValueHint("expected string, received number", "gateway.port", 18789),
-    ).toBe("expected string, received number");
+    expect(appendReceivedValueHint("expected string, received number", "gateway.port", 18789)).toBe(
+      "expected string, received number",
+    );
   });
 
   it("skips sensitive paths", () => {
-    expect(
-      appendReceivedValueHint("invalid token", "channels.telegram.botToken", "abc123"),
-    ).toBe("invalid token");
+    expect(appendReceivedValueHint("invalid token", "channels.telegram.botToken", "abc123")).toBe(
+      "invalid token",
+    );
   });
 
   it("skips secret ref objects", () => {
@@ -148,21 +139,19 @@ describe("appendReceivedValueHint", () => {
   });
 
   it("skips object values", () => {
-    expect(
-      appendReceivedValueHint("invalid input", "some.path", { nested: true }),
-    ).toBe("invalid input");
+    expect(appendReceivedValueHint("invalid input", "some.path", { nested: true })).toBe(
+      "invalid input",
+    );
   });
 
   it("skips undefined values", () => {
-    expect(
-      appendReceivedValueHint("invalid input", "some.path", undefined),
-    ).toBe("invalid input");
+    expect(appendReceivedValueHint("invalid input", "some.path", undefined)).toBe("invalid input");
   });
 
   it("skips when message already has got:", () => {
-    expect(
-      appendReceivedValueHint("already got: something", "some.path", "value"),
-    ).toBe("already got: something");
+    expect(appendReceivedValueHint("already got: something", "some.path", "value")).toBe(
+      "already got: something",
+    );
   });
 });
 
@@ -223,10 +212,11 @@ describe("attachConfigIssueDiagnostics", () => {
   });
 
   it("handles empty raw gracefully", () => {
-    const issues = attachConfigIssueDiagnostics(
-      [{ path: "foo", message: "error" }],
-      { raw: null, parsed: {}, configPath: "/tmp/openclaw.json" },
-    );
+    const issues = attachConfigIssueDiagnostics([{ path: "foo", message: "error" }], {
+      raw: null,
+      parsed: {},
+      configPath: "/tmp/openclaw.json",
+    });
 
     expect(issues[0]?.line).toBeUndefined();
     expect(issues[0]?.sourceFile).toBeUndefined();
@@ -241,7 +231,7 @@ describe("attachConfigIssueDiagnostics", () => {
         },
       ],
       {
-        raw: ['{', '  "$include": "./models.json"', "}"].join("\n"),
+        raw: ["{", '  "$include": "./models.json"', "}"].join("\n"),
         parsed: { models: { providers: { openai: { api: "bad" } } } },
         configPath: "/tmp/openclaw.json",
         formatPathForDisplay: true,
