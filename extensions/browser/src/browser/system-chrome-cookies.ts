@@ -1,7 +1,7 @@
 /** macOS Chrome-family cookie database decryption and Playwright mapping. */
-import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 
 export type SystemBrowser = "chrome" | "brave" | "edge" | "chromium";
 
@@ -69,47 +69,44 @@ function isAsciiWhitespace(value: number): boolean {
 /** Read the browser Safe Storage secret. The OS consent prompt is intentional. */
 async function readKeychainSecret(entry: KeychainEntry, signal?: AbortSignal): Promise<Buffer> {
   signal?.throwIfAborted();
-  return await new Promise((resolve, reject) => {
-    execFile(
-      "security",
-      ["find-generic-password", "-w", "-s", entry.service, "-a", entry.account],
-      { encoding: "buffer", signal },
-      (error, stdout) => {
-        if (error) {
-          if (signal?.aborted) {
-            reject(
-              signal.reason instanceof Error
-                ? signal.reason
-                : new Error("Browser cookie import aborted.", { cause: signal.reason ?? error }),
-            );
-            return;
-          }
-          reject(
-            new Error(
-              `could not read ${entry.service} from macOS Keychain; approve the prompt and retry`,
-            ),
-          );
-          return;
-        }
-        const raw = Buffer.from(stdout);
-        let start = 0;
-        let end = raw.length;
-        while (start < end && isAsciiWhitespace(raw.readUInt8(start))) {
-          start += 1;
-        }
-        while (end > start && isAsciiWhitespace(raw.readUInt8(end - 1))) {
-          end -= 1;
-        }
-        const secret = Buffer.from(raw.subarray(start, end));
-        raw.fill(0);
-        if (secret.length === 0) {
-          reject(new Error(`macOS Keychain returned an empty ${entry.service} secret`));
-          return;
-        }
-        resolve(secret);
+  let stdout: Buffer;
+  try {
+    const result = await runCommandBuffered(
+      ["security", "find-generic-password", "-w", "-s", entry.service, "-a", entry.account],
+      {
+        signal,
+        maxOutputBytes: 1024 * 1024,
       },
     );
-  });
+    if (result.termination !== "exit" || result.code !== 0) {
+      throw result.error ?? new Error(`security exited with code ${result.code ?? "unknown"}`);
+    }
+    stdout = result.stdout;
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new Error("Browser cookie import aborted.", { cause: signal.reason ?? error });
+    }
+    throw new Error(
+      `could not read ${entry.service} from macOS Keychain; approve the prompt and retry`,
+    );
+  }
+  const raw = stdout;
+  let start = 0;
+  let end = raw.length;
+  while (start < end && isAsciiWhitespace(raw.readUInt8(start))) {
+    start += 1;
+  }
+  while (end > start && isAsciiWhitespace(raw.readUInt8(end - 1))) {
+    end -= 1;
+  }
+  const secret = Buffer.from(raw.subarray(start, end));
+  raw.fill(0);
+  if (secret.length === 0) {
+    throw new Error(`macOS Keychain returned an empty ${entry.service} secret`);
+  }
+  return secret;
 }
 
 /** Convert Chromium's Windows-epoch microseconds to Unix seconds. */
