@@ -10,10 +10,12 @@ import {
 
 describe("check-deadcode-exports", () => {
   it("excludes test support from every Knip issue type", () => {
+    expect(knipConfig.ignore).toContain("dist/**");
     expect(knipConfig.ignore).toContain("**/test-helpers/**");
     expect(knipConfig.ignore).toContain("**/*.test-utils.ts");
     expect(knipConfig.ignoreFiles).not.toContain("**/test-helpers/**");
     expect(knipConfig.ignoreFiles).toContain("scripts/**");
+    expect(knipConfig.ignoreFiles).toContain("dist/**");
     expect(knipConfig.ignore).not.toContain("**/live-*.ts");
     expect(knipConfig.ignoreFiles).toContain("**/live-*.ts");
   });
