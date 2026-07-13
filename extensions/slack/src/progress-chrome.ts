@@ -158,7 +158,3 @@ export async function maybeSuppressSlackProgressChrome(
   }
   return { suppress: true, reactionAttempted: Boolean(progressReaction && input.threadTs) };
 }
-
-export function isSuppressedSlackSendResult(result: { suppressed?: true } | undefined): boolean {
-  return result?.suppressed === true;
-}
