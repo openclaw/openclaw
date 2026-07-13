@@ -1248,7 +1248,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Read sanitized visible-session history. Before reply/debug/resume. Supports limit/offset/tool messages.",
+        "description": "Read sanitized visible-session history. Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
         "inputSchema": {
           "properties": {
             "includeTools": {
@@ -1258,9 +1258,17 @@
               "minimum": 1,
               "type": "integer"
             },
+            "messageId": {
+              "minLength": 1,
+              "type": "string"
+            },
             "offset": {
               "minimum": 0,
               "type": "integer"
+            },
+            "sessionId": {
+              "minLength": 1,
+              "type": "string"
             },
             "sessionKey": {
               "type": "string"
@@ -1274,7 +1282,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey for full context.",
+        "description": "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
         "inputSchema": {
           "properties": {
             "limit": {
@@ -1298,7 +1306,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Message visible session by sessionKey/label, or configured agent by agentId; sessionKey wins redundant label. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available.",
+        "description": "Message visible session by sessionKey/label, or configured agent by agentId; sessionKey wins redundant label. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available. watch:true: notice arrives when others later change target session.",
         "inputSchema": {
           "properties": {
             "agentId": {
@@ -1320,6 +1328,9 @@
             "timeoutSeconds": {
               "minimum": 0,
               "type": "integer"
+            },
+            "watch": {
+              "type": "boolean"
             }
           },
           "required": ["message"],

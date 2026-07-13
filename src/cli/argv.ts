@@ -22,12 +22,6 @@ const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
   ),
 );
 
-export function hasHelpOrVersion(argv: string[]): boolean {
-  return (
-    argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
-  );
-}
-
 export function isHelpOrVersionInvocation(argv: string[]): boolean {
   if (hasRootVersionAlias(argv)) {
     return true;
@@ -265,14 +259,14 @@ export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   return [runtimePath, entryPath, ...rootOptions, ...targetPath, "--help"];
 }
 
-export type NormalizeRootNoColorArgvOptions = {
+type NormalizeRootNoColorArgvOptions = {
   shouldPreserveNoColor?: (params: {
     remainingArgs: readonly string[];
     noColorIndex: number;
   }) => boolean;
 };
 
-export type NormalizeRootLogLevelArgvOptions = {
+type NormalizeRootLogLevelArgvOptions = {
   shouldPreserveLogLevel?: (params: {
     remainingArgs: readonly string[];
     logLevelIndex: number;

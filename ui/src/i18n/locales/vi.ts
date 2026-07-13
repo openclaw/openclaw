@@ -218,10 +218,11 @@ export const vi: TranslationMap = {
   lazyView: {
     loadingTitle: "Đang tải bảng điều khiển",
     errorTitle: "Không tải được bảng điều khiển",
-    errorSubtitle:
-      "Tải lại trang để tải gói Control UI mới nhất, hoặc thử lại nếu yêu cầu mạng thất bại.",
+    genericSubtitle: "Đã xảy ra lỗi khi tải bảng điều khiển này.",
+    staleTitle: "Đã có phiên bản mới",
+    staleSubtitle:
+      "OpenClaw đã được cập nhật trong nền. Hãy tải lại để xem bảng điều khiển mới nhất.",
     retry: "Thử lại",
-    unknownError: "Lỗi tải mô-đun không xác định.",
   },
   nodes: {
     pairing: {
@@ -390,6 +391,16 @@ export const vi: TranslationMap = {
     confirmDelete: "Tạo snapshot và xóa {name}?",
     confirmForceDelete: "Tạo snapshot thất bại: {error}\n\nXóa mà không có snapshot?",
   },
+  agentChip: {
+    menuLabel: "Menu tác nhân",
+    agents: "Tác nhân",
+    working: "Đang làm việc…",
+    ready: "Sẵn sàng trò chuyện",
+    whatCanAgentDo: "{name} có thể làm gì?",
+    getHelp: "Nhận trợ giúp",
+    discord: "Cộng đồng Discord",
+    viewChangelog: "Xem nhật ký thay đổi",
+  },
   newSession: {
     title: "Phiên mới",
     hint: "Chọn nơi phiên này làm việc, rồi cho biết cần làm gì.",
@@ -400,10 +411,14 @@ export const vi: TranslationMap = {
     folder: "Thư mục",
     folderPlaceholder: "Không gian làm việc của agent",
     browse: "Duyệt thư mục",
+    browseRequiresAdmin: "Duyệt thư mục yêu cầu kết nối quản trị viên",
     browserUp: "Thư mục cha",
     browserUse: "Sử dụng thư mục này",
     browserEmpty: "Không có thư mục con",
     browserLoadFailed: "Không thể liệt kê thư mục đó.",
+    nodeOffline: "Thiết bị đang ngoại tuyến",
+    nodeCannotBrowse: "Thiết bị này không hỗ trợ duyệt thư mục",
+    hiddenFolder: "Thư mục ẩn",
     worktree: "Worktree",
     worktreeUnavailable: "Không gian làm việc của agent không phải là git checkout",
     baseBranch: "Nhánh cơ sở",
@@ -438,6 +453,24 @@ export const vi: TranslationMap = {
     archivedOnlyTooltip: "Chỉ hiển thị các phiên đã lưu trữ.",
     minutesPlaceholder: "phút",
     searchPlaceholder: "Lọc theo khóa, agent, nhãn, loại…",
+    transcriptSearchTitle: "Tìm kiếm bản ghi",
+    transcriptSearchDescription:
+      "Tìm các từ hoặc cụm từ chính xác trong tin nhắn của người dùng và trợ lý ở các phiên của tác nhân mặc định.",
+    transcriptSearchInputLabel: "Tìm kiếm bản ghi phiên",
+    transcriptSearchPlaceholder: "Tìm từ hoặc cụm từ chính xác…",
+    transcriptSearchAction: "Tìm kiếm",
+    transcriptSearchClear: "Xóa",
+    transcriptSearchRetry: "Thử lại",
+    transcriptSearchSearching: "Đang tìm kiếm bản ghi…",
+    transcriptSearchUnavailable: "Tìm kiếm bản ghi yêu cầu phiên bản Gateway mới hơn.",
+    transcriptSearchError: "Tìm kiếm bản ghi không thành công",
+    transcriptSearchIndexing:
+      "Chỉ mục bản ghi vẫn đang được cập nhật. Hãy thử lại để bao gồm các tin nhắn gần đây.",
+    transcriptSearchEmpty: "Không có tin nhắn nào trong bản ghi khớp với tìm kiếm này.",
+    transcriptSearchMatches: "Kết quả khớp trong bản ghi: {count}",
+    transcriptSearchTruncated: "Đang hiển thị 25 kết quả khớp đầu tiên.",
+    user: "Người dùng",
+    assistant: "Trợ lý",
     selected: "Đã chọn {count}",
     deleteSelected: "Xóa",
     selectAllOnPage: "Chọn tất cả trên trang",
@@ -1423,6 +1456,8 @@ export const vi: TranslationMap = {
     blockedAgentFilter: "bị chặn bởi bộ lọc agent",
   },
   nav: {
+    back: "Quay lại",
+    forward: "Tiến",
     chat: "Trò chuyện",
     settings: "Cài đặt",
     settingsGeneral: "Chung",
@@ -1694,8 +1729,6 @@ export const vi: TranslationMap = {
     cancel: "Hủy",
     removedRestart: "Đã gỡ bỏ {name}. Cần khởi động lại Gateway để áp dụng thay đổi.",
     verifiedSource: "Nguồn đã xác minh",
-    menuLabel: "Thao tác {name}",
-    menuDetails: "Xem chi tiết",
     enableAction: "Bật",
     disableAction: "Tắt",
     working: "Đang xử lý…",
@@ -1830,6 +1863,10 @@ export const vi: TranslationMap = {
       useCurrentChatAria: "Dùng cuộc trò chuyện hiện tại cho yêu cầu chỉnh sửa",
       useCurrentChatTooltip:
         "Gửi yêu cầu chỉnh sửa đến phiên trò chuyện hiện tại thay vì phiên workshop của đề xuất.",
+      selfLearning: "Tự học",
+      selfLearningAria: "Bật hoặc tắt đề xuất Skills tự học",
+      selfLearningTooltip:
+        "Ghi nhận các chỉnh sửa và xem xét những công việc quan trọng đã hoàn thành để tạo thành các đề xuất kỹ năng đang chờ xử lý. Tính năng này sử dụng thêm token nền; các bản nháp sẽ xuất hiện trên bảng này dưới dạng đề xuất đang chờ xử lý.",
       view: "Chế độ xem Workshop",
       board: "Bảng",
       today: "Hôm nay",
@@ -1911,6 +1948,14 @@ export const vi: TranslationMap = {
       noProposalsTitle: "Chưa có đề xuất nào",
       noProposalsBody: "{agent} chưa soạn thảo đề xuất skill nào.",
       noProposalsFooter: "Các đề xuất mới sẽ xuất hiện ở đây để xem xét.",
+    },
+    selfLearning: {
+      pitchTitle: "Bật tính năng tự học",
+      pitchBody:
+        "OpenClaw xem xét các chỉnh sửa và những lượt chạy quan trọng đã hoàn thành, sau đó soạn thảo các đề xuất kỹ năng cho bảng này. Tính năng này sử dụng thêm token nền và các bản nháp sẽ xuất hiện dưới dạng đề xuất đang chờ xử lý.",
+      enable: "Bật tính năng tự học",
+      enabling: "Đang bật…",
+      updateError: "Không thể cập nhật cài đặt tự học.",
     },
     today: {
       emptyTitle: "Hôm nay không có gì đang chờ",
@@ -3014,6 +3059,8 @@ export const vi: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Tạo PR",
+      createPrLabel: "Tạo yêu cầu kéo cho {branch}",
       dismiss: "Bỏ qua pull request #{number}",
       open: "Mở",
       draft: "Bản nháp",
@@ -3339,6 +3386,12 @@ export const vi: TranslationMap = {
         activityErrorMany: "Hoạt động: {count} công cụ, bao gồm lỗi.",
       },
     },
+    workRun: {
+      workedFor: "Đã hoạt động trong {duration}",
+      worked: "Đã hoạt động",
+      workedForError: "Đã hoạt động trong {duration}, có lỗi.",
+      workedError: "Đã hoạt động, có lỗi.",
+    },
     backgroundTasks: {
       label: "Tác vụ nền",
       title: "Tác vụ nền",
@@ -3532,6 +3585,14 @@ export const vi: TranslationMap = {
       remove: "Xóa",
       more: "Thêm hành động",
       history: "Lịch sử",
+    },
+    runNotStarted: {
+      notDue: "Chưa đến thời điểm chạy tác vụ tự động này.",
+      alreadyRunning: "Tác vụ tự động này đang chạy.",
+      recoveryPending: "Quá trình khôi phục trình lập lịch vẫn đang diễn ra.",
+      invalidSpec: "Tác vụ tự động này có lịch biểu hoặc tải trọng không hợp lệ.",
+      stopped: "Trình lập lịch đã dừng.",
+      unknown: "Không thể khởi chạy tác vụ tự động này.",
     },
     jobs: {
       schedule: "Lịch",

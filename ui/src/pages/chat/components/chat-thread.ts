@@ -16,7 +16,11 @@ import {
 } from "../../../components/markdown.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
-import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatQueueItem,
+  ChatStreamSegment,
+  MessageGroup,
+} from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import {
   buildMoreDetailsSideCommand,
@@ -33,6 +37,7 @@ import {
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
+  collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpandedToolCards,
   resetChatThreadState,
@@ -48,6 +53,7 @@ import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
+  renderWorkGroupSummary,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
@@ -81,9 +87,6 @@ type ChatThreadState = {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
-  relativeTimeTimer: ReturnType<typeof setInterval> | null;
-  relativeTimeRequestUpdate: (() => void) | null;
-  relativeTimeVersion: number;
 };
 
 type ChatThreadProps = {
@@ -95,6 +98,7 @@ type ChatThreadProps = {
     manualFallback: boolean;
     onLoadOlder: () => void;
   };
+  renderAllLoadedHistory?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
@@ -161,24 +165,7 @@ function createChatThreadState(): ChatThreadState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
-    relativeTimeTimer: null,
-    relativeTimeRequestUpdate: null,
-    relativeTimeVersion: 0,
   };
-}
-
-const RELATIVE_TIME_REFRESH_MS = 60_000;
-
-// Footer timestamps render relative labels ("5m ago") that go stale on idle
-// panes; one per-pane minute tick keeps them fresh without per-message timers.
-// The version bump must accompany requestUpdate: the message subtree is
-// memoized by guard(), so a tick only re-renders it via this dependency.
-function ensureRelativeTimeRefresh(state: ChatThreadState, requestUpdate: () => void) {
-  state.relativeTimeRequestUpdate = requestUpdate;
-  state.relativeTimeTimer ??= setInterval(() => {
-    state.relativeTimeVersion = (state.relativeTimeVersion + 1) % Number.MAX_SAFE_INTEGER;
-    state.relativeTimeRequestUpdate?.();
-  }, RELATIVE_TIME_REFRESH_MS);
 }
 
 const threadStates = new Map<string, ChatThreadState>();
@@ -228,11 +215,6 @@ export function resetChatThreadPresentationState(paneId?: string) {
     if (state.historyRenderAnchorFrame != null) {
       cancelAnimationFrame(state.historyRenderAnchorFrame);
     }
-    if (state.relativeTimeTimer != null) {
-      clearInterval(state.relativeTimeTimer);
-      state.relativeTimeTimer = null;
-      state.relativeTimeRequestUpdate = null;
-    }
   }
   if (paneId) {
     threadStates.delete(paneId);
@@ -242,8 +224,9 @@ export function resetChatThreadPresentationState(paneId?: string) {
   }
 }
 
-function resolveChatHistoryRenderCap(messageCount: number): number {
-  return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
+function resolveChatHistoryRenderCap(messageCount: number, renderAllLoadedHistory = false): number {
+  const count = Math.max(0, messageCount);
+  return renderAllLoadedHistory ? count : Math.min(count, CHAT_HISTORY_RENDER_LIMIT);
 }
 
 function shouldRenderFullChatHistoryWindow(state: ChatThreadState, messageCount: number): boolean {
@@ -254,11 +237,11 @@ function shouldRenderFullChatHistoryWindow(state: ChatThreadState, messageCount:
 }
 
 function resolveChatHistoryRenderWindow(
-  props: Pick<ChatThreadProps, "paneId" | "sessionKey" | "messages">,
+  props: Pick<ChatThreadProps, "paneId" | "sessionKey" | "messages" | "renderAllLoadedHistory">,
 ) {
   const state = getChatThreadState(props.paneId);
   const messages = Array.isArray(props.messages) ? props.messages : [];
-  const cap = resolveChatHistoryRenderCap(messages.length);
+  const cap = resolveChatHistoryRenderCap(messages.length, props.renderAllLoadedHistory);
   const sessionChanged = state.historyRenderSessionKey !== props.sessionKey;
   const refChanged = state.historyRenderMessagesRef !== messages;
   const previousCount = state.historyRenderMessageCount;
@@ -275,7 +258,7 @@ function resolveChatHistoryRenderWindow(
     return 0;
   }
 
-  if (shouldRenderFullChatHistoryWindow(state, messages.length)) {
+  if (props.renderAllLoadedHistory || shouldRenderFullChatHistoryWindow(state, messages.length)) {
     state.historyRenderSessionKey = props.sessionKey;
     state.historyRenderMessagesRef = messages;
     state.historyRenderMessageCount = messages.length;
@@ -730,7 +713,6 @@ function renderLoadingSkeleton() {
 export function renderChatThread(props: ChatThreadProps) {
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  ensureRelativeTimeRefresh(state, requestUpdate);
   const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
   // Equivalence, not exact match: the default session travels under alias
@@ -771,6 +753,7 @@ export function renderChatThread(props: ChatThreadProps) {
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     historyRenderLimit,
+    allowExpandedHistoryRenderLimit: props.renderAllLoadedHistory,
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
@@ -869,13 +852,15 @@ export function renderChatThread(props: ChatThreadProps) {
             deletedChatItemsSignature(deleted, chatItems),
             stableBooleanMapSignature(expandedToolCards),
             getAssistantAttachmentAvailabilityRenderVersion(),
-            state.relativeTimeVersion,
+            // The host minute poll requests an update; this key crosses guard() memoization.
+            Math.floor(Date.now() / 60_000),
             getToolTitlesVersion(),
             props.sessionKey,
             props.fullMessageAgentId,
             showReasoning,
             props.showToolCalls,
             Boolean(props.runActive),
+            Boolean(props.runWorking),
             Boolean(props.autoExpandToolCalls),
             props.assistantName,
             assistantIdentity.avatar,
@@ -889,9 +874,54 @@ export function renderChatThread(props: ChatThreadProps) {
             props.allowExternalEmbedUrls ?? false,
             threadContextWindow,
           ],
-          () =>
-            repeat(
-              coalesceStreamRuns(chatItems),
+          () => {
+            const renderGroupItem = (item: MessageGroup) => {
+              if (deleted.has(item.key)) {
+                return nothing;
+              }
+              return renderMessageGroup(item, {
+                onOpenSidebar: props.onOpenSidebar,
+                onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+                sessionKey: props.sessionKey,
+                agentId: props.fullMessageAgentId,
+                showReasoning,
+                showToolCalls: props.showToolCalls,
+                runActive: props.runActive,
+                autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
+                isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
+                onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
+                  expandedToolCards.set(
+                    messageId,
+                    !(expanded ?? expandedToolCards.get(messageId) ?? false),
+                  );
+                  requestUpdate();
+                },
+                isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
+                onToggleToolExpanded: toggleToolCardExpanded,
+                onRequestUpdate: requestUpdate,
+                onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+                assistantName: props.assistantName,
+                assistantAvatar: assistantIdentity.avatar,
+                userName: props.userName ?? null,
+                userAvatar: props.userAvatar ?? null,
+                basePath: props.basePath,
+                localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+                assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+                canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+                embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                contextWindow: threadContextWindow,
+                onDelete: () => {
+                  deleted.delete(item.key);
+                  requestUpdate();
+                },
+              });
+            };
+            return repeat(
+              collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
+                runWorking: Boolean(props.runWorking),
+                searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
+              }),
               (item) => item.key,
               (item) => {
                 if (item.kind === "divider") {
@@ -936,52 +966,26 @@ export function renderChatThread(props: ChatThreadProps) {
                     authToken: props.assistantAttachmentAuthToken ?? null,
                   });
                 }
+                if (item.kind === "work-group") {
+                  const workExpanded = expandedToolCards.get(item.key) ?? item.hasError;
+                  return html`
+                    ${renderWorkGroupSummary(item, {
+                      expanded: workExpanded,
+                      onToggle: () => {
+                        expandedToolCards.set(item.key, !workExpanded);
+                        requestUpdate();
+                      },
+                    })}
+                    ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
+                  `;
+                }
                 if (item.kind === "group") {
-                  if (deleted.has(item.key)) {
-                    return nothing;
-                  }
-                  return renderMessageGroup(item, {
-                    onOpenSidebar: props.onOpenSidebar,
-                    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
-                    sessionKey: props.sessionKey,
-                    agentId: props.fullMessageAgentId,
-                    showReasoning,
-                    showToolCalls: props.showToolCalls,
-                    runActive: props.runActive,
-                    autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
-                    isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
-                    onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
-                      expandedToolCards.set(
-                        messageId,
-                        !(expanded ?? expandedToolCards.get(messageId) ?? false),
-                      );
-                      requestUpdate();
-                    },
-                    isToolExpanded: (toolCardId: string) =>
-                      expandedToolCards.get(toolCardId) ?? false,
-                    onToggleToolExpanded: toggleToolCardExpanded,
-                    onRequestUpdate: requestUpdate,
-                    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
-                    assistantName: props.assistantName,
-                    assistantAvatar: assistantIdentity.avatar,
-                    userName: props.userName ?? null,
-                    userAvatar: props.userAvatar ?? null,
-                    basePath: props.basePath,
-                    localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
-                    assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-                    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-                    embedSandboxMode: props.embedSandboxMode ?? "scripts",
-                    allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-                    contextWindow: threadContextWindow,
-                    onDelete: () => {
-                      deleted.delete(item.key);
-                      requestUpdate();
-                    },
-                  });
+                  return renderGroupItem(item);
                 }
                 return nothing;
               },
-            ),
+            );
+          },
         )}
         ${renderRealtimeTalkConversation(props)}
       </div>

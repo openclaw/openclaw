@@ -2,32 +2,6 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-
-vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
-vi.mock("../tool-display.ts", () => ({
-  formatToolDetail: (display: { detail?: string }) => display.detail,
-  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => {
-    const labels: Record<string, string> = {
-      sessions_spawn: "Sub-agent",
-      skill_workshop: "Skill Workshop",
-      web_search: "Web Search",
-    };
-    const detail =
-      name === "skill_workshop" &&
-      args &&
-      typeof args === "object" &&
-      typeof (args as { action?: unknown }).action === "string"
-        ? (args as { action: string }).action
-        : undefined;
-    return {
-      name,
-      label: labels[name] ?? name,
-      icon: "zap",
-      detail,
-    };
-  },
-}));
-
 import {
   buildMcpAppHostCapabilities,
   resolveMcpAppSandboxUrl,

@@ -217,10 +217,11 @@ export const ko: TranslationMap = {
   lazyView: {
     loadingTitle: "패널 로드 중",
     errorTitle: "패널을 로드하지 못했습니다",
-    errorSubtitle:
-      "최신 Control UI 번들을 로드하려면 페이지를 새로고침하거나, 네트워크 요청이 실패한 경우 다시 시도하세요.",
+    genericSubtitle: "이 패널을 불러오는 중에 문제가 발생했습니다.",
+    staleTitle: "새 버전을 사용할 수 있습니다",
+    staleSubtitle:
+      "OpenClaw가 백그라운드에서 업데이트되었습니다. 최신 패널을 사용하려면 새로고침하세요.",
     retry: "다시 시도",
-    unknownError: "알 수 없는 모듈 로드 오류입니다.",
   },
   nodes: {
     pairing: {
@@ -389,6 +390,16 @@ export const ko: TranslationMap = {
     confirmDelete: "{name}의 스냅샷을 만들고 삭제할까요?",
     confirmForceDelete: "스냅샷 실패: {error}\n\n스냅샷 없이 삭제할까요?",
   },
+  agentChip: {
+    menuLabel: "에이전트 메뉴",
+    agents: "에이전트",
+    working: "작업 중…",
+    ready: "채팅할 준비가 되었습니다",
+    whatCanAgentDo: "{name}님은 무엇을 할 수 있나요?",
+    getHelp: "도움말 보기",
+    discord: "Discord 커뮤니티",
+    viewChangelog: "변경 로그 보기",
+  },
   newSession: {
     title: "새 세션",
     hint: "이 세션이 작업할 위치를 선택한 다음, 수행할 작업을 입력하세요.",
@@ -399,10 +410,14 @@ export const ko: TranslationMap = {
     folder: "폴더",
     folderPlaceholder: "Agent workspace",
     browse: "폴더 찾아보기",
+    browseRequiresAdmin: "폴더를 탐색하려면 관리자 연결이 필요합니다",
     browserUp: "상위 폴더",
     browserUse: "이 폴더 사용",
     browserEmpty: "하위 폴더 없음",
     browserLoadFailed: "해당 폴더 목록을 표시할 수 없습니다.",
+    nodeOffline: "기기가 오프라인 상태입니다",
+    nodeCannotBrowse: "이 기기는 폴더 탐색을 지원하지 않습니다",
+    hiddenFolder: "숨김 폴더",
     worktree: "Worktree",
     worktreeUnavailable: "Agent workspace가 git checkout이 아닙니다",
     baseBranch: "기준 브랜치",
@@ -437,6 +452,24 @@ export const ko: TranslationMap = {
     archivedOnlyTooltip: "보관된 세션만 표시합니다.",
     minutesPlaceholder: "분",
     searchPlaceholder: "키, 에이전트, 레이블, 종류로 필터링…",
+    transcriptSearchTitle: "대화 기록 검색",
+    transcriptSearchDescription:
+      "기본 에이전트의 세션에서 사용자 및 어시스턴트 메시지의 정확한 단어나 구문을 찾습니다.",
+    transcriptSearchInputLabel: "세션 대화 기록 검색",
+    transcriptSearchPlaceholder: "정확한 단어나 구문 검색…",
+    transcriptSearchAction: "검색",
+    transcriptSearchClear: "지우기",
+    transcriptSearchRetry: "다시 시도",
+    transcriptSearchSearching: "대화 기록 검색 중…",
+    transcriptSearchUnavailable: "대화 기록 검색을 사용하려면 최신 Gateway가 필요합니다.",
+    transcriptSearchError: "대화 기록 검색에 실패했습니다",
+    transcriptSearchIndexing:
+      "대화 기록 색인이 아직 업데이트 중입니다. 최근 메시지를 포함하려면 다시 시도하세요.",
+    transcriptSearchEmpty: "이 검색과 일치하는 대화 기록 메시지가 없습니다.",
+    transcriptSearchMatches: "대화 기록 일치 항목: {count}",
+    transcriptSearchTruncated: "처음 25개 일치 항목을 표시합니다.",
+    user: "사용자",
+    assistant: "어시스턴트",
     selected: "{count}개 선택됨",
     deleteSelected: "삭제",
     selectAllOnPage: "페이지에서 모두 선택",
@@ -1421,6 +1454,8 @@ export const ko: TranslationMap = {
     blockedAgentFilter: "에이전트 필터에 의해 차단됨",
   },
   nav: {
+    back: "뒤로",
+    forward: "앞으로",
     chat: "채팅",
     settings: "설정",
     settingsGeneral: "일반",
@@ -1690,8 +1725,6 @@ export const ko: TranslationMap = {
     removedRestart:
       "{name}이(가) 제거되었습니다. 변경 사항을 적용하려면 Gateway를 다시 시작해야 합니다.",
     verifiedSource: "인증된 출처",
-    menuLabel: "{name} 작업",
-    menuDetails: "세부 정보 보기",
     enableAction: "활성화",
     disableAction: "비활성화",
     working: "작업 중…",
@@ -1827,6 +1860,10 @@ export const ko: TranslationMap = {
       useCurrentChat: "현재 채팅 사용",
       useCurrentChatAria: "수정 요청에 현재 채팅 사용",
       useCurrentChatTooltip: "수정 요청을 제안의 워크숍 세션 대신 현재 채팅 세션으로 보냅니다.",
+      selfLearning: "자기 학습",
+      selfLearningAria: "자기 학습 스킬 제안 전환",
+      selfLearningTooltip:
+        "수정 사항과 완료된 주요 작업을 포착하고 검토하여 보류 중인 Skill 제안으로 만듭니다. 추가 백그라운드 토큰을 사용하며, 초안은 이 보드에 보류 중인 제안으로 등록됩니다.",
       view: "워크숍 보기",
       board: "보드",
       today: "오늘",
@@ -1905,6 +1942,14 @@ export const ko: TranslationMap = {
       noProposalsTitle: "아직 제안이 없습니다",
       noProposalsBody: "{agent}이(가) 아직 스킬 제안을 작성하지 않았습니다.",
       noProposalsFooter: "새 제안은 검토를 위해 여기에 표시됩니다.",
+    },
+    selfLearning: {
+      pitchTitle: "자기 학습 켜기",
+      pitchBody:
+        "OpenClaw는 수정 사항과 완료된 주요 실행을 검토한 후 이 보드에 게시할 Skill 제안 초안을 작성합니다. 추가 백그라운드 토큰을 사용하며, 초안은 보류 중인 제안으로 등록됩니다.",
+      enable: "자기 학습 활성화",
+      enabling: "활성화 중…",
+      updateError: "자기 학습 설정을 업데이트할 수 없습니다.",
     },
     today: {
       emptyTitle: "오늘 대기 중인 항목이 없습니다",
@@ -3008,6 +3053,8 @@ export const ko: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "PR 만들기",
+      createPrLabel: "{branch}에 대한 풀 리퀘스트 만들기",
       dismiss: "Pull request #{number} 해제",
       open: "열림",
       draft: "초안",
@@ -3335,6 +3382,12 @@ export const ko: TranslationMap = {
         activityErrorMany: "활동: 도구 {count}개, 오류 포함.",
       },
     },
+    workRun: {
+      workedFor: "{duration} 동안 작업함",
+      worked: "작업함",
+      workedForError: "{duration} 동안 작업했으며, 오류가 포함되어 있습니다.",
+      workedError: "작업했으며, 오류가 포함되어 있습니다.",
+    },
     backgroundTasks: {
       label: "백그라운드 작업",
       title: "백그라운드 작업",
@@ -3528,6 +3581,14 @@ export const ko: TranslationMap = {
       remove: "제거",
       more: "추가 작업",
       history: "기록",
+    },
+    runNotStarted: {
+      notDue: "이 자동화는 아직 실행할 시간이 아닙니다.",
+      alreadyRunning: "이 자동화는 이미 실행 중입니다.",
+      recoveryPending: "스케줄러 복구가 아직 진행 중입니다.",
+      invalidSpec: "이 자동화의 일정 또는 페이로드가 잘못되었습니다.",
+      stopped: "스케줄러가 중지되었습니다.",
+      unknown: "이 자동화를 시작할 수 없습니다.",
     },
     jobs: {
       schedule: "일정",

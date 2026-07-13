@@ -1,8 +1,5 @@
 // Slack plugin module implements approval auth behavior.
-import {
-  createResolvedApproverActionAuthAdapter,
-  resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-auth-runtime";
+import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
@@ -35,9 +32,3 @@ export function isSlackApprovalAuthorizedSender(params: {
   }
   return (resolveSlackAccountAllowFrom(params) ?? []).some((entry) => entry.trim() === "*");
 }
-
-export const slackApprovalAuth = createResolvedApproverActionAuthAdapter({
-  channelLabel: "Slack",
-  resolveApprovers: ({ cfg, accountId }) => getSlackApprovalApprovers({ cfg, accountId }),
-  normalizeSenderId: (value) => normalizeSlackApproverId(value),
-});

@@ -433,6 +433,11 @@ export const icons = {
       <path d="M9 18l6-6-6-6" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
+  chevronLeft: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M15 18l-6-6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
   externalLink: html`
     <svg viewBox="0 0 24 24">
       <path

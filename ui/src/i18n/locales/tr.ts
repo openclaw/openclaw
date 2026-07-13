@@ -219,10 +219,10 @@ export const tr: TranslationMap = {
   lazyView: {
     loadingTitle: "Panel yükleniyor",
     errorTitle: "Panel yüklenemedi",
-    errorSubtitle:
-      "En son Control UI paketini yüklemek için sayfayı yeniden yükleyin veya ağ isteği başarısız olduysa tekrar deneyin.",
+    genericSubtitle: "Bu panel yüklenirken bir sorun oluştu.",
+    staleTitle: "Yeni bir sürüm mevcut",
+    staleSubtitle: "OpenClaw arka planda güncellendi. En son paneli almak için yeniden yükleyin.",
     retry: "Tekrar dene",
-    unknownError: "Bilinmeyen modül yükleme hatası.",
   },
   nodes: {
     pairing: {
@@ -394,6 +394,16 @@ export const tr: TranslationMap = {
     confirmForceDelete:
       "Anlık görüntü başarısız oldu: {error}\n\nAnlık görüntü olmadan silinsin mi?",
   },
+  agentChip: {
+    menuLabel: "Ajan menüsü",
+    agents: "Ajanlar",
+    working: "Çalışıyor…",
+    ready: "Sohbete hazır",
+    whatCanAgentDo: "{name} neler yapabilir?",
+    getHelp: "Yardım alın",
+    discord: "Discord topluluğu",
+    viewChangelog: "Değişiklik günlüğünü görüntüleyin",
+  },
   newSession: {
     title: "Yeni oturum",
     hint: "Bu oturumun nerede çalışacağını seçin, ardından ne yapılacağını söyleyin.",
@@ -404,10 +414,14 @@ export const tr: TranslationMap = {
     folder: "Klasör",
     folderPlaceholder: "Agent workspace",
     browse: "Klasörlere göz at",
+    browseRequiresAdmin: "Klasörlere göz atmak için yönetici bağlantısı gerekir",
     browserUp: "Üst klasör",
     browserUse: "Bu klasörü kullan",
     browserEmpty: "Alt klasör yok",
     browserLoadFailed: "Bu klasör listelenemedi.",
+    nodeOffline: "Cihaz çevrimdışı",
+    nodeCannotBrowse: "Bu cihaz klasörlere göz atmayı desteklemiyor",
+    hiddenFolder: "Gizli klasör",
     worktree: "Worktree",
     worktreeUnavailable: "Agent workspace bir git checkout değil",
     baseBranch: "Temel branch",
@@ -442,6 +456,24 @@ export const tr: TranslationMap = {
     archivedOnlyTooltip: "Yalnızca arşivlenen oturumları göster.",
     minutesPlaceholder: "dk",
     searchPlaceholder: "Anahtara, ajana, etikete, türe göre filtrele…",
+    transcriptSearchTitle: "Transkriptlerde ara",
+    transcriptSearchDescription:
+      "Varsayılan aracının oturumlarındaki kullanıcı ve asistan mesajlarında tam eşleşen kelime veya ifadeleri bulun.",
+    transcriptSearchInputLabel: "Oturum transkriptlerinde ara",
+    transcriptSearchPlaceholder: "Tam eşleşen kelime veya ifadeleri ara…",
+    transcriptSearchAction: "Ara",
+    transcriptSearchClear: "Temizle",
+    transcriptSearchRetry: "Yeniden dene",
+    transcriptSearchSearching: "Transkriptler aranıyor…",
+    transcriptSearchUnavailable: "Transkript araması için daha yeni bir Gateway gerekir.",
+    transcriptSearchError: "Transkript araması başarısız oldu",
+    transcriptSearchIndexing:
+      "Transkript dizini hâlâ güncelleniyor. Son mesajları dahil etmek için yeniden deneyin.",
+    transcriptSearchEmpty: "Bu aramayla eşleşen transkript mesajı yok.",
+    transcriptSearchMatches: "Transkript eşleşmeleri: {count}",
+    transcriptSearchTruncated: "İlk 25 eşleşme gösteriliyor.",
+    user: "Kullanıcı",
+    assistant: "Asistan",
     selected: "{count} seçildi",
     deleteSelected: "Sil",
     selectAllOnPage: "Sayfadakilerin tümünü seç",
@@ -1430,6 +1462,8 @@ export const tr: TranslationMap = {
     blockedAgentFilter: "aracı filtresi tarafından engellendi",
   },
   nav: {
+    back: "Geri",
+    forward: "İleri",
     chat: "Sohbet",
     settings: "Ayarlar",
     settingsGeneral: "Genel",
@@ -1713,8 +1747,6 @@ export const tr: TranslationMap = {
     removedRestart:
       "{name} kaldırıldı. Değişikliği uygulamak için Gateway yeniden başlatılmalıdır.",
     verifiedSource: "Doğrulanmış kaynak",
-    menuLabel: "{name} eylemleri",
-    menuDetails: "Ayrıntıları görüntüle",
     enableAction: "Etkinleştir",
     disableAction: "Devre dışı bırak",
     working: "Çalışıyor…",
@@ -1852,6 +1884,10 @@ export const tr: TranslationMap = {
       useCurrentChatAria: "Revizyon istekleri için mevcut sohbeti kullan",
       useCurrentChatTooltip:
         "Revizyon isteklerini önerinin çalışma alanı oturumu yerine mevcut sohbet oturumuna gönder.",
+      selfLearning: "Kendi kendine öğrenme",
+      selfLearningAria: "Kendi kendine öğrenen beceri önerilerini aç veya kapat",
+      selfLearningTooltip:
+        "Düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceleyerek bekleyen beceri önerilerine dönüştürür. Arka planda ek token harcar; taslaklar bu panoya bekleyen öneriler olarak eklenir.",
       view: "Atölye görünümü",
       board: "Pano",
       today: "Bugün",
@@ -1931,6 +1967,14 @@ export const tr: TranslationMap = {
       noProposalsTitle: "Henüz öneri yok",
       noProposalsBody: "{agent} henüz herhangi bir skill önerisi hazırlamadı.",
       noProposalsFooter: "Yeni öneriler inceleme için burada görünecek.",
+    },
+    selfLearning: {
+      pitchTitle: "Kendi kendine öğrenmeyi aç",
+      pitchBody:
+        "OpenClaw, düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceler, ardından bu pano için beceri önerileri taslakları oluşturur. Arka planda ek token harcar ve taslaklar bekleyen öneriler olarak eklenir.",
+      enable: "Kendi kendine öğrenmeyi etkinleştir",
+      enabling: "Etkinleştiriliyor…",
+      updateError: "Kendi kendine öğrenme ayarı güncellenemedi.",
     },
     today: {
       emptyTitle: "Bugün bekleyen bir şey yok",
@@ -3042,6 +3086,8 @@ export const tr: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "PR oluştur",
+      createPrLabel: "{branch} için bir pull request oluştur",
       dismiss: "Pull request #{number} öğesini kapat",
       open: "Açık",
       draft: "Taslak",
@@ -3368,6 +3414,12 @@ export const tr: TranslationMap = {
         activityErrorMany: "Etkinlik: {count} araç, hatalar içeriyor.",
       },
     },
+    workRun: {
+      workedFor: "{duration} boyunca çalıştı",
+      worked: "Çalıştı",
+      workedForError: "{duration} boyunca çalıştı, hatalar içeriyor.",
+      workedError: "Çalıştı, hatalar içeriyor.",
+    },
     backgroundTasks: {
       label: "Arka plan görevleri",
       title: "Arka plan görevleri",
@@ -3564,6 +3616,14 @@ export const tr: TranslationMap = {
       remove: "Kaldır",
       more: "Diğer işlemler",
       history: "Geçmiş",
+    },
+    runNotStarted: {
+      notDue: "Bu otomasyonun çalışma zamanı henüz gelmedi.",
+      alreadyRunning: "Bu otomasyon zaten çalışıyor.",
+      recoveryPending: "Zamanlayıcı kurtarma işlemi hâlâ devam ediyor.",
+      invalidSpec: "Bu otomasyonun zamanlaması veya yükü geçersiz.",
+      stopped: "Zamanlayıcı durduruldu.",
+      unknown: "Bu otomasyon başlatılamadı.",
     },
     jobs: {
       schedule: "Zamanlama",

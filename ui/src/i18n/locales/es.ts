@@ -218,10 +218,11 @@ export const es: TranslationMap = {
   lazyView: {
     loadingTitle: "Cargando panel",
     errorTitle: "No se pudo cargar el panel",
-    errorSubtitle:
-      "Vuelve a cargar la página para cargar el paquete más reciente de Control UI, o inténtalo de nuevo si falló la solicitud de red.",
+    genericSubtitle: "Se produjo un error al cargar este panel.",
+    staleTitle: "Hay una nueva versión disponible",
+    staleSubtitle:
+      "OpenClaw se actualizó en segundo plano. Recarga para obtener el panel más reciente.",
     retry: "Reintentar",
-    unknownError: "Error desconocido al cargar el módulo.",
   },
   nodes: {
     pairing: {
@@ -391,6 +392,16 @@ export const es: TranslationMap = {
     confirmDelete: "¿Crear snapshot y eliminar {name}?",
     confirmForceDelete: "Error al crear snapshot: {error}\n\n¿Eliminar sin snapshot?",
   },
+  agentChip: {
+    menuLabel: "Menú del agente",
+    agents: "Agentes",
+    working: "Procesando…",
+    ready: "Listo para chatear",
+    whatCanAgentDo: "¿Qué puede hacer {name}?",
+    getHelp: "Obtener ayuda",
+    discord: "Comunidad de Discord",
+    viewChangelog: "Ver registro de cambios",
+  },
   newSession: {
     title: "Nueva sesión",
     hint: "Elige dónde trabajará esta sesión y luego indica qué hacer.",
@@ -401,10 +412,14 @@ export const es: TranslationMap = {
     folder: "Carpeta",
     folderPlaceholder: "Espacio de trabajo del agente",
     browse: "Explorar carpetas",
+    browseRequiresAdmin: "La exploración de carpetas requiere una conexión de administrador",
     browserUp: "Carpeta superior",
     browserUse: "Usar esta carpeta",
     browserEmpty: "No hay subcarpetas",
     browserLoadFailed: "No se pudo listar esa carpeta.",
+    nodeOffline: "El dispositivo está sin conexión",
+    nodeCannotBrowse: "Este dispositivo no admite la exploración de carpetas",
+    hiddenFolder: "Carpeta oculta",
     worktree: "Worktree",
     worktreeUnavailable: "El espacio de trabajo del agente no es un checkout de git",
     baseBranch: "Rama base",
@@ -439,6 +454,25 @@ export const es: TranslationMap = {
     archivedOnlyTooltip: "Mostrar solo las sesiones archivadas.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filtrar por clave, agente, etiqueta, tipo…",
+    transcriptSearchTitle: "Buscar transcripciones",
+    transcriptSearchDescription:
+      "Encuentra palabras o frases exactas en los mensajes del usuario y del asistente de las sesiones del agente predeterminado.",
+    transcriptSearchInputLabel: "Buscar transcripciones de sesiones",
+    transcriptSearchPlaceholder: "Buscar palabras o frases exactas…",
+    transcriptSearchAction: "Buscar",
+    transcriptSearchClear: "Borrar",
+    transcriptSearchRetry: "Reintentar",
+    transcriptSearchSearching: "Buscando transcripciones…",
+    transcriptSearchUnavailable:
+      "La búsqueda de transcripciones requiere una versión más reciente de Gateway.",
+    transcriptSearchError: "Error al buscar transcripciones",
+    transcriptSearchIndexing:
+      "El índice de transcripciones aún se está actualizando. Vuelve a intentarlo para incluir mensajes recientes.",
+    transcriptSearchEmpty: "Ningún mensaje de la transcripción coincide con esta búsqueda.",
+    transcriptSearchMatches: "Coincidencias en transcripciones: {count}",
+    transcriptSearchTruncated: "Se muestran las primeras 25 coincidencias.",
+    user: "Usuario",
+    assistant: "Asistente",
     selected: "{count} seleccionados",
     deleteSelected: "Eliminar",
     selectAllOnPage: "Seleccionar todo en la página",
@@ -1431,6 +1465,8 @@ export const es: TranslationMap = {
     blockedAgentFilter: "bloqueado por filtro de agente",
   },
   nav: {
+    back: "Atrás",
+    forward: "Adelante",
     chat: "Chat",
     settings: "Ajustes",
     settingsGeneral: "General",
@@ -1712,8 +1748,6 @@ export const es: TranslationMap = {
     cancel: "Cancelar",
     removedRestart: "Se eliminó {name}. Es necesario reiniciar Gateway para aplicar el cambio.",
     verifiedSource: "Fuente verificada",
-    menuLabel: "Acciones de {name}",
-    menuDetails: "Ver detalles",
     enableAction: "Activar",
     disableAction: "Desactivar",
     working: "Procesando…",
@@ -1849,6 +1883,10 @@ export const es: TranslationMap = {
       useCurrentChatAria: "Usar el chat actual para las solicitudes de revisión",
       useCurrentChatTooltip:
         "Enviar las solicitudes de revisión a la sesión de chat actual en lugar de la sesión de workshop de la propuesta.",
+      selfLearning: "Autoaprendizaje",
+      selfLearningAria: "Activar o desactivar las propuestas de Skills de autoaprendizaje",
+      selfLearningTooltip:
+        "Recopila correcciones y revisa trabajos sustanciales completados para convertirlos en propuestas de Skills pendientes. Consume tokens adicionales en segundo plano; los borradores aparecen en este tablero como propuestas pendientes.",
       view: "Vista del taller",
       board: "Tablero",
       today: "Hoy",
@@ -1929,6 +1967,14 @@ export const es: TranslationMap = {
       noProposalsTitle: "Aún no hay propuestas",
       noProposalsBody: "{agent} no ha redactado ninguna propuesta de skill.",
       noProposalsFooter: "Las nuevas propuestas aparecerán aquí para su revisión.",
+    },
+    selfLearning: {
+      pitchTitle: "Activar el autoaprendizaje",
+      pitchBody:
+        "OpenClaw revisa las correcciones y las ejecuciones sustanciales completadas y, a continuación, redacta propuestas de Skills para este tablero. Consume tokens adicionales en segundo plano y los borradores aparecen como propuestas pendientes.",
+      enable: "Activar el autoaprendizaje",
+      enabling: "Activando…",
+      updateError: "No se pudo actualizar la configuración de autoaprendizaje.",
     },
     today: {
       emptyTitle: "Nada pendiente hoy",
@@ -3049,6 +3095,8 @@ export const es: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request n.º {number}: {title}",
+      createPr: "Crear PR",
+      createPrLabel: "Crear una solicitud de extracción para {branch}",
       dismiss: "Descartar pull request n.º {number}",
       open: "Abierto",
       draft: "Borrador",
@@ -3378,6 +3426,12 @@ export const es: TranslationMap = {
         activityErrorMany: "Actividad: {count} herramientas, incluye errores.",
       },
     },
+    workRun: {
+      workedFor: "Trabajó durante {duration}",
+      worked: "Trabajó",
+      workedForError: "Trabajó durante {duration}, con errores.",
+      workedError: "Trabajó, con errores.",
+    },
     backgroundTasks: {
       label: "Tareas en segundo plano",
       title: "Tareas en segundo plano",
@@ -3572,6 +3626,14 @@ export const es: TranslationMap = {
       remove: "Eliminar",
       more: "Más acciones",
       history: "Historial",
+    },
+    runNotStarted: {
+      notDue: "Esta automatización aún no está programada para ejecutarse.",
+      alreadyRunning: "Esta automatización ya se está ejecutando.",
+      recoveryPending: "La recuperación del programador aún está en curso.",
+      invalidSpec: "Esta automatización tiene una programación o una carga útil no válidas.",
+      stopped: "El programador está detenido.",
+      unknown: "No se pudo iniciar esta automatización.",
     },
     jobs: {
       schedule: "Programación",

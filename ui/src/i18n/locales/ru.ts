@@ -218,10 +218,11 @@ export const ru: TranslationMap = {
   lazyView: {
     loadingTitle: "Загрузка панели",
     errorTitle: "Не удалось загрузить панель",
-    errorSubtitle:
-      "Перезагрузите страницу, чтобы загрузить последнюю версию пакета Control UI, или повторите попытку, если сетевой запрос завершился ошибкой.",
+    genericSubtitle: "При загрузке этой панели произошла ошибка.",
+    staleTitle: "Доступна новая версия",
+    staleSubtitle:
+      "OpenClaw был обновлён в фоновом режиме. Перезагрузите страницу, чтобы получить последнюю версию панели.",
     retry: "Повторить",
-    unknownError: "Неизвестная ошибка загрузки модуля.",
   },
   nodes: {
     pairing: {
@@ -392,6 +393,16 @@ export const ru: TranslationMap = {
     confirmDelete: "Создать снимок и удалить {name}?",
     confirmForceDelete: "Не удалось создать снимок: {error}\n\nУдалить без снимка?",
   },
+  agentChip: {
+    menuLabel: "Меню агента",
+    agents: "Агенты",
+    working: "Выполняется…",
+    ready: "Готово к чату",
+    whatCanAgentDo: "Что умеет {name}?",
+    getHelp: "Получить помощь",
+    discord: "Сообщество Discord",
+    viewChangelog: "Посмотреть журнал изменений",
+  },
   newSession: {
     title: "Новый сеанс",
     hint: "Выберите, где будет работать эта сессия, затем опишите, что нужно сделать.",
@@ -402,10 +413,14 @@ export const ru: TranslationMap = {
     folder: "Папка",
     folderPlaceholder: "Рабочая область агента",
     browse: "Обзор папок",
+    browseRequiresAdmin: "Для просмотра папок требуется подключение администратора",
     browserUp: "Родительская папка",
     browserUse: "Использовать эту папку",
     browserEmpty: "Нет подпапок",
     browserLoadFailed: "Не удалось получить список этой папки.",
+    nodeOffline: "Устройство не в сети",
+    nodeCannotBrowse: "Это устройство не поддерживает просмотр папок",
+    hiddenFolder: "Скрытая папка",
     worktree: "Рабочее дерево",
     worktreeUnavailable: "Рабочая область агента не является git checkout",
     baseBranch: "Базовая ветка",
@@ -440,6 +455,24 @@ export const ru: TranslationMap = {
     archivedOnlyTooltip: "Показывать только архивные сеансы.",
     minutesPlaceholder: "мин",
     searchPlaceholder: "Фильтр по ключу, агенту, метке, типу…",
+    transcriptSearchTitle: "Поиск по расшифровкам",
+    transcriptSearchDescription:
+      "Находите точные слова или фразы в сообщениях пользователя и ассистента во всех сеансах агента по умолчанию.",
+    transcriptSearchInputLabel: "Поиск по расшифровкам сеансов",
+    transcriptSearchPlaceholder: "Искать точные слова или фразы…",
+    transcriptSearchAction: "Поиск",
+    transcriptSearchClear: "Очистить",
+    transcriptSearchRetry: "Повторить",
+    transcriptSearchSearching: "Поиск по расшифровкам…",
+    transcriptSearchUnavailable: "Для поиска по расшифровкам требуется более новая версия Gateway.",
+    transcriptSearchError: "Не удалось выполнить поиск по расшифровкам",
+    transcriptSearchIndexing:
+      "Индекс расшифровок всё ещё обновляется. Повторите попытку, чтобы включить последние сообщения.",
+    transcriptSearchEmpty: "Сообщений расшифровки, соответствующих этому поиску, нет.",
+    transcriptSearchMatches: "Совпадения в расшифровках: {count}",
+    transcriptSearchTruncated: "Показаны первые 25 совпадений.",
+    user: "Пользователь",
+    assistant: "Ассистент",
     selected: "Выбрано: {count}",
     deleteSelected: "Удалить",
     selectAllOnPage: "Выбрать все на странице",
@@ -1435,6 +1468,8 @@ export const ru: TranslationMap = {
     blockedAgentFilter: "заблокировано фильтром агента",
   },
   nav: {
+    back: "Назад",
+    forward: "Вперед",
     chat: "Чат",
     settings: "Настройки",
     settingsGeneral: "Общие",
@@ -1711,8 +1746,6 @@ export const ru: TranslationMap = {
     cancel: "Отмена",
     removedRestart: "{name} удален. Для применения изменения требуется перезапуск Gateway.",
     verifiedSource: "Проверенный источник",
-    menuLabel: "Действия для {name}",
-    menuDetails: "Просмотреть сведения",
     enableAction: "Включить",
     disableAction: "Отключить",
     working: "Выполняется…",
@@ -1847,6 +1880,10 @@ export const ru: TranslationMap = {
       useCurrentChatAria: "Использовать текущий чат для запросов на доработку",
       useCurrentChatTooltip:
         "Отправлять запросы на доработку в текущую сессию чата вместо сессии мастерской предложения.",
+      selfLearning: "Самообучение",
+      selfLearningAria: "Включить или выключить предложения навыков на основе самообучения",
+      selfLearningTooltip:
+        "Собирает исправления и анализирует значимые завершённые задачи, формируя из них ожидающие рассмотрения предложения по навыкам. Использует дополнительные токены в фоновом режиме; черновики появляются на этой доске как ожидающие рассмотрения предложения.",
       view: "Вид мастерской",
       board: "Доска",
       today: "Сегодня",
@@ -1926,6 +1963,14 @@ export const ru: TranslationMap = {
       noProposalsTitle: "Пока нет предложений",
       noProposalsBody: "{agent} ещё не подготовил ни одного предложения навыков.",
       noProposalsFooter: "Новые предложения появятся здесь для проверки.",
+    },
+    selfLearning: {
+      pitchTitle: "Включить самообучение",
+      pitchBody:
+        "OpenClaw анализирует исправления и значимые завершённые запуски, а затем создаёт для этой доски черновики предложений по навыкам. При этом используются дополнительные токены в фоновом режиме, а черновики поступают как ожидающие рассмотрения предложения.",
+      enable: "Включить самообучение",
+      enabling: "Включение…",
+      updateError: "Не удалось обновить настройку самообучения.",
     },
     today: {
       emptyTitle: "Сегодня ничего не ожидает",
@@ -3046,6 +3091,8 @@ export const ru: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Создать PR",
+      createPrLabel: "Создать запрос на слияние для ветки {branch}",
       dismiss: "Скрыть pull request #{number}",
       open: "Открыть",
       draft: "Черновик",
@@ -3372,6 +3419,12 @@ export const ru: TranslationMap = {
         activityErrorMany: "Активность: {count} инструментов, содержит ошибки.",
       },
     },
+    workRun: {
+      workedFor: "Работал в течение {duration}",
+      worked: "Работал",
+      workedForError: "Работал в течение {duration}, возникли ошибки.",
+      workedError: "Работал, возникли ошибки.",
+    },
     backgroundTasks: {
       label: "Фоновые задачи",
       title: "Фоновые задачи",
@@ -3566,6 +3619,14 @@ export const ru: TranslationMap = {
       remove: "Удалить",
       more: "Другие действия",
       history: "История",
+    },
+    runNotStarted: {
+      notDue: "Время запуска этой автоматизации ещё не наступило.",
+      alreadyRunning: "Эта автоматизация уже выполняется.",
+      recoveryPending: "Восстановление планировщика ещё не завершено.",
+      invalidSpec: "У этой автоматизации недопустимое расписание или содержимое.",
+      stopped: "Планировщик остановлен.",
+      unknown: "Не удалось запустить эту автоматизацию.",
     },
     jobs: {
       schedule: "Расписание",

@@ -218,10 +218,11 @@ export const uk: TranslationMap = {
   lazyView: {
     loadingTitle: "Завантаження панелі",
     errorTitle: "Не вдалося завантажити панель",
-    errorSubtitle:
-      "Перезавантажте сторінку, щоб завантажити найновіший пакет Control UI, або повторіть спробу, якщо мережевий запит не вдався.",
+    genericSubtitle: "Під час завантаження цієї панелі сталася помилка.",
+    staleTitle: "Доступна нова версія",
+    staleSubtitle:
+      "OpenClaw оновлено у фоновому режимі. Перезавантажте, щоб отримати найновішу панель.",
     retry: "Повторити",
-    unknownError: "Невідома помилка завантаження модуля.",
   },
   nodes: {
     pairing: {
@@ -391,6 +392,16 @@ export const uk: TranslationMap = {
     confirmDelete: "Створити знімок і видалити {name}?",
     confirmForceDelete: "Не вдалося створити знімок: {error}\n\nВидалити без знімка?",
   },
+  agentChip: {
+    menuLabel: "Меню агента",
+    agents: "Агенти",
+    working: "Працює…",
+    ready: "Готовий до спілкування",
+    whatCanAgentDo: "Що може робити {name}?",
+    getHelp: "Отримати допомогу",
+    discord: "Спільнота Discord",
+    viewChangelog: "Переглянути журнал змін",
+  },
   newSession: {
     title: "Новий сеанс",
     hint: "Виберіть, де працюватиме цей сеанс, а потім скажіть, що потрібно зробити.",
@@ -401,10 +412,14 @@ export const uk: TranslationMap = {
     folder: "Папка",
     folderPlaceholder: "Робоча область агента",
     browse: "Переглянути папки",
+    browseRequiresAdmin: "Для перегляду папок потрібне підключення адміністратора",
     browserUp: "Батьківська папка",
     browserUse: "Використати цю папку",
     browserEmpty: "Немає підпапок",
     browserLoadFailed: "Не вдалося отримати список цієї папки.",
+    nodeOffline: "Пристрій не в мережі",
+    nodeCannotBrowse: "Цей пристрій не підтримує перегляд папок",
+    hiddenFolder: "Прихована папка",
     worktree: "Worktree",
     worktreeUnavailable: "Робоча область агента не є git checkout",
     baseBranch: "Базова гілка",
@@ -439,6 +454,24 @@ export const uk: TranslationMap = {
     archivedOnlyTooltip: "Показувати лише архівовані сеанси.",
     minutesPlaceholder: "хв",
     searchPlaceholder: "Фільтрувати за ключем, агентом, міткою, типом…",
+    transcriptSearchTitle: "Пошук у стенограмах",
+    transcriptSearchDescription:
+      "Знаходьте точні слова або фрази в повідомленнях користувача й асистента в сеансах агента за замовчуванням.",
+    transcriptSearchInputLabel: "Шукати в стенограмах сеансів",
+    transcriptSearchPlaceholder: "Шукати точні слова або фрази…",
+    transcriptSearchAction: "Пошук",
+    transcriptSearchClear: "Очистити",
+    transcriptSearchRetry: "Повторити",
+    transcriptSearchSearching: "Пошук у стенограмах…",
+    transcriptSearchUnavailable: "Для пошуку в стенограмах потрібна новіша версія Gateway.",
+    transcriptSearchError: "Не вдалося виконати пошук у стенограмах",
+    transcriptSearchIndexing:
+      "Індекс стенограм ще оновлюється. Повторіть спробу, щоб включити останні повідомлення.",
+    transcriptSearchEmpty: "Жодне повідомлення стенограми не відповідає цьому пошуку.",
+    transcriptSearchMatches: "Збіги у стенограмах: {count}",
+    transcriptSearchTruncated: "Показано перші 25 збігів.",
+    user: "Користувач",
+    assistant: "Асистент",
     selected: "Вибрано: {count}",
     deleteSelected: "Видалити",
     selectAllOnPage: "Вибрати все на сторінці",
@@ -1430,6 +1463,8 @@ export const uk: TranslationMap = {
     blockedAgentFilter: "заблоковано фільтром агента",
   },
   nav: {
+    back: "Назад",
+    forward: "Вперед",
     chat: "Чат",
     settings: "Налаштування",
     settingsGeneral: "Загальні",
@@ -1704,8 +1739,6 @@ export const uk: TranslationMap = {
     cancel: "Скасувати",
     removedRestart: "Видалено {name}. Щоб застосувати зміну, потрібен перезапуск Gateway.",
     verifiedSource: "Перевірене джерело",
-    menuLabel: "Дії для {name}",
-    menuDetails: "Переглянути деталі",
     enableAction: "Увімкнути",
     disableAction: "Вимкнути",
     working: "Обробка…",
@@ -1840,6 +1873,10 @@ export const uk: TranslationMap = {
       useCurrentChatAria: "Використовувати поточний чат для запитів на перегляд",
       useCurrentChatTooltip:
         "Надсилати запити на перегляд до поточної сесії чату замість сесії воркшопу пропозиції.",
+      selfLearning: "Самонавчання",
+      selfLearningAria: "Увімкнути або вимкнути пропозиції навичок на основі самонавчання",
+      selfLearningTooltip:
+        "Фіксує виправлення та аналізує суттєві завершені завдання, перетворюючи їх на чернетки пропозицій навичок. Використовує додаткові фонові токени; чернетки з’являються на цій дошці як пропозиції, що очікують розгляду.",
       view: "Вигляд майстерні",
       board: "Дошка",
       today: "Сьогодні",
@@ -1919,6 +1956,14 @@ export const uk: TranslationMap = {
       noProposalsTitle: "Пропозицій поки немає",
       noProposalsBody: "{agent} ще не створив жодної пропозиції навички.",
       noProposalsFooter: "Нові пропозиції з’являтимуться тут для перегляду.",
+    },
+    selfLearning: {
+      pitchTitle: "Увімкнути самонавчання",
+      pitchBody:
+        "OpenClaw аналізує виправлення та суттєві завершені запуски, а потім створює чернетки пропозицій навичок для цієї дошки. Він використовує додаткові фонові токени, а чернетки надходять як пропозиції, що очікують розгляду.",
+      enable: "Увімкнути самонавчання",
+      enabling: "Увімкнення…",
+      updateError: "Не вдалося оновити налаштування самонавчання.",
     },
     today: {
       emptyTitle: "Сьогодні нічого не очікує",
@@ -3029,6 +3074,8 @@ export const uk: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Створити PR",
+      createPrLabel: "Створити запит на злиття для {branch}",
       dismiss: "Відхилити pull request #{number}",
       open: "Відкрито",
       draft: "Чернетка",
@@ -3356,6 +3403,12 @@ export const uk: TranslationMap = {
         activityErrorMany: "Активність: {count} інструментів, містить помилки.",
       },
     },
+    workRun: {
+      workedFor: "Працював протягом {duration}",
+      worked: "Працював",
+      workedForError: "Працював протягом {duration}, виникли помилки.",
+      workedError: "Працював, виникли помилки.",
+    },
     backgroundTasks: {
       label: "Фонові завдання",
       title: "Фонові завдання",
@@ -3549,6 +3602,14 @@ export const uk: TranslationMap = {
       remove: "Видалити",
       more: "Більше дій",
       history: "Історія",
+    },
+    runNotStarted: {
+      notDue: "Час запуску цієї автоматизації ще не настав.",
+      alreadyRunning: "Ця автоматизація вже виконується.",
+      recoveryPending: "Відновлення планувальника ще триває.",
+      invalidSpec: "Ця автоматизація має некоректний розклад або корисне навантаження.",
+      stopped: "Планувальник зупинено.",
+      unknown: "Не вдалося запустити цю автоматизацію.",
     },
     jobs: {
       schedule: "Розклад",

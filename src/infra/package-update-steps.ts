@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
@@ -79,10 +80,6 @@ type NpmBinShimBackup = {
 };
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
-
-function formatError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
   return step.exitCode !== 0 && step.advisory === undefined;
@@ -379,7 +376,7 @@ async function prepareStagedNpmInstall(
         durationMs: Date.now() - startedAt,
         exitCode: 1,
         stdoutTail: null,
-        stderrTail: formatError(err),
+        stderrTail: formatErrorMessage(err),
       },
     };
   }
@@ -459,7 +456,7 @@ async function captureLocalPackageOverridesForUpdate(
         packageRoot: recordedPackageRoot,
         command: `inspect local OpenClaw changes in ${recordedPackageRoot}`,
         durationMs: Date.now() - startedAt,
-        message: `Local OpenClaw changes could not be inspected safely before update: ${formatError(error)}`,
+        message: `Local OpenClaw changes could not be inspected safely before update: ${formatErrorMessage(error)}`,
       }),
     };
   }
@@ -655,7 +652,7 @@ async function swapStagedNpmInstall(params: {
         durationMs: Date.now() - startedAt,
         exitCode: 1,
         stdoutTail: null,
-        stderrTail: formatError(err),
+        stderrTail: formatErrorMessage(err),
       },
       capturedLocalOverrides,
     };
@@ -868,7 +865,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           ...(await collectPackageDistContentInventoryErrors(verificationPackageRoot)),
         );
       } catch (error) {
-        verificationErrors.push(formatError(error));
+        verificationErrors.push(formatErrorMessage(error));
       }
       if (verificationErrors.length > 0) {
         steps.push({

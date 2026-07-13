@@ -218,10 +218,11 @@ export const nl: TranslationMap = {
   lazyView: {
     loadingTitle: "Paneel laden",
     errorTitle: "Paneel kan niet worden geladen",
-    errorSubtitle:
-      "Laad de pagina opnieuw om de nieuwste Control UI-bundel te laden, of probeer het opnieuw als de netwerkaanvraag is mislukt.",
+    genericSubtitle: "Er is iets misgegaan bij het laden van dit paneel.",
+    staleTitle: "Er is een nieuwe versie beschikbaar",
+    staleSubtitle:
+      "OpenClaw is op de achtergrond bijgewerkt. Laad opnieuw om het nieuwste paneel te zien.",
     retry: "Opnieuw proberen",
-    unknownError: "Onbekende fout bij laden van module.",
   },
   nodes: {
     pairing: {
@@ -392,6 +393,16 @@ export const nl: TranslationMap = {
     confirmDelete: "Snapshot maken en {name} verwijderen?",
     confirmForceDelete: "Snapshot mislukt: {error}\n\nVerwijderen zonder snapshot?",
   },
+  agentChip: {
+    menuLabel: "Agentmenu",
+    agents: "Agents",
+    working: "Bezig…",
+    ready: "Klaar om te chatten",
+    whatCanAgentDo: "Wat kan {name} doen?",
+    getHelp: "Hulp krijgen",
+    discord: "Discord-community",
+    viewChangelog: "Wijzigingslogboek bekijken",
+  },
   newSession: {
     title: "Nieuwe sessie",
     hint: "Kies waar deze sessie werkt en zeg vervolgens wat er moet gebeuren.",
@@ -402,10 +413,14 @@ export const nl: TranslationMap = {
     folder: "Map",
     folderPlaceholder: "Agent-werkruimte",
     browse: "Door mappen bladeren",
+    browseRequiresAdmin: "Voor het bladeren door mappen is een beheerdersverbinding vereist",
     browserUp: "Bovenliggende map",
     browserUse: "Deze map gebruiken",
     browserEmpty: "Geen submappen",
     browserLoadFailed: "Kan die map niet weergeven.",
+    nodeOffline: "Apparaat is offline",
+    nodeCannotBrowse: "Dit apparaat ondersteunt het bladeren door mappen niet",
+    hiddenFolder: "Verborgen map",
     worktree: "Worktree",
     worktreeUnavailable: "Agent-werkruimte is geen git checkout",
     baseBranch: "Basisbranch",
@@ -440,6 +455,25 @@ export const nl: TranslationMap = {
     archivedOnlyTooltip: "Toon alleen gearchiveerde sessies.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter op sleutel, agent, label, type…",
+    transcriptSearchTitle: "Transcripties doorzoeken",
+    transcriptSearchDescription:
+      "Vind exacte woorden of zinnen in berichten van gebruikers en assistenten in de sessies van de standaardagent.",
+    transcriptSearchInputLabel: "Sessietranscripties doorzoeken",
+    transcriptSearchPlaceholder: "Zoek exacte woorden of zinnen…",
+    transcriptSearchAction: "Zoeken",
+    transcriptSearchClear: "Wissen",
+    transcriptSearchRetry: "Opnieuw proberen",
+    transcriptSearchSearching: "Transcripties doorzoeken…",
+    transcriptSearchUnavailable:
+      "Voor het doorzoeken van transcripties is een nieuwere Gateway vereist.",
+    transcriptSearchError: "Doorzoeken van transcripties mislukt",
+    transcriptSearchIndexing:
+      "De transcriptie-index wordt nog bijgewerkt. Probeer het opnieuw om recente berichten mee te nemen.",
+    transcriptSearchEmpty: "Geen transcriptieberichten komen overeen met deze zoekopdracht.",
+    transcriptSearchMatches: "Overeenkomsten in transcripties: {count}",
+    transcriptSearchTruncated: "De eerste 25 overeenkomsten worden weergegeven.",
+    user: "Gebruiker",
+    assistant: "Assistent",
     selected: "{count} geselecteerd",
     deleteSelected: "Verwijderen",
     selectAllOnPage: "Alles op pagina selecteren",
@@ -1430,6 +1464,8 @@ export const nl: TranslationMap = {
     blockedAgentFilter: "geblokkeerd door agentfilter",
   },
   nav: {
+    back: "Terug",
+    forward: "Vooruit",
     chat: "Chat",
     settings: "Instellingen",
     settingsGeneral: "Algemeen",
@@ -1701,8 +1737,6 @@ export const nl: TranslationMap = {
     removedRestart:
       "{name} verwijderd. Een herstart van de Gateway is vereist om de wijziging toe te passen.",
     verifiedSource: "Geverifieerde bron",
-    menuLabel: "{name}-acties",
-    menuDetails: "Details bekijken",
     enableAction: "Inschakelen",
     disableAction: "Uitschakelen",
     working: "Bezig…",
@@ -1839,6 +1873,10 @@ export const nl: TranslationMap = {
       useCurrentChatAria: "Huidige chat gebruiken voor revisieverzoeken",
       useCurrentChatTooltip:
         "Stuur revisieverzoeken naar de huidige chatsessie in plaats van de workshopsessie van het voorstel.",
+      selfLearning: "Zelflerend",
+      selfLearningAria: "Voorstellen voor zelflerende Skills in- of uitschakelen",
+      selfLearningTooltip:
+        "Leg correcties vast en zet omvangrijk voltooid werk na beoordeling om in openstaande skillvoorstellen. Verbruikt extra tokens op de achtergrond; concepten verschijnen op dit bord als openstaande voorstellen.",
       view: "Workshopweergave",
       board: "Bord",
       today: "Vandaag",
@@ -1919,6 +1957,14 @@ export const nl: TranslationMap = {
       noProposalsTitle: "Nog geen voorstellen",
       noProposalsBody: "{agent} heeft nog geen skill-voorstellen opgesteld.",
       noProposalsFooter: "Nieuwe voorstellen verschijnen hier ter beoordeling.",
+    },
+    selfLearning: {
+      pitchTitle: "Zelfleren inschakelen",
+      pitchBody:
+        "OpenClaw beoordeelt correcties en omvangrijke voltooide runs en stelt vervolgens skillvoorstellen op voor dit bord. Het verbruikt extra tokens op de achtergrond en concepten verschijnen als openstaande voorstellen.",
+      enable: "Zelfleren inschakelen",
+      enabling: "Inschakelen…",
+      updateError: "De instelling voor zelfleren kon niet worden bijgewerkt.",
     },
     today: {
       emptyTitle: "Vandaag niets in wachtrij",
@@ -3034,6 +3080,8 @@ export const nl: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "PR aanmaken",
+      createPrLabel: "Een pull request aanmaken voor {branch}",
       dismiss: "Pull request #{number} negeren",
       open: "Open",
       draft: "Concept",
@@ -3361,6 +3409,12 @@ export const nl: TranslationMap = {
         activityErrorMany: "Activiteit: {count} tools, bevat fouten.",
       },
     },
+    workRun: {
+      workedFor: "Gewerkt gedurende {duration}",
+      worked: "Gewerkt",
+      workedForError: "Gewerkt gedurende {duration}, bevat fouten.",
+      workedError: "Gewerkt, bevat fouten.",
+    },
     backgroundTasks: {
       label: "Achtergrondtaken",
       title: "Achtergrondtaken",
@@ -3555,6 +3609,14 @@ export const nl: TranslationMap = {
       remove: "Verwijderen",
       more: "Meer acties",
       history: "Geschiedenis",
+    },
+    runNotStarted: {
+      notDue: "Deze automatisering hoeft nog niet te worden uitgevoerd.",
+      alreadyRunning: "Deze automatisering wordt al uitgevoerd.",
+      recoveryPending: "Het herstel van de planner is nog bezig.",
+      invalidSpec: "Deze automatisering heeft een ongeldig schema of een ongeldige payload.",
+      stopped: "De planner is gestopt.",
+      unknown: "Deze automatisering kon niet worden gestart.",
     },
     jobs: {
       schedule: "Schema",

@@ -218,10 +218,11 @@ export const fa: TranslationMap = {
   lazyView: {
     loadingTitle: "در حال بارگیری پنل",
     errorTitle: "پنل بارگیری نشد",
-    errorSubtitle:
-      "برای بارگیری آخرین بسته Control UI صفحه را دوباره بارگیری کنید، یا اگر درخواست شبکه ناموفق بود دوباره تلاش کنید.",
+    genericSubtitle: "هنگام بارگذاری این پنل مشکلی پیش آمد.",
+    staleTitle: "نسخه جدیدی در دسترس است",
+    staleSubtitle:
+      "OpenClaw در پس‌زمینه به‌روزرسانی شد. برای دریافت جدیدترین پنل، دوباره بارگذاری کنید.",
     retry: "تلاش دوباره",
-    unknownError: "خطای نامشخص در بارگیری ماژول.",
   },
   nodes: {
     pairing: {
@@ -391,6 +392,16 @@ export const fa: TranslationMap = {
     confirmDelete: "از {name} snapshot گرفته و حذف شود؟",
     confirmForceDelete: "snapshot ناموفق بود: {error}\n\nبدون snapshot حذف شود؟",
   },
+  agentChip: {
+    menuLabel: "منوی عامل",
+    agents: "عامل‌ها",
+    working: "در حال کار…",
+    ready: "آماده گفت‌وگو",
+    whatCanAgentDo: "{name} چه کاری می‌تواند انجام دهد؟",
+    getHelp: "دریافت راهنمایی",
+    discord: "انجمن Discord",
+    viewChangelog: "مشاهده فهرست تغییرات",
+  },
   newSession: {
     title: "جلسه جدید",
     hint: "انتخاب کنید این جلسه کجا کار کند، سپس بگویید چه کاری انجام دهد.",
@@ -401,10 +412,14 @@ export const fa: TranslationMap = {
     folder: "پوشه",
     folderPlaceholder: "فضای کاری Agent",
     browse: "مرور پوشه‌ها",
+    browseRequiresAdmin: "مرور پوشه‌ها به اتصال مدیر نیاز دارد",
     browserUp: "پوشه والد",
     browserUse: "استفاده از این پوشه",
     browserEmpty: "زیرپوشه‌ای وجود ندارد",
     browserLoadFailed: "فهرست‌کردن آن پوشه ممکن نبود.",
+    nodeOffline: "دستگاه آفلاین است",
+    nodeCannotBrowse: "این دستگاه از مرور پوشه‌ها پشتیبانی نمی‌کند",
+    hiddenFolder: "پوشه پنهان",
     worktree: "Worktree",
     worktreeUnavailable: "فضای کاری Agent یک git checkout نیست",
     baseBranch: "شاخه پایه",
@@ -439,6 +454,24 @@ export const fa: TranslationMap = {
     archivedOnlyTooltip: "فقط نشست‌های بایگانی‌شده را نشان بده.",
     minutesPlaceholder: "دقیقه",
     searchPlaceholder: "فیلتر بر اساس کلید، عامل، برچسب، نوع…",
+    transcriptSearchTitle: "جست‌وجو در رونوشت‌ها",
+    transcriptSearchDescription:
+      "واژه‌ها یا عبارت‌های دقیق را در پیام‌های کاربر و دستیار در نشست‌های عامل پیش‌فرض پیدا کنید.",
+    transcriptSearchInputLabel: "جست‌وجو در رونوشت نشست‌ها",
+    transcriptSearchPlaceholder: "جست‌وجوی واژه‌ها یا عبارت‌های دقیق…",
+    transcriptSearchAction: "جستجو",
+    transcriptSearchClear: "پاک کردن",
+    transcriptSearchRetry: "تلاش دوباره",
+    transcriptSearchSearching: "در حال جست‌وجوی رونوشت‌ها…",
+    transcriptSearchUnavailable: "جست‌وجوی رونوشت به نسخه جدیدتری از Gateway نیاز دارد.",
+    transcriptSearchError: "جست‌وجوی رونوشت ناموفق بود",
+    transcriptSearchIndexing:
+      "نمایه رونوشت هنوز در حال به‌روزرسانی است. برای شامل شدن پیام‌های اخیر دوباره تلاش کنید.",
+    transcriptSearchEmpty: "هیچ پیام رونوشتی با این جست‌وجو مطابقت ندارد.",
+    transcriptSearchMatches: "موارد مطابق در رونوشت‌ها: {count}",
+    transcriptSearchTruncated: "۲۵ مورد مطابق نخست نمایش داده می‌شود.",
+    user: "کاربر",
+    assistant: "دستیار",
     selected: "{count} انتخاب‌شده",
     deleteSelected: "حذف",
     selectAllOnPage: "انتخاب همه در صفحه",
@@ -1424,6 +1457,8 @@ export const fa: TranslationMap = {
     blockedAgentFilter: "مسدودشده توسط فیلتر عامل",
   },
   nav: {
+    back: "بازگشت",
+    forward: "جلو",
     chat: "چت",
     settings: "تنظیمات",
     settingsGeneral: "عمومی",
@@ -1691,8 +1726,6 @@ export const fa: TranslationMap = {
     cancel: "لغو",
     removedRestart: "{name} حذف شد. برای اعمال تغییر، راه‌اندازی مجدد Gateway لازم است.",
     verifiedSource: "منبع تأییدشده",
-    menuLabel: "اقدامات {name}",
-    menuDetails: "مشاهده جزئیات",
     enableAction: "فعال کردن",
     disableAction: "غیرفعال کردن",
     working: "در حال انجام…",
@@ -1826,6 +1859,10 @@ export const fa: TranslationMap = {
       useCurrentChatAria: "استفاده از گفتگوی فعلی برای درخواست‌های بازبینی",
       useCurrentChatTooltip:
         "درخواست‌های بازبینی را به جای جلسه کارگاهی پیشنهاد، به جلسه گفتگوی فعلی ارسال کنید.",
+      selfLearning: "خودآموزی",
+      selfLearningAria: "فعال یا غیرفعال کردن پیشنهادهای مهارتِ خودآموزی",
+      selfLearningTooltip:
+        "اصلاحات و کارهای مهم تکمیل‌شده را ثبت و بررسی می‌کند و به پیشنهادهای مهارتِ در انتظار تبدیل می‌کند. توکن‌های پس‌زمینه بیشتری مصرف می‌کند؛ پیش‌نویس‌ها به‌صورت پیشنهادهای در انتظار روی این برد قرار می‌گیرند.",
       view: "نمای کارگاه",
       board: "تخته",
       today: "امروز",
@@ -1907,6 +1944,14 @@ export const fa: TranslationMap = {
       noProposalsTitle: "هنوز پیشنهادی وجود ندارد",
       noProposalsBody: "{agent} هنوز هیچ پیشنهاد مهارتی تهیه نکرده است.",
       noProposalsFooter: "پیشنهادهای جدید برای بررسی اینجا نمایش داده می‌شوند.",
+    },
+    selfLearning: {
+      pitchTitle: "فعال‌سازی خودآموزی",
+      pitchBody:
+        "OpenClaw اصلاحات و اجراهای مهم تکمیل‌شده را بررسی می‌کند و سپس برای این برد، پیش‌نویس پیشنهادهای مهارت را می‌سازد. این فرایند توکن‌های پس‌زمینه بیشتری مصرف می‌کند و پیش‌نویس‌ها به‌صورت پیشنهادهای در انتظار ارائه می‌شوند.",
+      enable: "فعال‌سازی خودآموزی",
+      enabling: "در حال فعال‌سازی…",
+      updateError: "تنظیمات خودآموزی به‌روزرسانی نشد.",
     },
     today: {
       emptyTitle: "امروز چیزی در انتظار نیست",
@@ -3018,6 +3063,8 @@ export const fa: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "درخواست pull شماره {number}: {title}",
+      createPr: "ایجاد PR",
+      createPrLabel: "ایجاد درخواست ادغام برای {branch}",
       dismiss: "بستن درخواست pull شماره {number}",
       open: "باز",
       draft: "پیش‌نویس",
@@ -3343,6 +3390,12 @@ export const fa: TranslationMap = {
         activityErrorMany: "فعالیت: {count} ابزار، شامل خطاها.",
       },
     },
+    workRun: {
+      workedFor: "به‌مدت {duration} کار کرد",
+      worked: "کار کرد",
+      workedForError: "به‌مدت {duration} کار کرد، شامل خطاها.",
+      workedError: "کار کرد، شامل خطاها.",
+    },
     backgroundTasks: {
       label: "وظایف پس‌زمینه",
       title: "وظایف پس‌زمینه",
@@ -3537,6 +3590,14 @@ export const fa: TranslationMap = {
       remove: "حذف",
       more: "اقدامات بیشتر",
       history: "تاریخچه",
+    },
+    runNotStarted: {
+      notDue: "هنوز زمان اجرای این خودکارسازی نرسیده است.",
+      alreadyRunning: "این خودکارسازی در حال اجرا است.",
+      recoveryPending: "بازیابی زمان‌بند هنوز در حال انجام است.",
+      invalidSpec: "زمان‌بندی یا محتوای این خودکارسازی نامعتبر است.",
+      stopped: "زمان‌بند متوقف شده است.",
+      unknown: "این خودکارسازی راه‌اندازی نشد.",
     },
     jobs: {
       schedule: "زمان‌بندی",

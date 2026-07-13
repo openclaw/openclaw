@@ -23,7 +23,7 @@ import {
   readInstalledPackagePeerDependencies,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
-import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
+import { compareValidSemver } from "../infra/semver.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
@@ -397,7 +397,7 @@ function compareNpmSemverForUpdate(left: string, right: string): number {
   if (releaseCmp !== null) {
     return releaseCmp;
   }
-  return compareComparableSemver(parseComparableSemver(left), parseComparableSemver(right)) ?? 0;
+  return compareValidSemver(left, right) ?? 0;
 }
 
 async function resolveNewerExactPinnedNpmDefaultLine(params: {
@@ -584,10 +584,7 @@ function isBundledVersionNewer(bundledVersion: string, installedVersion: string)
   if (releaseCmp !== null) {
     return releaseCmp > 0;
   }
-  const bundled = parseComparableSemver(bundledVersion);
-  const installed = parseComparableSemver(installedVersion);
-  const cmp = compareComparableSemver(bundled, installed);
-  return cmp !== null && cmp > 0;
+  return (compareValidSemver(bundledVersion, installedVersion) ?? 0) > 0;
 }
 
 function pathsEqual(

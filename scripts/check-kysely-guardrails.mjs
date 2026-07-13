@@ -19,15 +19,9 @@ const ts = require("typescript");
 const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = [path.join(repoRoot, "src")];
 
-const kyselyRawAllowPaths = new Set([
-  "src/infra/kysely-node-sqlite.test.ts",
-  "src/infra/kysely-sync.ts",
-]);
+const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 
-const compiledRawAllowPaths = new Set([
-  "src/infra/kysely-node-sqlite.ts",
-  "src/infra/kysely-node-sqlite.test.ts",
-]);
+const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 
 const rawSqliteAllowPathGroups = {
   "native Kysely adapter and sync execution": [
@@ -39,6 +33,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
+    "src/infra/sqlite-schema-contract.ts",
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
@@ -46,8 +41,13 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
-  "backup snapshot maintenance": ["src/commands/backup-verify.ts", "src/infra/backup-create.ts"],
+  "backup snapshot maintenance": [
+    "src/commands/backup-verify.ts",
+    "src/infra/backup-create.ts",
+    "src/snapshot/local-repository.ts",
+  ],
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
+  "read-only shared state database access": ["src/state/openclaw-state-db-readonly.ts"],
   "read-only SQLite status probes": [
     "src/commands/doctor-db-bloat.ts",
     "src/commands/status.scan.shared.ts",

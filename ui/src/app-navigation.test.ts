@@ -6,6 +6,7 @@ import {
   SIDEBAR_NAV_ROUTES,
   isPluginsHubRoute,
   navigationIconForRoute,
+  settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
 } from "./app-navigation.ts";
@@ -52,6 +53,7 @@ const SETTINGS_ROUTE_PATHS = [
     alias: "/infrastructure",
   },
   { routeId: "worktrees", path: "/settings/worktrees", alias: "/worktrees" },
+  { routeId: "sessions", path: "/settings/sessions", alias: "/sessions" },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
   {
     routeId: "model-providers",
@@ -104,6 +106,14 @@ describe("navigationIconForRoute", () => {
     // TypeScript won't allow this normally, but runtime could receive unexpected values
     const unknownRouteId = "unknown" as RouteId;
     expect(navigationIconForRoute(unknownRouteId)).toBe("folder");
+  });
+});
+
+describe("settingsSearchTextMatches", () => {
+  it("uses locale-aware word prefixes for short queries", () => {
+    expect(settingsSearchTextMatches("CPU usage", "cp")).toBe(true);
+    expect(settingsSearchTextMatches("MCP", "cp")).toBe(false);
+    expect(settingsSearchTextMatches("外観設定", "設定")).toBe(true);
   });
 });
 
@@ -228,7 +238,7 @@ describe("pathForRoute", () => {
 
   it("prepends base path", () => {
     expect(pathForRoute("chat", "/ui")).toBe("/ui/chat");
-    expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
+    expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/settings/sessions");
   });
 });
 
@@ -388,6 +398,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "channels",
       "communications",
       "ai-agents",
+      "sessions",
       "model-providers",
       "automation",
       "mcp",

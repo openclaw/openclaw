@@ -96,6 +96,7 @@ import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
+  hasAbortableSessionRun,
   isChatBusy,
   isChatStopCommand,
   reconcileChatRunLifecycle,
@@ -2167,7 +2168,12 @@ export async function handleSendChat(
   }
 
   if (shouldInterpretChatCommands) {
-    if (isChatStopCommand(message)) {
+    // Natural words such as "wait" and "exit" are stop aliases only while a
+    // run exists. Keep the explicit /stop command available at any time.
+    const shouldAbort =
+      isChatStopCommand(message) &&
+      (message.trim().startsWith("/") || hasAbortableSessionRun(host));
+    if (shouldAbort) {
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, message);
       }

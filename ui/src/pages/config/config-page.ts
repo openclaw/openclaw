@@ -24,13 +24,24 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  AI_AGENTS_SECTION_KEYS,
+  AUTOMATION_SECTION_KEYS,
+  COMMUNICATION_SECTION_KEYS,
+  configSectionKeysForPage,
+  INFRASTRUCTURE_SECTION_KEYS,
+  SCOPED_CONFIG_SECTION_KEYS,
+  type ConfigPageId,
+} from "./config-sections.ts";
 import { renderMcp } from "./mcp.ts";
 import {
   renderQuickSettings,
   type QuickSettingsChannel,
   type QuickSettingsSecurity,
 } from "./quick.ts";
+import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -38,14 +49,7 @@ import {
   type ConfigViewState,
 } from "./view.ts";
 
-export type ConfigPageId =
-  | "config"
-  | "communications"
-  | "appearance"
-  | "automation"
-  | "mcp"
-  | "infrastructure"
-  | "ai-agents";
+export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
@@ -60,42 +64,6 @@ const CONFIG_PAGE_I18N_KEYS = {
   "ai-agents": "aiAgents",
 } as const satisfies Record<ConfigPageId, string>;
 
-const COMMUNICATION_SECTION_KEYS = [
-  "messages",
-  "broadcast",
-  "__notifications__",
-  "talk",
-  "audio",
-  "channels",
-] as const;
-const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
-const AUTOMATION_SECTION_KEYS = ["commands", "hooks", "bindings", "cron", "approvals", "plugins"];
-const INFRASTRUCTURE_SECTION_KEYS = [
-  "gateway",
-  "web",
-  "browser",
-  "nodeHost",
-  "canvasHost",
-  "discovery",
-  "media",
-  "acp",
-  "mcp",
-] as const;
-const AI_AGENTS_SECTION_KEYS = [
-  "agents",
-  "models",
-  "skills",
-  "tools",
-  "memory",
-  "session",
-] as const;
-const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
-  ...COMMUNICATION_SECTION_KEYS,
-  ...APPEARANCE_SECTION_KEYS,
-  ...AUTOMATION_SECTION_KEYS,
-  ...INFRASTRUCTURE_SECTION_KEYS,
-  ...AI_AGENTS_SECTION_KEYS,
-]);
 const KNOWN_CHANNELS = [
   { id: "telegram", labelKey: "configPage.channels.telegram" },
   { id: "discord", labelKey: "configPage.channels.discord" },
@@ -150,18 +118,7 @@ function normalizeConfigSelection(
   activeSection: string | null,
   activeSubsection: string | null,
 ): ConfigSelection {
-  const sections: readonly string[] | null =
-    pageId === "communications"
-      ? COMMUNICATION_SECTION_KEYS
-      : pageId === "appearance"
-        ? APPEARANCE_SECTION_KEYS
-        : pageId === "automation"
-          ? AUTOMATION_SECTION_KEYS
-          : pageId === "mcp" || pageId === "infrastructure"
-            ? INFRASTRUCTURE_SECTION_KEYS
-            : pageId === "ai-agents"
-              ? AI_AGENTS_SECTION_KEYS
-              : null;
+  const sections = configSectionKeysForPage(pageId) ?? null;
   if (pageId === "config" && activeSection && SCOPED_CONFIG_SECTION_KEYS.has(activeSection)) {
     return { activeSection: null, activeSubsection: null };
   }
@@ -280,6 +237,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @property({ attribute: "page-id" }) pageId: ConfigPageId = "config";
+  @property({ attribute: false }) routeData: ConfigRouteData | null = null;
 
   @state() private settings = loadSettings();
   @state() private settingsMode: "quick" | "advanced" = "quick";
@@ -325,7 +283,15 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoClient: GatewayBrowserClient | null = null;
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
-  private systemInfoPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private readonly systemInfoPolling = new PollController(
+    this,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
+    () => {
+      void this.loadSystemInfo();
+    },
+    false,
+  );
+  private pendingRouteTargetId: string | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.runtimeConfig,
@@ -360,15 +326,11 @@ export class ConfigPage extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.settings = loadSettings();
-    const linkedSelection = configSelectionFromSearch(
-      this.pageId,
-      globalThis.location?.search ?? "",
-    );
-    this.selections = { ...this.selections, [this.pageId]: linkedSelection };
+    this.syncRouteData();
   }
 
   override disconnectedCallback() {
-    this.stopSystemInfoPolling();
+    this.systemInfoPolling.stop();
     this.invalidateSystemInfoRequest();
     this.runtimeConfigSource = null;
     this.resetConfigViewState();
@@ -378,6 +340,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
+  override willUpdate(changed: PropertyValues) {
+    if (changed.has("pageId") || changed.has("routeData")) {
+      this.syncRouteData();
+    }
+  }
+
   override updated(changed: PropertyValues) {
     const pageChanged = changed.has("pageId") && changed.get("pageId") !== undefined;
     const modeChanged = changed.has("settingsMode") && changed.get("settingsMode") !== undefined;
@@ -385,6 +353,40 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.invalidateSystemInfoRequest();
     }
     this.syncSystemInfoPolling();
+    this.scrollToPendingRouteTarget();
+  }
+
+  private syncRouteData() {
+    const selection = this.routeData
+      ? normalizeConfigSelection(this.pageId, this.routeData.section, null)
+      : configSelectionFromSearch(this.pageId, globalThis.location?.search ?? "");
+    this.selections = { ...this.selections, [this.pageId]: selection };
+    const targetBlockId =
+      this.routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
+    this.pendingRouteTargetId = targetBlockId;
+    if (this.pageId !== "config") {
+      return;
+    }
+    if (this.routeData?.section) {
+      this.settingsMode = "advanced";
+    } else if (targetBlockId?.startsWith("settings-general-")) {
+      this.settingsMode = "quick";
+    }
+  }
+
+  private scrollToPendingRouteTarget() {
+    const targetId = this.pendingRouteTargetId;
+    if (!targetId) {
+      return;
+    }
+    const target = [...this.renderRoot.querySelectorAll<HTMLElement>("[id]")].find(
+      (element) => element.id === targetId,
+    );
+    if (!target) {
+      return;
+    }
+    target.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    this.pendingRouteTargetId = null;
   }
 
   private isSystemInfoVisible(): boolean {
@@ -404,17 +406,18 @@ export class ConfigPage extends OpenClawLightDomElement {
           this.runtimeConfigSource === runtimeConfig
             ? runtimeConfig.ensureSchemaLoaded()
             : undefined,
-        );
+        )
+        .catch(() => undefined);
       return;
     }
     if (!config.configSchema && !config.configSchemaLoading) {
-      void runtimeConfig.ensureSchemaLoaded();
+      void runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
     }
   }
 
   private synchronizeSystemInfoGateway(gateway: ApplicationContext["gateway"]) {
     if (gateway !== this.systemInfoGatewaySource) {
-      this.stopSystemInfoPolling();
+      this.systemInfoPolling.stop();
       this.invalidateSystemInfoRequest();
       this.systemInfoGatewaySource = gateway;
       this.resetConfigViewState();
@@ -462,24 +465,12 @@ export class ConfigPage extends OpenClawLightDomElement {
       supportsSystemInfo(gateway.hello) &&
       gateway.client != null;
     if (!shouldPoll) {
-      this.stopSystemInfoPolling();
+      this.systemInfoPolling.stop();
       return;
     }
-    if (this.systemInfoPollInterval !== null) {
-      return;
-    }
-    void this.loadSystemInfo();
-    this.systemInfoPollInterval = globalThis.setInterval(() => {
+    if (this.systemInfoPolling.start()) {
       void this.loadSystemInfo();
-    }, SYSTEM_INFO_POLL_INTERVAL_MS);
-  }
-
-  private stopSystemInfoPolling() {
-    if (this.systemInfoPollInterval === null) {
-      return;
     }
-    globalThis.clearInterval(this.systemInfoPollInterval);
-    this.systemInfoPollInterval = null;
   }
 
   private invalidateSystemInfoRequest() {
@@ -536,7 +527,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
         this.systemInfo = null;
         this.systemInfoUnavailable = true;
-        this.stopSystemInfoPolling();
+        this.systemInfoPolling.stop();
       }
     } finally {
       if (this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
@@ -677,17 +668,12 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private includeSections(): readonly string[] | undefined {
-    return this.pageId === "communications"
-      ? COMMUNICATION_SECTION_KEYS
-      : this.pageId === "appearance"
-        ? APPEARANCE_SECTION_KEYS
-        : this.pageId === "automation"
-          ? AUTOMATION_SECTION_KEYS
-          : this.pageId === "mcp" || this.pageId === "infrastructure"
-            ? INFRASTRUCTURE_SECTION_KEYS
-            : this.pageId === "ai-agents"
-              ? AI_AGENTS_SECTION_KEYS
-              : undefined;
+    return configSectionKeysForPage(this.pageId);
+  }
+
+  private isUpdateBusy(): boolean {
+    const update = this.context.overlays.snapshot;
+    return update.updateRunning || update.updateReconciliationPending;
   }
 
   private renderAdvancedConfig(configObject: Record<string, unknown>) {
@@ -720,7 +706,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       loading: configState.configLoading,
       saving: configState.configSaving,
       applying: configState.configApplying,
-      updating: this.context.overlays.snapshot.updateRunning,
+      updating: this.isUpdateBusy(),
       connected: configState.connected,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
@@ -874,8 +860,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
       configDirty: runtimeConfig.state.configFormDirty,
+      configLoading: runtimeConfig.state.configLoading,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
+      configUpdating: this.isUpdateBusy(),
       configReady: Boolean(runtimeConfig.state.configSnapshot?.hash),
       onResetConfig: () => runtimeConfig.resetDraft(),
       onSaveConfig: () => void runtimeConfig.save(),

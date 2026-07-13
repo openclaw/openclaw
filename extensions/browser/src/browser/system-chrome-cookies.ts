@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 
 export type SystemBrowser = "chrome" | "brave" | "edge" | "chromium";
 
-export type PlaywrightCookie = {
+type PlaywrightCookie = {
   name: string;
   value: string;
   domain: string;
@@ -16,7 +16,7 @@ export type PlaywrightCookie = {
   sameSite?: "Strict" | "Lax" | "None";
 };
 
-export type ChromeCookieRow = {
+type ChromeCookieRow = {
   host_key: string;
   top_frame_site_key: string;
   name: string;
@@ -30,7 +30,7 @@ export type ChromeCookieRow = {
   samesite: number | bigint;
 };
 
-export type CookieImportCounts = {
+type CookieImportCounts = {
   total: number;
   imported: number;
   failed: number;
@@ -67,10 +67,7 @@ function isAsciiWhitespace(value: number): boolean {
 }
 
 /** Read the browser Safe Storage secret. The OS consent prompt is intentional. */
-export async function readKeychainSecret(
-  entry: KeychainEntry,
-  signal?: AbortSignal,
-): Promise<Buffer> {
+async function readKeychainSecret(entry: KeychainEntry, signal?: AbortSignal): Promise<Buffer> {
   signal?.throwIfAborted();
   return await new Promise((resolve, reject) => {
     execFile(
@@ -116,7 +113,7 @@ export async function readKeychainSecret(
 }
 
 /** Convert Chromium's Windows-epoch microseconds to Unix seconds. */
-export function chromeFiletimeToUnixSeconds(value: number | bigint): number | undefined {
+function chromeFiletimeToUnixSeconds(value: number | bigint): number | undefined {
   if (typeof value === "bigint") {
     const seconds = value / 1_000_000n - BigInt(CHROME_EPOCH_OFFSET_SECONDS);
     return seconds > 0n && seconds <= 9_999_999_999n ? Number(seconds) : undefined;
@@ -129,7 +126,7 @@ export function chromeFiletimeToUnixSeconds(value: number | bigint): number | un
 }
 
 /** Map Chrome SameSite storage values to Playwright's cookie contract. */
-export function mapChromeSameSite(
+function mapChromeSameSite(
   value: number | bigint,
   secure: boolean,
 ): PlaywrightCookie["sameSite"] | undefined {
@@ -199,7 +196,7 @@ function matchesDomain(hostKey: string, domains: readonly string[] | undefined):
 }
 
 /** Decrypt and map cookie rows without exposing any cookie values in the result metadata. */
-export async function decryptChromeCookieRows(params: {
+async function decryptChromeCookieRows(params: {
   browser: SystemBrowser;
   rows: readonly ChromeCookieRow[];
   domains?: readonly string[];

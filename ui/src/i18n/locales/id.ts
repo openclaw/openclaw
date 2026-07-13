@@ -218,10 +218,11 @@ export const id: TranslationMap = {
   lazyView: {
     loadingTitle: "Memuat panel",
     errorTitle: "Panel gagal dimuat",
-    errorSubtitle:
-      "Muat ulang halaman untuk memuat bundel Control UI terbaru, atau coba lagi jika permintaan jaringan gagal.",
+    genericSubtitle: "Terjadi kesalahan saat memuat panel ini.",
+    staleTitle: "Versi baru tersedia",
+    staleSubtitle:
+      "OpenClaw telah diperbarui di latar belakang. Muat ulang untuk mendapatkan panel terbaru.",
     retry: "Coba lagi",
-    unknownError: "Kesalahan pemuatan modul yang tidak diketahui.",
   },
   nodes: {
     pairing: {
@@ -390,6 +391,16 @@ export const id: TranslationMap = {
     confirmDelete: "Buat snapshot dan hapus {name}?",
     confirmForceDelete: "Snapshot gagal: {error}\n\nHapus tanpa snapshot?",
   },
+  agentChip: {
+    menuLabel: "Menu agen",
+    agents: "Agen",
+    working: "Sedang bekerja…",
+    ready: "Siap mengobrol",
+    whatCanAgentDo: "Apa yang dapat dilakukan {name}?",
+    getHelp: "Dapatkan bantuan",
+    discord: "Komunitas Discord",
+    viewChangelog: "Lihat log perubahan",
+  },
   newSession: {
     title: "Sesi baru",
     hint: "Pilih tempat sesi ini bekerja, lalu katakan apa yang harus dilakukan.",
@@ -400,10 +411,14 @@ export const id: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Ruang kerja agen",
     browse: "Jelajahi folder",
+    browseRequiresAdmin: "Penjelajahan folder memerlukan koneksi admin",
     browserUp: "Folder induk",
     browserUse: "Gunakan folder ini",
     browserEmpty: "Tidak ada subfolder",
     browserLoadFailed: "Tidak dapat menampilkan folder tersebut.",
+    nodeOffline: "Perangkat sedang offline",
+    nodeCannotBrowse: "Perangkat ini tidak mendukung penjelajahan folder",
+    hiddenFolder: "Folder tersembunyi",
     worktree: "Worktree",
     worktreeUnavailable: "Ruang kerja agen bukan checkout git",
     baseBranch: "Branch dasar",
@@ -438,6 +453,24 @@ export const id: TranslationMap = {
     archivedOnlyTooltip: "Tampilkan hanya sesi yang diarsipkan.",
     minutesPlaceholder: "mnt",
     searchPlaceholder: "Filter menurut kunci, agen, label, jenis…",
+    transcriptSearchTitle: "Cari transkrip",
+    transcriptSearchDescription:
+      "Temukan kata atau frasa yang persis sama dalam pesan pengguna dan asisten di seluruh sesi agen default.",
+    transcriptSearchInputLabel: "Cari transkrip sesi",
+    transcriptSearchPlaceholder: "Cari kata atau frasa yang persis sama…",
+    transcriptSearchAction: "Pencarian",
+    transcriptSearchClear: "Hapus",
+    transcriptSearchRetry: "Coba lagi",
+    transcriptSearchSearching: "Mencari transkrip…",
+    transcriptSearchUnavailable: "Pencarian transkrip memerlukan Gateway yang lebih baru.",
+    transcriptSearchError: "Pencarian transkrip gagal",
+    transcriptSearchIndexing:
+      "Indeks transkrip masih diperbarui. Coba lagi untuk menyertakan pesan terbaru.",
+    transcriptSearchEmpty: "Tidak ada pesan transkrip yang cocok dengan pencarian ini.",
+    transcriptSearchMatches: "Kecocokan transkrip: {count}",
+    transcriptSearchTruncated: "Menampilkan 25 kecocokan pertama.",
+    user: "Pengguna",
+    assistant: "Assistant",
     selected: "{count} dipilih",
     deleteSelected: "Hapus",
     selectAllOnPage: "Pilih semua di halaman",
@@ -1426,6 +1459,8 @@ export const id: TranslationMap = {
     blockedAgentFilter: "diblokir oleh filter agen",
   },
   nav: {
+    back: "Kembali",
+    forward: "Maju",
     chat: "Chat",
     settings: "Pengaturan",
     settingsGeneral: "Umum",
@@ -1695,8 +1730,6 @@ export const id: TranslationMap = {
     cancel: "Batal",
     removedRestart: "{name} dihapus. Gateway perlu dimulai ulang untuk menerapkan perubahan.",
     verifiedSource: "Sumber terverifikasi",
-    menuLabel: "Tindakan {name}",
-    menuDetails: "Lihat detail",
     enableAction: "Aktifkan",
     disableAction: "Nonaktifkan",
     working: "Memproses…",
@@ -1833,6 +1866,10 @@ export const id: TranslationMap = {
       useCurrentChatAria: "Gunakan obrolan saat ini untuk permintaan revisi",
       useCurrentChatTooltip:
         "Kirim permintaan revisi ke sesi obrolan saat ini alih-alih sesi workshop proposal.",
+      selfLearning: "Pembelajaran mandiri",
+      selfLearningAria: "Aktifkan atau nonaktifkan usulan Skills dari pembelajaran mandiri",
+      selfLearningTooltip:
+        "Catat koreksi dan tinjau pekerjaan penting yang telah diselesaikan untuk dijadikan proposal skill yang tertunda. Menggunakan token latar belakang tambahan; draf muncul di papan ini sebagai proposal tertunda.",
       view: "Tampilan workshop",
       board: "Papan",
       today: "Hari ini",
@@ -1913,6 +1950,14 @@ export const id: TranslationMap = {
       noProposalsTitle: "Belum ada proposal",
       noProposalsBody: "{agent} belum membuat proposal skill apa pun.",
       noProposalsFooter: "Proposal baru akan muncul di sini untuk ditinjau.",
+    },
+    selfLearning: {
+      pitchTitle: "Aktifkan pembelajaran mandiri",
+      pitchBody:
+        "OpenClaw meninjau koreksi dan proses penting yang telah diselesaikan, lalu menyusun draf proposal skill untuk papan ini. Fitur ini menggunakan token latar belakang tambahan dan draf akan muncul sebagai proposal tertunda.",
+      enable: "Aktifkan pembelajaran mandiri",
+      enabling: "Mengaktifkan…",
+      updateError: "Tidak dapat memperbarui pengaturan pembelajaran mandiri.",
     },
     today: {
       emptyTitle: "Tidak ada yang menunggu hari ini",
@@ -3025,6 +3070,8 @@ export const id: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Buat PR",
+      createPrLabel: "Buat pull request untuk {branch}",
       dismiss: "Tutup pull request #{number}",
       open: "Terbuka",
       draft: "Draf",
@@ -3350,6 +3397,12 @@ export const id: TranslationMap = {
         activityErrorMany: "Aktivitas: {count} alat, mencakup kesalahan.",
       },
     },
+    workRun: {
+      workedFor: "Berjalan selama {duration}",
+      worked: "Berjalan",
+      workedForError: "Berjalan selama {duration}, termasuk kesalahan.",
+      workedError: "Berjalan, termasuk kesalahan.",
+    },
     backgroundTasks: {
       label: "Tugas latar belakang",
       title: "Tugas latar belakang",
@@ -3545,6 +3598,14 @@ export const id: TranslationMap = {
       remove: "Hapus",
       more: "Tindakan lainnya",
       history: "Riwayat",
+    },
+    runNotStarted: {
+      notDue: "Otomatisasi ini belum waktunya dijalankan.",
+      alreadyRunning: "Otomatisasi ini sudah berjalan.",
+      recoveryPending: "Pemulihan penjadwal masih berlangsung.",
+      invalidSpec: "Otomatisasi ini memiliki jadwal atau payload yang tidak valid.",
+      stopped: "Penjadwal dihentikan.",
+      unknown: "Otomatisasi ini tidak dapat dimulai.",
     },
     jobs: {
       schedule: "Jadwal",

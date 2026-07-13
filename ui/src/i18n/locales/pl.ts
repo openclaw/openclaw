@@ -218,10 +218,10 @@ export const pl: TranslationMap = {
   lazyView: {
     loadingTitle: "Ładowanie panelu",
     errorTitle: "Nie udało się załadować panelu",
-    errorSubtitle:
-      "Odśwież stronę, aby załadować najnowszy pakiet Control UI, lub spróbuj ponownie, jeśli żądanie sieciowe się nie powiodło.",
+    genericSubtitle: "Coś poszło nie tak podczas ładowania tego panelu.",
+    staleTitle: "Dostępna jest nowa wersja",
+    staleSubtitle: "OpenClaw został zaktualizowany w tle. Odśwież, aby pobrać najnowszy panel.",
     retry: "Spróbuj ponownie",
-    unknownError: "Nieznany błąd ładowania modułu.",
   },
   nodes: {
     pairing: {
@@ -391,6 +391,16 @@ export const pl: TranslationMap = {
     confirmDelete: "Utworzyć migawkę i usunąć {name}?",
     confirmForceDelete: "Tworzenie migawki nie powiodło się: {error}\n\nUsunąć bez migawki?",
   },
+  agentChip: {
+    menuLabel: "Menu agenta",
+    agents: "Agenci",
+    working: "Pracuje…",
+    ready: "Gotowy do rozmowy",
+    whatCanAgentDo: "Co potrafi {name}?",
+    getHelp: "Uzyskaj pomoc",
+    discord: "Społeczność Discord",
+    viewChangelog: "Wyświetl dziennik zmian",
+  },
   newSession: {
     title: "Nowa sesja",
     hint: "Wybierz, gdzie ma działać ta sesja, a następnie powiedz, co ma zrobić.",
@@ -401,10 +411,14 @@ export const pl: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Obszar roboczy agenta",
     browse: "Przeglądaj foldery",
+    browseRequiresAdmin: "Przeglądanie folderów wymaga połączenia administratora",
     browserUp: "Folder nadrzędny",
     browserUse: "Użyj tego folderu",
     browserEmpty: "Brak podfolderów",
     browserLoadFailed: "Nie udało się wyświetlić zawartości tego folderu.",
+    nodeOffline: "Urządzenie jest offline",
+    nodeCannotBrowse: "To urządzenie nie obsługuje przeglądania folderów",
+    hiddenFolder: "Ukryty folder",
     worktree: "Worktree",
     worktreeUnavailable: "Obszar roboczy agenta nie jest checkoutem git",
     baseBranch: "Gałąź bazowa",
@@ -439,6 +453,24 @@ export const pl: TranslationMap = {
     archivedOnlyTooltip: "Pokaż tylko zarchiwizowane sesje.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filtruj według klucza, agenta, etykiety, rodzaju…",
+    transcriptSearchTitle: "Przeszukaj transkrypcje",
+    transcriptSearchDescription:
+      "Znajdź dokładne słowa lub frazy w wiadomościach użytkownika i asystenta w sesjach domyślnego agenta.",
+    transcriptSearchInputLabel: "Przeszukaj transkrypcje sesji",
+    transcriptSearchPlaceholder: "Wyszukaj dokładne słowa lub frazy…",
+    transcriptSearchAction: "Szukaj",
+    transcriptSearchClear: "Wyczyść",
+    transcriptSearchRetry: "Spróbuj ponownie",
+    transcriptSearchSearching: "Przeszukiwanie transkrypcji…",
+    transcriptSearchUnavailable: "Wyszukiwanie w transkrypcjach wymaga nowszej wersji Gateway.",
+    transcriptSearchError: "Wyszukiwanie w transkrypcjach nie powiodło się",
+    transcriptSearchIndexing:
+      "Indeks transkrypcji jest nadal aktualizowany. Spróbuj ponownie, aby uwzględnić ostatnie wiadomości.",
+    transcriptSearchEmpty: "Żadna wiadomość transkrypcji nie pasuje do tego wyszukiwania.",
+    transcriptSearchMatches: "Dopasowania w transkrypcjach: {count}",
+    transcriptSearchTruncated: "Wyświetlanie pierwszych 25 dopasowań.",
+    user: "Użytkownik",
+    assistant: "Asystent",
     selected: "Wybrano: {count}",
     deleteSelected: "Usuń",
     selectAllOnPage: "Zaznacz wszystko na stronie",
@@ -1431,6 +1463,8 @@ export const pl: TranslationMap = {
     blockedAgentFilter: "zablokowane przez filtr agenta",
   },
   nav: {
+    back: "Wstecz",
+    forward: "Dalej",
     chat: "Czat",
     settings: "Ustawienia",
     settingsGeneral: "Ogólne",
@@ -1708,8 +1742,6 @@ export const pl: TranslationMap = {
     removedRestart:
       "Usunięto {name}. Aby zastosować zmianę, wymagane jest ponowne uruchomienie Gateway.",
     verifiedSource: "Zweryfikowane źródło",
-    menuLabel: "Działania dla {name}",
-    menuDetails: "Zobacz szczegóły",
     enableAction: "Włącz",
     disableAction: "Wyłącz",
     working: "Przetwarzanie…",
@@ -1847,6 +1879,10 @@ export const pl: TranslationMap = {
       useCurrentChatAria: "Użyj bieżącego czatu do próśb o poprawki",
       useCurrentChatTooltip:
         "Wysyłaj prośby o poprawki do bieżącej sesji czatu zamiast do sesji warsztatu propozycji.",
+      selfLearning: "Samouczenie",
+      selfLearningAria: "Włącz lub wyłącz propozycje umiejętności tworzone przez samouczenie",
+      selfLearningTooltip:
+        "Zapisuje poprawki i analizuje istotne ukończone zadania, tworząc oczekujące propozycje umiejętności. Zużywa dodatkowe tokeny w tle; wersje robocze trafiają na tę tablicę jako oczekujące propozycje.",
       view: "Widok warsztatu",
       board: "Tablica",
       today: "Dzisiaj",
@@ -1926,6 +1962,14 @@ export const pl: TranslationMap = {
       noProposalsTitle: "Brak propozycji",
       noProposalsBody: "{agent} nie przygotował jeszcze żadnych propozycji umiejętności.",
       noProposalsFooter: "Nowe propozycje pojawią się tutaj do przeglądu.",
+    },
+    selfLearning: {
+      pitchTitle: "Włącz samouczenie",
+      pitchBody:
+        "OpenClaw analizuje poprawki i istotne ukończone zadania, a następnie tworzy propozycje umiejętności dla tej tablicy. Zużywa dodatkowe tokeny w tle, a wersje robocze trafiają tu jako oczekujące propozycje.",
+      enable: "Włącz samouczenie",
+      enabling: "Włączanie…",
+      updateError: "Nie udało się zaktualizować ustawienia samouczenia.",
     },
     today: {
       emptyTitle: "Nic nie czeka dzisiaj",
@@ -3043,6 +3087,8 @@ export const pl: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull request #{number}: {title}",
+      createPr: "Utwórz PR",
+      createPrLabel: "Utwórz pull request dla gałęzi {branch}",
       dismiss: "Odrzuć pull request #{number}",
       open: "Otwarte",
       draft: "Wersja robocza",
@@ -3369,6 +3415,12 @@ export const pl: TranslationMap = {
         activityErrorMany: "Aktywność: narzędzia: {count}, zawiera błędy.",
       },
     },
+    workRun: {
+      workedFor: "Pracował przez {duration}",
+      worked: "Pracował",
+      workedForError: "Pracował przez {duration}, wystąpiły błędy.",
+      workedError: "Pracował, wystąpiły błędy.",
+    },
     backgroundTasks: {
       label: "Zadania w tle",
       title: "Zadania w tle",
@@ -3563,6 +3615,14 @@ export const pl: TranslationMap = {
       remove: "Usuń",
       more: "Więcej akcji",
       history: "Historia",
+    },
+    runNotStarted: {
+      notDue: "Termin uruchomienia tej automatyzacji jeszcze nie nadszedł.",
+      alreadyRunning: "Ta automatyzacja jest już uruchomiona.",
+      recoveryPending: "Przywracanie harmonogramu jest nadal w toku.",
+      invalidSpec: "Ta automatyzacja ma nieprawidłowy harmonogram lub ładunek.",
+      stopped: "Harmonogram jest zatrzymany.",
+      unknown: "Nie udało się uruchomić tej automatyzacji.",
     },
     jobs: {
       schedule: "Harmonogram",

@@ -324,6 +324,40 @@ describe("cron controller", () => {
     });
   });
 
+  it("omits a blank delivery accountId from cron.add payloads", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "job-blank-account-id" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "implicit account",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        sessionTarget: "isolated",
+        payloadKind: "agentTurn",
+        payloadText: "run this",
+        deliveryMode: "announce",
+        deliveryAccountId: "   ",
+      },
+    });
+
+    await addCronJob(state);
+
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expect(requireRecord(requestPayload(addCall).delivery, "delivery").accountId).toBeUndefined();
+  });
+
   it('omits delivery.channel when the form still uses the "last" sentinel', async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.add") {
@@ -687,7 +721,7 @@ describe("cron controller", () => {
     expect(state.cronEditingJobId).toBeNull();
   });
 
-  it("sends empty delivery.accountId in cron.update to clear persisted account routing", async () => {
+  it("sends null delivery.accountId in cron.update to clear persisted account routing", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {
         return { id: "job-clear-account-id" };
@@ -741,7 +775,7 @@ describe("cron controller", () => {
     });
     expectRecordFields(requireRecord(requestPatch(updateCall).delivery, "delivery"), {
       mode: "announce",
-      accountId: "",
+      accountId: null,
     });
   });
 
@@ -1871,7 +1905,7 @@ describe("cron controller", () => {
           id: "job-due",
           mode: "due",
         });
-        return { ok: true };
+        return { ok: true, enqueued: true, runId: "run-due" };
       }
       if (method === "cron.runs") {
         return { entries: [], total: 0, hasMore: false, nextOffset: null };
@@ -1886,6 +1920,60 @@ describe("cron controller", () => {
     await runCronJob(state, "job-due", "due");
 
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-due", mode: "due" });
+    expect(request).toHaveBeenCalledWith("cron.runs", expect.any(Object));
+  });
+
+  it.each([
+    ["not-due", "This automation is not due yet."],
+    ["already-running", "This automation is already running."],
+    ["restart-recovery-pending", "Scheduler recovery is still in progress."],
+    ["stopped", "The scheduler is stopped."],
+  ] as const)(
+    "surfaces cron.run %s outcomes without reloading run history",
+    async (reason, message) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.run") {
+          return { ok: true, ran: false, reason };
+        }
+        return {};
+      });
+      const state = createState({
+        client: { request } as unknown as CronState["client"],
+        cronRunsScope: "job",
+        cronRunsJobId: "job-blocked",
+      });
+
+      await runCronJob(state, "job-blocked", "force");
+
+      expect(state.cronError).toBe(message);
+      expect(request).toHaveBeenCalledWith("cron.run", { id: "job-blocked", mode: "force" });
+      expect(request).not.toHaveBeenCalledWith("cron.runs", expect.anything());
+    },
+  );
+
+  it("reloads the skipped run recorded for an invalid persisted specification", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.run") {
+        return { ok: true, ran: false, reason: "invalid-spec" };
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, hasMore: false, nextOffset: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronRunsScope: "job",
+      cronRunsJobId: "job-invalid",
+    });
+
+    await runCronJob(state, "job-invalid", "force");
+
+    expect(state.cronError).toBe("This automation has an invalid schedule or payload.");
+    expect(request).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({ id: "job-invalid" }),
+    );
   });
 });
 

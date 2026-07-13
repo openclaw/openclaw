@@ -116,7 +116,7 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
 }
 
 /** Runner-facing progress callbacks plus terminal spinner cleanup. */
-export type ProgressController = {
+type ProgressController = {
   progress: UpdateStepProgress;
   stop: () => void;
 };
