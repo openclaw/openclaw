@@ -27,6 +27,8 @@ const RATE_LIMIT_CONTEXT_PATTERN = buildProviderErrorPattern([
   "quota exceeded",
 ]);
 
+const BUILTIN_PROVIDER_ERROR_STATUS_RE = /^(?:\w[\w ]* )?API error \((\d{3})\): /i;
+
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "overloaded",
   "rate.?limit",
@@ -68,14 +70,21 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
     return false;
   }
   const status = extractLeadingHttpStatus(errorMessage)?.code;
-  if (status && status !== 429 && RETRYABLE_HTTP_STATUS_CODES.has(status)) {
+  const effectiveStatus =
+    status ?? (Number(BUILTIN_PROVIDER_ERROR_STATUS_RE.exec(errorMessage)?.[1] ?? 0) || undefined);
+  if (
+    effectiveStatus &&
+    effectiveStatus !== 429 &&
+    RETRYABLE_HTTP_STATUS_CODES.has(effectiveStatus)
+  ) {
     return true;
   }
-  const hasRateLimitContext = status === 429 || RATE_LIMIT_CONTEXT_PATTERN.test(errorMessage);
+  const hasRateLimitContext =
+    effectiveStatus === 429 || RATE_LIMIT_CONTEXT_PATTERN.test(errorMessage);
   if (hasRateLimitContext && classifyRateLimitWindow(errorMessage).kind === "long") {
     return false;
   }
-  if (status === 429) {
+  if (effectiveStatus === 429) {
     return true;
   }
   return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);

@@ -112,4 +112,50 @@ describe("isRetryableAssistantError", () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    "OpenAI API error (500): 500 The server had an error while processing your request. Sorry about that!",
+    "OpenAI API error (502): Bad Gateway",
+    "OpenAI API error (503): Service Unavailable upstream",
+    "OpenAI API error (504): Gateway Timeout",
+    "Azure OpenAI API error (503): Service Unavailable",
+    "Mistral API error (502): upstream error",
+    'Mistral API error (500): {"object":"error","message":"internal error"}',
+    "API error (500): plain wrapper without provider prefix",
+  ])("retries transient provider-wrapped 5xx: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
+  });
+
+  it.each([
+    "OpenAI API error (400): Bad Request",
+    "OpenAI API error (401): Unauthorized",
+    "OpenAI API error (403): Forbidden",
+    "Azure OpenAI API error (404): Not Found",
+  ])("does not retry provider-wrapped non-transient 4xx: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
+
+  it("retries provider-wrapped 429 with short window", () => {
+    expect(
+      isRetryableAssistantError(
+        errorMessage(
+          "OpenAI API error (429): RESOURCE_EXHAUSTED: Quota exceeded for requests per minute; please retry your request",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not retry provider-wrapped 429 with embedded quota failure", () => {
+    expect(
+      isRetryableAssistantError(errorMessage("OpenAI API error (429): insufficient_quota")),
+    ).toBe(false);
+  });
+
+  it("does not retry API error text embedded after unrelated leading prose", () => {
+    expect(
+      isRetryableAssistantError(
+        errorMessage("some earlier error: API error (503) was returned upstream"),
+      ),
+    ).toBe(false);
+  });
 });
