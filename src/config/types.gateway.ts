@@ -596,9 +596,9 @@ export type GatewayConfig = {
    */
   channelStaleEventThresholdMinutes?: number;
   /**
-   * Max restart records per channel/account in a rolling 1-hour window.
-   * A pending restart at the boundary gets one extra completion pass
-   * without recording a new slot (effective max = configured + 1). Default: 10.
+   * Maximum number of health-monitor-initiated channel restarts per hour.
+   * Once this limit is reached, the monitor skips further restarts until
+   * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
 };
