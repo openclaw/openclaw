@@ -47,16 +47,17 @@ function createMockBus() {
   };
 }
 
-function createRuntimeHarness() {
+function createRuntimeHarness(deliveredText = "|a|b|") {
   const recordInboundSession = vi.fn(async () => {});
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
-    await dispatcherOptions.deliver({ text: "**Table:** [docs](https://example.com)" });
+    await dispatcherOptions.deliver({ text: deliveredText });
   });
+  const convertMarkdownTables = vi.fn((text: string) => `converted:${text}`);
   const runtime = {
     channel: {
       text: {
         resolveMarkdownTableMode: vi.fn(() => "off"),
-        convertMarkdownTables: vi.fn((text: string) => text),
+        convertMarkdownTables,
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => true),
@@ -91,14 +92,16 @@ function createRuntimeHarness() {
     runtime,
     recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher,
+    convertMarkdownTables,
   };
 }
 
 async function startGatewayHarness(params: {
   account: ReturnType<typeof buildResolvedNostrAccount>;
   cfg?: Parameters<typeof createStartAccountContext>[0]["cfg"];
+  deliveredText?: string;
 }) {
-  const harness = createRuntimeHarness();
+  const harness = createRuntimeHarness(params.deliveredText);
   const bus = createMockBus();
   setNostrRuntime(harness.runtime);
   mocks.startNostrBus.mockResolvedValueOnce(bus as never);
@@ -223,7 +226,52 @@ describe("nostr inbound gateway path", () => {
         turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
       }),
     );
-    expect(sendReply).toHaveBeenCalledWith("Table: docs (https://example.com)");
+    expect(sendReply).toHaveBeenCalledWith("converted:Table: docs (https://example.com)");
+
+    await cleanup.stop();
+  });
+
+  it.each([
+    {
+      name: "sanitizes mixed visible and tool-trace content before replying",
+      deliveredText: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+      expectedText: "Done.",
+    },
+    {
+      name: "suppresses replies containing only tool-trace content",
+      deliveredText: "⚠️ 🛠️ `search repos (agent)` failed",
+      expectedText: null,
+    },
+  ])("$name", async ({ deliveredText, expectedText }) => {
+    const { harness, cleanup } = await startGatewayHarness({
+      account: buildResolvedNostrAccount({
+        publicKey: "bot-pubkey",
+        config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
+      }),
+      deliveredText,
+    });
+    const options = mockCallArg(mocks.startNostrBus) as {
+      onMessage: (
+        senderPubkey: string,
+        text: string,
+        reply: (text: string) => Promise<void>,
+        meta: { eventId: string; createdAt: number },
+      ) => Promise<void>;
+    };
+    const sendReply = vi.fn(async (_text: string) => {});
+
+    await options.onMessage("sender-pubkey", "hello from nostr", sendReply, {
+      eventId: "event-123",
+      createdAt: 1_710_000_000,
+    });
+
+    if (expectedText === null) {
+      expect(harness.convertMarkdownTables).not.toHaveBeenCalled();
+      expect(sendReply).not.toHaveBeenCalled();
+    } else {
+      expect(harness.convertMarkdownTables).toHaveBeenCalledWith(expectedText, "off");
+      expect(sendReply).toHaveBeenCalledWith(`converted:${expectedText}`);
+    }
 
     await cleanup.stop();
   });
