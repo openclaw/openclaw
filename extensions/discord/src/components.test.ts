@@ -115,32 +115,30 @@ describe("discord components", () => {
     expect(result.modals[0]?.allowedUsers).toEqual(["discord:user-1"]);
   });
 
-  it("omits invalid numeric container accent colors", () => {
-    const validSpec = readDiscordComponentSpec({
-      text: "Status",
-      container: { accentColor: 0 },
-    });
-    if (!validSpec) {
-      throw new Error("Expected valid component spec to be parsed");
-    }
-    const validResult = buildDiscordComponentMessage({ spec: validSpec });
-    const validSerialized = validResult.components[0]?.serialize() as
-      | { accent_color?: unknown }
-      | undefined;
-    expect(validSerialized?.accent_color).toBe(0);
-
+  it.each([
+    { label: "minimum", accentColor: 0, expected: 0 },
+    { label: "maximum", accentColor: 0xffffff, expected: 0xffffff },
+    { label: "negative", accentColor: -1, expected: undefined },
+    { label: "fractional", accentColor: 1.5, expected: undefined },
+    { label: "above maximum", accentColor: 0x1000000, expected: undefined },
+  ])("serializes $label numeric container accent colors safely", ({ accentColor, expected }) => {
     const spec = readDiscordComponentSpec({
       text: "Status",
-      container: { accentColor: 0x1000000 },
+      container: { accentColor },
     });
     if (!spec) {
       throw new Error("Expected component spec to be parsed");
     }
 
-    const result = buildDiscordComponentMessage({ spec });
-    const serialized = result.components[0]?.serialize() as { accent_color?: unknown } | undefined;
+    const serialized = buildDiscordComponentMessage({ spec }).components[0]?.serialize() as
+      | { accent_color?: unknown }
+      | undefined;
 
-    expect(serialized).not.toHaveProperty("accent_color");
+    if (expected === undefined) {
+      expect(serialized).not.toHaveProperty("accent_color");
+    } else {
+      expect(serialized?.accent_color).toBe(expected);
+    }
   });
 
   it("serializes disabled link buttons", () => {
