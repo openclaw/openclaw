@@ -81,6 +81,52 @@ describe("draft-stream-controls", () => {
     expect(warn).toHaveBeenCalledWith("cleanup failed: boom");
   });
 
+  it("clearFinalizableDraftMessage retains failed deletes for retry", async () => {
+    let messageId: string | undefined = "m-3";
+    const warn = vi.fn();
+    const deleteMessage = vi.fn(async () => {
+      throw new Error("boom");
+    });
+
+    await clearFinalizableDraftMessage({
+      stopForClear: async () => {},
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
+      warn,
+      warnPrefix: "cleanup failed",
+    });
+
+    // ID should be retained after failed delete so a later cleanup can retry.
+    expect(messageId).toBe("m-3");
+    expect(deleteMessage).toHaveBeenCalledWith("m-3");
+    expect(warn).toHaveBeenCalledWith("cleanup failed: boom");
+
+    // Retry: call clear again and expect a second DELETE attempt.
+    deleteMessage.mockReset();
+    deleteMessage.mockResolvedValueOnce(undefined);
+    warn.mockReset();
+
+    await clearFinalizableDraftMessage({
+      stopForClear: async () => {},
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
+      warn,
+      warnPrefix: "cleanup failed",
+    });
+
+    expect(deleteMessage).toHaveBeenCalledWith("m-3");
+    expect(messageId).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("controls ignore updates after final", async () => {
     const sendOrEditStreamMessage = vi.fn(async () => true);
     const controls = createFinalizableDraftStreamControlsForState({
