@@ -77,6 +77,40 @@
   flex: 1 1 auto;
 }
 
+/* ---------- collapsible skill groups ---------- */
+
+/* <details> shell keeps the settings-section look while restoring the native
+ * expand/collapse the pre-migration skill groups had (cfg-object pattern). */
+.skills-group__summary {
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.skills-group__summary::-webkit-details-marker {
+  display: none;
+}
+
+.skills-group__chevron {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  opacity: 0.6;
+  transition: transform var(--duration-fast) ease;
+}
+
+.skills-group__chevron svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2px;
+}
+
+.skills-group[open] > .skills-group__summary .skills-group__chevron {
+  transform: rotate(180deg);
+}
+
 /* ---------- panel + notices ---------- */
 
 /* Sections inside the tabpanel keep the settings-page rhythm. */
@@ -203,6 +237,13 @@
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* Item titles/subheadings are semantic <h3>s for AT heading navigation; the
+ * shared classes own the look, so only the UA heading margin needs a reset. */
+h3.settings-row__title,
+h3.plugins-subheader {
+  margin: 0;
 }
 
 /* Use-case subheading between connector rows inside one group surface. */

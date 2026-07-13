@@ -245,10 +245,33 @@ describe("nodes inventory rendering", () => {
     const gatewayEntry = expectDefined(entries[0], "gateway inventory entry");
 
     expect(statusesByText(gatewayEntry, "gateway")).toHaveLength(1);
+    expect(statusesByText(gatewayEntry, "connected")).toHaveLength(1);
     expect(gatewayEntry.textContent).toContain("gateway-host");
     expect(gatewayEntry.textContent).toContain("Linux · 2026.7.11 · input 5s ago");
     expect(gatewayEntry.querySelector("button")).toBeNull();
     expect(gatewayEntry.querySelector("details")).toBeNull();
+  });
+
+  it("keeps the paired-devices empty state when only other sections have rows", () => {
+    const container = renderNodesContainer({
+      devicesList: {
+        pending: [
+          {
+            requestId: "req-1",
+            deviceId: "device-1",
+            displayName: "Device One",
+            role: "operator",
+            scopes: [],
+            ts: Date.now(),
+          },
+        ],
+        paired: [],
+      },
+      presence: [{ instanceId: "probe-1", host: "laptop", mode: "probe" }],
+    });
+
+    const section = getInventorySection(container);
+    expect(section.querySelector(".settings-empty")?.textContent).toContain("No paired devices.");
   });
 
   it("renders one row per machine with duplicates collapsed", () => {

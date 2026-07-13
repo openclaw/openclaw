@@ -803,9 +803,14 @@ describe("sessions view", () => {
     const statuses = container.querySelectorAll(".session-status-stack .settings-status");
     const goal = statuses[1];
     expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe("Pursuing goal (12k/50k)");
-    expect((goal?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
+    // The wrapper span exposes the objective to keyboard/screen-reader users.
+    const wrapper = goal?.parentElement;
+    expect(wrapper?.getAttribute("tabindex")).toBe("0");
+    expect(wrapper?.getAttribute("aria-label")).toBe(
       "Pursuing goal (12k/50k): Ship the web goal indicator",
     );
+    const tooltip = wrapper?.parentElement as (HTMLElement & { content: string }) | null;
+    expect(tooltip?.content).toBe("Pursuing goal (12k/50k): Ship the web goal indicator");
     expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 

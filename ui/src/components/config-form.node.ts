@@ -21,7 +21,11 @@ import {
   schemaType,
   type JsonSchema,
 } from "./config-form.shared.ts";
-import { renderSettingsEmpty, renderSettingsToggle } from "./settings-ui.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsToggle,
+  renderSettingsToggleRow,
+} from "./settings-ui.ts";
 
 const META_KEYS = new Set(["title", "description", "default", "nullable", "tags", "x-tags"]);
 
@@ -386,17 +390,31 @@ export function renderNode(params: {
         : typeof schema.default === "boolean"
           ? schema.default
           : false;
-    return renderFieldRow({
-      label,
-      help,
-      tags,
-      showLabel,
-      control: renderSettingsToggle({
-        checked: displayValue,
-        disabled,
-        ariaLabel: typeof label === "string" ? label : undefined,
-        onChange: (checked) => onPatch(path, checked),
-      }),
+    const onChange = (checked: boolean) => onPatch(path, checked);
+    if (!showLabel) {
+      // Control-only contexts (array items, map values) have no visible title,
+      // so the switch keeps its accessible name from the field label.
+      return renderFieldRow({
+        label,
+        help,
+        tags,
+        showLabel,
+        control: renderSettingsToggle({
+          checked: displayValue,
+          disabled,
+          ariaLabel: label,
+          onChange,
+        }),
+      });
+    }
+    const description =
+      help || tags.length > 0 ? html`${help ?? nothing}${renderTags(tags)}` : undefined;
+    return renderSettingsToggleRow({
+      title: label,
+      description,
+      checked: displayValue,
+      disabled,
+      onChange,
     });
   }
 

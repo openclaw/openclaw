@@ -20,6 +20,7 @@ import {
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsToggle,
+  renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -347,26 +348,37 @@ function renderSegmented<T extends string>(params: {
 }
 
 // Settings row whose control keeps its own validation message underneath.
+// Mirrors renderSettingsRow markup; local only so the title can be a real
+// <label for> that gives the wrapped control its accessible name (including
+// the visually-hidden required marker).
 function renderFieldRow(params: {
   label: string;
+  controlId: string;
   control: unknown;
   required?: boolean;
   help?: string;
   error?: string;
   errorId?: string;
   stacked?: boolean;
+  wide?: boolean;
 }) {
+  const controlClass = params.wide ? "cron-control cron-control--wide" : "cron-control";
   const control = params.error
-    ? html`<div class="cron-control">
+    ? html`<div class=${controlClass}>
         ${params.control}${renderFieldError(params.error, params.errorId)}
       </div>`
-    : html`<div class="cron-control">${params.control}</div>`;
-  return renderSettingsRow({
-    title: params.required ? renderRequiredTitle(params.label) : params.label,
-    description: params.help,
-    control,
-    stacked: params.stacked,
-  });
+    : html`<div class=${controlClass}>${params.control}</div>`;
+  return html`
+    <div class=${params.stacked ? "settings-row settings-row--stacked" : "settings-row"}>
+      <div class="settings-row__text">
+        <label class="settings-row__title" for=${params.controlId}>
+          ${params.required ? renderRequiredTitle(params.label) : params.label}
+        </label>
+        ${params.help ? html`<span class="settings-row__desc">${params.help}</span>` : nothing}
+      </div>
+      <div class="settings-row__control">${control}</div>
+    </div>
+  `;
 }
 
 function renderToggleRow(params: {
@@ -376,15 +388,12 @@ function renderToggleRow(params: {
   disabled?: boolean;
   onChange: (checked: boolean) => void;
 }) {
-  return renderSettingsRow({
+  return renderSettingsToggleRow({
     title: params.label,
     description: params.help,
-    control: renderSettingsToggle({
-      checked: params.checked,
-      disabled: params.disabled,
-      ariaLabel: params.label,
-      onChange: params.onChange,
-    }),
+    checked: params.checked,
+    disabled: params.disabled,
+    onChange: params.onChange,
   });
 }
 
@@ -1055,36 +1064,41 @@ function renderPromptSection(
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.mainTimelineMessage")
       : t("cron.form.assistantTaskPrompt");
-  const actionHelp =
-    props.form.payloadKind === "systemEvent"
+  const promptHelp = ctx.payloadLocked
+    ? undefined
+    : props.form.payloadKind === "systemEvent"
       ? t("cron.form.systemEventHelp")
       : t("cron.form.agentTurnHelp");
-  const promptRow = renderSettingsRow({
-    title: renderRequiredTitle(promptLabel),
+  const promptRow = renderFieldRow({
+    label: promptLabel,
+    controlId: "cron-payload-text",
+    required: true,
+    help: promptHelp,
     stacked: true,
+    wide: true,
+    error: props.fieldErrors.payloadText,
+    errorId: errorIdForField("payloadText"),
     control: html`
-      <div class="cron-control cron-control--wide">
-        <textarea
-          id="cron-payload-text"
-          class="settings-input"
-          rows="6"
-          .value=${props.form.payloadText}
-          ?readonly=${ctx.payloadLocked}
-          placeholder=${t("cron.form.promptPlaceholder")}
-          aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
-          aria-describedby=${ifDefined(
-            props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
-          )}
-          @input=${(e: Event) =>
-            props.onFormChange({ payloadText: (e.target as HTMLTextAreaElement).value })}
-        ></textarea>
-        ${renderFieldError(props.fieldErrors.payloadText, errorIdForField("payloadText"))}
-      </div>
+      <textarea
+        id="cron-payload-text"
+        class="settings-input"
+        rows="6"
+        .value=${props.form.payloadText}
+        ?readonly=${ctx.payloadLocked}
+        aria-required="true"
+        placeholder=${t("cron.form.promptPlaceholder")}
+        aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
+        aria-describedby=${ifDefined(
+          props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
+        )}
+        @input=${(e: Event) =>
+          props.onFormChange({ payloadText: (e.target as HTMLTextAreaElement).value })}
+      ></textarea>
     `,
   });
   const actionRow = renderFieldRow({
     label: t("cron.form.action"),
-    help: ctx.payloadLocked ? undefined : actionHelp,
+    controlId: "cron-payload-kind",
     control: ctx.payloadLocked
       ? html`
           <input
@@ -1113,6 +1127,7 @@ function renderPromptSection(
     ? html`
         ${renderFieldRow({
           label: t("cron.form.model"),
+          controlId: "cron-payload-model",
           help: t("cron.form.modelHelp"),
           error: props.fieldErrors.payloadModel,
           errorId: errorIdForField("payloadModel"),
@@ -1131,6 +1146,7 @@ function renderPromptSection(
         })}
         ${renderFieldRow({
           label: t("cron.form.thinking"),
+          controlId: "cron-payload-thinking",
           help: t("cron.form.thinkingHelp"),
           error: props.fieldErrors.payloadThinking,
           errorId: errorIdForField("payloadThinking"),
@@ -1160,6 +1176,7 @@ function renderGeneralSection(props: CronProps) {
     html`
       ${renderFieldRow({
         label: t("cron.form.fieldName"),
+        controlId: "cron-name",
         required: true,
         error: props.fieldErrors.name,
         errorId: errorIdForField("name"),
@@ -1167,6 +1184,7 @@ function renderGeneralSection(props: CronProps) {
           <input
             id="cron-name"
             class="settings-input"
+            aria-required="true"
             .value=${props.form.name}
             placeholder=${t("cron.form.namePlaceholder")}
             aria-invalid=${props.fieldErrors.name ? "true" : "false"}
@@ -1180,6 +1198,7 @@ function renderGeneralSection(props: CronProps) {
       })}
       ${renderFieldRow({
         label: t("cron.form.agentId"),
+        controlId: "cron-agent-id",
         help: t("cron.form.agentHelp"),
         control: html`
           <input
@@ -1196,6 +1215,7 @@ function renderGeneralSection(props: CronProps) {
       })}
       ${renderFieldRow({
         label: t("cron.form.runsIn"),
+        controlId: "cron-session-target",
         help: t("cron.form.sessionHelp"),
         control: html`
           <select
@@ -1297,6 +1317,7 @@ function renderScheduleSection(props: CronProps) {
       ${form.scheduleKind === "at"
         ? renderFieldRow({
             label: t("cron.form.runAt"),
+            controlId: "cron-schedule-at",
             required: true,
             error: props.fieldErrors.scheduleAt,
             errorId: errorIdForField("scheduleAt"),
@@ -1305,6 +1326,7 @@ function renderScheduleSection(props: CronProps) {
                 id="cron-schedule-at"
                 class="settings-input"
                 type="datetime-local"
+                aria-required="true"
                 .value=${form.scheduleAt}
                 aria-invalid=${props.fieldErrors.scheduleAt ? "true" : "false"}
                 aria-describedby=${ifDefined(
@@ -1319,6 +1341,7 @@ function renderScheduleSection(props: CronProps) {
       ${form.scheduleKind === "every"
         ? renderFieldRow({
             label: t("cron.form.every"),
+            controlId: "cron-every-amount",
             required: true,
             error: props.fieldErrors.everyAmount,
             errorId: errorIdForField("everyAmount"),
@@ -1327,6 +1350,7 @@ function renderScheduleSection(props: CronProps) {
                 <input
                   id="cron-every-amount"
                   class="settings-input"
+                  aria-required="true"
                   .value=${form.everyAmount}
                   aria-invalid=${props.fieldErrors.everyAmount ? "true" : "false"}
                   aria-describedby=${ifDefined(
@@ -1358,6 +1382,7 @@ function renderScheduleSection(props: CronProps) {
         ? html`
             ${renderFieldRow({
               label: t("cron.form.expression"),
+              controlId: "cron-cron-expr",
               required: true,
               error: props.fieldErrors.cronExpr,
               errorId: errorIdForField("cronExpr"),
@@ -1365,6 +1390,7 @@ function renderScheduleSection(props: CronProps) {
                 <input
                   id="cron-cron-expr"
                   class="settings-input mono"
+                  aria-required="true"
                   .value=${form.cronExpr}
                   aria-invalid=${props.fieldErrors.cronExpr ? "true" : "false"}
                   aria-describedby=${ifDefined(
@@ -1378,9 +1404,11 @@ function renderScheduleSection(props: CronProps) {
             })}
             ${renderFieldRow({
               label: t("cron.form.timezoneOptional"),
+              controlId: "cron-cron-tz",
               help: t("cron.form.timezoneHelp"),
               control: html`
                 <input
+                  id="cron-cron-tz"
                   class="settings-input"
                   .value=${form.cronTz}
                   list="cron-tz-suggestions"
@@ -1412,6 +1440,7 @@ function renderDeliverySection(
     html`
       ${renderFieldRow({
         label: t("cron.form.deliveryModeLabel"),
+        controlId: "cron-delivery-mode",
         help: t("cron.form.deliveryHelp"),
         control: html`
           <select
@@ -1436,6 +1465,7 @@ function renderDeliverySection(
         ? html`
             ${renderFieldRow({
               label: t("cron.form.channel"),
+              controlId: "cron-delivery-channel",
               help: t("cron.form.channelHelp"),
               control: html`
                 <select
@@ -1456,6 +1486,7 @@ function renderDeliverySection(
             })}
             ${renderFieldRow({
               label: t("cron.form.to"),
+              controlId: "cron-delivery-to",
               help: t("cron.form.toHelp"),
               control: html`
                 <input
@@ -1474,6 +1505,7 @@ function renderDeliverySection(
       ${ctx.selectedDeliveryMode === "webhook"
         ? renderFieldRow({
             label: t("cron.form.webhookUrl"),
+            controlId: "cron-delivery-to",
             required: true,
             help: t("cron.form.webhookHelp"),
             error: props.fieldErrors.deliveryTo,
@@ -1482,6 +1514,7 @@ function renderDeliverySection(
               <input
                 id="cron-delivery-to"
                 class="settings-input"
+                aria-required="true"
                 .value=${props.form.deliveryTo}
                 list="cron-delivery-to-suggestions"
                 aria-invalid=${props.fieldErrors.deliveryTo ? "true" : "false"}
@@ -1521,8 +1554,10 @@ function renderAdvanced(
         <div class="settings-group">
           ${renderFieldRow({
             label: t("cron.form.description"),
+            controlId: "cron-description",
             control: html`
               <input
+                id="cron-description"
                 class="settings-input"
                 .value=${props.form.description}
                 placeholder=${t("cron.form.descriptionPlaceholder")}
@@ -1540,6 +1575,7 @@ function renderAdvanced(
             : nothing}
           ${renderFieldRow({
             label: t("cron.form.wakeMode"),
+            controlId: "cron-wake-mode",
             help: t("cron.form.wakeModeHelp"),
             control: html`
               <select
@@ -1559,6 +1595,7 @@ function renderAdvanced(
           ${ctx.isAgentTurn
             ? renderFieldRow({
                 label: t("cron.form.timeoutSeconds"),
+                controlId: "cron-timeout-seconds",
                 help: t("cron.form.timeoutHelp"),
                 error: props.fieldErrors.timeoutSeconds,
                 errorId: errorIdForField("timeoutSeconds"),
@@ -1594,6 +1631,7 @@ function renderAdvanced(
           })}
           ${renderFieldRow({
             label: t("cron.form.sessionKey"),
+            controlId: "cron-session-key",
             help: t("cron.form.sessionKeyHelp"),
             control: html`
               <input
@@ -1616,6 +1654,7 @@ function renderAdvanced(
                 })}
                 ${renderFieldRow({
                   label: t("cron.form.staggerWindow"),
+                  controlId: "cron-stagger-amount",
                   error: props.fieldErrors.staggerAmount,
                   errorId: errorIdForField("staggerAmount"),
                   control: html`
@@ -1660,6 +1699,7 @@ function renderAdvanced(
             ? html`
                 ${renderFieldRow({
                   label: t("cron.form.accountId"),
+                  controlId: "cron-delivery-account-id",
                   help: t("cron.form.accountIdHelp"),
                   control: html`
                     <input
@@ -1703,9 +1743,11 @@ function renderFailureAlertRows(props: CronProps, channelOptions: string[]) {
   return html`
     ${renderFieldRow({
       label: t("cron.form.failureAlerts"),
+      controlId: "cron-failure-alert-mode",
       help: t("cron.form.failureAlertsHelp"),
       control: html`
         <select
+          id="cron-failure-alert-mode"
           class="settings-select"
           .value=${props.form.failureAlertMode}
           @change=${(e: Event) =>
@@ -1724,6 +1766,7 @@ function renderFailureAlertRows(props: CronProps, channelOptions: string[]) {
       ? html`
           ${renderFieldRow({
             label: t("cron.form.failureAlertAfter"),
+            controlId: "cron-failure-alert-after",
             help: t("cron.form.failureAlertAfterHelp"),
             error: props.fieldErrors.failureAlertAfter,
             errorId: errorIdForField("failureAlertAfter"),
@@ -1746,6 +1789,7 @@ function renderFailureAlertRows(props: CronProps, channelOptions: string[]) {
           })}
           ${renderFieldRow({
             label: t("cron.form.failureAlertCooldown"),
+            controlId: "cron-failure-alert-cooldown-seconds",
             help: t("cron.form.failureAlertCooldownHelp"),
             error: props.fieldErrors.failureAlertCooldownSeconds,
             errorId: errorIdForField("failureAlertCooldownSeconds"),
@@ -1770,8 +1814,10 @@ function renderFailureAlertRows(props: CronProps, channelOptions: string[]) {
           })}
           ${renderFieldRow({
             label: t("cron.form.failureAlertChannel"),
+            controlId: "cron-failure-alert-channel",
             control: html`
               <select
+                id="cron-failure-alert-channel"
                 class="settings-select"
                 .value=${props.form.failureAlertChannel || "last"}
                 @change=${(e: Event) =>
@@ -1788,9 +1834,11 @@ function renderFailureAlertRows(props: CronProps, channelOptions: string[]) {
           })}
           ${renderFieldRow({
             label: t("cron.form.failureAlertTo"),
+            controlId: "cron-failure-alert-to",
             help: t("cron.form.failureAlertToHelp"),
             control: html`
               <input
+                id="cron-failure-alert-to"
                 class="settings-input"
                 .value=${props.form.failureAlertTo}
                 list="cron-delivery-to-suggestions"
@@ -1802,8 +1850,10 @@ function renderFailureAlertRows(props: CronProps, channelOptions: string[]) {
           })}
           ${renderFieldRow({
             label: t("cron.form.failureAlertMode"),
+            controlId: "cron-failure-alert-delivery-mode",
             control: html`
               <select
+                id="cron-failure-alert-delivery-mode"
                 class="settings-select"
                 .value=${props.form.failureAlertDeliveryMode || "announce"}
                 @change=${(e: Event) =>
@@ -1819,8 +1869,10 @@ function renderFailureAlertRows(props: CronProps, channelOptions: string[]) {
           })}
           ${renderFieldRow({
             label: t("cron.form.failureAlertAccountId"),
+            controlId: "cron-failure-alert-account-id",
             control: html`
               <input
+                id="cron-failure-alert-account-id"
                 class="settings-input"
                 .value=${props.form.failureAlertAccountId}
                 placeholder=${t("cron.form.failureAlertAccountPlaceholder")}

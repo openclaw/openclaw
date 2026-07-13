@@ -79,11 +79,9 @@ export function renderNodesInventory(props: NodesProps) {
       ${icons.plus} ${t("nodes.pairing.button")}
     </button>
   `;
-  const empty =
-    groups.length === 0 &&
-    pending.length === 0 &&
-    !gatewayPresence &&
-    unpairedPresence.length === 0;
+  // Pending requests and unpaired presence render in their own sections, so
+  // this section's empty state depends only on its own rows.
+  const empty = groups.length === 0 && !gatewayPresence;
   const deviceRows = html`
     ${gatewayPresence ? renderGatewayEntry(gatewayPresence) : nothing}
     ${empty
@@ -371,6 +369,7 @@ function renderGatewayEntry(entry: PresenceEntry) {
           : nothing}
       </div>
       <div class="settings-row__control">
+        ${renderSettingsStatus({ kind: "ok", label: t("nodes.inventory.connected") })}
         ${renderSettingsStatus({ kind: "accent", label: t("nodes.inventory.gateway") })}
       </div>
     </div>

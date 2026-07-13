@@ -34,7 +34,7 @@ import {
   renderSettingsSection,
   renderSettingsSegmented,
   renderSettingsStatus,
-  renderSettingsToggle,
+  renderSettingsToggleRow,
   renderSettingsValue,
   type SettingsSectionProps,
 } from "../../components/settings-ui.ts";
@@ -416,11 +416,8 @@ function renderModelSection(props: QuickSettingsProps) {
             value: level,
             label: t(`quickSettings.model.thinkingLevels.${level}`),
           })),
-          onChange: (level) => {
-            if (!configBusy) {
-              props.onThinkingChange?.(level);
-            }
-          },
+          disabled: configBusy,
+          onChange: (level) => props.onThinkingChange?.(level),
         }),
       }),
       renderSettingsRow({
@@ -432,8 +429,9 @@ function renderModelSection(props: QuickSettingsProps) {
             { value: "on", label: t("quickSettings.model.fastModes.fast") },
             { value: "off", label: t("quickSettings.model.fastModes.standard") },
           ],
+          disabled: configBusy,
           onChange: (value) => {
-            if (!configBusy && value !== fastMode) {
+            if (value !== fastMode) {
               props.onFastModeChange?.(fastModeOptionValue(value));
             }
           },
@@ -541,14 +539,11 @@ function renderSecuritySection(props: QuickSettingsProps) {
         title: t("quickSettings.security.execPolicy"),
         control: renderSettingsValue(execPolicy),
       }),
-      renderSettingsRow({
+      renderSettingsToggleRow({
         title: t("quickSettings.security.browserEnabled"),
-        control: renderSettingsToggle({
-          checked: browserEnabled,
-          disabled: configBusy,
-          ariaLabel: t("quickSettings.security.browserEnabled"),
-          onChange: (enabled) => props.onBrowserEnabledToggle?.(enabled),
-        }),
+        checked: browserEnabled,
+        disabled: configBusy,
+        onChange: (enabled) => props.onBrowserEnabledToggle?.(enabled),
       }),
       renderSettingsRow({
         title: t("quickSettings.security.toolProfile"),
@@ -556,11 +551,8 @@ function renderSecuritySection(props: QuickSettingsProps) {
         control: renderSettingsSegmented({
           value: normalizedToolProfile,
           options: toolProfiles.map((profile) => ({ value: profile, label: profile })),
-          onChange: (profile) => {
-            if (!configBusy) {
-              props.onToolProfileChange?.(profile);
-            }
-          },
+          disabled: configBusy,
+          onChange: (profile) => props.onToolProfileChange?.(profile),
         }),
       }),
       renderSettingsRow({
@@ -789,13 +781,14 @@ function renderAppearanceSection(props: QuickSettingsProps) {
         control: renderSettingsSegmented<ThemeName>({
           value: props.theme,
           options: themeOptions,
-          onChange: (theme) => {
+          onChange: (theme, event) => {
             if (theme === "custom" && !props.hasCustomTheme) {
               props.onOpenCustomThemeImport?.();
               return;
             }
             if (theme !== props.theme) {
-              props.setTheme(theme);
+              // Anchor the theme transition on the clicked segmented button.
+              props.setTheme(theme, { element: (event.currentTarget as HTMLElement) ?? undefined });
             }
           },
         }),
@@ -808,9 +801,11 @@ function renderAppearanceSection(props: QuickSettingsProps) {
             value: mode,
             label: t(`common.${mode}`),
           })),
-          onChange: (mode) => {
+          onChange: (mode, event) => {
             if (mode !== props.themeMode) {
-              props.setThemeMode(mode);
+              props.setThemeMode(mode, {
+                element: (event.currentTarget as HTMLElement) ?? undefined,
+              });
             }
           },
         }),
@@ -822,31 +817,26 @@ function renderAppearanceSection(props: QuickSettingsProps) {
           options: TEXT_SCALE_OPTIONS.map((stop) => ({
             value: String(stop.value),
             label: t(stop.labelKey),
+            title: `${stop.value}%`,
           })),
           onChange: (value) => props.setTextScale(Number(value)),
         }),
       }),
-      renderSettingsRow({
+      renderSettingsToggleRow({
         title: t("quickSettings.appearance.lobsterVisits"),
         description: props.lobsterPetVisits
           ? t("quickSettings.appearance.lobsterVisitsOn")
           : t("quickSettings.appearance.lobsterVisitsOff"),
-        control: renderSettingsToggle({
-          checked: props.lobsterPetVisits,
-          ariaLabel: t("quickSettings.appearance.lobsterVisits"),
-          onChange: (enabled) => props.setLobsterPetVisits(enabled),
-        }),
+        checked: props.lobsterPetVisits,
+        onChange: (enabled) => props.setLobsterPetVisits(enabled),
       }),
-      renderSettingsRow({
+      renderSettingsToggleRow({
         title: t("quickSettings.appearance.lobsterSounds"),
         description: props.lobsterPetSounds
           ? t("quickSettings.appearance.lobsterSoundsOn")
           : t("quickSettings.appearance.lobsterSoundsOff"),
-        control: renderSettingsToggle({
-          checked: props.lobsterPetSounds,
-          ariaLabel: t("quickSettings.appearance.lobsterSounds"),
-          onChange: (enabled) => props.setLobsterPetSounds(enabled),
-        }),
+        checked: props.lobsterPetSounds,
+        onChange: (enabled) => props.setLobsterPetSounds(enabled),
       }),
       renderSettingsRow({
         title: t("quickSettings.appearance.lobsterdex"),

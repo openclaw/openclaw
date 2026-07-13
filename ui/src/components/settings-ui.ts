@@ -113,11 +113,13 @@ export function renderSettingsNavRow(
   `;
 }
 
+/** Toggle for a custom control slot. ariaLabel is required because the row
+ * title is not associated with the input; prefer renderSettingsToggleRow. */
 export function renderSettingsToggle(props: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
-  ariaLabel?: string;
+  ariaLabel: string;
 }): TemplateResult {
   return html`
     <label class="settings-toggle">
@@ -125,7 +127,7 @@ export function renderSettingsToggle(props: {
         type="checkbox"
         .checked=${props.checked}
         ?disabled=${props.disabled ?? false}
-        aria-label=${props.ariaLabel ?? nothing}
+        aria-label=${props.ariaLabel}
         @change=${(event: Event) => {
           props.onChange((event.target as HTMLInputElement).checked);
         }}
@@ -135,13 +137,50 @@ export function renderSettingsToggle(props: {
   `;
 }
 
-export function renderSettingsSegmented<T extends string>(props: {
-  value: T;
-  options: ReadonlyArray<{ value: T; label: unknown }>;
-  onChange: (value: T) => void;
+/** Toggle row: one <label> wraps title, description, and switch, so the whole
+ * row is clickable and the checkbox gets its accessible name from the title. */
+export function renderSettingsToggleRow(props: {
+  title: unknown;
+  description?: unknown;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
 }): TemplateResult {
   return html`
-    <div class="settings-segmented" role="group">
+    <label class="settings-row settings-row--toggle">
+      <div class="settings-row__text">
+        <span class="settings-row__title">${props.title}</span>
+        ${props.description
+          ? html`<span class="settings-row__desc">${props.description}</span>`
+          : nothing}
+      </div>
+      <div class="settings-row__control">
+        <span class="settings-toggle">
+          <input
+            type="checkbox"
+            .checked=${props.checked}
+            ?disabled=${props.disabled ?? false}
+            @change=${(event: Event) => {
+              props.onChange((event.target as HTMLInputElement).checked);
+            }}
+          />
+          <span class="settings-toggle__track"></span>
+        </span>
+      </div>
+    </label>
+  `;
+}
+
+export function renderSettingsSegmented<T extends string>(props: {
+  value: T;
+  options: ReadonlyArray<{ value: T; label: unknown; title?: string }>;
+  /** The clicked button is passed so callers can anchor transitions on it. */
+  onChange: (value: T, event: MouseEvent) => void;
+  disabled?: boolean;
+  ariaLabel?: string;
+}): TemplateResult {
+  return html`
+    <div class="settings-segmented" role="group" aria-label=${props.ariaLabel ?? nothing}>
       ${props.options.map(
         (option) => html`
           <button
@@ -150,7 +189,9 @@ export function renderSettingsSegmented<T extends string>(props: {
               ? "settings-segmented__btn--active"
               : ""}"
             aria-pressed=${option.value === props.value ? "true" : "false"}
-            @click=${() => props.onChange(option.value)}
+            title=${option.title ?? nothing}
+            ?disabled=${props.disabled ?? false}
+            @click=${(event: MouseEvent) => props.onChange(option.value, event)}
           >
             ${option.label}
           </button>

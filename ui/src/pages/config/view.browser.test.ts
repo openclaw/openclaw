@@ -1307,4 +1307,32 @@ describe("config view", () => {
       "/r/themes/cmlhfpjhw000004l4f4ax3m7z",
     );
   });
+
+  it("names the chat preference selects for assistive tech", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      microphone: {
+        devices: [{ deviceId: "mic-1", label: "Desk Mic" }],
+        selectedDeviceId: "mic-1",
+        loading: false,
+        error: null,
+      },
+      onMicrophoneSelect: vi.fn(),
+      onMicrophoneRefresh: vi.fn(),
+    });
+
+    const shortcutSelect = queryRequired(
+      container,
+      "[data-settings-send-shortcut]",
+      HTMLSelectElement,
+    );
+    expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
+    const microphoneSelect = queryRequired(
+      container,
+      "[data-settings-microphone]",
+      HTMLSelectElement,
+    );
+    expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
+  });
 });

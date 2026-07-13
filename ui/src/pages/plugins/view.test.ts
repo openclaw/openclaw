@@ -139,6 +139,10 @@ describe("renderPlugins", () => {
 
     const container = mount(createProps({ result: createResult(plugins) }));
     const filterBar = container.querySelector(".settings-segmented");
+    expect(filterBar?.getAttribute("aria-label")).toBeTruthy();
+    expect(
+      container.querySelector('[data-plugin-id="telegram"] h3.settings-row__title')?.textContent,
+    ).toContain("Telegram");
     expect(normalizedText(filterBar)).toContain("All 3");
     expect(normalizedText(filterBar)).toContain("Enabled 1");
     expect(normalizedText(filterBar)).toContain("Issues 1");

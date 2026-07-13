@@ -8,11 +8,13 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
   renderSettingsSection,
+  renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsToggle,
   renderSettingsValue,
@@ -20,7 +22,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
-import { groupSkills } from "../../lib/skills-grouping.ts";
+import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import "../../styles/plugins.css";
 import "../../styles/sidebar-markdown.css";
 import {
@@ -287,21 +289,34 @@ export function renderSkills(props: SkillsProps) {
                 ? t("skillsPage.disconnected")
                 : t("skillsPage.empty"),
             )
-          : groups.map((group) =>
-              renderSettingsSection(
-                { title: group.label, count: group.skills.length },
-                repeat(
-                  group.skills,
-                  (skill) => skill.skillKey,
-                  (skill) => renderSkill(skill, props),
-                ),
-              ),
-            )}
+          : groups.map((group) => renderSkillGroup(group, props))}
       `,
       { wide: true },
     )}
     ${detailSkill ? renderSkillDetail(detailSkill, props) : nothing}
     ${props.clawhubDetailSlug ? renderClawHubDetailDialog(props) : nothing}
+  `;
+}
+
+/** Collapsible skill group: settings-section look, but a <details>/<summary>
+ * shell so each group keeps the pre-migration expand/collapse interaction. */
+function renderSkillGroup(group: SkillGroup, props: SkillsProps) {
+  return html`
+    <details class="settings-section skills-group" open>
+      <summary class="settings-section__header skills-group__summary">
+        <h2 class="settings-section__heading">
+          ${group.label} <span class="settings-count">${group.skills.length}</span>
+        </h2>
+        <span class="skills-group__chevron" aria-hidden="true">${icons.chevronDown}</span>
+      </summary>
+      <div class="settings-group">
+        ${repeat(
+          group.skills,
+          (skill) => skill.skillKey,
+          (skill) => renderSkill(skill, props),
+        )}
+      </div>
+    </details>
   `;
 }
 
@@ -315,22 +330,16 @@ function renderSkillsToolbar(
     props.selectedAgentId ?? props.agentsList?.defaultId ?? agents[0]?.id ?? "";
   return html`
     <div class="plugins-toolbar plugins-toolbar--fields">
-      <div class="settings-segmented" role="group" aria-label=${t("skillsPage.title")}>
-        ${STATUS_TABS.map(
-          (tab) => html`
-            <button
-              type="button"
-              class="settings-segmented__btn ${props.statusFilter === tab.id
-                ? "settings-segmented__btn--active"
-                : ""}"
-              aria-pressed=${props.statusFilter === tab.id ? "true" : "false"}
-              @click=${() => props.onStatusFilterChange(tab.id)}
-            >
-              ${t(tab.labelKey)} <span class="settings-count">${statusCounts[tab.id]}</span>
-            </button>
-          `,
-        )}
-      </div>
+      ${renderSettingsSegmented<SkillsStatusFilter>({
+        value: props.statusFilter,
+        ariaLabel: t("skillsPage.title"),
+        options: STATUS_TABS.map((tab) => ({
+          value: tab.id,
+          label: html`${t(tab.labelKey)}
+            <span class="settings-count">${statusCounts[tab.id]}</span>`,
+        })),
+        onChange: (value) => props.onStatusFilterChange(value),
+      })}
       ${agents.length > 0
         ? html`
             <label class="plugins-field skills-toolbar__agent">

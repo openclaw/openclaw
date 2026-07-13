@@ -86,6 +86,7 @@ export function renderLogs(props: LogsProps) {
         </button>
       </div>
     </div>
+    <p class="settings-section__desc">${t("logsView.subtitle")}</p>
     ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
     <div class="settings-group logs-card">
       ${renderSettingsRow({

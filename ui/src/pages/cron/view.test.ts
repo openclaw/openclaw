@@ -477,6 +477,18 @@ describe("cron view editor", () => {
     expect(container.querySelector('[data-test-id="cron-detail-tab-history"]')).toBeNull();
     expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')).toBeNull();
 
+    // Generated controls take their accessible name from the row title label.
+    const nameLabel = container.querySelector('label[for="cron-name"]');
+    expect(nameLabel?.textContent).toContain("Name");
+    expect(nameLabel?.textContent).toContain("required");
+    expect(container.querySelector("#cron-name")?.getAttribute("aria-required")).toBe("true");
+    const promptLabel = container.querySelector('label[for="cron-payload-text"]');
+    expect(promptLabel?.textContent).toContain("required");
+    // The payload-kind help renders as the prompt row's description.
+    expect(promptLabel?.closest(".settings-row")?.textContent).toContain(
+      "Starts an agent run in its own session using your prompt.",
+    );
+
     getElement(container, '[data-test-id="cron-submit"]', HTMLButtonElement).click();
     expect(onSubmit).toHaveBeenCalledTimes(1);
 

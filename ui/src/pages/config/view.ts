@@ -1060,6 +1060,7 @@ function renderSettingsMicrophoneField(props: ConfigProps) {
       <select
         class="settings-select"
         data-settings-microphone
+        aria-label=${t("chat.composer.microphoneInput")}
         .value=${selectedDeviceId}
         @change=${(event: Event) =>
           props.onMicrophoneSelect?.((event.currentTarget as HTMLSelectElement).value)}
@@ -1099,6 +1100,7 @@ function renderChatPreferencesSection(props: ConfigProps) {
             <select
               class="settings-select"
               data-settings-send-shortcut
+              aria-label=${t("chat.sendShortcut")}
               .value=${props.chatSendShortcut}
               @change=${(event: Event) =>
                 props.setChatSendShortcut(

@@ -115,6 +115,74 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
 
+  it("renders subsection labels exactly once", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: rootAnalysis.schema,
+        uiHints: {},
+        unsupportedPaths: rootAnalysis.unsupportedPaths,
+        value: {},
+        activeSection: "gateway",
+        activeSubsection: "auth",
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    const headings = Array.from(container.querySelectorAll(".settings-section__heading")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(headings).toEqual(["Auth"]);
+    // The subsection object emits its fields directly; no nested details block
+    // repeats the subsection title inside the group.
+    expect(container.querySelector(".cfg-object")).toBeNull();
+    const rowTitles = Array.from(container.querySelectorAll(".settings-row__title")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(rowTitles).toEqual(["Token"]);
+  });
+
+  it("renders boolean fields as label-wrapped toggle rows", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        features: {
+          type: "object",
+          properties: {
+            beta: { type: "boolean", description: "Enable beta features" },
+          },
+        },
+      },
+    });
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { features: { beta: false } },
+        onPatch,
+      }),
+      container,
+    );
+
+    const checkbox = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='checkbox']"),
+      "beta checkbox",
+    );
+    const row = expectElement(checkbox.closest(".settings-row"), "beta toggle row");
+    expect(row.tagName).toBe("LABEL");
+    expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe("Beta");
+    expect(row.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
+      "Enable beta features",
+    );
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["features", "beta"], true);
+  });
+
   it("keeps dropdown selects on their configured value after options render", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");

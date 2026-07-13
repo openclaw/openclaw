@@ -205,6 +205,15 @@
   justify-content: flex-start;
 }
 
+/* Label-wrapped toggle row: whole row toggles the switch. */
+.settings-row--toggle {
+  cursor: pointer;
+}
+
+.settings-row--toggle:has(input:disabled) {
+  cursor: not-allowed;
+}
+
 /* Clickable drill-in row. */
 .settings-row--nav {
   width: 100%;

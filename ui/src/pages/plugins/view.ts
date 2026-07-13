@@ -11,6 +11,7 @@ import {
   renderSettingsEmpty,
   renderSettingsPage,
   renderSettingsSection,
+  renderSettingsSegmented,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -529,24 +530,15 @@ function renderInstalledFilter(props: PluginsViewProps) {
     disabled: installed.length - enabled - issues,
     issues,
   };
-  return html`
-    <div class="settings-segmented" role="group" aria-label=${t("pluginsPage.filterLabel")}>
-      ${INSTALLED_FILTERS.map(
-        (filter) => html`
-          <button
-            type="button"
-            class="settings-segmented__btn ${props.installedFilter === filter
-              ? "settings-segmented__btn--active"
-              : ""}"
-            aria-pressed=${props.installedFilter === filter ? "true" : "false"}
-            @click=${() => props.onFilterChange(filter)}
-          >
-            ${filterLabel(filter)} <span class="settings-count">${counts[filter]}</span>
-          </button>
-        `,
-      )}
-    </div>
-  `;
+  return renderSettingsSegmented<InstalledFilter>({
+    value: props.installedFilter,
+    ariaLabel: t("pluginsPage.filterLabel"),
+    options: INSTALLED_FILTERS.map((filter) => ({
+      value: filter,
+      label: html`${filterLabel(filter)} <span class="settings-count">${counts[filter]}</span>`,
+    })),
+    onChange: (value) => props.onFilterChange(value),
+  });
 }
 
 function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
@@ -567,12 +559,12 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
     >
       ${renderArtTile(plugin.id, plugin.name)}
       <div class="settings-row__text">
-        <span class="settings-row__title">
+        <h3 class="settings-row__title">
           ${plugin.name}
           ${plugin.version
             ? html`<span class="plugins-version">v${plugin.version}</span>`
             : nothing}
-        </span>
+        </h3>
         <span class="settings-row__desc">
           ${plugin.description || t("pluginsPage.optionalCapability")}
         </span>
@@ -658,7 +650,7 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
     <article class="settings-row plugins-item" data-mcp-name=${server.name}>
       ${renderArtTile(server.name, server.name)}
       <div class="settings-row__text">
-        <span class="settings-row__title">${server.name}</span>
+        <h3 class="settings-row__title">${server.name}</h3>
         <span class="settings-row__desc plugins-meta__mono">${server.target}</span>
         ${renderMetaLine([
           t("pluginsPage.mcp"),
@@ -779,12 +771,12 @@ function renderCatalogRow(plugin: PluginCatalogItem, props: PluginsViewProps): T
     >
       ${renderArtTile(plugin.id, plugin.name)}
       <div class="settings-row__text">
-        <span class="settings-row__title">
+        <h3 class="settings-row__title">
           ${plugin.name}
           ${plugin.version
             ? html`<span class="plugins-version">v${plugin.version}</span>`
             : nothing}
-        </span>
+        </h3>
         <span class="settings-row__desc">
           ${plugin.description || t("pluginsPage.optionalCapability")}
         </span>
@@ -827,7 +819,7 @@ function renderConnectorRow(
     >
       ${renderArtTile(connector.id, connector.name)}
       <div class="settings-row__text">
-        <span class="settings-row__title">${connector.name}</span>
+        <h3 class="settings-row__title">${connector.name}</h3>
         <span class="settings-row__desc">${t(connector.descriptionKey)}</span>
         ${renderMetaLine(
           isMcp
@@ -913,12 +905,12 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
     >
       ${renderArtTile(artSlug, pkg.displayName)}
       <div class="settings-row__text">
-        <span class="settings-row__title">
+        <h3 class="settings-row__title">
           ${pkg.displayName}
           ${pkg.latestVersion
             ? html`<span class="plugins-version">v${pkg.latestVersion}</span>`
             : nothing}
-        </span>
+        </h3>
         <span class="settings-row__desc">${pkg.summary || pkg.name}</span>
         ${renderMetaLine([
           pkg.isOfficial ? t("pluginsPage.official") : nothing,
@@ -1033,9 +1025,9 @@ function renderConnectorSection(
     },
     groups.map(
       (entry) => html`
-        <div class="plugins-subheader" data-connector-group=${entry.group}>
+        <h3 class="plugins-subheader" data-connector-group=${entry.group}>
           ${connectorGroupLabel(entry.group)}
-        </div>
+        </h3>
         ${entry.entries.map((connector) => renderConnectorRow(connector, props))}
       `,
     ),

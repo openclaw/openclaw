@@ -768,10 +768,14 @@ function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
             goal.status === "usage_limited"
           ? "warn"
           : "muted";
-  const title = formatGoalDetail(goal);
+  const detail = formatGoalDetail(goal);
+  // tabindex lets keyboard users trigger the tooltip; aria-label exposes the
+  // full objective detail that sighted users only get on hover.
   return html`
-    <openclaw-tooltip .content=${title}>
-      ${renderSettingsStatus({ kind, label: formatGoalSummary(goal) })}
+    <openclaw-tooltip .content=${detail}>
+      <span tabindex="0" aria-label=${detail}>
+        ${renderSettingsStatus({ kind, label: formatGoalSummary(goal) })}
+      </span>
     </openclaw-tooltip>
   `;
 }

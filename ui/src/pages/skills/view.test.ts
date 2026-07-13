@@ -156,6 +156,23 @@ describe("renderSkills", () => {
     expect(onAgentChange).toHaveBeenCalledWith("main");
   });
 
+  it("renders skill groups as open collapsible sections with heading summaries", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    render(renderSkills(createProps()), container);
+    await Promise.resolve();
+
+    const group = container.querySelector<HTMLDetailsElement>("details.skills-group");
+    expect(expectDefined(group, "skill group details").open).toBe(true);
+    const heading = group?.querySelector("summary h2.settings-section__heading");
+    expect(normalizeText(expectDefined(heading, "group summary heading"))).toContain("1");
+    expect(normalizeText(group!.querySelector(".settings-group .settings-row")!)).toContain(
+      "Repo Skill",
+    );
+  });
+
   it("locks every skill mutation control behind the active mutation", async () => {
     const container = document.createElement("div");
     document.body.append(container);

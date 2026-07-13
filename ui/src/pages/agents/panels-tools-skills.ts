@@ -898,6 +898,7 @@ function renderAgentSkillRow(
         ${renderSettingsToggle({
           checked: enabled,
           disabled: !params.editable,
+          ariaLabel: skill.name,
           onChange: (checked) => params.onToggle(params.agentId, skill.name, checked),
         })}
       </div>

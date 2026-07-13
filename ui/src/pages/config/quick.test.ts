@@ -403,11 +403,17 @@ describe("renderQuickSettings", () => {
         container,
       );
 
-      expectButtonByText(expectRowByTitle(container, "Thinking"), "High").click();
+      const thinkingButton = expectButtonByText(expectRowByTitle(container, "Thinking"), "High");
+      expect(thinkingButton.disabled).toBe(true);
+      thinkingButton.click();
       expect(onThinkingChange).not.toHaveBeenCalled();
-      expectButtonByText(expectRowByTitle(container, "Fast mode"), "Fast").click();
+      const fastButton = expectButtonByText(expectRowByTitle(container, "Fast mode"), "Fast");
+      expect(fastButton.disabled).toBe(true);
+      fastButton.click();
       expect(onFastModeChange).not.toHaveBeenCalled();
-      expectButtonByText(expectRowByTitle(container, "Tool profile"), "full").click();
+      const profileButton = expectButtonByText(expectRowByTitle(container, "Tool profile"), "full");
+      expect(profileButton.disabled).toBe(true);
+      profileButton.click();
       expect(onToolProfileChange).not.toHaveBeenCalled();
       const browserRow = expectRowByTitle(container, "Browser enabled");
       expect(browserRow.querySelector("input")?.hasAttribute("disabled")).toBe(true);
@@ -476,6 +482,8 @@ describe("renderQuickSettings", () => {
     );
 
     const browserRow = expectRowByTitle(container, "Browser enabled");
+    // Toggle rows are one label so the whole row is clickable.
+    expect(browserRow.tagName).toBe("LABEL");
     const browserInput = browserRow.querySelector("input");
     expect(browserInput).toBeInstanceOf(HTMLInputElement);
     expect((browserInput as HTMLInputElement).checked).toBe(false);
@@ -540,9 +548,41 @@ describe("renderQuickSettings", () => {
       button.classList.contains("settings-segmented__btn--active"),
     );
     expect(active?.textContent?.trim()).toBe("XL");
+    expect(active?.getAttribute("title")).toBe("125%");
 
-    expectButtonByText(textSizeRow, "XXL").click();
+    const xxlButton = expectButtonByText(textSizeRow, "XXL");
+    expect(xxlButton.getAttribute("title")).toBe("140%");
+    xxlButton.click();
     expect(setTextScale).toHaveBeenCalledWith(140);
+  });
+
+  it("anchors theme mode transitions on the clicked segmented button", () => {
+    const setThemeMode = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ themeMode: "system", setThemeMode })), container);
+
+    const modeRow = expectRowByTitle(container, "Mode");
+    const darkButton = expectButtonByText(modeRow, "Dark");
+    darkButton.click();
+    expect(setThemeMode).toHaveBeenCalledWith("dark", { element: darkButton });
+  });
+
+  it("renders lobster pet rows as label-wrapped toggle rows", () => {
+    const setLobsterPetVisits = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ setLobsterPetVisits })), container);
+
+    const visitsRow = expectRowByTitle(container, "Lobster visits");
+    expect(visitsRow.tagName).toBe("LABEL");
+    const input = visitsRow.querySelector("input");
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error("Expected lobster visits toggle input");
+    }
+    input.checked = false;
+    input.dispatchEvent(new Event("change"));
+    expect(setLobsterPetVisits).toHaveBeenCalledWith(false);
   });
 
   it("keeps the local user name fixed and shows the assistant identity", () => {
@@ -945,9 +985,10 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expectButtonByText(container, "Light Green").click();
+    const customButton = expectButtonByText(container, "Light Green");
+    customButton.click();
 
-    expect(setTheme).toHaveBeenCalledWith("custom");
+    expect(setTheme).toHaveBeenCalledWith("custom", { element: customButton });
     expect(onOpenCustomThemeImport).not.toHaveBeenCalled();
   });
 });
