@@ -125,12 +125,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.branchesLoading = false;
     this.agentsHydrated = false;
     this.closeBrowser();
+    // A transport loss makes an in-flight create outcome unknowable even when
+    // the reconnect reuses the same client. Never offer an automatic retry.
+    this.invalidateSubmission(true);
     if (!resetHostSelection) {
       return;
     }
     // A replacement client may target another Gateway. Keep the user's task,
     // but retire every selection and discovery result owned by the old host.
-    this.invalidateSubmission(true);
     this.agentId = "";
     this.agentSelectedByUser = false;
     this.folder = "";

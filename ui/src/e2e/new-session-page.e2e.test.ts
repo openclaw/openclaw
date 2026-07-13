@@ -893,82 +893,93 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
-  it("marks a pending creation outcome unknown when the Gateway client changes", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:fresh-replacement-create";
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Original agent" },
-              name: "Original agent",
-              workspace: SOURCE_REPO,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-        },
-        "sessions.create": { key: sessionKey },
-      },
-    });
-
-    try {
-      await page.goto(`${server.baseUrl}new`);
-      await page.getByRole("heading", { name: "Original agent" }).waitFor();
-      const message = page.locator(".new-session-page__message");
-      const start = page.locator("button.chat-send-btn");
-      await message.fill("retry this draft on the replacement");
-      await gateway.deferNext("sessions.create");
-      await start.click();
-      await gateway.waitForRequest("sessions.create");
-      await expect.poll(() => start.isDisabled()).toBe(true);
-
-      await gateway.setMethodResponse("agents.list", {
-        agents: [
-          {
-            id: "main",
-            identity: { name: "Replacement agent" },
-            name: "Replacement agent",
-            workspace: TARGET_REPO,
-            workspaceGit: true,
-          },
-        ],
-        defaultId: "main",
-        mainKey: "main",
-        scope: "agent",
+  for (const reconnectKind of ["same-client reconnect", "client replacement"] as const) {
+    it(`marks a pending creation outcome unknown after ${reconnectKind}`, async () => {
+      const context = await browser.newContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
       });
-      const socketsBefore = await gateway.getSocketCount();
-      await replaceGatewayClient(page);
+      const page = await context.newPage();
+      const sessionKey = `agent:main:unknown-${reconnectKind.replaceAll(" ", "-")}`;
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "agents.list": {
+            agents: [
+              {
+                id: "main",
+                identity: { name: "Original agent" },
+                name: "Original agent",
+                workspace: SOURCE_REPO,
+                workspaceGit: true,
+              },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+          "worktrees.branches": {
+            branches: [{ kind: "local", name: "main" }],
+            defaultBranch: "main",
+          },
+          "sessions.create": { key: sessionKey },
+        },
+      });
 
-      await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
-      await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
-      await expect.poll(() => message.inputValue()).toBe("retry this draft on the replacement");
-      await expect.poll(() => message.isEnabled()).toBe(true);
-      await expect.poll(() => start.isDisabled()).toBe(true);
-      await page
-        .getByText(
-          "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
-        )
-        .waitFor();
-      expect(new URL(page.url()).searchParams.get("session")).toBeNull();
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-    } finally {
-      await context.close();
-    }
-  });
+      try {
+        await page.goto(`${server.baseUrl}new`);
+        await page.getByRole("heading", { name: "Original agent" }).waitFor();
+        const message = page.locator(".new-session-page__message");
+        const start = page.locator("button.chat-send-btn");
+        await message.fill("retry this draft after reconnect");
+        await gateway.deferNext("sessions.create");
+        await start.click();
+        await gateway.waitForRequest("sessions.create");
+        await expect.poll(() => start.isDisabled()).toBe(true);
+
+        if (reconnectKind === "client replacement") {
+          await gateway.setMethodResponse("agents.list", {
+            agents: [
+              {
+                id: "main",
+                identity: { name: "Replacement agent" },
+                name: "Replacement agent",
+                workspace: TARGET_REPO,
+                workspaceGit: true,
+              },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          });
+          const socketsBefore = await gateway.getSocketCount();
+          await replaceGatewayClient(page);
+          await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
+          await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
+        } else {
+          const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
+          await gateway.setOnline(false);
+          await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+          await gateway.setOnline(true);
+          await expect
+            .poll(async () => (await gateway.getRequests("agents.list")).length)
+            .toBe(agentRequestsBefore + 1);
+        }
+        await expect.poll(() => message.inputValue()).toBe("retry this draft after reconnect");
+        await expect.poll(() => message.isEnabled()).toBe(true);
+        await expect.poll(() => start.isDisabled()).toBe(true);
+        await page
+          .getByText(
+            "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
+          )
+          .waitFor();
+        expect(new URL(page.url()).searchParams.get("session")).toBeNull();
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      } finally {
+        await context.close();
+      }
+    });
+  }
 
   it("resets agent-derived workspace state when retargeted to a catalog", async () => {
     const context = await browser.newContext({
