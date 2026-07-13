@@ -42,7 +42,11 @@ describe("resolveCronExecutionRetryHint", () => {
   });
 
   it("classifies cron pre-execution watchdog failures as timeout retries", () => {
-    for (const message of [setupTimeoutErrorMessage(), preExecutionTimeoutErrorMessage()]) {
+    for (const message of [
+      "cron: isolated agent setup stalled before runner start",
+      setupTimeoutErrorMessage(),
+      preExecutionTimeoutErrorMessage(),
+    ]) {
       expect(resolveCronExecutionRetryHint(message, ["timeout"])).toEqual({
         retryable: true,
         category: "timeout",

@@ -18,6 +18,11 @@ type CronRetryHint = {
 const SERVER_ERROR_PATTERN =
   /\b(?:https?|status(?:[ _]code)?|response(?:[ _]code)?|http(?:[ _]status)?)\b[\s:=#"']{0,4}5\d{2}\b|\b5\d{2}\b[\s:)\].,-]*(?:internal server error|server error|bad gateway|service unavailable|gateway time-?out)\b|\binternal server error\b|\bbad gateway\b|\bservice unavailable\b|\bgateway time-?out\b|\b5xx\b|^\s*5\d{2}\s*$/i;
 
+// Cron setup/pre-execution watchdogs can emit runner-start stall prose that
+// does not include terse timeout tokens or ETIMEDOUT codes.
+const TIMEOUT_PATTERN =
+  /(timeout|timed out|isolated agent setup stalled before runner start|stalled before execution start|etimedout)/i;
+
 const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
   rate_limit:
     /(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare|tokens per day)/i,
@@ -25,7 +30,7 @@ const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
     /\b529\b|\boverloaded(?:_error)?\b|high demand|temporar(?:ily|y) overloaded|capacity exceeded/i,
   network:
     /(network|fetch failed|socket|econnreset|econnrefused|eai_again|enetdown|ehostunreach|ehostdown|enetreset|enetunreach|epipe)/i,
-  timeout: /(timeout|timed out|stalled before execution start|etimedout)/i,
+  timeout: TIMEOUT_PATTERN,
   server_error: SERVER_ERROR_PATTERN,
 };
 
