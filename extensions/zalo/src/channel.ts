@@ -16,7 +16,7 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
-  type ChannelMessageSendResult,
+  type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildOpenGroupPolicyRestrictSendersWarning,
@@ -85,48 +85,32 @@ const zaloSetupWizard = createZaloSetupWizardProxy(
 );
 const zaloTextChunkLimit = 2000;
 
-type ZaloRawSendResult = {
-  ok: boolean;
-  messageId?: string;
-  receipt: ChannelMessageSendResult["receipt"];
-  error?: string;
-};
-
-function requireSuccessfulZaloSend(
-  result: ZaloRawSendResult,
-  fallbackError: string,
-): ChannelMessageSendResult {
+async function sendZaloDelivery(ctx: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  accountId?: string | null;
+  mediaUrl?: string;
+}): Promise<{ messageId: string; receipt: MessageReceipt }> {
+  const result = await (
+    await loadZaloChannelRuntime()
+  ).sendZaloText({
+    to: ctx.to,
+    text: ctx.text,
+    accountId: ctx.accountId ?? undefined,
+    mediaUrl: ctx.mediaUrl,
+    cfg: ctx.cfg,
+  });
   if (!result.ok) {
-    throw new Error(result.error ?? fallbackError);
+    throw new Error(result.error ?? `Failed to send Zalo ${ctx.mediaUrl ? "media" : "message"}`);
   }
   return { messageId: result.messageId ?? "", receipt: result.receipt };
 }
 
 const zaloSendResultAdapter = createAttachedChannelResultAdapter({
   channel: "zalo",
-  sendText: async ({ to, text, accountId, cfg }) => {
-    const result = await (
-      await loadZaloChannelRuntime()
-    ).sendZaloText({
-      to,
-      text,
-      accountId: accountId ?? undefined,
-      cfg,
-    });
-    return requireSuccessfulZaloSend(result, "Failed to send Zalo message");
-  },
-  sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) => {
-    const result = await (
-      await loadZaloChannelRuntime()
-    ).sendZaloText({
-      to,
-      text,
-      accountId: accountId ?? undefined,
-      mediaUrl,
-      cfg,
-    });
-    return requireSuccessfulZaloSend(result, "Failed to send Zalo media");
-  },
+  sendText: sendZaloDelivery,
+  sendMedia: sendZaloDelivery,
 });
 
 export const zaloMessageAdapter = defineChannelMessageAdapter({
@@ -139,31 +123,8 @@ export const zaloMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
-    text: async ({ to, text, accountId, cfg }) =>
-      requireSuccessfulZaloSend(
-        await (
-          await loadZaloChannelRuntime()
-        ).sendZaloText({
-          to,
-          text,
-          accountId: accountId ?? undefined,
-          cfg,
-        }),
-        "Failed to send Zalo message",
-      ),
-    media: async ({ to, text, mediaUrl, accountId, cfg }) =>
-      requireSuccessfulZaloSend(
-        await (
-          await loadZaloChannelRuntime()
-        ).sendZaloText({
-          to,
-          text,
-          accountId: accountId ?? undefined,
-          mediaUrl,
-          cfg,
-        }),
-        "Failed to send Zalo media",
-      ),
+    text: sendZaloDelivery,
+    media: sendZaloDelivery,
   },
 });
 
