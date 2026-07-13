@@ -2746,6 +2746,54 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("renders the authenticated assistant avatar after switching sessions", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const avatarBody = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
+      "base64",
+    );
+    await page.route(/\/avatar\/main\?meta=1$/, (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
+      }),
+    );
+    await page.route(/\/avatar\/main$/, (route) =>
+      route.fulfill({ contentType: "image/png", body: avatarBody }),
+    );
+    await installMockGateway(page, {
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Avatar check" }] }],
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const avatar = page.locator("img.chat-avatar.assistant").first();
+      await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
+
+      await page
+        .locator(
+          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+        )
+        .click();
+      await page
+        .locator(
+          '.sidebar-recent-session[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link',
+        )
+        .click();
+
+      await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("shows a pending send while a model override update is still pending", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

@@ -700,7 +700,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
     }
     void state.loadAssistantIdentity();
-    void refreshChatAvatar(state);
+    void refreshChatAvatar(state).finally(() => state.requestUpdate?.());
     void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const composerStorageError = state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
