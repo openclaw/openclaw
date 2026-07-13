@@ -7,6 +7,7 @@ import { OpClient } from "./src/op-client.js";
 import { createOnePasswordTool, redactPersistedOnePasswordResult } from "./src/tool.js";
 
 const MAX_AUDIT_ROWS = 40_000;
+const MAX_STANDING_GRANTS = MAX_REGISTERED_ITEMS * 32;
 
 export default definePluginEntry({
   id: "onepassword",
@@ -16,8 +17,10 @@ export default definePluginEntry({
     const config = parseOnePasswordConfig(api.pluginConfig);
     const grants = api.runtime.state.openKeyedStore<StandingGrant>({
       namespace: "grants",
-      maxEntries: MAX_REGISTERED_ITEMS,
-      overflowPolicy: "reject-new",
+      // Evicting the oldest grant is fail-closed: that agent must approve again.
+      // Keep enough room for 32 agents holding every registered slug.
+      maxEntries: MAX_STANDING_GRANTS,
+      overflowPolicy: "evict-oldest",
     });
     const audit = api.runtime.state.openKeyedStore<AuditRow>({
       namespace: "audit",

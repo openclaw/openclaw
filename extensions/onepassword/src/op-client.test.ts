@@ -128,7 +128,12 @@ describe("OpClient", () => {
     ["RATE_LIMITED", { stderr: "request failed: 429 rate limit", code: 1 }],
     ["ITEM_NOT_FOUND", { stderr: "item is not found", code: 1 }],
     ["ITEM_NOT_FOUND", { stderr: `"Token" isn't an item in the "Automation" vault`, code: 1 }],
+    [
+      "ITEM_NOT_FOUND",
+      { stderr: `"Rate limit token" isn't an item in the "Automation" vault`, code: 1 },
+    ],
     ["FIELD_NOT_FOUND", { stderr: `"credential" isn't a field in the "Token" item`, code: 1 }],
+    ["FIELD_NOT_FOUND", { stderr: `"429 credential" isn't a field in the "Token" item`, code: 1 }],
     ["AUTH_FAILED", { stderr: "unauthorized service account", code: 1 }],
     ["TIMEOUT", { stderr: "", killed: true, signal: "SIGTERM" }],
     ["OP_ERROR", { stderr: "unexpected failure", code: 1 }],

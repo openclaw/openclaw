@@ -126,9 +126,6 @@ function classifyOpError(error: unknown): OnePasswordError {
   if (record.killed === true || record.code === "ETIMEDOUT" || record.signal === "SIGTERM") {
     return new OnePasswordError("TIMEOUT", "1Password CLI request timed out");
   }
-  if (/\b429\b|rate[ -]?limit|too many requests/u.test(normalized)) {
-    return new OnePasswordError("RATE_LIMITED", "1Password rate limit reached");
-  }
   if (
     /item.+(is not found|isn't found|not found|does not exist)|could not find.+item|isn't an item\b/u.test(
       normalized,
@@ -147,6 +144,9 @@ function classifyOpError(error: unknown): OnePasswordError {
     )
   ) {
     return new OnePasswordError("AUTH_FAILED", "1Password service account authentication failed");
+  }
+  if (/\b429\b|rate[ -]?limit|too many requests/u.test(normalized)) {
+    return new OnePasswordError("RATE_LIMITED", "1Password rate limit reached");
   }
   return new OnePasswordError("OP_ERROR", "1Password CLI request failed");
 }

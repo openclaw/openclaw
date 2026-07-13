@@ -151,7 +151,8 @@ grant for that agent and slug to SQLite; other agents must receive their own
 approval. OpenClaw offers allow always only when the caller has a concrete agent
 identity. The grant expires after `grantTtlHours`, which defaults to 720 hours.
 An unresolved or timed-out approval denies the request; the maximum approval
-wait is 600 seconds.
+wait is 600 seconds. The plugin retains up to 1,024 standing grants; at that
+bound, the oldest grant is evicted and its agent must approve the next access.
 
 The in-memory cache defaults to 300 seconds and is bounded by the configured
 slug registry. Set `cacheTtlSeconds` to `0` to disable it. Policy is evaluated
