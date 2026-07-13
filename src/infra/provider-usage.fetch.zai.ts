@@ -71,7 +71,9 @@ export async function fetchZaiUsage(
 
   for (const limit of limits) {
     const percent = clampPercent(limit.percentage || 0);
-    const nextReset = limit.nextResetTime ? new Date(limit.nextResetTime).getTime() : undefined;
+    // Invalid reset strings become NaN; keep resetAt unset instead of propagating NaN.
+    const parsedReset = limit.nextResetTime ? new Date(limit.nextResetTime).getTime() : undefined;
+    const nextReset = Number.isFinite(parsedReset) ? parsedReset : undefined;
     let windowLabel = "Limit";
     if (limit.unit === 1) {
       windowLabel = `${limit.number}d`;
