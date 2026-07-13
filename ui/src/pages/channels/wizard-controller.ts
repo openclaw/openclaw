@@ -93,6 +93,11 @@ export class ChannelWizardController {
         { timeoutMs: WIZARD_STEP_TIMEOUT_MS },
       );
       if (this.generation !== generation) {
+        // The modal was closed/superseded mid-start, but the gateway already
+        // created a running session; cancel it or later starts get rejected.
+        if (result.sessionId && !result.done) {
+          void client.request("wizard.cancel", { sessionId: result.sessionId }).catch(() => {});
+        }
         return;
       }
       this.sessionId = result.sessionId ?? null;

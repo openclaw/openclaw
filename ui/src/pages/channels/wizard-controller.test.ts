@@ -101,6 +101,32 @@ describe("ChannelWizardController", () => {
     });
   });
 
+  it("cancels a stale in-flight start so the gateway session is not leaked", async () => {
+    let resolveStart: (value: unknown) => void = () => {};
+    const cancelled: unknown[] = [];
+    const { controller } = createController(async (method, params) => {
+      if (method === "wizard.start") {
+        return await new Promise((resolve) => {
+          resolveStart = resolve;
+        });
+      }
+      if (method === "wizard.cancel") {
+        cancelled.push((params as { sessionId?: string }).sessionId);
+        return { status: "cancelled" };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const start = controller.start("telegram");
+    await Promise.resolve();
+    await controller.cancel();
+    resolveStart({ sessionId: "s-stale", done: false, status: "running", step: selectStep });
+    await start;
+    await Promise.resolve();
+    expect(controller.state).toEqual({ phase: "idle" });
+    expect(cancelled).toContain("s-stale");
+  });
+
   it("adopts the channel picked in a browse-all select step", async () => {
     const { controller } = createController(
       async (method) => {
