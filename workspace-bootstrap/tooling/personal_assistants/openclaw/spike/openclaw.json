@@ -1,0 +1,837 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.6.11",
+    "lastTouchedAt": "2026-07-10T11:22:49.120Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-07-09T13:29:15.467Z",
+    "lastRunVersion": "2026.6.11",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
+  },
+  "auth": {
+    "profiles": {
+      "zai:default": {
+        "provider": "zai",
+        "mode": "api_key"
+      },
+      "openai:2010sahara@gmail.com": {
+        "provider": "openai",
+        "mode": "oauth",
+        "email": "2010sahara@gmail.com"
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "zai": {
+        "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "glm-5-turbo",
+            "name": "GLM-5-Turbo",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 204800,
+            "maxTokens": 131072
+          },
+          {
+            "id": "glm-5",
+            "name": "GLM-5",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 204800,
+            "maxTokens": 131072
+          },
+          {
+            "id": "glm-5.1",
+            "name": "GLM-5.1",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 204800,
+            "maxTokens": 131072
+          },
+          {
+            "id": "glm-4.7",
+            "name": "GLM-4.7",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 204800,
+            "maxTokens": 131072
+          },
+          {
+            "id": "glm-5.2",
+            "name": "GLM-5.2",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 131072
+          },
+          {
+            "id": "glm-5v-turbo",
+            "name": "GLM-5V Turbo",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 1.2,
+              "output": 4,
+              "cacheRead": 0.24,
+              "cacheWrite": 0
+            },
+            "contextWindow": 202800,
+            "maxTokens": 131100
+          },
+          {
+            "id": "glm-4.7-flash",
+            "name": "GLM-4.7 Flash",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0.07,
+              "output": 0.4,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 200000,
+            "maxTokens": 131072
+          },
+          {
+            "id": "glm-4.7-flashx",
+            "name": "GLM-4.7 FlashX",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0.06,
+              "output": 0.4,
+              "cacheRead": 0.01,
+              "cacheWrite": 0
+            },
+            "contextWindow": 200000,
+            "maxTokens": 128000
+          },
+          {
+            "id": "glm-4.6",
+            "name": "GLM-4.6",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0.6,
+              "output": 2.2,
+              "cacheRead": 0.11,
+              "cacheWrite": 0
+            },
+            "contextWindow": 204800,
+            "maxTokens": 131072
+          },
+          {
+            "id": "glm-4.6v",
+            "name": "GLM-4.6V",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0.3,
+              "output": 0.9,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 128000,
+            "maxTokens": 32768
+          },
+          {
+            "id": "glm-4.5",
+            "name": "GLM-4.5",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0.6,
+              "output": 2.2,
+              "cacheRead": 0.11,
+              "cacheWrite": 0
+            },
+            "contextWindow": 131072,
+            "maxTokens": 98304
+          },
+          {
+            "id": "glm-4.5-air",
+            "name": "GLM-4.5 Air",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0.2,
+              "output": 1.1,
+              "cacheRead": 0.03,
+              "cacheWrite": 0
+            },
+            "contextWindow": 131072,
+            "maxTokens": 98304
+          },
+          {
+            "id": "glm-4.5-flash",
+            "name": "GLM-4.5 Flash",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 131072,
+            "maxTokens": 98304
+          },
+          {
+            "id": "glm-4.5v",
+            "name": "GLM-4.5V",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0.6,
+              "output": 1.8,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 64000,
+            "maxTokens": 16384
+          }
+        ],
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "ZAI_API_KEY"
+        }
+      },
+      "nous": {
+        "baseUrl": "https://inference-api.nousresearch.com/v1",
+        "api": "openai-completions",
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "SPIKE_NOUS_API_KEY"
+        },
+        "timeoutSeconds": 180,
+        "models": [
+          {
+            "id": "moonshotai/kimi-k2.7-code",
+            "name": "Nous Kimi K2.7 Code",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 131072
+          },
+          {
+            "id": "deepseek/deepseek-v4-pro",
+            "name": "Nous DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 32768
+          },
+          {
+            "id": "deepseek/deepseek-v4-flash",
+            "name": "Nous DeepSeek V4 Flash",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 32768
+          },
+          {
+            "id": "tencent/hy3:free",
+            "name": "Nous Tencent Hy3 (Free)",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 131072
+          }
+        ]
+      },
+      "ollama-cloud-1": {
+        "baseUrl": "https://ollama.com",
+        "api": "ollama",
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "OLLAMA_CLOUD_1"
+        },
+        "timeoutSeconds": 120,
+        "models": [
+          {
+            "id": "gemma4:31b",
+            "name": "Ollama Gemma 4 31B",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "params": {
+              "num_ctx": 262144
+            }
+          }
+        ]
+      },
+      "ollama-cloud-2": {
+        "baseUrl": "https://ollama.com",
+        "api": "ollama",
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "OLLAMA_CLOUD_2"
+        },
+        "timeoutSeconds": 120,
+        "models": [
+          {
+            "id": "gemma4:31b",
+            "name": "Ollama Gemma 4 31B",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "params": {
+              "num_ctx": 262144
+            }
+          }
+        ]
+      },
+      "openai": {
+        "models": [
+          {
+            "id": "gpt-5.5",
+            "name": "GPT-5.5",
+            "input": [
+              "text"
+            ],
+            "reasoning": true,
+            "contextWindow": 200000,
+            "maxTokens": 131072
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "ollama-cloud-1/gemma4:31b",
+        "fallbacks": [
+          "ollama-cloud-2/gemma4:31b",
+          "nous/deepseek/deepseek-v4-flash"
+        ]
+      },
+      "models": {
+        "nous/z-ai/glm-5.2": {},
+        "nous/moonshotai/kimi-k2.7-code": {},
+        "nous/deepseek/deepseek-v4-pro": {},
+        "nous/deepseek/deepseek-v4-flash": {},
+        "nous/tencent/hy3:free": {
+          "alias": "Hy3 (Free)"
+        },
+        "ollama-cloud-1/gemma4:31b": {},
+        "zai/glm-5": {},
+        "zai/glm-5.1": {},
+        "zai/glm-5.2": {
+          "alias": "GLM"
+        },
+        "openai/gpt-5.5": {}
+      },
+      "workspace": "/home/spike/.openclaw/workspace",
+      "compaction": {
+        "mode": "safeguard",
+        "notifyUser": true
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      },
+      "memorySearch": {
+        "fallback": "local",
+        "query": {
+          "hybrid": {
+            "enabled": true
+          }
+        },
+        "provider": "mistral"
+      },
+      "heartbeat": {
+        "skipWhenBusy": true
+      },
+      "thinkingDefault": "off"
+    },
+    "list": [
+      {
+        "id": "spike",
+        "default": true,
+        "name": "Spike",
+        "workspace": "/home/spike/.openclaw/workspace",
+        "model": {
+          "primary": "ollama-cloud-1/gemma4:31b",
+          "fallbacks": [
+            "ollama-cloud-2/gemma4:31b",
+            "zai/glm-5.1",
+            "nous/tencent/hy3:free"
+          ]
+        },
+        "thinkingDefault": "off",
+        "identity": {
+          "name": "Spike",
+          "theme": "A sharp blue-team defender: defensive, methodical, and focused on hardening and remediation.",
+          "emoji": "🛡️",
+          "avatar": "avatars/spike.png"
+        }
+      }
+    ]
+  },
+  "tools": {
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "brave"
+      }
+    },
+    "elevated": {
+      "enabled": true,
+      "allowFrom": {
+        "telegram": [
+          "550523830"
+        ],
+        "direct": [
+          "550523830"
+        ]
+      }
+    },
+    "exec": {
+      "security": "full",
+      "ask": "off"
+    },
+    "profile": "coding"
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "approvals": {
+    "exec": {
+      "enabled": true,
+      "mode": "session",
+      "agentFilter": [
+        "main"
+      ],
+      "sessionFilter": [
+        "telegram"
+      ]
+    }
+  },
+  "session": {
+    "dmScope": "per-channel-peer",
+    "reset": {
+      "mode": "daily",
+      "atHour": 4,
+      "idleMinutes": 120
+    },
+    "threadBindings": {
+      "enabled": true,
+      "idleHours": 24,
+      "maxAgeHours": 0
+    }
+  },
+  "channels": {
+    "defaults": {
+      "groupPolicy": "open",
+      "heartbeat": {
+        "showOk": false,
+        "showAlerts": true,
+        "useIndicator": true
+      }
+    },
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "pairing",
+      "accounts": {
+        "default": {
+          "botToken": {
+            "source": "env",
+            "provider": "default",
+            "id": "BLUE_TEAM_BOT_TOKEN"
+          },
+          "allowFrom": [
+            "550523830"
+          ],
+          "groupAllowFrom": [
+            "550523830",
+            "7656173571",
+            "8345792250",
+            "8754341912",
+            "8516324256"
+          ]
+        }
+      },
+      "groupPolicy": "allowlist",
+      "streaming": {
+        "mode": "off"
+      },
+      "groups": {
+        "-1003752822878": {
+          "requireMention": true
+        },
+        "-1003921957475": {
+          "requireMention": true
+        }
+      },
+      "allowFrom": [
+        "550523830"
+      ],
+      "groupAllowFrom": [
+        "550523830",
+        "7656173571",
+        "7556658841",
+        "8345792250",
+        "8516324256",
+        "8754341912",
+        "8919637914"
+      ]
+    },
+    "discord": {
+      "enabled": true,
+      "groupPolicy": "allowlist",
+      "streaming": {
+        "mode": "off"
+      },
+      "threadBindings": {
+        "enabled": true,
+        "idleHours": 24,
+        "maxAgeHours": 0
+      }
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": {
+        "source": "env",
+        "provider": "default",
+        "id": "OPENCLAW_GATEWAY_TOKEN"
+      }
+    },
+    "channelHealthCheckMinutes": 5,
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "nodes": {
+      "denyCommands": [
+        "camera.snap",
+        "camera.clip",
+        "screen.record",
+        "calendar.add",
+        "contacts.add",
+        "reminders.add"
+      ]
+    },
+    "controlUi": {
+      "allowInsecureAuth": true,
+      "allowedOrigins": [
+        "http://localhost:18789",
+        "http://127.0.0.1:18789"
+      ]
+    },
+    "customBindHost": "127.0.0.1"
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true,
+        "config": {}
+      },
+      "brave": {
+        "enabled": true,
+        "config": {
+          "webSearch": {
+            "apiKey": {
+              "source": "env",
+              "provider": "default",
+              "id": "BRAVE_API_KEY"
+            }
+          }
+        }
+      },
+      "zai": {
+        "enabled": false
+      },
+      "memory-wiki": {
+        "enabled": true,
+        "config": {
+          "vaultMode": "bridge",
+          "bridge": {
+            "enabled": true,
+            "readMemoryArtifacts": true,
+            "indexDreamReports": true,
+            "indexDailyNotes": true,
+            "indexMemoryRoot": true,
+            "followMemoryEvents": true
+          },
+          "search": {
+            "backend": "shared",
+            "corpus": "all"
+          }
+        }
+      },
+      "active-memory": {
+        "enabled": true
+      },
+      "memory-core": {
+        "config": {}
+      },
+      "xiaomi": {
+        "enabled": false
+      },
+      "llama-cpp": {
+        "enabled": true
+      },
+      "qwen": {
+        "enabled": true
+      },
+      "ollama": {
+        "enabled": true
+      },
+      "codex": {
+        "enabled": true
+      },
+      "openai": {
+        "enabled": true
+      }
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "spike",
+      "match": {
+        "channel": "telegram",
+        "accountId": "default"
+      }
+    }
+  ],
+  "skills": {
+    "entries": {
+      "1password": {
+        "enabled": false
+      },
+      "apple-notes": {
+        "enabled": false
+      },
+      "apple-reminders": {
+        "enabled": false
+      },
+      "bear-notes": {
+        "enabled": false
+      },
+      "blogwatcher": {
+        "enabled": false
+      },
+      "blucli": {
+        "enabled": false
+      },
+      "camsnap": {
+        "enabled": false
+      },
+      "coding-agent": {
+        "enabled": false
+      },
+      "discord": {
+        "enabled": false
+      },
+      "eightctl": {
+        "enabled": false
+      },
+      "gemini": {
+        "enabled": false
+      },
+      "gifgrep": {
+        "enabled": false
+      },
+      "gog": {
+        "enabled": false
+      },
+      "goplaces": {
+        "enabled": false
+      },
+      "himalaya": {
+        "enabled": false
+      },
+      "imsg": {
+        "enabled": false
+      },
+      "mcporter": {
+        "enabled": false
+      },
+      "model-usage": {
+        "enabled": false
+      },
+      "nano-pdf": {
+        "enabled": false
+      },
+      "obsidian": {
+        "enabled": false
+      },
+      "openai-whisper": {
+        "enabled": false
+      },
+      "openai-whisper-api": {
+        "enabled": false
+      },
+      "openhue": {
+        "enabled": false
+      },
+      "oracle": {
+        "enabled": false
+      },
+      "ordercli": {
+        "enabled": false
+      },
+      "peekaboo": {
+        "enabled": false
+      },
+      "sag": {
+        "enabled": false
+      },
+      "session-logs": {
+        "enabled": false
+      },
+      "sherpa-onnx-tts": {
+        "enabled": false
+      },
+      "slack": {
+        "enabled": false
+      },
+      "songsee": {
+        "enabled": false
+      },
+      "sonoscli": {
+        "enabled": false
+      },
+      "spotify-player": {
+        "enabled": false
+      },
+      "summarize": {
+        "enabled": false
+      },
+      "things-mac": {
+        "enabled": false
+      },
+      "trello": {
+        "enabled": false
+      },
+      "video-frames": {
+        "enabled": false
+      },
+      "voice-call": {
+        "enabled": false
+      },
+      "wacli": {
+        "enabled": false
+      },
+      "xurl": {
+        "enabled": false
+      },
+      "clawhub": {
+        "enabled": false
+      }
+    },
+    "install": {
+      "nodeManager": "npm"
+    }
+  }
+}
