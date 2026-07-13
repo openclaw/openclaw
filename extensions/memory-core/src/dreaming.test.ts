@@ -2386,7 +2386,7 @@ describe("short-term dreaming trigger", () => {
     const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreamsText).toContain("<!-- openclaw:dreaming:diary:start -->");
     expect(dreamsText).toContain(
-      "A memory trace surfaced, but details were unavailable in this run.",
+      "(Fallback entry: this run could not generate a diary narrative.) A memory trace surfaced, but details were unavailable.",
     );
     expect(dreamsText).not.toContain("Move backups to S3 Glacier.");
     expect(logger.info).toHaveBeenCalledWith(

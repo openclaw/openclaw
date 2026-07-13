@@ -147,8 +147,11 @@ function formatFallbackWriteFailure(err: unknown): string {
   return "unknown error";
 }
 
+// Cause-neutral marker: this fallback covers no-text completions, failed
+// runs, and request-scoped runtime unavailability alike — the specific cause
+// belongs in the gateway log line, never in DREAMS.md.
 const REQUEST_SCOPED_FALLBACK_NARRATIVE =
-  "A memory trace surfaced, but details were unavailable in this run.";
+  "(Fallback entry: this run could not generate a diary narrative.) A memory trace surfaced, but details were unavailable.";
 
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
@@ -369,34 +372,126 @@ function waitForNarrativeMessagesToSettle(delayMs: number): Promise<void> {
   });
 }
 
+// Carries the last-read messages alongside the extracted narrative so the
+// caller can diagnose an empty result (#90781) without re-fetching the session.
+type SettledNarrative = { narrative: string | null; messages: unknown[] };
+
 async function readNarrativeText(params: {
   subagent: SubagentSurface;
   sessionKey: string;
-}): Promise<string | null> {
+}): Promise<SettledNarrative> {
   const { messages } = await params.subagent.getSessionMessages({
     sessionKey: params.sessionKey,
     limit: NARRATIVE_MESSAGE_FETCH_LIMIT,
   });
-  return extractNarrativeText(messages);
+  return { narrative: extractNarrativeText(messages), messages };
 }
 
 async function readSettledNarrativeText(params: {
   subagent: SubagentSurface;
   sessionKey: string;
-}): Promise<string | null> {
-  const immediateNarrative = await readNarrativeText(params);
-  if (immediateNarrative) {
-    return immediateNarrative;
+}): Promise<SettledNarrative> {
+  let last = await readNarrativeText(params);
+  if (last.narrative) {
+    return last;
   }
 
   for (const delayMs of NARRATIVE_MESSAGE_SETTLE_DELAYS_MS) {
     await waitForNarrativeMessagesToSettle(delayMs);
-    const narrative = await readNarrativeText(params);
-    if (narrative) {
-      return narrative;
+    last = await readNarrativeText(params);
+    if (last.narrative) {
+      return last;
     }
   }
-  return null;
+  // Return the most recently read messages so the empty-result diagnostic
+  // reflects what the model actually produced after settling.
+  return last;
+}
+
+// Returns a short diagnostic string that explains *why* extractNarrativeText
+// returned null for a given message array. Used to enrich the "produced no
+// text" warning (#90781) so operators can tell whether the model returned an
+// empty completion, a tool-only assistant turn, refused content, etc., instead
+// of seeing a bare "produced no text" log.
+export function summarizeNarrativeMessages(messages: unknown[]): string {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return "messages=0";
+  }
+  let assistantCount = 0;
+  let assistantWithText = 0;
+  let assistantWhitespaceOnly = 0;
+  let assistantToolOnly = 0;
+  let assistantNonTextParts = 0;
+  let lastAssistantContentType = "none";
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
+      continue;
+    }
+    const record = msg as Record<string, unknown>;
+    if (record.role !== "assistant") {
+      continue;
+    }
+    assistantCount += 1;
+    const content = record.content;
+    if (typeof content === "string") {
+      lastAssistantContentType = "string";
+      if (content.trim().length > 0) {
+        assistantWithText += 1;
+      } else {
+        assistantWhitespaceOnly += 1;
+      }
+      continue;
+    }
+    if (Array.isArray(content)) {
+      lastAssistantContentType = "array";
+      const partTypes = new Set<string>();
+      let hasText = false;
+      for (const part of content) {
+        if (!part || typeof part !== "object" || Array.isArray(part)) {
+          continue;
+        }
+        const rawType = (part as Record<string, unknown>).type;
+        const type = typeof rawType === "string" ? rawType : "unknown";
+        partTypes.add(type);
+        if (type === "text" || type === "output_text") {
+          const text = (part as Record<string, unknown>).text;
+          if (typeof text === "string" && text.trim().length > 0) {
+            hasText = true;
+          }
+        }
+      }
+      if (hasText) {
+        assistantWithText += 1;
+      } else if (
+        // Covers the canonical OpenClaw normalized shape (toolCall) plus the
+        // provider-native camel/snake variants that can reach session files.
+        partTypes.has("toolCall") ||
+        partTypes.has("toolUse") ||
+        partTypes.has("tool_use") ||
+        partTypes.has("tool_call") ||
+        partTypes.has("functionCall") ||
+        partTypes.has("function_call")
+      ) {
+        assistantToolOnly += 1;
+      } else if (partTypes.size > 0) {
+        assistantNonTextParts += 1;
+      } else {
+        assistantWhitespaceOnly += 1;
+      }
+      continue;
+    }
+    lastAssistantContentType = content == null ? "null" : typeof content;
+    assistantNonTextParts += 1;
+  }
+  return [
+    `messages=${messages.length}`,
+    `assistant=${assistantCount}`,
+    `withText=${assistantWithText}`,
+    `whitespaceOnly=${assistantWhitespaceOnly}`,
+    `toolOnly=${assistantToolOnly}`,
+    `nonTextParts=${assistantNonTextParts}`,
+    `lastAssistantContent=${lastAssistantContentType}`,
+  ].join(" ");
 }
 
 // ── Date formatting ────────────────────────────────────────────────────
@@ -929,13 +1024,17 @@ export async function generateAndAppendDreamNarrative(params: {
         return;
       }
 
-      const narrative = await readSettledNarrativeText({
+      const { narrative, messages } = await readSettledNarrativeText({
         subagent: params.subagent,
         sessionKey: successfulSessionKey,
       });
       if (!narrative) {
+        // #90781: enrich the diagnostic so operators can tell why the run
+        // produced no text (empty completion, tool-only assistant turn,
+        // refusal, etc.) instead of just seeing "produced no text".
+        const diagnostic = summarizeNarrativeMessages(messages);
         params.logger.warn(
-          `memory-core: narrative generation produced no text for ${params.data.phase} phase; writing fallback diary entry.`,
+          `memory-core: narrative generation produced no text for ${params.data.phase} phase; writing fallback diary entry [${diagnostic}].`,
         );
         await appendFallbackNarrativeEntry({
           workspaceDir: params.workspaceDir,
@@ -943,7 +1042,7 @@ export async function generateAndAppendDreamNarrative(params: {
           nowMs,
           timezone: params.timezone,
           logger: params.logger,
-          reason: "the narrative run produced no text",
+          reason: `the narrative run produced no text [${diagnostic}]`,
         });
         return;
       }

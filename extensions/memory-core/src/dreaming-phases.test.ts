@@ -487,7 +487,9 @@ describe("memory-core dreaming phases", () => {
     ).resolves.toBeUndefined();
 
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(dreams).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expect(dreams).toContain(
+      "(Fallback entry: this run could not generate a diary narrative.) A memory trace surfaced, but details were unavailable.",
+    );
     expect(dreams).not.toContain("Move backups to S3 Glacier.");
     expect(logger.error).not.toHaveBeenCalled();
     expectIncludesSubstring(mockStringMessages(logger.info), "request-scoped");
