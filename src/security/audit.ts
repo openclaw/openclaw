@@ -38,7 +38,6 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
-import { readRegularFile } from "../infra/regular-file.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
@@ -49,6 +48,7 @@ import {
   inspectPathPermissions,
 } from "./audit-fs.js";
 import { collectGatewayConfigFindings as collectGatewayConfigFindingsBase } from "./audit-gateway-config.js";
+import { readBoundedMcporterRegistry } from "./audit-mcporter-registry.js";
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -1069,15 +1069,9 @@ function listConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
 async function readGlobalMcporterRegistrySummary(
   stateDir: string,
 ): Promise<McpServerSourceSummary | null> {
-  const registryPath = path.join(stateDir, "skills", "config", "mcporter.json");
-  const MAX_MCPORTER_REGISTRY_BYTES = 16 * 1024 * 1024;
   let parsed: unknown;
   try {
-    const { buffer } = await readRegularFile({
-      filePath: registryPath,
-      maxBytes: MAX_MCPORTER_REGISTRY_BYTES,
-    });
-    parsed = JSON.parse(buffer.toString("utf-8")) as unknown;
+    parsed = (await readBoundedMcporterRegistry(stateDir)) as unknown;
   } catch {
     return null;
   }
