@@ -466,10 +466,10 @@ export async function startGatewayBonjourAdvertiser(
               `bonjour: ${label} name conflict resolved; newName=${JSON.stringify(name)}`,
             );
           });
-          svc.on("hostname-change", (resolvedHostname) => {
+          svc.on("hostname-change", (nextHostname) => {
             markConflictObserved(label, svc);
             logger.warn(
-              `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(resolvedHostname)}`,
+              `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
             );
           });
         } catch (err) {

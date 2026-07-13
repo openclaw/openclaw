@@ -328,11 +328,10 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
-      return Object.assign(
-        {},
-        draft.card,
-        apiKeySupported === undefined ? {} : { apiKeySupported },
-      );
+      if (apiKeySupported !== undefined) {
+        draft.card.apiKeySupported = apiKeySupported;
+      }
+      return draft.card;
     })
     .toSorted((a, b) => a.displayName.localeCompare(b.displayName));
 }
