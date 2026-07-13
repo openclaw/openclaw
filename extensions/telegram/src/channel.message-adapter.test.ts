@@ -100,6 +100,7 @@ describe("telegram channel message adapter", () => {
         forceDocument: false,
         quoteText: undefined,
         buttons: undefined,
+        standardMessage: false,
       });
       expect(result.receipt.platformMessageIds).toEqual(["tg-payload"]);
     };
@@ -159,6 +160,7 @@ describe("telegram channel message adapter", () => {
           quoteText: undefined,
           mediaUrl: "https://example.com/a.png",
           buttons: undefined,
+          standardMessage: false,
         },
       ]);
       expect(batchCalls[1]).toEqual([
@@ -177,6 +179,7 @@ describe("telegram channel message adapter", () => {
           forceDocument: false,
           quoteText: undefined,
           mediaUrl: "https://example.com/b.png",
+          standardMessage: false,
         },
       ]);
     };

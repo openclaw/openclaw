@@ -3361,6 +3361,7 @@ export const registerTelegramHandlers = ({
     return {
       ...post,
       from: post.from ?? syntheticFrom,
+      sender_chat: post.sender_chat ?? post.chat,
       chat: {
         ...post.chat,
         type: "supergroup" as const,
