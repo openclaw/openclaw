@@ -1395,23 +1395,29 @@ async function* parseWebSocket(
     });
   };
 
+  // Terminal callbacks must wait behind any decode still in flight on messageChain;
+  // an eager close/error otherwise overtakes a delayed Blob carrying response.completed.
   const onError: WebSocketListener = (event) => {
-    failed = extractWebSocketError(event);
-    done = true;
-    wake();
+    messageChain = messageChain.then(() => {
+      failed = extractWebSocketError(event);
+      done = true;
+      wake();
+    });
   };
 
   const onClose: WebSocketListener = (event) => {
-    if (sawCompletion) {
+    messageChain = messageChain.then(() => {
+      if (sawCompletion) {
+        done = true;
+        wake();
+        return;
+      }
+      if (!failed) {
+        failed = extractWebSocketCloseError(event);
+      }
       done = true;
       wake();
-      return;
-    }
-    if (!failed) {
-      failed = extractWebSocketCloseError(event);
-    }
-    done = true;
-    wake();
+    });
   };
 
   const onAbort = () => {

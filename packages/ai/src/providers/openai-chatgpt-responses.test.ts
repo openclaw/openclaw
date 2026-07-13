@@ -384,6 +384,73 @@ describe("streamOpenAICodexResponses transport", () => {
     });
   });
 
+  it("does not let an eager close overtake a completion queued behind a delayed blob", async () => {
+    class EagerCloseWebSocket extends EventTarget {
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(): void {
+        const added = JSON.stringify({
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_eager_close", phase: "final_answer" },
+        });
+        const completed = JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "resp_eager_close",
+            status: "completed",
+            output: [],
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        });
+
+        queueMicrotask(() => {
+          this.dispatchEvent(
+            Object.assign(new Event("message"), {
+              data: {
+                arrayBuffer: () =>
+                  new Promise<ArrayBuffer>((resolve) => {
+                    setTimeout(() => {
+                      const bytes = new TextEncoder().encode(added);
+                      resolve(
+                        bytes.buffer.slice(
+                          bytes.byteOffset,
+                          bytes.byteOffset + bytes.byteLength,
+                        ) as ArrayBuffer,
+                      );
+                    }, 30);
+                  }),
+              },
+            }),
+          );
+        });
+        queueMicrotask(() => {
+          this.dispatchEvent(Object.assign(new Event("message"), { data: completed }));
+        });
+        // Fires while the blob above is still decoding, before its 30ms timer resolves.
+        queueMicrotask(() => {
+          this.dispatchEvent(new Event("close"));
+        });
+      }
+
+      close(): void {}
+    }
+
+    vi.stubGlobal("WebSocket", EagerCloseWebSocket);
+    vi.stubGlobal("fetch", vi.fn());
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+      }),
+      transport: "websocket",
+    }).result();
+
+    expect(result.stopReason).toBe("stop");
+  });
+
   it("rotates cached websockets before the backend connection age limit", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-07-03T00:00:00Z");
