@@ -958,16 +958,57 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 .sidebar-attention__item {
   display: flex;
   align-items: center;
-  gap: 8px;
   width: 100%;
-  padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-hover);
   color: var(--text);
   font-size: 12px;
+}
+
+/* Navigate + dismiss are sibling buttons inside the pill (buttons can't nest);
+   the open button carries the click padding so the whole pill stays a target. */
+.sidebar-attention__open {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 6px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.sidebar-attention__dismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px 6px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.sidebar-attention__dismiss:hover {
+  color: var(--text);
+  opacity: 1;
+}
+
+.sidebar-attention__dismiss svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-attention__item--warning {
