@@ -215,6 +215,7 @@ export async function ensureConfigReady(params: {
   suppressDoctorStdout?: boolean;
   allowInvalid?: boolean;
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
@@ -240,6 +241,9 @@ export async function ensureConfigReady(params: {
           : {}),
         ...(params.skipPristineStartupStateMigrations
           ? { skipPristineStartupStateMigrations: true }
+          : {}),
+        ...(params.skipPristineCoreStateMigrations
+          ? { skipPristineCoreStateMigrations: true }
           : {}),
       });
     try {

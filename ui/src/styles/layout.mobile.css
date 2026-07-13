@@ -214,15 +214,6 @@
     display: none;
   }
 
-  .nav-section {
-    display: grid;
-    margin-bottom: 16px;
-  }
-
-  .sidebar-nav .nav-section__label {
-    display: flex;
-  }
-
   .nav-item {
     margin: 0;
     min-height: 40px;

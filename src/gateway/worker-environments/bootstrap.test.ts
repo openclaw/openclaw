@@ -199,7 +199,7 @@ describe("bootstrapWorker", () => {
     const runner = fakeRunner([
       result({
         code: 45,
-        stderr: "OPENCLAW_WORKER_NODE_UNSUPPORTED: v22.18.0\n",
+        stderr: "OPENCLAW_WORKER_NODE_UNSUPPORTED: v24.14.1\n",
       }),
     ]);
 
@@ -208,9 +208,10 @@ describe("bootstrapWorker", () => {
         { ssh: SSH, artifact: BUNDLE },
         { resolveIdentity, runCommand: runner.runCommand },
       ),
-    ).rejects.toThrow("Node 22.19+, 23.11+, or 24+");
+    ).rejects.toThrow("Node 22.22.3+, 24.15.0+, or 25.9.0+ with WAL-reset-safe SQLite");
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0]?.options.input).toContain("process.versions.node");
+    expect(runner.calls[0]?.options.input).toContain("SELECT sqlite_version() AS version");
   });
 
   it("installs only the exact npm package without transferring a tarball", async () => {

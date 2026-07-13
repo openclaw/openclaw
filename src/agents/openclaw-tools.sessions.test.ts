@@ -301,6 +301,8 @@ describe("sessions tools", () => {
     };
 
     expect(schemaProp("sessions_history", "limit").type).toBe("integer");
+    expect(schemaProp("sessions_history", "messageId").type).toBe("string");
+    expect(schemaProp("sessions_history", "sessionId").type).toBe("string");
     expect(schemaProp("sessions_search", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("integer");

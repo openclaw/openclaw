@@ -8,7 +8,8 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDateMs, formatDateTimeMs } from "../../lib/format.ts";
+import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
+import "../../styles/workboard.css";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -193,17 +194,7 @@ function formatAge(value: number | undefined): string {
     return "";
   }
   const elapsedMs = Math.max(0, Date.now() - value);
-  const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 1) {
-    return t("activity.duration.seconds", { count: String(Math.floor(elapsedMs / 1000)) });
-  }
-  if (minutes < 60) {
-    return t("activity.duration.minutes", {
-      minutes: String(minutes),
-      seconds: "0",
-    });
-  }
-  return t("workboard.ageHours", { count: String(Math.floor(minutes / 60)) });
+  return formatDurationCompact(elapsedMs, { spaced: true }) ?? "0ms";
 }
 
 function truncateBadgeText(value: string, maxLength = 64): string {

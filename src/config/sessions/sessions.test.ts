@@ -18,6 +18,7 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
+import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import { loadSessionEntry } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
@@ -32,6 +33,16 @@ import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
 type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
+
+it("merges bounded restart tombstones without evicting fresh-only ids", () => {
+  const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);
+
+  expect(mergeRestartRecoveryTerminalRunIds(existing, [...existing.slice(1), "run-new"])).toEqual([
+    ...existing.slice(1),
+    "run-new",
+  ]);
+  expect(mergeRestartRecoveryTerminalRunIds(existing, ["run-0"])).toEqual(existing);
+});
 
 function requireWriteTextAtomicCall(
   spy: { mock: { calls: WriteTextAtomicCall[] } },
@@ -457,6 +468,8 @@ describe("session store writer queue", () => {
           to: [],
         },
         restartRecoveryDeliveryRunId: 123,
+        restartRecoveryDeliverySourceRunId: 123,
+        restartRecoveryTerminalRunIds: [123, "", {}],
       },
       "agent:main:good-pending": {
         sessionId: "s-good-pending",
@@ -481,6 +494,8 @@ describe("session store writer queue", () => {
           threadId: "reply-1",
         },
         restartRecoveryDeliveryRunId: "run-1",
+        restartRecoveryDeliverySourceRunId: "source-run-1",
+        restartRecoveryTerminalRunIds: [" terminal-1 ", "terminal-2", "terminal-1", null],
       },
     } as unknown as Record<string, SessionEntry>);
 
@@ -502,6 +517,8 @@ describe("session store writer queue", () => {
     expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryContext).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(bad?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(bad?.restartRecoveryTerminalRunIds).toBeUndefined();
 
     expect(good).toMatchObject({
       pendingFinalDelivery: true,
@@ -524,6 +541,8 @@ describe("session store writer queue", () => {
         threadId: "reply-1",
       },
       restartRecoveryDeliveryRunId: "run-1",
+      restartRecoveryDeliverySourceRunId: "source-run-1",
+      restartRecoveryTerminalRunIds: ["terminal-2", "terminal-1"],
     });
   });
 

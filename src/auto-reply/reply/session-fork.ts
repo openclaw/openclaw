@@ -24,7 +24,7 @@ function assertParentSessionForkAllowed(parentEntry: SessionEntry): void {
   }
 }
 
-export type ParentForkDecision = SessionParentForkDecision;
+type ParentForkDecision = SessionParentForkDecision;
 
 type ParentForkDecisionParams = {
   parentEntry: SessionEntry;
@@ -45,7 +45,7 @@ type ForkSessionFromParentParams = {
   targetStorePath?: string;
 };
 
-export type ForkedParentSessionEntry = ParentForkedSessionTranscript;
+type ForkedParentSessionEntry = ParentForkedSessionTranscript;
 
 export type ForkSessionEntryFromParentResult =
   | {
