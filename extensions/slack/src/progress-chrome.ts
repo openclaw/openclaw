@@ -23,9 +23,9 @@ const PROGRESS_CHROME_REACTION_BY_UNICODE_EMOJI = new Map<string, string>([
 ]);
 
 /** Private channelData kind for automatic tool-progress chrome (not a public SDK export). */
-export const SLACK_TOOL_PROGRESS_KIND = "tool-progress";
+const SLACK_TOOL_PROGRESS_KIND = "tool-progress";
 
-export function hasSlackPlatformError(err: unknown, code: string): boolean {
+function hasSlackPlatformError(err: unknown, code: string): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
@@ -33,7 +33,7 @@ export function hasSlackPlatformError(err: unknown, code: string): boolean {
   return data?.error === code;
 }
 
-export function detectSlackProgressChromeReaction(
+function detectSlackProgressChromeReaction(
   text: string,
   opts: { progressChrome?: boolean } = {},
 ): string | undefined {
@@ -101,7 +101,7 @@ export function detectSlackProgressChromeReaction(
   return undefined;
 }
 
-export function isSlackToolProgressChannelData(channelData: unknown): boolean {
+function isSlackToolProgressChannelData(channelData: unknown): boolean {
   if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
     return false;
   }
@@ -111,7 +111,7 @@ export function isSlackToolProgressChannelData(channelData: unknown): boolean {
   );
 }
 
-export function isSlackProgressChromePayload(payload: { channelData?: unknown }): boolean {
+function isSlackProgressChromePayload(payload: { channelData?: unknown }): boolean {
   const channelData = payload.channelData;
   const slackData =
     channelData && typeof channelData === "object" && !Array.isArray(channelData)
@@ -132,7 +132,7 @@ export function isSlackProgressChromePayload(payload: { channelData?: unknown })
   );
 }
 
-export function resolveSlackProgressChromeReaction(payload: {
+function resolveSlackProgressChromeReaction(payload: {
   channelData?: unknown;
 }): string | undefined {
   const channelData = payload.channelData;
@@ -143,7 +143,7 @@ export function resolveSlackProgressChromeReaction(payload: {
   return openclawProgressKind === "fast-mode-auto" ? "dash" : undefined;
 }
 
-export type SlackProgressChromeSendOpts = {
+type SlackProgressChromeSendOpts = {
   progressChrome?: true;
   progressChromeReaction?: string;
 };
@@ -162,7 +162,7 @@ export function buildSlackProgressChromeSendOpts(payload: {
   };
 }
 
-export type SlackProgressChromeSuppressInput = {
+type SlackProgressChromeSuppressInput = {
   client: {
     reactions: {
       add: (args: { channel: string; timestamp: string; name: string }) => Promise<unknown>;
@@ -176,7 +176,7 @@ export type SlackProgressChromeSuppressInput = {
   logVerbose: (message: string) => void;
 };
 
-export type SlackProgressChromeSuppressDecision =
+type SlackProgressChromeSuppressDecision =
   | { suppress: false }
   | {
       suppress: true;
@@ -224,7 +224,7 @@ export async function maybeSuppressSlackProgressChrome(
   return { suppress: true, reactionAttempted: Boolean(progressReaction && input.threadTs) };
 }
 
-export type SlackSuppressedSendResult = {
+type SlackSuppressedSendResult = {
   messageId: "suppressed";
   channelId: string;
   suppressed: true;
@@ -235,10 +235,10 @@ export function isSuppressedSlackSendResult(result: { suppressed?: true } | unde
   return result?.suppressed === true;
 }
 
-export function buildSlackSuppressedSendShell(params: {
-  channelId: string;
-  threadTs?: string;
-}): Omit<SlackSuppressedSendResult, never> & {
+function buildSlackSuppressedSendShell(params: { channelId: string; threadTs?: string }): Omit<
+  SlackSuppressedSendResult,
+  never
+> & {
   channelId: string;
   messageId: "suppressed";
   suppressed: true;
