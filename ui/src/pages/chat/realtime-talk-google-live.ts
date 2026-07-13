@@ -63,7 +63,7 @@ function isGemini31LiveModel(model: string | undefined): boolean {
   return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
 }
 
-export function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult): string {
+function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult): string {
   let url: URL;
   try {
     url = new URL(session.websocketUrl);

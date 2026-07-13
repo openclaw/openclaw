@@ -346,7 +346,7 @@ describe("Windows command execution", () => {
     });
   });
 
-  it("still rejects a Windows shim launch error without an exit state", async () => {
+  it("sanitizes a Windows shim launch error without an exit state", async () => {
     const command = createMockSubprocess({ autoFinish: false });
     execaMock.mockReturnValueOnce(command);
 
@@ -361,7 +361,32 @@ describe("Windows command execution", () => {
         failed: true,
       });
 
-      await expect(resultPromise).rejects.toThrow("Failed to launch command: pnpm");
+      await expect(resultPromise).rejects.toMatchObject({
+        code: "ENOENT",
+        message: "Command failed during launch or output capture (ENOENT)",
+      });
+    });
+  });
+
+  it("does not time out after the direct child exits while output settles", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    execaMock.mockReturnValueOnce(command);
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["node", "quick.js"], { timeoutMs: 80 });
+      command.exitCode = 0;
+      command.emit("exit", 0, null);
+
+      await vi.advanceTimersByTimeAsync(81);
+      expect(execaMock).toHaveBeenCalledTimes(1);
+      expect(command.stdout.destroyed).toBe(false);
+      await vi.advanceTimersByTimeAsync(19);
+      expect(command.stdout.destroyed).toBe(true);
+      expect(command.stderr.destroyed).toBe(true);
+
+      command.finish();
+      await expect(resultPromise).resolves.toMatchObject({ code: 0, termination: "exit" });
     });
   });
 
@@ -388,6 +413,85 @@ describe("Windows command execution", () => {
       expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
       command.finish({ signal: "SIGKILL" });
 
+      await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
+    });
+  });
+
+  it("keeps forced Windows tree escalation after graceful taskkill returns nonzero", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    execaMock
+      .mockImplementationOnce(() => command)
+      .mockImplementationOnce(() => createMockSubprocess({ exitCode: 1 }))
+      .mockImplementation(() => createMockSubprocess());
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+        killProcessTree: true,
+        timeoutMs: 80,
+      });
+      await vi.advanceTimersByTimeAsync(81);
+      expect(requireExecaCall(1)[1]).toEqual(["/PID", "1234", "/T"]);
+
+      await vi.advanceTimersByTimeAsync(300);
+      expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      command.finish({ signal: "SIGKILL" });
+
+      await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
+    });
+  });
+
+  it("waits for forced taskkill before aborting the live Windows root", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    const forcedTaskkill = createMockSubprocess({ autoFinish: false });
+    execaMock
+      .mockImplementationOnce(() => command)
+      .mockImplementationOnce(() => createMockSubprocess())
+      .mockImplementationOnce(() => forcedTaskkill);
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+        killProcessTree: true,
+        timeoutMs: 80,
+      });
+      const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
+
+      await vi.advanceTimersByTimeAsync(381);
+      expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      expect(cancelSignal.aborted).toBe(false);
+
+      forcedTaskkill.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cancelSignal.aborted).toBe(true);
+
+      command.finish({ signal: "SIGKILL" });
+      await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
+    });
+  });
+
+  it("waits for immediate forced taskkill before aborting the Windows root", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    const forcedTaskkill = createMockSubprocess({ autoFinish: false });
+    execaMock.mockImplementationOnce(() => command).mockImplementationOnce(() => forcedTaskkill);
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+        killProcessTree: false,
+        timeoutMs: 80,
+      });
+      const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
+
+      await vi.advanceTimersByTimeAsync(81);
+      expect(requireExecaCall(1)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      expect(cancelSignal.aborted).toBe(false);
+
+      forcedTaskkill.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cancelSignal.aborted).toBe(true);
+
+      command.finish({ signal: "SIGKILL" });
       await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
     });
   });

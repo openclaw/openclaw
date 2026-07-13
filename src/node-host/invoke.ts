@@ -1,9 +1,7 @@
 /** Node-host command dispatcher for system commands, approvals, env policy, and plugin commands. */
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -43,11 +41,9 @@ import {
   NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
-import {
-  decodeWindowsOutputBuffer,
-  resolveWindowsConsoleEncoding,
-} from "../infra/windows-encoding.js";
+import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { logWarn } from "../logger.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
 import {
@@ -82,9 +78,6 @@ const MCP_PAYLOAD_TRUNCATION_MARKER = "[truncated: MCP result exceeded 20 MB]";
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 
 const OUTPUT_EVENT_TAIL = 20_000;
-
-const STREAM_ERROR_KILL_GRACE_MS = 1_000;
-
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 const execHostEnforced =
@@ -349,137 +342,39 @@ async function runCommand(
   env: Record<string, string> | undefined,
   timeoutMs: number | undefined,
 ): Promise<RunResult> {
-  return await new Promise((resolve) => {
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let outputLen = 0;
-    let truncated = false;
-    let timedOut = false;
-    let settled = false;
-    const windowsEncoding = resolveWindowsConsoleEncoding();
-
-    // A cwd that exists but is not a directory makes `spawn` throw ENOTDIR
-    // synchronously instead of emitting `error`. Keep that failure inside the
-    // node result because runner.ts intentionally dispatches invokes with `void`.
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(expectDefined(argv[0], "argv entry at 0"), argv.slice(1), {
-        cwd,
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      });
-    } catch (err) {
-      resolve({
-        exitCode: undefined,
-        timedOut: false,
-        success: false,
-        stdout: "",
-        stderr: "",
-        error: clarifyNodeExecCwdSpawnError(err as NodeJS.ErrnoException, cwd),
-        truncated: false,
-      });
-      return;
-    }
-
-    const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {
-      if (outputLen >= OUTPUT_CAP) {
-        truncated = true;
-        return;
-      }
-      const remaining = OUTPUT_CAP - outputLen;
-      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-      outputLen += slice.length;
-      if (target === "stdout") {
-        stdoutChunks.push(slice);
-      } else {
-        stderrChunks.push(slice);
-      }
-      if (chunk.length > remaining) {
-        truncated = true;
-      }
-    };
-
-    child.stdout?.on("data", (chunk) => onChunk(chunk as Buffer, "stdout"));
-    child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
-
-    let timer: NodeJS.Timeout | undefined;
-    let streamError: Error | undefined;
-    let streamKillTimer: NodeJS.Timeout | undefined;
-    if (timeoutMs && timeoutMs > 0) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore
-        }
-      }, timeoutMs);
-    }
-
-    const finalize = (exitCode?: number, error?: string | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (streamKillTimer) {
-        clearTimeout(streamKillTimer);
-      }
-      const stdout = decodeCapturedOutputBuffer({
-        buffer: Buffer.concat(stdoutChunks),
-        windowsEncoding,
-      });
-      const stderr = decodeCapturedOutputBuffer({
-        buffer: Buffer.concat(stderrChunks),
-        windowsEncoding,
-      });
-      resolve({
-        exitCode,
-        timedOut,
-        success: exitCode === 0 && !timedOut && !error,
-        stdout,
-        stderr,
-        error: error ?? null,
-        truncated,
-      });
-    };
-
-    const onStreamError = (err: Error) => {
-      if (settled || streamError) {
-        return;
-      }
-      streamError = err;
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // ignore
-      }
-      // A reported system.run completion must not outlive its command. Escalate
-      // a pipe-failure shutdown, then let the child exit settle the result.
-      streamKillTimer = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore
-        }
-      }, STREAM_ERROR_KILL_GRACE_MS);
-      streamKillTimer.unref?.();
-    };
-
-    child.stdout?.on("error", onStreamError);
-    child.stderr?.on("error", onStreamError);
-    child.on("error", (err) => {
-      if (!streamError) {
-        finalize(undefined, clarifyNodeExecCwdSpawnError(err, cwd));
-      }
+  try {
+    const result = await runCommandWithTimeout(argv, {
+      baseEnv: env,
+      cwd,
+      killProcessTree: true,
+      maxCombinedOutputBytes: OUTPUT_CAP,
+      maxOutputBytes: OUTPUT_CAP,
+      outputCapture: "head",
+      input: Buffer.alloc(0),
+      timeoutMs: timeoutMs && timeoutMs > 0 ? timeoutMs : undefined,
     });
-    child.on("exit", (code) => {
-      finalize(code === null ? undefined : code, streamError?.message ?? null);
-    });
-  });
+    const timedOut = result.termination === "timeout";
+    const exitCode = result.code ?? undefined;
+    return {
+      exitCode,
+      timedOut,
+      success: exitCode === 0 && !timedOut,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      error: null,
+      truncated: Boolean(result.stdoutTruncatedBytes || result.stderrTruncatedBytes),
+    };
+  } catch (err) {
+    return {
+      exitCode: undefined,
+      timedOut: false,
+      success: false,
+      stdout: "",
+      stderr: "",
+      error: clarifyNodeExecCwdSpawnError(err as NodeJS.ErrnoException, cwd),
+      truncated: false,
+    };
+  }
 }
 
 function resolveEnvPath(env?: Record<string, string>): string[] {
@@ -1204,7 +1099,6 @@ async function sendNodeEvent(client: NodeHostClient, event: string, payload: unk
 export const testing = {
   MCP_TEXT_CONTENT_MAX_BYTES,
   MCP_INVOKE_PAYLOAD_MAX_BYTES,
-  STREAM_ERROR_KILL_GRACE_MS,
   clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;

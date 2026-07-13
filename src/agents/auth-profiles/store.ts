@@ -33,6 +33,7 @@ import {
   mergeOAuthFileIntoStore,
 } from "./persisted.js";
 import {
+  clearRuntimeAuthProfileStoreSnapshot as clearRuntimeAuthProfileStoreSnapshotImpl,
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
   getRuntimeAuthProfileStoreSnapshot as getRuntimeAuthProfileStoreSnapshotImpl,
   getRuntimeAuthProfileStoreSnapshotRevision,
@@ -1176,6 +1177,11 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
 /** Clear all runtime auth-profile snapshots. */
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
   clearRuntimeAuthProfileStoreSnapshotsImpl();
+}
+
+/** Clear one runtime auth-profile snapshot. */
+export function clearRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
+  return clearRuntimeAuthProfileStoreSnapshotImpl(agentDir);
 }
 
 function saveAuthProfileStoreInTransaction(

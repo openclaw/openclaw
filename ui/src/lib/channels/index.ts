@@ -19,7 +19,7 @@ type ChannelGateway = {
   subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
 };
 
-export type ChannelsState = {
+type ChannelsState = {
   client: ChannelGatewayClient | null;
   connected: boolean;
   channelsLoading: boolean;
@@ -79,7 +79,7 @@ function isCurrentChannelRefresh(
   return state.client === client && state.channelsRefreshSeq === refreshSeq;
 }
 
-export async function loadChannels(
+async function loadChannels(
   state: ChannelsState,
   probe: boolean,
   options: LoadChannelsOptions = {},
@@ -216,7 +216,7 @@ async function startWhatsAppLogin(state: ChannelsState, force: boolean): Promise
   return true;
 }
 
-export async function waitWhatsAppLogin(state: ChannelsState): Promise<boolean> {
+async function waitWhatsAppLogin(state: ChannelsState): Promise<boolean> {
   const operation = beginWhatsAppOperation(state);
   if (!operation) {
     return false;
@@ -255,7 +255,7 @@ export async function waitWhatsAppLogin(state: ChannelsState): Promise<boolean> 
   return true;
 }
 
-export async function logoutWhatsApp(state: ChannelsState): Promise<boolean> {
+async function logoutWhatsApp(state: ChannelsState): Promise<boolean> {
   const operation = beginWhatsAppOperation(state);
   if (!operation) {
     return false;

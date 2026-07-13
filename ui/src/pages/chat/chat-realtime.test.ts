@@ -6,7 +6,8 @@ import {
   createInitialChatRealtimeState,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
-import { RealtimeTalkSession, type RealtimeTalkCallbacks } from "./realtime-talk.ts";
+import type { RealtimeTalkCallbacks } from "./realtime-talk-shared.ts";
+import { RealtimeTalkSession } from "./realtime-talk.ts";
 
 type InspectableRealtimeTalkSession = {
   callbacks: RealtimeTalkCallbacks;
@@ -106,6 +107,37 @@ describe("chat realtime actions", () => {
 
     callbacks.onStatus?.("error", "capture failed");
     expect(state.realtimeTalkInputLevel.value).toBe(0);
+  });
+
+  it("keeps a late final rewrite in its original user bubble", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const { callbacks } = inspectSession(state);
+
+    callbacks.onTranscript?.({ role: "user", text: "Can you tack", final: false });
+    callbacks.onTranscript?.({ role: "assistant", text: "Checking", final: false });
+    callbacks.onTranscript?.({ role: "user", text: "Can you check?", final: true });
+
+    expect(state.realtimeTalkConversation).toMatchObject([
+      { role: "user", text: "Can you check?", isStreaming: false },
+      { role: "assistant", text: "Checking", isStreaming: true },
+    ]);
+  });
+
+  it("starts a new user bubble after assistant output for a distinct final turn", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const { callbacks } = inspectSession(state);
+
+    callbacks.onTranscript?.({ role: "user", text: "First request", final: false });
+    callbacks.onTranscript?.({ role: "assistant", text: "Checking", final: false });
+    callbacks.onTranscript?.({ role: "user", text: "Second request", final: true });
+
+    expect(state.realtimeTalkConversation).toMatchObject([
+      { role: "user", text: "First request", isStreaming: false },
+      { role: "assistant", text: "Checking", isStreaming: false },
+      { role: "user", text: "Second request", isStreaming: false },
+    ]);
   });
 
   it("ignores a stopped session that rejects after its replacement starts", async () => {

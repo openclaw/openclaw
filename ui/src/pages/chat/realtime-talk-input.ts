@@ -87,7 +87,7 @@ export async function discoverRealtimeTalkInputs(
   }
 }
 
-export function realtimeTalkAudioConstraints(
+function realtimeTalkAudioConstraints(
   inputDeviceId: string | undefined,
   base: MediaTrackConstraints | true = true,
 ): MediaTrackConstraints | true {

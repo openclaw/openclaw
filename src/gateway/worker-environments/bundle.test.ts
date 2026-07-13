@@ -130,6 +130,108 @@ describe("worker bundle producer", () => {
     });
   });
 
+  it("vendors workspace packages that the shipped dist imports", async () => {
+    await withTempDir({ prefix: "openclaw-worker-bundle-vendor-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      await writeFixture(packageRoot, [
+        ["dist/entry.js", 'import { fake } from "@openclaw/fake-pkg";\nexport { fake };\n'],
+      ]);
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        `${JSON.stringify({
+          name: "openclaw",
+          version: "1.2.3",
+          type: "module",
+          files: ["dist/"],
+          dependencies: {
+            json5: "2.2.3",
+            "@openclaw/fake-pkg": "workspace:*",
+            "@openclaw/gateway-protocol": "workspace:*",
+          },
+        })}\n`,
+        "utf8",
+      );
+      const vendorSource = path.join(packageRoot, "node_modules/@openclaw/fake-pkg");
+      await fs.mkdir(path.join(vendorSource, "dist"), { recursive: true });
+      await fs.writeFile(
+        path.join(vendorSource, "package.json"),
+        `${JSON.stringify({
+          name: "@openclaw/fake-pkg",
+          version: "1.2.3",
+          type: "module",
+          main: "./dist/index.js",
+          dependencies: { "partial-json": "0.1.7" },
+          scripts: { build: "tsdown" },
+          devDependencies: { vitest: "4.0.0" },
+        })}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(vendorSource, "dist/index.js"),
+        "export const fake = true;\n",
+        "utf8",
+      );
+
+      const bundle = await createWorkerBundleProducer({
+        packageRoot,
+        cacheDir: path.join(root, "cache"),
+        openclawVersion: "1.2.3",
+      }).prepare();
+
+      await expect(listTarball(bundle.tarballPath)).resolves.toEqual([
+        "dist/entry.js",
+        "openclaw.mjs",
+        "package.json",
+        "vendor/openclaw-fake-pkg/dist/index.js",
+        "vendor/openclaw-fake-pkg/package.json",
+      ]);
+      const extractRoot = path.join(root, "extract");
+      await fs.mkdir(extractRoot, { recursive: true });
+      await tar.extract({ file: bundle.tarballPath, cwd: extractRoot });
+      const staged = JSON.parse(
+        await fs.readFile(path.join(extractRoot, "package.json"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(staged.dependencies).toEqual({
+        json5: "2.2.3",
+        "@openclaw/fake-pkg": "file:./vendor/openclaw-fake-pkg",
+      });
+      const vendored = JSON.parse(
+        await fs.readFile(path.join(extractRoot, "vendor/openclaw-fake-pkg/package.json"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(vendored.dependencies).toEqual({ "partial-json": "0.1.7" });
+      expect(vendored).not.toHaveProperty("scripts");
+      expect(vendored).not.toHaveProperty("devDependencies");
+    });
+  });
+
+  it("fails closed when a dist-referenced workspace package is not installed", async () => {
+    await withTempDir({ prefix: "openclaw-worker-bundle-vendor-missing-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      await writeFixture(packageRoot, [
+        ["dist/entry.js", 'import "@openclaw/fake-pkg";\nexport {};\n'],
+      ]);
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        `${JSON.stringify({
+          name: "openclaw",
+          version: "1.2.3",
+          type: "module",
+          files: ["dist/"],
+          dependencies: { "@openclaw/fake-pkg": "workspace:*" },
+        })}\n`,
+        "utf8",
+      );
+
+      await expect(
+        createWorkerBundleProducer({
+          packageRoot,
+          cacheDir: path.join(root, "cache"),
+          openclawVersion: "1.2.3",
+        }).prepare(),
+      ).rejects.toThrow("cannot resolve workspace dependency @openclaw/fake-pkg");
+    });
+  });
+
   it("changes the hash when file contents change", async () => {
     await withTempDir({ prefix: "openclaw-worker-bundle-change-" }, async (root) => {
       const packageRoot = path.join(root, "package");

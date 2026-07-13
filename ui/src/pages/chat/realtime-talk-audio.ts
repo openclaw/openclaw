@@ -48,7 +48,7 @@ export function measureRealtimeTalkAudioFrame(samples: Float32Array): RealtimeTa
   };
 }
 
-export class RealtimeTalkAudioLevelMeter {
+class RealtimeTalkAudioLevelMeter {
   private level = 0;
   private noiseFloor = 0.01;
 
