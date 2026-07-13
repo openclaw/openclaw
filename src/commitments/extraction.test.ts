@@ -190,10 +190,12 @@ describe("commitment extraction", () => {
           }),
         ],
       },
+      nowMs,
     });
 
     const validCandidate = expectSingleValidCandidate(valid);
     expect(validCandidate.candidate.dedupeKey).toBe("invalid-latest");
+    expect(validCandidate.earliestMs).toBe(Date.parse("2026-04-30T17:00:00.000Z"));
     expect(validCandidate.latestMs).toBe(validCandidate.earliestMs + 12 * 60 * 60 * 1000);
   });
 
@@ -211,6 +213,7 @@ describe("commitment extraction", () => {
           }),
         ],
       },
+      nowMs,
     });
 
     const validCandidate = expectSingleValidCandidate(valid);
