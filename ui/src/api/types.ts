@@ -449,7 +449,7 @@ type SessionCompactionCheckpointReason =
   | "overflow-retry"
   | "timeout-retry";
 
-export type SessionCompactionTranscriptReference = {
+type SessionCompactionTranscriptReference = {
   sessionId: string;
   sessionFile?: string;
   leafId?: string;
@@ -591,12 +591,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
 };
 
 export type {
-  CostUsageDailyEntry,
   CostUsageSummary,
-  SessionsUsageEntry,
   SessionsUsageResult,
-  SessionsUsageTotals,
-  SessionUsageTimePoint,
   SessionUsageTimeSeries,
 } from "../pages/usage/data-types.ts";
 
@@ -645,7 +641,7 @@ export type CronPayload =
       bestEffortDeliver?: boolean;
     };
 
-export type CronDelivery = {
+type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;

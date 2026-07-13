@@ -18,8 +18,13 @@ private func sendReachableWatchMessage(_ payload: [String: Any], with session: W
     try await withCheckedThrowingContinuation(isolation: nil) { (continuation: CheckedContinuation<Void, Error>) in
         session.sendMessage(
             payload,
-            replyHandler: { _ in
-                continuation.resume(returning: ())
+            replyHandler: { reply in
+                do {
+                    try requireAcceptedWatchMessageReply(reply)
+                    continuation.resume(returning: ())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             },
             errorHandler: { error in
                 continuation.resume(throwing: error)
@@ -45,7 +50,6 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         super.init()
         if let session = self.session {
             session.delegate = self
-            self.beginActivation(session)
         }
     }
 
@@ -106,6 +110,11 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
 
     func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?) {
         self.updateCallbacks { $0.appCommandHandler = handler }
+    }
+
+    func activate() {
+        guard let session = self.session else { return }
+        self.beginActivation(session)
     }
 
     func sendPayload(_ payload: [String: Any]) async throws -> WatchNotificationSendResult {

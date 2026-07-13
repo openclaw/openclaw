@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -18,6 +19,56 @@ func maskMarkdown(text string, nextPlaceholder func() string, placeholders *[]st
 	masked = maskMatches(masked, angleLinkRe, nextPlaceholder, placeholders, mapping)
 	masked = maskLinkURLs(masked, nextPlaceholder, placeholders, mapping)
 	return masked
+}
+
+func maskMarkdownFencedLiterals(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
+	angleValues, protocolValues, directiveValues := extractMarkdownFencedLiteralValues(text)
+	unique := map[string]struct{}{}
+	for _, value := range append(append(angleValues, protocolValues...), directiveValues...) {
+		if value != "" {
+			unique[value] = struct{}{}
+		}
+	}
+	if len(unique) == 0 {
+		return text
+	}
+
+	values := make([]string, 0, len(unique))
+	for value := range unique {
+		values = append(values, value)
+	}
+	sort.Slice(values, func(i, j int) bool {
+		return len(values[i]) > len(values[j])
+	})
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, regexp.QuoteMeta(value))
+	}
+	literalRE := regexp.MustCompile(strings.Join(quoted, "|"))
+
+	state := markdownLiteralFenceState{}
+	lines := strings.SplitAfter(text, "\n")
+	for index, line := range lines {
+		if state.delimiter == "" {
+			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
+				state = opening
+			}
+			continue
+		}
+		if !continuesMarkdownLiteralFenceContainer(line, state) {
+			state = markdownLiteralFenceState{}
+			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
+				state = opening
+			}
+			continue
+		}
+		if isMarkdownLiteralFenceClosing(line, state) {
+			state = markdownLiteralFenceState{}
+			continue
+		}
+		lines[index] = maskMatches(line, literalRE, nextPlaceholder, placeholders, mapping)
+	}
+	return strings.Join(lines, "")
 }
 
 func maskMatches(text string, re *regexp.Regexp, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
@@ -81,9 +132,23 @@ func unmaskMarkdown(text string, placeholders []string, mapping map[string]strin
 
 func validatePlaceholders(text string, placeholders []string) error {
 	for _, placeholder := range placeholders {
-		if !strings.Contains(text, placeholder) {
+		count := strings.Count(text, placeholder)
+		if count == 0 {
 			return fmt.Errorf("placeholder missing: %s", placeholder)
+		}
+		if count != 1 {
+			return fmt.Errorf("placeholder duplicated: %s count=%d", placeholder, count)
 		}
 	}
 	return nil
+}
+
+func placeholdersInText(text string, placeholders []string) []string {
+	found := make([]string, 0, len(placeholders))
+	for _, placeholder := range placeholders {
+		if strings.Contains(text, placeholder) {
+			found = append(found, placeholder)
+		}
+	}
+	return found
 }

@@ -61,7 +61,7 @@ export function requestExtensionProtocolToken(req: IncomingMessage): string {
 }
 
 /** Extract relay auth from a CDP header, extension subprotocol, or legacy query. */
-export function requestToken(req: IncomingMessage): string {
+function requestToken(req: IncomingMessage): string {
   const auth = firstHeader(req.headers.authorization);
   if (auth.startsWith("Bearer ")) {
     return auth.slice("Bearer ".length).trim();
