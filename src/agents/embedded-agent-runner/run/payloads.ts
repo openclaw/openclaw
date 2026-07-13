@@ -42,7 +42,10 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
-import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../../embedded-agent-messaging.types.js";
 import type { ToolResultFormat } from "../../embedded-agent-subscribe.shared-types.js";
 import {
   extractAssistantThinking,
@@ -51,6 +54,7 @@ import {
 } from "../../embedded-agent-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../delivery-evidence.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
 type ToolErrorWarningPolicy = {
@@ -581,6 +585,7 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  messagingToolSentTargets?: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   agentId?: string;
@@ -653,12 +658,21 @@ export function buildEmbeddedRunPayloads(params: {
   const deliveredSourceReplyViaMessageTool =
     params.sourceReplyDeliveryMode === "message_tool_only" &&
     params.didDeliverSourceReplyViaMessageTool === true;
+  const explicitFinalSourceReply = resolveExplicitFinalSourceReplyDeliveryEvidence({
+    messagingToolSentTargets: params.messagingToolSentTargets,
+    messagingToolSourceReplyPayloads: sourceReplyPayloads,
+  });
+  const completedSourceReplyViaMessageTool =
+    explicitFinalSourceReply ?? (hasSourceReplyPayload || deliveredSourceReplyViaMessageTool);
 
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
     params.didSendDeterministicApprovalPrompt === true ||
     (params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload) ||
     deliveredSourceReplyViaMessageTool;
+  const suppressFailureArtifacts =
+    params.didSendDeterministicApprovalPrompt === true ||
+    (params.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyViaMessageTool);
   const nonEmptyAssistantTexts = params.assistantTexts
     .map((text) => sanitizeAssistantVisibleStreamText(text))
     .filter((text) => text.trim().length > 0);
@@ -675,7 +689,7 @@ export function buildEmbeddedRunPayloads(params: {
     : undefined;
   const errorText =
     assistantForPayload && lastAssistantNeedsErrorSurface
-      ? suppressAssistantArtifacts
+      ? suppressFailureArtifacts
         ? undefined
         : lastAssistantErrored || rawErrorMessage
           ? formatUserFacingAssistantErrorText(assistantForPayload, {
@@ -843,7 +857,7 @@ export function buildEmbeddedRunPayloads(params: {
                 : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
 
-  let hasUserFacingAssistantReply = hasSourceReplyPayload || deliveredSourceReplyViaMessageTool;
+  let hasUserFacingAssistantReply = completedSourceReplyViaMessageTool;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {
@@ -931,6 +945,13 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.isError !== undefined) {
         payload.isError = item.isError;
+      }
+      if (
+        item.isError === true &&
+        params.sourceReplyDeliveryMode === "message_tool_only" &&
+        explicitFinalSourceReply === false
+      ) {
+        markReplyPayloadForSourceSuppressionDelivery(payload);
       }
       if (item.nonTerminalToolErrorWarning) {
         setReplyPayloadMetadata(payload, {
