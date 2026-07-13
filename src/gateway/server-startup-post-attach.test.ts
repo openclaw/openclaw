@@ -255,8 +255,7 @@ vi.mock("./server-tailscale.js", () => ({
 
 const { startGatewayPostAttachRuntime, startGatewaySidecars, testing } =
   await import("./server-startup-post-attach.js");
-const { scheduleContextCachePrewarm, testing: contextCachePrewarmTesting } =
-  await import("./server-startup-context-cache-prewarm.js");
+const { scheduleContextCachePrewarm } = await import("./server-startup-context-cache-prewarm.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
 const { createGatewayCloseHandler } = await import("./server-close.js");
 const { createChatRunState } = await import("./server-chat-state.js");
@@ -1232,7 +1231,6 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("defers context-window cache prewarm to a post-ready sidecar", async () => {
     vi.useFakeTimers();
-    expect(contextCachePrewarmTesting.contextCachePrewarmStartDelayMs).toBe(5_000);
     const cfg = { agents: { defaults: { model: "openai/gpt-5.5" } } } as never;
     const sidecar = scheduleContextCachePrewarm({
       cfgAtStart: cfg,
@@ -1240,7 +1238,9 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     await vi.dynamicImportSettled();
     await vi.waitFor(() => {
       expect(hoisted.ensureContextWindowCacheLoaded).toHaveBeenCalledWith(cfg);

@@ -7,7 +7,7 @@ type StartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 };
 
-export type ContextCachePrewarmHandle = {
+type ContextCachePrewarmHandle = {
   stop: () => void | Promise<void>;
 };
 
@@ -52,7 +52,3 @@ export function scheduleContextCachePrewarm(params: {
     },
   };
 }
-
-export const testing = {
-  contextCachePrewarmStartDelayMs: CONTEXT_CACHE_PREWARM_START_DELAY_MS,
-};
