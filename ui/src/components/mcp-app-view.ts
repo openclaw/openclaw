@@ -170,7 +170,7 @@ export class McpAppView extends LitElement {
 
   protected readonly i18nController = new I18nController(this);
   private readonly mount = createRef<HTMLDivElement>();
-  private bridge: OpenClawAppBridge | null = null;
+  private bridge: AppBridge | null = null;
   private iframe: HTMLIFrameElement | null = null;
   private transport: { close(): Promise<void> } | null = null;
   private setupKey = "";

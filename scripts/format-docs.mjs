@@ -12,9 +12,7 @@ import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-
 const ROOT = path.resolve(import.meta.dirname, "..");
 const CHECK = process.argv.includes("--check");
 const DOCS_FORMAT_MAX_BUFFER_BYTES = 1024 * 1024 * 16;
-const DOCS_FORMAT_MAX_POSIX_COMMAND_LINE_BYTES = 24 * 1024;
-const DOCS_FORMAT_MAX_WINDOWS_COMMAND_LINE_BYTES = 6 * 1024;
-export const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = DOCS_FORMAT_MAX_POSIX_COMMAND_LINE_BYTES;
+const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
 const FAILURE_OUTPUT_TAIL_BYTES = 16 * 1024;
 
 function outputText(value) {
@@ -71,8 +69,7 @@ function commandFailureMessage(label, result, invocation) {
 
 export function docsFiles(root = ROOT, deps = {}) {
   const spawnSyncImpl = deps.spawnSync ?? spawnSync;
-  const gitArgs = ["ls-files", "-s", "--", "docs/**/*.md", "docs/**/*.mdx", "README.md"];
-  const result = spawnSyncImpl("git", gitArgs, {
+  const result = spawnSyncImpl("git", ["ls-files", "docs/**/*.md", "docs/**/*.mdx", "README.md"], {
     cwd: root,
     encoding: "utf8",
     maxBuffer: DOCS_FORMAT_MAX_BUFFER_BYTES,
@@ -81,19 +78,12 @@ export function docsFiles(root = ROOT, deps = {}) {
     throw new Error(
       commandFailureMessage("git ls-files", result, {
         command: "git",
-        args: gitArgs,
+        args: ["ls-files", "docs/**/*.md", "docs/**/*.mdx", "README.md"],
       }),
     );
   }
   return outputText(result.stdout)
     .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const match = /^(?<mode>\d{6})\s+\S+\s+\d+\t(?<relativePath>.+)$/u.exec(line);
-      return match?.groups?.relativePath && match.groups.mode !== "120000"
-        ? match.groups.relativePath
-        : "";
-    })
     .filter(Boolean)
     .filter((relativePath) => (deps.existsSync ?? fs.existsSync)(path.join(root, relativePath)));
 }
@@ -127,12 +117,6 @@ export function chunkFilesForCommand(
   }
 
   return chunks;
-}
-
-export function docsFormatMaxCommandLineBytesForPlatform(platform = process.platform) {
-  return platform === "win32"
-    ? DOCS_FORMAT_MAX_WINDOWS_COMMAND_LINE_BYTES
-    : DOCS_FORMAT_MAX_POSIX_COMMAND_LINE_BYTES;
 }
 
 export function resolveOxfmtInvocation(args, params = {}) {
@@ -171,17 +155,18 @@ export function runOxfmt(files, params = {}, deps = {}) {
     return;
   }
   const repoRoot = params.repoRoot ?? ROOT;
-  const platform = params.platform ?? process.platform;
   const spawnSyncImpl = deps.spawnSync ?? spawnSync;
   const prefixArgs = ["--write", "--threads=1", "--config", path.join(repoRoot, ".oxfmtrc.jsonc")];
-  const maxCommandLineBytes =
-    params.maxCommandLineBytes ?? docsFormatMaxCommandLineBytesForPlatform(platform);
-  for (const chunk of chunkFilesForCommand(files, prefixArgs, maxCommandLineBytes)) {
+  for (const chunk of chunkFilesForCommand(
+    files,
+    prefixArgs,
+    params.maxCommandLineBytes ?? DOCS_FORMAT_MAX_COMMAND_LINE_BYTES,
+  )) {
     const invocation = resolveOxfmtInvocation([...prefixArgs, ...chunk], {
       comSpec: params.comSpec,
       existsSync: deps.existsSync,
       nodeExecPath: params.nodeExecPath,
-      platform,
+      platform: params.platform,
       repoRoot,
     });
     const result = spawnSyncImpl(invocation.command, invocation.args, {

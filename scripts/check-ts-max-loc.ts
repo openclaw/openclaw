@@ -5,7 +5,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_BASELINE_PATH = "scripts/ts-max-loc-baseline.json";
+const DEFAULT_BASELINE_PATH = "scripts/ts-max-loc-baseline-v2.json";
+const CONTROL_UI_LOCALE_BUNDLE_PATTERN = /^ui\/src\/i18n\/locales\/[^/]+\.ts$/u;
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
@@ -80,6 +81,8 @@ function gitLsFilesAll(): string[] {
 export function isProductionTypeScriptFile(filePath: string): boolean {
   return (
     /\.(?:ts|tsx|mts|cts)$/u.test(filePath) &&
+    // Locale bundles grow with every translation key and are governed by the i18n generator.
+    !CONTROL_UI_LOCALE_BUNDLE_PATTERN.test(filePath) &&
     !/(^|\/)(test|tests|__tests__|test-helpers?|test-support)(\/|$)|\.(test|spec|suite)\.[cm]?tsx?$|(?:^|[/.-])test-(?:helpers?|support|harness)(?:[/.-]|$)/u.test(
       filePath,
     )

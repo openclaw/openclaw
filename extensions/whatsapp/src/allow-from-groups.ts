@@ -11,9 +11,9 @@ export const WHATSAPP_ALLOW_FROM_GROUPS = [
 
 export const DEFAULT_WHATSAPP_ALLOW_FROM_GROUP = "restricted" satisfies WhatsAppAllowFromGroup;
 
-export type WhatsAppAllowFromGroup = (typeof WHATSAPP_ALLOW_FROM_GROUPS)[number];
+type WhatsAppAllowFromGroup = (typeof WHATSAPP_ALLOW_FROM_GROUPS)[number];
 
-export type WhatsAppGroupedAllowFromEntry = {
+type WhatsAppGroupedAllowFromEntry = {
   number: string;
   group: WhatsAppAllowFromGroup;
 };

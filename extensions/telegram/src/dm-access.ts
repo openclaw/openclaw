@@ -83,7 +83,7 @@ function resolveTelegramPreAuthContent(msg: Message): string {
   return renderTelegramTextEntities(textParts.text, textParts.entities).trim();
 }
 
-export function emitTelegramMessagePreAuthHooks(params: {
+function emitTelegramMessagePreAuthHooks(params: {
   accountId: string;
   chatId: number;
   sender: TelegramSenderIdentity;

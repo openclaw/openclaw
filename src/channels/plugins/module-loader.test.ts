@@ -39,8 +39,10 @@ function requireCreateJitiCall(
 }
 
 function normalizeModuleLoaderTarget(target: string): string {
-  const targetPath = target.startsWith("file:") ? fileURLToPath(target) : target;
-  return fs.realpathSync.native(targetPath);
+  if (target.startsWith("file:")) {
+    return fileURLToPath(target);
+  }
+  return target;
 }
 
 describe("channel plugin module loader helpers", () => {
@@ -107,7 +109,6 @@ describe("channel plugin module loader helpers", () => {
     const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
     fs.writeFileSync(modulePath, 'throw new Error("native source load failed");\n', "utf8");
-    const expectedJitiTarget = fs.realpathSync.native(modulePath);
 
     try {
       expect(
@@ -117,7 +118,7 @@ describe("channel plugin module loader helpers", () => {
         }),
       ).toEqual({
         loadedBy: "jiti",
-        target: expectedJitiTarget,
+        target: fs.realpathSync.native(modulePath),
       });
       expect(createJiti).toHaveBeenCalledOnce();
       const [loaderFilename, loaderOptions] = requireCreateJitiCall(createJiti);

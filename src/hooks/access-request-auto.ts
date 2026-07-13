@@ -21,7 +21,7 @@ function channelHasAllowlistDmPolicy(channelConfig: unknown): boolean {
   return Object.values(accounts).some(hasAllowlistDmPolicy);
 }
 
-export function hasAnyAllowlistDmPolicy(config: OpenClawConfig | undefined): boolean {
+function hasAnyAllowlistDmPolicy(config: OpenClawConfig | undefined): boolean {
   const channels = config?.channels;
   if (!isPlainObject(channels)) {
     return false;

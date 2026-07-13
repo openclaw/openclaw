@@ -67,15 +67,17 @@ export function mergeInstallInvocationEnv(params: {
       }
       continue;
     }
-    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
-      continue;
-    }
     if (
       upper === "HOME" ||
       upper === "PATH" ||
       upper === "TMPDIR" ||
       upper.startsWith("OPENCLAW_")
     ) {
+      continue;
+    }
+    // Existing service env may contain host-specific secrets or loader overrides; keep only
+    // portable, non-dangerous values and let the current shell override them.
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
       continue;
     }
     const value = rawValue.trim();

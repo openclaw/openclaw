@@ -290,23 +290,15 @@ export function getMatchingMessagingToolReplyTargets(params: {
   if (sentTargets.length === 0) {
     return [];
   }
-  let originThreadId: string | undefined;
-  let didResolveOriginThreadId = false;
-  const getOriginThreadId = () => {
-    if (!didResolveOriginThreadId) {
-      originThreadId = resolveOriginThreadIdForPayload({
-        provider,
-        config: params.config,
-        accountId: originAccount,
-        originatingThreadId: params.originatingThreadId,
-        replyToId: params.replyToId,
-        replyToIsExplicit: params.replyToIsExplicit,
-        replyDelivery: params.replyDelivery,
-      });
-      didResolveOriginThreadId = true;
-    }
-    return originThreadId;
-  };
+  const originThreadId = resolveOriginThreadIdForPayload({
+    provider,
+    config: params.config,
+    accountId: originAccount,
+    originatingThreadId: params.originatingThreadId,
+    replyToId: params.replyToId,
+    replyToIsExplicit: params.replyToIsExplicit,
+    replyDelivery: params.replyDelivery,
+  });
   return sentTargets.filter((target) => {
     const targetProvider = resolveTargetProviderForComparison({
       currentProvider: provider,
@@ -321,12 +313,11 @@ export function getMatchingMessagingToolReplyTargets(params: {
     }
     const targetRaw = normalizeOptionalString(target.to);
     const routeAccount = originAccount ?? targetAccount;
-    const resolvedOriginThreadId = getOriginThreadId();
     const originRoute = normalizeRouteTargetForDedupe({
       provider,
       rawTarget: originRawTarget,
       accountId: routeAccount,
-      threadId: resolvedOriginThreadId,
+      threadId: originThreadId,
     });
     if (!originRoute) {
       return false;
@@ -335,7 +326,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
       provider: targetProvider,
       rawTarget: targetRaw,
       accountId: routeAccount,
-      threadId: target.threadId ?? (target.threadImplicit ? resolvedOriginThreadId : undefined),
+      threadId: target.threadId ?? (target.threadImplicit ? originThreadId : undefined),
     });
     if (!targetRoute) {
       return false;

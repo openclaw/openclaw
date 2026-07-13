@@ -610,7 +610,6 @@ function createManagedRestartSequenceHarness(
     commitTerminalConfig: terminalPolicy.commitConfig,
     acceptTerminalConfig: terminalPolicy.acceptConfig,
     requestRecoveryRestart,
-    createHealthMonitor: () => null,
   });
   const writeConfig = (
     config: OpenClawConfig,

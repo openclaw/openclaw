@@ -133,7 +133,6 @@ export type {
   PluginHookInboundClaimResult,
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
-  PluginHookMessagePreAuthEvent,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
