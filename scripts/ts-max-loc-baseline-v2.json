@@ -1181,7 +1181,7 @@
   "ui/src/components/github-link-hovercard.ts": 582,
   "ui/src/components/icons.ts": 701,
   "ui/src/components/lobster-pet.ts": 1790,
-  "ui/src/components/markdown.ts": 1493,
+  "ui/src/components/markdown.ts": 1489,
   "ui/src/components/terminal/terminal-panel.ts": 1140,
   "ui/src/components/tooltip.ts": 502,
   "ui/src/lib/agents/display.ts": 661,

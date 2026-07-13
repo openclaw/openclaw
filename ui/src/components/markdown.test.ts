@@ -1050,6 +1050,17 @@ describe("toStreamingMarkdownHtml", () => {
     expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
+  it("keeps completed tilde-fence code out of the remend tail", () => {
+    // remend only understands ``` fences; a closed ~~~ block must land in the
+    // stable prefix so its raw markers are never "completed" as inline markdown.
+    const html = toStreamingMarkdownHtml('~~~ts\nconst s = "**open";\n~~~\ncontinuing **bold');
+    const fragment = htmlFragment(html);
+
+    expect(fragment.querySelector("code")?.textContent).toContain('const s = "**open";');
+    expect(fragment.querySelector("code strong")).toBeNull();
+    expect(fragment.querySelector("p strong")?.textContent).toBe("bold");
+  });
+
   it("streams an open blockquote code fence through blank lines", () => {
     const html = toStreamingMarkdownHtml("> ```ts\n> const x = 1;\n>\n> const y = 2;");
     const fragment = htmlFragment(html);

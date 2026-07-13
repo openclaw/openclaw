@@ -1450,6 +1450,9 @@ const streamingRemendOptions = { katex: false, linkMode: "text-only" } satisfies
 // tail is code, not prose: skip remend (it only understands top-level ```
 // fences) and let markdown-it auto-close the fence at end of input (CommonMark
 // allows unterminated fences), so code streams with live highlighting.
+// Invariant: the tail never contains a *closed* fence — the split boundary
+// advances past every fence close — so remend (which cannot see ~~~ fences)
+// never runs across completed fenced code.
 function toStreamingTailHtml(tail: string, renderOptions: MarkdownRenderEnv): string {
   return renderSanitizedMarkdown(remend(tail, streamingRemendOptions), renderOptions);
 }

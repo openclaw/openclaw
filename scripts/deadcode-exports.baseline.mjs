@@ -4573,7 +4573,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "ui/src/components/markdown.ts: encodeBlockArtCodeBlockCopyPayload",
   "ui/src/components/markdown.ts: highlightCode",
   "ui/src/components/markdown.ts: md",
-  "ui/src/components/markdown.ts: toStreamingPlainTextHtml",
   "ui/src/components/mcp-app-view.ts: buildMcpAppHostCapabilities",
   "ui/src/components/mcp-app-view.ts: McpAppView",
   "ui/src/components/mcp-app-view.ts: resolveMcpAppSandboxUrl",
