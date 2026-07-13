@@ -402,14 +402,6 @@ function stripOpenClawWrapperArgs(args) {
 const rawConfiguredArgs = process.argv.slice(2);
 const stderrLogPath = resolveStderrLogPath(rawConfiguredArgs);
 
-try {
-  if (stderrLogPath) {
-    writeFileSync(stderrLogPath, "", "utf8");
-  }
-} catch {
-  // Stderr capture is diagnostic-only; never break the ACP adapter.
-}
-
 const configuredArgs = stripOpenClawWrapperArgs(rawConfiguredArgs);
 
 function resolveNpmCliPath() {

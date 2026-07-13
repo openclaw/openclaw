@@ -763,6 +763,45 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await expectPathMissing(path.join(stateDir, "acpx", "codex-acp-wrapper.stderr.log"));
   });
 
+  it("does not create a per-lease stderr log when the adapter writes no stderr", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const quietScript = path.join(root, "quiet-adapter.mjs");
+    await fs.writeFile(quietScript, "process.exit(0);\n", "utf8");
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          codex: {
+            command: `${process.execPath} ${quietScript}`,
+          },
+        },
+      },
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => path.join(root, "codex-acp.js"),
+    });
+
+    await execFileAsync(process.execPath, [
+      generated.wrapperPath,
+      "--openclaw-run-configured",
+      process.execPath,
+      quietScript,
+      OPENCLAW_ACPX_LEASE_ID_ARG,
+      "quiet-lease",
+      OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+      "gateway-test",
+    ]);
+
+    await expectPathMissing(
+      path.join(stateDir, "acpx", "codex-acp-wrapper.stderr.quiet-lease.log"),
+    );
+  });
+
   it("keeps the persisted stderr line tail UTF-16 safe at the 256 KiB boundary", async () => {
     const { log } = await captureGeneratedCodexWrapperStderr(`
       const maxChars = 256 * 1024;
