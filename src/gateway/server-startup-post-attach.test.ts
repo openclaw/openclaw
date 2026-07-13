@@ -1220,6 +1220,10 @@ describe("startGatewayPostAttachRuntime", () => {
     );
   });
 
+  it("starts agent runtime plugin prewarm in the first post-ready turn", () => {
+    expect(testing.agentRuntimePluginPrewarmStartDelayMs).toBe(0);
+  });
+
   it("keeps provider auth prewarm alive when Gmail post-ready sidecars stop", async () => {
     vi.useFakeTimers();
     const onPostReadySidecars = vi.fn();
@@ -1686,12 +1690,16 @@ describe("startGatewayPostAttachRuntime", () => {
   it("emits a startup trace span when channel startup is skipped", async () => {
     const trace = createStartupTraceRecorder();
     const logChannels = { info: vi.fn(), error: vi.fn() };
+    const prewarmPrimaryModel = vi.fn(async () => {});
 
     await withEnvAsync(
       { OPENCLAW_SKIP_CHANNELS: "1", OPENCLAW_SKIP_PROVIDERS: undefined },
       async () => {
         await startGatewaySidecars({
-          cfg: { hooks: { internal: { enabled: false } } } as never,
+          cfg: {
+            hooks: { internal: { enabled: false } },
+            agents: { defaults: { model: "openai/gpt-5.6" } },
+          } as never,
           pluginRegistry: createPostAttachParams().pluginRegistry,
           defaultWorkspaceDir: "/tmp/openclaw-workspace",
           deps: {} as never,
@@ -1704,10 +1712,14 @@ describe("startGatewayPostAttachRuntime", () => {
           },
           logChannels,
           startupTrace: trace.startupTrace,
+          prewarmPrimaryModel,
         });
       },
     );
 
+    await vi.waitFor(() => {
+      expect(prewarmPrimaryModel).toHaveBeenCalledOnce();
+    });
     expect(trace.measures).toContain("sidecars.channels");
     expect(trace.measures).toContain("sidecars.channel-skip");
     expect(logChannels.info).toHaveBeenCalledWith(

@@ -394,6 +394,14 @@ export const fr: TranslationMap = {
     confirmForceDelete:
       "Échec de la création de l’instantané : {error}\n\nSupprimer sans instantané ?",
   },
+  agentChip: {
+    openConversation: "Ouvrir votre conversation avec {name}",
+    menuLabel: "Menu de l’agent",
+    agents: "Agents",
+    working: "Traitement en cours…",
+    ready: "Prêt à discuter",
+    whatCanAgentDo: "Que peut faire {name} ?",
+  },
   newSession: {
     title: "Nouvelle session",
     hint: "Choisissez où cette session s’exécute, puis indiquez quoi faire.",

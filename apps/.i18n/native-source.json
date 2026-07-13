@@ -26939,7 +26939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1231,
+      "line": 1199,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovalsStore.swift",
       "source": "missing:\\(hash)",
       "surface": "apple",
@@ -30667,7 +30667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 33,
+      "line": 44,
       "path": "apps/macos/Sources/OpenClaw/SessionMenuLabelView.swift",
       "source": "\\(self.row.tokens.contextSummaryShort) · \\(self.row.ageText)",
       "surface": "apple",
@@ -32707,7 +32707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 547,
+      "line": 548,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift",
       "source": "Image",
       "surface": "apple",
@@ -32811,7 +32811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 855,
+      "line": 866,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Running tools…",
       "surface": "apple",
@@ -33155,7 +33155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1178,
+      "line": 1179,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before switching chats.",
       "surface": "apple",
@@ -33163,7 +33163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1234,
+      "line": 1235,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "surface": "apple",
@@ -33595,7 +33595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 198,
+      "line": 191,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/ToolDisplay.swift",
       "source": "\\(preview)…",
       "surface": "apple",

@@ -388,6 +388,14 @@ export const ar: TranslationMap = {
     confirmDelete: "هل تريد أخذ لقطة وحذف {name}؟",
     confirmForceDelete: "فشل أخذ اللقطة: {error}\n\nهل تريد الحذف دون لقطة؟",
   },
+  agentChip: {
+    openConversation: "افتح محادثتك مع {name}",
+    menuLabel: "قائمة الوكيل",
+    agents: "الوكلاء",
+    working: "جارٍ العمل…",
+    ready: "جاهز للدردشة",
+    whatCanAgentDo: "ما الذي يمكن لـ {name} فعله؟",
+  },
   newSession: {
     title: "جلسة جديدة",
     hint: "اختر مكان عمل هذه الجلسة، ثم اذكر ما يجب فعله.",

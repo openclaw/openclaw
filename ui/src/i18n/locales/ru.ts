@@ -392,6 +392,14 @@ export const ru: TranslationMap = {
     confirmDelete: "Создать снимок и удалить {name}?",
     confirmForceDelete: "Не удалось создать снимок: {error}\n\nУдалить без снимка?",
   },
+  agentChip: {
+    openConversation: "Открыть беседу с {name}",
+    menuLabel: "Меню агента",
+    agents: "Агенты",
+    working: "Выполняется…",
+    ready: "Готово к чату",
+    whatCanAgentDo: "Что умеет {name}?",
+  },
   newSession: {
     title: "Новый сеанс",
     hint: "Выберите, где будет работать эта сессия, затем опишите, что нужно сделать.",

@@ -391,6 +391,14 @@ export const pl: TranslationMap = {
     confirmDelete: "Utworzyć migawkę i usunąć {name}?",
     confirmForceDelete: "Tworzenie migawki nie powiodło się: {error}\n\nUsunąć bez migawki?",
   },
+  agentChip: {
+    openConversation: "Otwórz swoją rozmowę z {name}",
+    menuLabel: "Menu agenta",
+    agents: "Agenci",
+    working: "Pracuje…",
+    ready: "Gotowy do rozmowy",
+    whatCanAgentDo: "Co potrafi {name}?",
+  },
   newSession: {
     title: "Nowa sesja",
     hint: "Wybierz, gdzie ma działać ta sesja, a następnie powiedz, co ma zrobić.",

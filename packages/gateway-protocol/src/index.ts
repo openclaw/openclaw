@@ -11,6 +11,7 @@ export {
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
+export * from "./schema/worker-inference.js";
 export type {
   SessionCatalog,
   SessionCatalogCapabilities,

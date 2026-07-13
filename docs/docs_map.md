@@ -1264,6 +1264,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw backup
   - H2: Notes
+  - H2: SQLite snapshots
+  - H3: Verify and restore
   - H2: What gets backed up
   - H2: Invalid config behavior
   - H2: Size and performance

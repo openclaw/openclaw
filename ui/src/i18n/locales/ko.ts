@@ -389,6 +389,14 @@ export const ko: TranslationMap = {
     confirmDelete: "{name}의 스냅샷을 만들고 삭제할까요?",
     confirmForceDelete: "스냅샷 실패: {error}\n\n스냅샷 없이 삭제할까요?",
   },
+  agentChip: {
+    openConversation: "{name}님과의 대화 열기",
+    menuLabel: "에이전트 메뉴",
+    agents: "에이전트",
+    working: "작업 중…",
+    ready: "채팅할 준비가 되었습니다",
+    whatCanAgentDo: "{name}님은 무엇을 할 수 있나요?",
+  },
   newSession: {
     title: "새 세션",
     hint: "이 세션이 작업할 위치를 선택한 다음, 수행할 작업을 입력하세요.",

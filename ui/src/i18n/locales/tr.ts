@@ -394,6 +394,14 @@ export const tr: TranslationMap = {
     confirmForceDelete:
       "Anlık görüntü başarısız oldu: {error}\n\nAnlık görüntü olmadan silinsin mi?",
   },
+  agentChip: {
+    openConversation: "{name} ile konuşmanızı açın",
+    menuLabel: "Ajan menüsü",
+    agents: "Ajanlar",
+    working: "Çalışıyor…",
+    ready: "Sohbete hazır",
+    whatCanAgentDo: "{name} neler yapabilir?",
+  },
   newSession: {
     title: "Yeni oturum",
     hint: "Bu oturumun nerede çalışacağını seçin, ardından ne yapılacağını söyleyin.",

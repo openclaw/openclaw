@@ -33,9 +33,14 @@ type DoctorStateSqliteCompactOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+type DoctorStateSqliteCompactDeps = {
+  busyTimeoutMs?: number;
+};
+
 /** Compact only the canonical shared state database resolved for this invocation. */
 export function runDoctorStateSqliteCompact(
   options: DoctorStateSqliteCompactOptions = {},
+  deps: DoctorStateSqliteCompactDeps = {},
 ): DoctorStateSqliteCompactReport {
   const env = options.env ?? process.env;
   const sqlitePath = resolveOpenClawStateSqlitePath(env);
@@ -59,6 +64,7 @@ export function runDoctorStateSqliteCompact(
 
   const compact = compactDoctorSqliteFile({
     afterMutation: () => ensureOpenClawStatePermissions(sqlitePath, env),
+    ...(deps.busyTimeoutMs !== undefined ? { busyTimeoutMs: deps.busyTimeoutMs } : {}),
     sqlitePath,
     validateBeforeMutation: (database) =>
       assertOpenClawStateDatabaseForMaintenance(database, { pathname: sqlitePath }),

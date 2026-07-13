@@ -386,6 +386,14 @@ export const th: TranslationMap = {
     confirmDelete: "สร้างสแนปช็อตและลบ {name}?",
     confirmForceDelete: "สร้างสแนปช็อตไม่สำเร็จ: {error}\n\nลบโดยไม่มีสแนปช็อตหรือไม่?",
   },
+  agentChip: {
+    openConversation: "เปิดการสนทนาของคุณกับ {name}",
+    menuLabel: "เมนูเอเจนต์",
+    agents: "เอเจนต์",
+    working: "กำลังทำงาน…",
+    ready: "พร้อมแชต",
+    whatCanAgentDo: "{name} ทำอะไรได้บ้าง?",
+  },
   newSession: {
     title: "เซสชันใหม่",
     hint: "เลือกตำแหน่งที่เซสชันนี้จะทำงาน จากนั้นบอกสิ่งที่ต้องทำ",

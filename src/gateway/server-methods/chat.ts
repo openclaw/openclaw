@@ -220,6 +220,7 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "../session-utils.js";
+import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -2666,6 +2667,23 @@ function abortAuthorizedQueuedTurnsForSession(params: {
   return { runIds, matched: matches.length, unauthorizedOnly: false };
 }
 
+function cancelWorkerInferenceForSession(params: {
+  context: GatewayRequestContext;
+  sessionId?: string;
+  runId?: string;
+}): string[] {
+  const sessionId = normalizeOptionalText(params.sessionId);
+  if (!sessionId) {
+    return [];
+  }
+  return (
+    asWorkerInferenceControl(params.context.workerEnvironmentService)?.cancelInferenceForSession({
+      sessionId,
+      ...(params.runId ? { runId: params.runId } : {}),
+    }) ?? []
+  );
+}
+
 async function abortChatRunsForSessionKeyWithPartials(params: {
   context: GatewayRequestContext;
   ops: ChatAbortOps;
@@ -2723,20 +2741,35 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
       keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
       preserveSideRuns: params.preserveSideRuns,
     });
+  const unauthorizedOnly =
+    matchedSessionRuns > 0 ||
+    matchedPendingAgentRuns > 0 ||
+    matchedPendingChatRuns > 0 ||
+    queuedAbort.unauthorizedOnly;
   if (
     authorizedRuns.length === 0 &&
     authorizedPendingAgentRuns.length === 0 &&
     authorizedPendingChatRuns.length === 0 &&
     queuedAbort.runIds.length === 0
   ) {
+    if (unauthorizedOnly) {
+      return { aborted: false, runIds: [], unauthorized: true };
+    }
+    const workerService = asWorkerInferenceControl(params.context.workerEnvironmentService);
+    if (!params.sessionId || !workerService?.hasInferenceForSession(params.sessionId)) {
+      return { aborted: false, runIds: [], unauthorized: false };
+    }
+    if (!params.requester.isAdmin) {
+      return { aborted: false, runIds: [], unauthorized: true };
+    }
+    const workerRunIds = cancelWorkerInferenceForSession({
+      context: params.context,
+      sessionId: params.sessionId,
+    });
     return {
-      aborted: false,
-      runIds: [],
-      unauthorized:
-        matchedSessionRuns > 0 ||
-        matchedPendingAgentRuns > 0 ||
-        matchedPendingChatRuns > 0 ||
-        queuedAbort.unauthorizedOnly,
+      aborted: workerRunIds.length > 0,
+      runIds: workerRunIds,
+      unauthorized: false,
     };
   }
   const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
@@ -2780,6 +2813,16 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
       attemptId: normalizeUnknownText(payload.attemptId),
     });
     runIds.push(runId);
+  }
+  if (params.requester.isAdmin) {
+    for (const runId of cancelWorkerInferenceForSession({
+      context: params.context,
+      sessionId: params.sessionId,
+    })) {
+      if (!runIds.includes(runId)) {
+        runIds.push(runId);
+      }
+    }
   }
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted && snapshots.length > 0) {
@@ -3763,16 +3806,25 @@ export const chatHandlers: GatewayRequestHandlers = {
     const ops = createChatAbortOps(context);
     const requester = resolveChatAbortRequester(client);
 
+    const sessionLoadOptions = abortAgentId ? { agentId: abortAgentId } : undefined;
+    const { entry: abortSessionEntry } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+    const cancelWorkerRun = (sessionId = abortSessionEntry?.sessionId): string[] =>
+      requester.isAdmin
+        ? cancelWorkerInferenceForSession({ context, sessionId, ...(runId ? { runId } : {}) })
+        : [];
+    const respondWithWorkerRuns = (localRunIds: string[], sessionId?: string): void => {
+      const runIds = [...new Set([...localRunIds, ...cancelWorkerRun(sessionId)])];
+      respond(true, { ok: true, aborted: runIds.length > 0, runIds });
+    };
+
     if (!runId) {
-      const sessionLoadOptions = abortAgentId ? { agentId: abortAgentId } : undefined;
-      const { entry } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
       const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
         sessionKey: canonicalAbortSessionKey,
         sessionKeyAliases: canonicalAbortSessionKey === rawSessionKey ? undefined : [rawSessionKey],
         agentId: abortAgentId,
-        sessionId: entry?.sessionId,
+        sessionId: abortSessionEntry?.sessionId,
         defaultAgentId,
         abortOrigin: "rpc",
         stopReason: "rpc",
@@ -3841,7 +3893,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           stopReason: "rpc",
           attemptId: normalizeUnknownText(pendingChatMatch.payload.attemptId),
         });
-        respond(true, { ok: true, aborted: true, runIds: [runId] });
+        respondWithWorkerRuns([runId]);
         return;
       }
       const pendingAgentEntry = context.dedupe.get(`agent:${runId}`);
@@ -3859,7 +3911,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           payload: pendingAgentPayload,
           stopReason: "rpc",
         });
-        respond(true, { ok: true, aborted: true, runIds: [runId] });
+        respondWithWorkerRuns([runId]);
         return;
       }
       // Queued followup/collect turns keep a cancel identity after chat.send
@@ -3902,14 +3954,25 @@ export const chatHandlers: GatewayRequestHandlers = {
           stopReason: "rpc",
           allowSessionMismatch: true,
         });
-        respond(true, {
-          ok: true,
-          aborted: queuedRes.aborted,
-          runIds: queuedRes.aborted ? [runId] : [],
-        });
+        respondWithWorkerRuns(queuedRes.aborted ? [runId] : []);
         return;
       }
-      respond(true, { ok: true, aborted: false, runIds: [] });
+      const workerSessionId = abortSessionEntry?.sessionId;
+      if (
+        !workerSessionId ||
+        !asWorkerInferenceControl(context.workerEnvironmentService)?.hasInferenceForSession(
+          workerSessionId,
+          runId,
+        )
+      ) {
+        respond(true, { ok: true, aborted: false, runIds: [] });
+        return;
+      }
+      if (!requester.isAdmin) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+        return;
+      }
+      respondWithWorkerRuns([]);
       return;
     }
     const abortSessionKeysForRun = new Set([rawSessionKey, canonicalAbortSessionKey]);
@@ -3962,11 +4025,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         ],
       });
     }
-    respond(true, {
-      ok: true,
-      aborted: res.aborted,
-      runIds: res.aborted ? [runId] : [],
-    });
+    respondWithWorkerRuns(res.aborted ? [runId] : [], active.sessionId);
   },
   "chat.send": async ({ params, respond, context, client }) => {
     const chatSendReceivedAtMs = performance.now();

@@ -427,6 +427,30 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("sends idle stop aliases as ordinary chat messages", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      await composer.fill("wait");
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(sendRequest.params).message).toBe("wait");
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("persists the chat send shortcut and keeps multiline and IME input safe", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
