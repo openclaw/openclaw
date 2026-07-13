@@ -10,7 +10,7 @@ import {
   reservedBundledPluginSdkEntrypoints,
   supportedBundledFacadeSdkEntrypoints,
 } from "../src/plugin-sdk/entrypoints.ts";
-import { PLUGIN_COMPAT_RECORDS } from "../src/plugins/compat/registry.ts";
+import { listPluginCompatRecords } from "../src/plugins/compat/registry.ts";
 import type { PluginCompatRecord } from "../src/plugins/compat/types.ts";
 
 const REPO_ROOT = process.cwd();
@@ -374,7 +374,8 @@ function collectCompatDebt(
   today = new Date(),
   options: { includeReferenceFiles?: boolean } = {},
 ): CompatDebtRecord[] {
-  return PLUGIN_COMPAT_RECORDS.filter((record) => record.status === "deprecated")
+  return listPluginCompatRecords()
+    .filter((record) => record.status === "deprecated")
     .map((record) => {
       const tokens = extractCompatTokens(record);
       const references =
