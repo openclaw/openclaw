@@ -561,6 +561,14 @@ function getStartupTraceStat(
   return startupTrace[key] ?? null;
 }
 
+function isStartupTraceDuration(name: string): boolean {
+  if (name.endsWith(".total") || name.startsWith("memory.")) {
+    return false;
+  }
+  const metricName = name.slice(name.lastIndexOf(".") + 1);
+  return !metricName.endsWith("Count") && !metricName.endsWith("Mb");
+}
+
 async function waitForProbe(params: {
   deadlineAt: number;
   isDone?: () => boolean;
@@ -945,7 +953,7 @@ function printResult(result: CaseResult): void {
     `  post-ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.externalMb"))}`,
   );
   const trace = Object.entries(result.summary.startupTrace)
-    .filter(([name]) => !name.endsWith(".total") && !name.startsWith("memory."))
+    .filter(([name]) => isStartupTraceDuration(name))
     .toSorted((a, b) => (b[1].avg ?? 0) - (a[1].avg ?? 0))
     .slice(0, 8);
   if (trace.length > 0) {
@@ -1009,6 +1017,7 @@ export const testing = {
   classifyGatewayReadyLog,
   collectResultFailures,
   collectStartupTrace,
+  isStartupTraceDuration,
   parseOptions,
   parseNonNegativeInt,
   parsePositiveInt,

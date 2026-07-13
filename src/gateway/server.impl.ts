@@ -3,7 +3,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 // and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { WORKER_PROTOCOL_FEATURES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import {
   getActiveEmbeddedRunCount,
@@ -65,15 +64,12 @@ import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/di
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
-import { cleanupRetainedManagedNpmInstallGenerations } from "../plugins/managed-npm-retention.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
-import { resolveWorkerProvider } from "../plugins/worker-provider-registry.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -158,10 +154,6 @@ import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-genera
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
-import { createWorkerLiveEventReceiver } from "./worker-environments/live-events.js";
-import { createWorkerEnvironmentService } from "./worker-environments/service.js";
-import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
-import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 type LoadGatewayModelCatalogSnapshot =
@@ -190,6 +182,8 @@ ensureOpenClawCliOnPath();
 
 const MAX_MEDIA_TTL_HOURS = 24 * 7;
 const POST_READY_MAINTENANCE_DELAY_MS = 250;
+const RETAINED_PLUGIN_CLEANUP_DELAY_MS = 30_000;
+const RETAINED_PLUGIN_CLEANUP_RETRY_DELAY_MS = 30_000;
 
 type GatewayStartupChannelPlugin = {
   id: ChannelId;
@@ -578,17 +572,19 @@ const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
   return runSetupWizard(...args);
 };
 
-export async function startGatewayServer(
-  port = 18789,
-  opts: GatewayServerOptions = {},
-): Promise<GatewayServer> {
-  normalizeStateDirEnv(process.env);
-  // runGatewayLoop calls this after closing the previous server on both fresh
-  // and in-process restarts, making retired plugin generations safe to remove.
+async function cleanupRetainedPluginInstallGenerations(
+  installRecords?: Readonly<Record<string, { installPath?: string }>>,
+): Promise<void> {
   try {
-    const installRecords = loadInstalledPluginIndexInstallRecordsSync();
+    const records =
+      installRecords ??
+      (
+        await import("../plugins/installed-plugin-index-records.js")
+      ).loadInstalledPluginIndexInstallRecordsSync();
+    const { cleanupRetainedManagedNpmInstallGenerations } =
+      await import("../plugins/managed-npm-retention.js");
     const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({
-      activeInstallPaths: Object.values(installRecords).flatMap((record) =>
+      activeInstallPaths: Object.values(records).flatMap((record) =>
         record.installPath ? [record.installPath] : [],
       ),
       onError: (error, projectRoot) =>
@@ -600,6 +596,13 @@ export async function startGatewayServer(
   } catch (error) {
     log.warn(`retained npm generation cleanup unavailable: ${String(error)}`);
   }
+}
+
+export async function startGatewayServer(
+  port = 18789,
+  opts: GatewayServerOptions = {},
+): Promise<GatewayServer> {
+  normalizeStateDirEnv(process.env);
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
@@ -876,12 +879,24 @@ export async function startGatewayServer(
     ),
     preserveExistingOwnership: true,
   });
-  const workerEnvironmentStore = minimalTestGateway ? undefined : createWorkerEnvironmentStore();
-  const hasWorkerEnvironmentRecords = (workerEnvironmentStore?.list().length ?? 0) > 0;
+  const workerEnvironmentStore = minimalTestGateway
+    ? undefined
+    : (
+        await startupTrace.measure(
+          "worker-environments.store-import",
+          () => import("./worker-environments/store.js"),
+        )
+      ).createWorkerEnvironmentStore();
+  const workerEnvironmentRecordsAtStartup = workerEnvironmentStore?.list() ?? [];
+  const hasWorkerEnvironmentRecords = workerEnvironmentRecordsAtStartup.length > 0;
   // Durable rows can outlive profiles. Startup planning still enforces plugin trust/disable gates.
   const listDurableWorkerProviderIds = () =>
     uniqueStrings(
-      workerEnvironmentStore?.listForReconcile().map((record) => record.providerId) ?? [],
+      workerEnvironmentRecordsAtStartup.flatMap((record) =>
+        record.state === "destroyed" || record.state === "failed" || record.state === "orphaned"
+          ? []
+          : [record.providerId],
+      ),
     );
   const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
@@ -942,7 +957,10 @@ export async function startGatewayServer(
     | { host: "127.0.0.1" | "::1"; port: number }
     | undefined = () => undefined;
   const prepareWorkerInstallation = async (install: "bundle" | "npm") => {
-    const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
+    const [workerEnvironmentRuntime, { WORKER_PROTOCOL_FEATURES }] = await Promise.all([
+      loadWorkerEnvironmentRuntimeModule(),
+      import("../../packages/gateway-protocol/src/schema/worker-admission.js"),
+    ]);
     workerBundleProducer ??= workerEnvironmentRuntime.createWorkerBundleProducer({
       protocolFeatures: WORKER_PROTOCOL_FEATURES,
     });
@@ -958,13 +976,23 @@ export async function startGatewayServer(
       });
     return await workerNpmArtifact;
   };
-  const workerTunnelManager =
+  const workerEnvironmentRuntimeModules =
     workerEnvironmentStore && shouldStartWorkerEnvironmentService
-      ? (await loadWorkerTunnelRuntimeModule()).createWorkerTunnelManager()
+      ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
+          const [service, liveEvents, transcriptCommit, tunnel, workerProviderRegistry] =
+            await Promise.all([
+              import("./worker-environments/service.js"),
+              import("./worker-environments/live-events.js"),
+              import("./worker-environments/transcript-commit.js"),
+              loadWorkerTunnelRuntimeModule(),
+              import("../plugins/worker-provider-registry.js"),
+            ]);
+          return { service, liveEvents, transcriptCommit, tunnel, workerProviderRegistry };
+        })
       : undefined;
+  const workerTunnelManager = workerEnvironmentRuntimeModules?.tunnel.createWorkerTunnelManager();
   // Freeze restart-owned identities before any new attach can advance its environment.
   // Only an exact pre-start owner may seed an ephemeral ACK after gateway state loss.
-  const workerEnvironmentRecordsAtStartup = workerEnvironmentStore?.list() ?? [];
   const workerStartupBindings = workerEnvironmentRecordsAtStartup.flatMap((record) =>
     record.state === "attached" && record.attachedSessionIds.length === 1
       ? [
@@ -980,25 +1008,30 @@ export async function startGatewayServer(
     workerStartupBindings.map((binding) => [binding.environmentId, binding.runEpoch] as const),
   );
   const workerLiveEvents =
-    workerEnvironmentStore && shouldStartWorkerEnvironmentService
-      ? createWorkerLiveEventReceiver({
+    workerEnvironmentStore && workerEnvironmentRuntimeModules
+      ? workerEnvironmentRuntimeModules.liveEvents.createWorkerLiveEventReceiver({
           getConfig: getRuntimeConfig,
           startupBindings: workerStartupBindings,
           startupOwners: workerStartupOwners,
         })
       : undefined;
   const workerEnvironmentService =
-    workerEnvironmentStore && shouldStartWorkerEnvironmentService
-      ? createWorkerEnvironmentService({
+    workerEnvironmentStore && workerEnvironmentRuntimeModules
+      ? workerEnvironmentRuntimeModules.service.createWorkerEnvironmentService({
           store: workerEnvironmentStore,
           getConfig: getRuntimeConfig,
-          resolveProvider: (providerId) => resolveWorkerProvider(pluginRegistry, providerId),
+          resolveProvider: (providerId) =>
+            workerEnvironmentRuntimeModules.workerProviderRegistry.resolveWorkerProvider(
+              pluginRegistry,
+              providerId,
+            ),
           prepareInstallation: prepareWorkerInstallation,
           tunnelManager: workerTunnelManager,
           resolveWorkerGateway: () => resolveWorkerGatewayEndpoint(),
-          applyTranscriptCommit: createWorkerTranscriptCommitter({
-            getConfig: getRuntimeConfig,
-          }).commit,
+          applyTranscriptCommit:
+            workerEnvironmentRuntimeModules.transcriptCommit.createWorkerTranscriptCommitter({
+              getConfig: getRuntimeConfig,
+            }).commit,
           executeInference: async (params) => {
             const workerInferenceRuntime = await loadWorkerInferenceRuntimeModule();
             return await workerInferenceRuntime.executeWorkerInference(params);
@@ -1369,6 +1402,7 @@ export async function startGatewayServer(
     },
   });
   let postReadyMaintenanceTimer: ReturnType<typeof setTimeout> | null = null;
+  let retainedPluginCleanupHandle: { stop: () => void } | null = null;
   const clearPostReadyMaintenanceTimer = () => {
     if (!postReadyMaintenanceTimer) {
       return;
@@ -1380,6 +1414,8 @@ export async function startGatewayServer(
     closePreludeStarted = true;
     cronReconciliation.invalidate();
     clearPostReadyMaintenanceTimer();
+    retainedPluginCleanupHandle?.stop();
+    retainedPluginCleanupHandle = null;
   };
   let configReloaderStopPromise: Promise<void> | null = null;
   const stopConfigReloaderForClose = () => {
@@ -2334,6 +2370,21 @@ export async function startGatewayServer(
         recordPostReadyMemory: () => {
           startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
         },
+      });
+      // The loop closes the previous server before this generation starts, so retired
+      // plugin installs are safe to remove. Wait for an idle window and preserve paths
+      // from the startup snapshot so cleanup cannot remove active code or delay a turn.
+      retainedPluginCleanupHandle = gatewayRuntimeServices.scheduleGatewayIdleTask({
+        delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
+        retryDelayMs: RETAINED_PLUGIN_CLEANUP_RETRY_DELAY_MS,
+        isClosing: () => closePreludeStarted,
+        isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+        run: () =>
+          cleanupRetainedPluginInstallGenerations(
+            startupConfigLoad.pluginMetadataSnapshot?.index.installRecords,
+          ),
+        log,
+        errorMessage: "retained npm generation cleanup failed",
       });
     } else {
       startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());

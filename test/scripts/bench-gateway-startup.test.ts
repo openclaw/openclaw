@@ -383,6 +383,17 @@ describe("gateway startup benchmark script", () => {
     expect(startupTrace["sidecars.acp.runtime-ready.readyCount"]).toBe(1);
   });
 
+  it("keeps counts and memory metrics out of the slow-duration ranking", () => {
+    expect(testing.isStartupTraceDuration("plugins.runtime-post-bind")).toBe(true);
+    expect(testing.isStartupTraceDuration("plugins.gateway-load.loadMs")).toBe(true);
+    expect(testing.isStartupTraceDuration("ready.eventLoopMax")).toBe(true);
+    expect(testing.isStartupTraceDuration("plugins.runtime-post-bind.gatewayMethodCount")).toBe(
+      false,
+    );
+    expect(testing.isStartupTraceDuration("memory.ready.rssMb")).toBe(false);
+    expect(testing.isStartupTraceDuration("ready.total")).toBe(false);
+  });
+
   it("records probe state transitions, first error kind, and first recovery", async () => {
     let calls = 0;
     const { port, server } = await listenOnLoopback((_req, res) => {
