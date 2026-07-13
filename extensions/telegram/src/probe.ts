@@ -121,10 +121,7 @@ function normalizeBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
-async function readTelegramDiagnosticBody(
-  response: Response,
-  timeoutMs: number,
-): Promise<Buffer> {
+async function readTelegramDiagnosticBody(response: Response, timeoutMs: number): Promise<Buffer> {
   return await readTelegramResponseBodyWithTimeout(response, {
     maxBytes: TELEGRAM_BOT_API_MAX_RESPONSE_BYTES,
     timeoutMs,

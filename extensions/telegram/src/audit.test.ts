@@ -122,9 +122,7 @@ describe("telegram audit", () => {
       const res = await auditPromise;
       expect(res.ok).toBe(false);
       expect(res.groups[0]?.ok).toBe(false);
-      expect(res.groups[0]?.error).toBe(
-        "Telegram membership audit response body stalled for 25ms",
-      );
+      expect(res.groups[0]?.error).toBe("Telegram membership audit response body stalled for 25ms");
       expect(cancel).toHaveBeenCalledTimes(1);
       expect(cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
     } finally {

@@ -138,8 +138,7 @@ async function readFallbackBodyWithTimeout(
     return await Promise.race([
       readResponseWithLimit(response, options.maxBytes, {
         chunkTimeoutMs: idleTimeoutMs,
-        onIdleTimeout: ({ chunkTimeoutMs }) =>
-          options.onIdleTimeout({ timeoutMs: chunkTimeoutMs }),
+        onIdleTimeout: ({ chunkTimeoutMs }) => options.onIdleTimeout({ timeoutMs: chunkTimeoutMs }),
       }),
       deadline,
     ]);
