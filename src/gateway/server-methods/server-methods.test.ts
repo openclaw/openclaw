@@ -6,6 +6,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
@@ -2555,12 +2556,12 @@ describe("timestampOptsFromConfig", () => {
   it.each([
     {
       name: "extracts timezone from config",
-      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as any,
+      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as OpenClawConfig,
       expected: "America/Chicago",
     },
     {
       name: "falls back gracefully with empty config",
-      cfg: {} as any,
+      cfg: {} as OpenClawConfig,
       expected: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     },
   ])("$name", ({ cfg, expected }) => {
@@ -2637,11 +2638,15 @@ describe("gateway chat transcript writes (guardrail)", () => {
   it("routes transcript writes through helper and async parentId append", () => {
     const chatTs = fileURLToPath(new URL("./chat.ts", import.meta.url));
     const chatSrc = fs.readFileSync(chatTs, "utf-8");
+    const persistenceTs = fileURLToPath(
+      new URL("./chat-transcript-persistence.ts", import.meta.url),
+    );
+    const persistenceSrc = fs.readFileSync(persistenceTs, "utf-8");
     const helperTs = fileURLToPath(new URL("./chat-transcript-inject.ts", import.meta.url));
     const helperSrc = fs.readFileSync(helperTs, "utf-8");
 
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
-    expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
+    expect(persistenceSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
     expect(helperSrc).toContain("persistSessionTranscriptTurn(");
     expect(helperSrc).toContain("useRawWhenLinear: true");
@@ -2718,7 +2723,10 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     client?: ExecApprovalGetArgs["client"];
   }) {
-    return params.handlers["exec.approval.get"]({
+    return expectDefined(
+      params.handlers["exec.approval.get"],
+      'params.handlers["exec.approval.get"] test invariant',
+    )({
       params: { id: params.id } as ExecApprovalGetArgs["params"],
       respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
       context: {} as ExecApprovalGetArgs["context"],
@@ -2733,7 +2741,10 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     client?: ExecApprovalResolveArgs["client"];
   }) {
-    return params.handlers["exec.approval.list"]({
+    return expectDefined(
+      params.handlers["exec.approval.list"],
+      'params.handlers["exec.approval.list"] test invariant',
+    )({
       params: {} as never,
       respond: params.respond as never,
       context: {} as never,
@@ -2786,7 +2797,10 @@ describe("exec approval handlers", () => {
             : null,
       };
     }
-    return params.handlers["exec.approval.request"]({
+    return expectDefined(
+      params.handlers["exec.approval.request"],
+      'params.handlers["exec.approval.request"] test invariant',
+    )({
       params: requestParams,
       respond: params.respond as unknown as ExecApprovalRequestArgs["respond"],
       context: toExecApprovalRequestContext({
@@ -2807,7 +2821,10 @@ describe("exec approval handlers", () => {
     context: { broadcast: (event: string, payload: unknown) => void };
     client?: ExecApprovalResolveArgs["client"];
   }) {
-    return params.handlers["exec.approval.resolve"]({
+    return expectDefined(
+      params.handlers["exec.approval.resolve"],
+      'params.handlers["exec.approval.resolve"] test invariant',
+    )({
       params: {
         id: params.id,
         decision: params.decision ?? "allow-once",
@@ -4708,14 +4725,17 @@ describe("gateway healthHandlers.status scope handling", () => {
   async function runHealthStatus(scopes: string[]) {
     const respond = vi.fn();
 
-    await healthHandlers.status({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {} as never,
-      client: { connect: { role: "operator", scopes } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.status, "healthHandlers.status test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {} as never,
+        client: { connect: { role: "operator", scopes } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     return respond;
   }
@@ -4739,14 +4759,17 @@ describe("gateway healthHandlers.status scope handling", () => {
   it("can skip channel summary work for liveness-only status requests", async () => {
     const respond = vi.fn();
 
-    await healthHandlers.status({
-      req: {} as never,
-      params: { includeChannelSummary: false },
-      respond: respond as never,
-      context: {} as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.status, "healthHandlers.status test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: { includeChannelSummary: false },
+        respond: respond as never,
+        context: {} as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
       includeSensitive: false,
@@ -4827,30 +4850,33 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({
-          channels: {},
-          channelAccounts: {
-            discord: {
-              default: {
-                accountId: "default",
-                running: true,
-                connected: true,
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({
+            channels: {},
+            channelAccounts: {
+              discord: {
+                default: {
+                  accountId: "default",
+                  running: true,
+                  connected: true,
+                },
               },
             },
-          },
-        }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+          }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -4895,20 +4921,23 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
     const getEventLoopHealth = vi.fn(() => replacementEventLoop);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => null,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        getEventLoopHealth,
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => null,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          getEventLoopHealth,
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -4942,19 +4971,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     const payload = mockCallArg(respond, 0, 1) as
       | {
@@ -5016,19 +5048,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
       const respond = vi.fn();
       const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-      await healthHandlers.health({
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      });
+      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+        healthHandlers,
+        {
+          req: {} as never,
+          params: {} as never,
+          respond: respond as never,
+          context: {
+            getHealthCache: () => cached,
+            refreshHealthSnapshot,
+            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            logHealth: { error: vi.fn() },
+          } as never,
+          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+          isWebchatConnect: () => false,
+        },
+      );
 
       const payload = mockCallArg(respond, 0, 1) as
         | {
@@ -5086,19 +5121,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
       const respond = vi.fn();
       const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-      await healthHandlers.health({
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      });
+      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+        healthHandlers,
+        {
+          req: {} as never,
+          params: {} as never,
+          respond: respond as never,
+          context: {
+            getHealthCache: () => cached,
+            refreshHealthSnapshot,
+            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            logHealth: { error: vi.fn() },
+          } as never,
+          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+          isWebchatConnect: () => false,
+        },
+      );
 
       const payload = mockCallArg(respond, 0, 1) as
         | {
@@ -5142,20 +5180,23 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
     const getConfigReloaderHotReloadStatus = vi.fn(() => "disabled" as const);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        getConfigReloaderHotReloadStatus,
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          getConfigReloaderHotReloadStatus,
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     const payload = mockCallArg(respond, 0, 1) as
       | { configReload?: { hotReloadStatus?: string } }
@@ -5185,19 +5226,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     const payload = mockCallArg(respond, 0, 1) as
       | { configReload?: { hotReloadStatus?: string } }
@@ -5253,30 +5297,33 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({
-          channels: {},
-          channelAccounts: {
-            discord: {
-              work: {
-                accountId: "work",
-                running: true,
-                connected: true,
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({
+            channels: {},
+            channelAccounts: {
+              discord: {
+                work: {
+                  accountId: "work",
+                  running: true,
+                  connected: true,
+                },
               },
             },
-          },
-        }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+          }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -5307,7 +5354,10 @@ describe("logs.tail", () => {
     setLoggerOverride({ file: path.join(tempDir, "openclaw-2026-01-22.log") });
 
     const respond = vi.fn();
-    await logsHandlers["logs.tail"]({
+    await expectDefined(
+      logsHandlers["logs.tail"],
+      'logsHandlers["logs.tail"] test invariant',
+    )({
       params: {},
       respond,
       context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
@@ -5338,7 +5388,10 @@ describe("logs.tail", () => {
     setLoggerOverride({ file });
 
     const respond = vi.fn();
-    await logsHandlers["logs.tail"]({
+    await expectDefined(
+      logsHandlers["logs.tail"],
+      'logsHandlers["logs.tail"] test invariant',
+    )({
       params: {},
       respond,
       context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],

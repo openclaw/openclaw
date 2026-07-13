@@ -59,6 +59,7 @@ function runCiManifestFixture(options: {
   historicalCompatibility?: boolean;
   iosCapabilities?: boolean;
   iosBuildCapability?: boolean;
+  androidCiCapabilities?: boolean;
   nativeI18nCapabilities?: boolean;
   protocolCoverage?: boolean;
   qaSmokePlan?: boolean;
@@ -145,9 +146,14 @@ function runCiManifestFixture(options: {
     mkdirSync(path.dirname(targetWorkflow), { recursive: true });
     writeFileSync(
       targetWorkflow,
-      (options.formatCheck ?? options.bundledPlanner)
-        ? "pnpm format:check\npnpm format:check\n"
-        : "",
+      [
+        ...((options.formatCheck ?? options.bundledPlanner)
+          ? ["pnpm format:check", "pnpm format:check"]
+          : []),
+        ...((options.androidCiCapabilities ?? options.bundledPlanner)
+          ? ["android-ci-contract-v2"]
+          : []),
+      ].join("\n"),
     );
     const outputPath = path.join(root, "manifest.out");
     writeFileSync(outputPath, "", "utf8");
@@ -377,6 +383,55 @@ function runGit(cwd: string, args: string[]): string {
 function writeExecutable(filePath: string, lines: string[]): void {
   writeFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
   chmodSync(filePath, 0o755);
+}
+
+function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts: string[] }): {
+  calls: string[];
+  output: string;
+  status: number | null;
+} {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deadcode-"));
+  try {
+    const fakeBin = path.join(root, "bin");
+    const callsPath = path.join(root, "pnpm-calls.txt");
+    mkdirSync(fakeBin);
+    writeFileSync(
+      path.join(root, "package.json"),
+      `${JSON.stringify({
+        scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
+      })}\n`,
+    );
+    writeExecutable(path.join(fakeBin, "pnpm"), [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+    ]);
+    const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    ).run;
+    const run = spawnSync("bash", ["-c", checkShardRun], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FORMAT_CHECK: "false",
+        HISTORICAL_TARGET: options.historicalTarget ? "true" : "false",
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        PNPM_CALLS: callsPath,
+        PR_BASE_SHA: "",
+        TASK: "dependencies",
+      },
+    });
+    return {
+      calls: existsSync(callsPath)
+        ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
+        : [],
+      output: `${run.stdout}${run.stderr}`,
+      status: run.status,
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 }
 
 function runGeneratedPublisherScenario(
@@ -1263,7 +1318,8 @@ describe("ci workflow guards", () => {
     expect(source).toContain(
       '{ check_name: "android-test-third-party", task: "test-third-party" }',
     );
-    expect(source).toContain('{ check_name: "android-build-play", task: "build-play" }');
+    expect(source).toContain('check_name: "android-build-play"');
+    expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
     expect(runStep.run).toContain(":app:testPlayDebugUnitTest");
     expect(runStep.run).toContain(":app:testThirdPartyDebugUnitTest");
     expect(runStep.run).toContain(":app:assemblePlayDebug");
@@ -1299,6 +1355,14 @@ describe("ci workflow guards", () => {
 
     expect(blacksmithJobs).toEqual([]);
     expect(source).not.toContain("blacksmith-");
+  });
+
+  it("keeps security checks hosted and the cache writer on Blacksmith", () => {
+    const workflow = readCiWorkflow();
+
+    expect(workflow.jobs.preflight["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
+    expect(workflow.jobs["security-fast"]["runs-on"]).toBe("ubuntu-24.04");
+    expect(workflow.jobs["pnpm-store-warmup"]["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
@@ -1461,6 +1525,25 @@ describe("ci workflow guards", () => {
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+  });
+
+  it("refetches an exact manual target when the workflow branch moves", () => {
+    const workflow = readCiWorkflow();
+    const checkoutStep = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Checkout",
+    );
+    const run = checkoutStep.run;
+    const driftCheck = run.indexOf(
+      'if [ "$resolved_sha" != "$requested_sha" ] && [ "$checkout_ref" != "$requested_sha" ]; then',
+    );
+    const exactFetch = run.indexOf('fetch_checkout_ref "$checkout_ref"', driftCheck);
+    const finalCheck = run.indexOf('if [ "$resolved_sha" != "$requested_sha" ]; then', driftCheck);
+
+    expect(driftCheck).toBeGreaterThan(-1);
+    expect(run).toContain("while the manual run waits for a runner");
+    expect(run).toContain('checkout_ref="$requested_sha"');
+    expect(exactFetch).toBeGreaterThan(driftCheck);
+    expect(finalCheck).toBeGreaterThan(exactFetch);
   });
 
   it("retries workflow sanity checkout fetch timeouts", () => {
@@ -1690,6 +1773,69 @@ describe("ci workflow guards", () => {
     expect(preflightGuards).toContain("pnpm deps:patches:check");
   });
 
+  it("uses stable deadcode checks for current and frozen checkouts", () => {
+    const modern = runDependencyCheckFixture({
+      historicalTarget: false,
+      scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
+    });
+    expect(modern.status, modern.output).toBe(0);
+    expect(modern.calls).toEqual([
+      "deadcode:dependencies",
+      "deadcode:unused-files",
+      "deadcode:exports",
+    ]);
+
+    const frozenWithExports = runDependencyCheckFixture({
+      historicalTarget: true,
+      scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
+    });
+    expect(frozenWithExports.status, frozenWithExports.output).toBe(0);
+    expect(frozenWithExports.calls).toEqual([
+      "deadcode:dependencies",
+      "deadcode:unused-files",
+      "deadcode:exports",
+    ]);
+
+    const frozen = runDependencyCheckFixture({
+      historicalTarget: true,
+      scripts: [
+        "deadcode:ci",
+        "deadcode:dependencies",
+        "deadcode:report:ci:ts-unused",
+        "deadcode:unused-files",
+      ],
+    });
+    expect(frozen.status, frozen.output).toBe(0);
+    expect(frozen.calls).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
+
+    const currentWithoutExports = runDependencyCheckFixture({
+      historicalTarget: false,
+      scripts: ["deadcode:dependencies", "deadcode:unused-files"],
+    });
+    expect(currentWithoutExports.status).toBe(1);
+    expect(currentWithoutExports.calls).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
+    expect(currentWithoutExports.output).toContain(
+      "Current CI targets must provide the deadcode:exports package script.",
+    );
+
+    const legacy = runDependencyCheckFixture({
+      historicalTarget: true,
+      scripts: ["deadcode:ci"],
+    });
+    expect(legacy.status, legacy.output).toBe(0);
+    expect(legacy.calls).toEqual(["deadcode:ci"]);
+
+    const incompleteCurrent = runDependencyCheckFixture({
+      historicalTarget: false,
+      scripts: ["deadcode:dependencies"],
+    });
+    expect(incompleteCurrent.status).toBe(1);
+    expect(incompleteCurrent.calls).toEqual([]);
+    expect(incompleteCurrent.output).toContain(
+      "Target does not provide a supported deadcode check.",
+    );
+  });
+
   it("runs mobile protocol coverage for Node and native-only changes", () => {
     const workflow = readCiWorkflow();
     const coverageStep = workflow.jobs.preflight.steps.find(
@@ -1705,6 +1851,12 @@ describe("ci workflow guards", () => {
   });
 
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {
+    const androidRun = readCiWorkflow().jobs.android.steps.find(
+      (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
+    ).run;
+    expect(androidRun).toContain("build-play-compat)");
+    expect(androidRun).toContain(":app:assemblePlayDebug");
+
     const legacy = runCiManifestFixture({ bundledPlanner: false });
     expect(legacy.status, legacy.output).toBe(0);
     expect(legacy.outputs.historical_target).toBe("true");
@@ -1713,6 +1865,14 @@ describe("ci workflow guards", () => {
     expect(legacy.outputs.run_qa_smoke_ci).toBe("false");
     expect(legacy.outputs.run_channel_contracts_shards).toBe("false");
     expect(legacy.outputs.run_protocol_event_coverage).toBe("false");
+    expect(
+      JSON.parse(expectDefined(legacy.outputs.android_matrix, "legacy Android matrix output"))
+        .include,
+    ).toEqual([
+      { check_name: "android-test-play", task: "test-play" },
+      { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-build-play", task: "build-play-compat" },
+    ]);
     expect(
       JSON.parse(
         expectDefined(
@@ -1735,6 +1895,37 @@ describe("ci workflow guards", () => {
     expect(current.outputs.run_channel_contracts_shards).toBe("true");
     expect(current.outputs.run_protocol_event_coverage).toBe("true");
     expect(current.outputs.run_format_check).toBe("true");
+    expect(
+      JSON.parse(expectDefined(current.outputs.android_matrix, "current Android matrix output"))
+        .include,
+    ).toEqual([
+      { check_name: "android-test-play", task: "test-play" },
+      { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-build-play", task: "build-play" },
+      { check_name: "android-ktlint", task: "ktlint" },
+    ]);
+
+    const currentMissingAndroidCapabilities = runCiManifestFixture({
+      androidCiCapabilities: false,
+      bundledPlanner: true,
+      eventName: "pull_request",
+    });
+    expect(currentMissingAndroidCapabilities.status, currentMissingAndroidCapabilities.output).toBe(
+      0,
+    );
+    expect(
+      JSON.parse(
+        expectDefined(
+          currentMissingAndroidCapabilities.outputs.android_matrix,
+          "current fallback-resistant Android matrix output",
+        ),
+      ).include,
+    ).toEqual([
+      { check_name: "android-test-play", task: "test-play" },
+      { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-build-play", task: "build-play" },
+      { check_name: "android-ktlint", task: "ktlint" },
+    ]);
     expect(
       JSON.parse(
         expectDefined(
@@ -1926,6 +2117,17 @@ describe("ci workflow guards", () => {
     );
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
     expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(checkShard.run).toContain('has_package_script "deadcode:dependencies"');
+    expect(checkShard.run).toContain('has_package_script "deadcode:unused-files"');
+    expect(checkShard.run).toContain('has_package_script "deadcode:exports"');
+    expect(checkShard.run).toContain("pnpm deadcode:exports");
+    expect(checkShard.run).toContain(
+      "Current CI targets must provide the deadcode:exports package script.",
+    );
+    expect(checkShard.run).toContain(
+      'elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"',
+    );
+    expect(checkShard.run).toContain("Target does not provide a supported deadcode check.");
 
     const uiInstall = workflow.jobs["checks-ui"].steps.find(
       (step: { name?: string }) => step.name === "Install Playwright Chromium",
@@ -1997,7 +2199,7 @@ describe("ci workflow guards", () => {
     );
 
     expect(startupMemoryStep.env.OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB).toBe(
-      "${{ runner.environment == 'github-hosted' && '425' || '350' }}",
+      "${{ runner.environment == 'github-hosted' && '425' || '400' }}",
     );
   });
 
@@ -2723,7 +2925,9 @@ describe("ci workflow guards", () => {
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
     expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
     expect(smokeRunStep.run).toContain("readQaScenarioPack");
-    expect(smokeRunStep.run).toContain("scenarioIdsByKind");
+    expect(smokeRunStep.run).toContain("isolate each scenario");
+    expect(smokeRunStep.run).toContain("scenario_ids: [scenarioId]");
+    expect(smokeRunStep.run).not.toContain("scenarioIdsByKind");
     const compatibilityScenarioBlock = smokeRunStep.run.match(
       /const compatibilityScenarioIds = new Set\(\[([\s\S]*?)\]\);/u,
     )?.[1];

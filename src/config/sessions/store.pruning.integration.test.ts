@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
@@ -1656,7 +1657,6 @@ describe("Integration: saveSessionStore with pruning", () => {
           mode: "enforce",
           pruneAfter: "365d",
           maxEntries: 100,
-          rotateBytes: 200,
         },
       },
     });
@@ -1673,8 +1673,10 @@ describe("Integration: saveSessionStore with pruning", () => {
       };
 
       for (let i = 0; i < 5; i++) {
-        store.hot.updatedAt = Date.now();
-        store.hot.pluginExtensions = { test: { payload: "x".repeat(1000), write: i } };
+        expectDefined(store.hot, "store.hot test invariant").updatedAt = Date.now();
+        expectDefined(store.hot, "store.hot test invariant").pluginExtensions = {
+          test: { payload: "x".repeat(1000), write: i },
+        };
         await saveSessionStore(storePath, store);
       }
     } finally {
@@ -1693,7 +1695,6 @@ describe("Integration: saveSessionStore with pruning", () => {
           mode: "enforce",
           pruneAfter: "365d",
           maxEntries: 1,
-          rotateBytes: 200,
         },
       },
     });

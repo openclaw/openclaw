@@ -1324,6 +1324,7 @@ public struct AgentParams: Codable, Sendable {
     public let replyto: String?
     public let sessionid: String?
     public let sessionkey: String?
+    public let expectedexistingsessionid: String?
     public let thinking: String?
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
@@ -1368,6 +1369,7 @@ public struct AgentParams: Codable, Sendable {
         replyto: String? = nil,
         sessionid: String? = nil,
         sessionkey: String? = nil,
+        expectedexistingsessionid: String? = nil,
         thinking: String? = nil,
         deliver: Bool? = nil,
         attachments: [AnyCodable]? = nil,
@@ -1411,6 +1413,7 @@ public struct AgentParams: Codable, Sendable {
         self.replyto = replyto
         self.sessionid = sessionid
         self.sessionkey = sessionkey
+        self.expectedexistingsessionid = expectedexistingsessionid
         self.thinking = thinking
         self.deliver = deliver
         self.attachments = attachments
@@ -1456,6 +1459,7 @@ public struct AgentParams: Codable, Sendable {
         case replyto = "replyTo"
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
+        case expectedexistingsessionid = "expectedExistingSessionId"
         case thinking
         case deliver
         case attachments
@@ -11470,6 +11474,8 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let gatewayurls: [String]?
     public let auth: AnyCodable
     public let urlsource: String
+    public let access: AnyCodable?
+    public let accessdowngraded: Bool?
 
     public init(
         setupcode: String,
@@ -11477,7 +11483,9 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         gatewayurl: String,
         gatewayurls: [String]? = nil,
         auth: AnyCodable,
-        urlsource: String)
+        urlsource: String,
+        access: AnyCodable? = nil,
+        accessdowngraded: Bool? = nil)
     {
         self.setupcode = setupcode
         self.qrdataurl = qrdataurl
@@ -11485,6 +11493,8 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         self.gatewayurls = gatewayurls
         self.auth = auth
         self.urlsource = urlsource
+        self.access = access
+        self.accessdowngraded = accessdowngraded
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -11494,6 +11504,8 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         case gatewayurls = "gatewayUrls"
         case auth
         case urlsource = "urlSource"
+        case access
+        case accessdowngraded = "accessDowngraded"
     }
 }
 
@@ -11656,6 +11668,8 @@ public struct ChatHistoryParams: Codable, Sendable {
     public let agentid: String?
     public let limit: Int?
     public let offset: Int?
+    public let messageid: String?
+    public let sessionid: String?
     public let maxchars: Int?
 
     public init(
@@ -11663,12 +11677,16 @@ public struct ChatHistoryParams: Codable, Sendable {
         agentid: String? = nil,
         limit: Int? = nil,
         offset: Int? = nil,
+        messageid: String? = nil,
+        sessionid: String? = nil,
         maxchars: Int? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.limit = limit
         self.offset = offset
+        self.messageid = messageid
+        self.sessionid = sessionid
         self.maxchars = maxchars
     }
 
@@ -11677,6 +11695,8 @@ public struct ChatHistoryParams: Codable, Sendable {
         case agentid = "agentId"
         case limit
         case offset
+        case messageid = "messageId"
+        case sessionid = "sessionId"
         case maxchars = "maxChars"
     }
 }

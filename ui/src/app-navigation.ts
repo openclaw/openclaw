@@ -1,7 +1,8 @@
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
-import { t } from "./i18n/index.ts";
+import { i18n, t } from "./i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty } from "./lib/string-coerce.ts";
 
 export type NavigationRouteId = RouteId;
 
@@ -13,9 +14,9 @@ type NavigationItem = {
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
+// Session management lives in Settings (SETTINGS_NAVIGATION_GROUPS below).
 export const SIDEBAR_NAV_ROUTES = [
   "workboard",
-  "sessions",
   "usage",
   "cron",
   "tasks",
@@ -78,6 +79,48 @@ type SettingsNavigationGroup = {
   routes: readonly NavigationRouteId[];
 };
 
+export type SettingsSearchBlock = {
+  routeId: RouteId;
+  label: string;
+  search?: string;
+  hash: string;
+};
+
+let settingsSearchSegmenterLocale = "";
+let settingsSearchSegmenter: Intl.Segmenter | null = null;
+
+function settingsSearchHasWordPrefix(value: string, query: string): boolean {
+  const locale = i18n.getLocale();
+  if (settingsSearchSegmenterLocale !== locale) {
+    settingsSearchSegmenterLocale = locale;
+    settingsSearchSegmenter =
+      typeof Intl !== "undefined" && "Segmenter" in Intl
+        ? new Intl.Segmenter(locale, { granularity: "word" })
+        : null;
+  }
+  if (!settingsSearchSegmenter) {
+    return value.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(query));
+  }
+  for (const segment of settingsSearchSegmenter.segment(value)) {
+    if (segment.isWordLike !== false && segment.segment.startsWith(query)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function settingsSearchTextMatches(value: string, query: string): boolean {
+  const candidate = normalizeLowercaseStringOrEmpty(value);
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  if (!normalizedQuery) {
+    return false;
+  }
+  if (normalizedQuery.length > 2) {
+    return candidate.includes(normalizedQuery);
+  }
+  return settingsSearchHasWordPrefix(candidate, normalizedQuery);
+}
+
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
 export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["profile", "config", "appearance"] },
@@ -87,7 +130,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["ai-agents", "model-providers", "automation", "mcp"],
+    routes: ["ai-agents", "sessions", "model-providers", "automation", "mcp"],
   },
   {
     labelKey: "nav.settingsGroupSystem",

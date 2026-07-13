@@ -1,6 +1,7 @@
 // Gateway Protocol tests cover native protocol levels.guard behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, it } from "vitest";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import {
@@ -18,14 +19,19 @@ import {
  * and connect payloads aligned with the package source of truth.
  */
 
-/** Min/max protocol pair expected in every native client surface. */
+/** Min/max protocol pair expected in a native client surface. */
 type ProtocolLevels = {
   min: number;
   max: number;
 };
 
-const expectedLevels: ProtocolLevels = {
+const expectedClientLevels: ProtocolLevels = {
   min: MIN_CLIENT_PROTOCOL_VERSION,
+  max: PROTOCOL_VERSION,
+};
+
+const expectedAndroidLevels: ProtocolLevels = {
+  min: MIN_NODE_PROTOCOL_VERSION,
   max: PROTOCOL_VERSION,
 };
 
@@ -47,16 +53,20 @@ function extractInteger(
       `${relativePath}: missing ${label}; keep native Gateway protocol levels in sync with packages/gateway-protocol/src/version.ts.`,
     );
   }
-  return Number.parseInt(match[1], 10);
+  return Number.parseInt(expectDefined(match[1], "match[1] test invariant"), 10);
 }
 
 /** Compares native min/max values to the TypeScript version constants. */
-function assertLevelsMatch(relativePath: string, actual: ProtocolLevels): void {
-  if (actual.min === expectedLevels.min && actual.max === expectedLevels.max) {
+function assertLevelsMatch(
+  relativePath: string,
+  actual: ProtocolLevels,
+  expected: ProtocolLevels = expectedClientLevels,
+): void {
+  if (actual.min === expected.min && actual.max === expected.max) {
     return;
   }
   throw new Error(
-    `${relativePath}: Gateway protocol level mismatch: expected min=${expectedLevels.min} max=${expectedLevels.max} from packages/gateway-protocol/src/version.ts, got min=${actual.min} max=${actual.max}. Update the native constants/generated artifacts before shipping.`,
+    `${relativePath}: Gateway protocol level mismatch: expected min=${expected.min} max=${expected.max} from packages/gateway-protocol/src/version.ts, got min=${actual.min} max=${actual.max}. Update the native constants/generated artifacts before shipping.`,
   );
 }
 
@@ -133,20 +143,24 @@ describe("native Gateway protocol levels", () => {
 
     const androidPath = "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt";
     const android = await readRepoFile(androidPath);
-    assertLevelsMatch(androidPath, {
-      min: extractInteger(
-        android,
-        /const val GATEWAY_MIN_PROTOCOL_VERSION = (\d+)/,
-        androidPath,
-        "GATEWAY_MIN_PROTOCOL_VERSION",
-      ),
-      max: extractInteger(
-        android,
-        /const val GATEWAY_PROTOCOL_VERSION = (\d+)/,
-        androidPath,
-        "GATEWAY_PROTOCOL_VERSION",
-      ),
-    });
+    assertLevelsMatch(
+      androidPath,
+      {
+        min: extractInteger(
+          android,
+          /const val GATEWAY_MIN_PROTOCOL_VERSION = (\d+)/,
+          androidPath,
+          "GATEWAY_MIN_PROTOCOL_VERSION",
+        ),
+        max: extractInteger(
+          android,
+          /const val GATEWAY_PROTOCOL_VERSION = (\d+)/,
+          androidPath,
+          "GATEWAY_PROTOCOL_VERSION",
+        ),
+      },
+      expectedAndroidLevels,
+    );
   });
 
   it("uses the min constant for native connect compatibility ranges", async () => {

@@ -60,7 +60,7 @@ type SessionTitleFields = {
   lastMessagePreview: string | null;
 };
 
-type ReadRecentSessionMessagesResult = {
+export type ReadRecentSessionMessagesResult = {
   messages: unknown[];
   transcriptPath?: string;
   totalMessages: number;
@@ -86,7 +86,7 @@ type ResolvedTranscriptReadTarget = {
   storePath?: string;
 };
 
-function resolveTranscriptReadTarget(
+export function resolveTranscriptReadTarget(
   scope: SessionTranscriptReadScope,
 ): ResolvedTranscriptReadTarget {
   const target = resolveSessionTranscriptReadTarget(scope);
@@ -109,7 +109,7 @@ function resolveConcreteReadStorePath(storePath: string | undefined): string | u
   return trimmed;
 }
 
-function isSqliteReadTarget(target: ResolvedTranscriptReadTarget): boolean {
+export function isSqliteReadTarget(target: ResolvedTranscriptReadTarget): boolean {
   return parseSqliteSessionFileMarker(target.sessionFile) !== undefined;
 }
 
@@ -170,7 +170,7 @@ function readSqliteMessageRecordsSync(target: ResolvedTranscriptReadTarget): {
   );
 }
 
-async function readSqliteMessageRecords(target: ResolvedTranscriptReadTarget): Promise<
+export async function readSqliteMessageRecords(target: ResolvedTranscriptReadTarget): Promise<
   {
     id?: string;
     message: unknown;
@@ -265,7 +265,7 @@ function readRecentSqliteUsageMessages(
   ).map((record) => record.message);
 }
 
-function sqliteRecordMessageWithSeq(record: {
+export function sqliteRecordMessageWithSeq(record: {
   id?: string;
   message: unknown;
   recordTimestampMs?: number;
@@ -604,34 +604,6 @@ export async function readSessionMessagesWithSourceAsync(
     };
   }
   return await readSessionMessagesWithSourceAsyncFile(
-    target.sessionId,
-    target.storePath,
-    target.sessionFile,
-    opts,
-    target.agentId,
-  );
-}
-
-/** Reads recent display messages asynchronously through the reader seam. */
-export async function readRecentSessionMessagesAsync(
-  scope: SessionTranscriptReadScope,
-  opts?: ReadRecentSessionMessagesOptions,
-): Promise<unknown[]> {
-  const target = resolveTranscriptReadTarget(scope);
-  if (isSqliteReadTarget(target)) {
-    const records = await readRecentSqliteMessageRecords(target, opts);
-    if (records.length === 0 && opts?.allowResetArchiveFallback === true) {
-      return await readRecentSessionMessagesAsyncFile(
-        target.sessionId,
-        target.storePath,
-        undefined,
-        { ...opts, resetArchiveOnly: true },
-        target.agentId,
-      );
-    }
-    return records.map(sqliteRecordMessageWithSeq);
-  }
-  return await readRecentSessionMessagesAsyncFile(
     target.sessionId,
     target.storePath,
     target.sessionFile,

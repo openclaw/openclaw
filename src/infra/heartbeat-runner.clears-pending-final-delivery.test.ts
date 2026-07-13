@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/types.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";

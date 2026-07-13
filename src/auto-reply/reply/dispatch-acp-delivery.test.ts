@@ -1,10 +1,12 @@
 // Tests ACP dispatch delivery routing and visible reply handoff.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { clearOperationalReplyPolicyStateForTest } from "./operational-reply-policy.js";
-import { createReplyDispatcher, type ReplyDispatcher } from "./reply-dispatcher.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 
@@ -183,9 +185,14 @@ async function expectVisibleChatBlockRoutesToAccount(
   await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
   expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
-  const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
-    [{ channel?: string; to?: string; accountId?: string }]
-  >;
+  const [routeParams] = expectDefined(
+    (
+      deliveryMocks.routeReply.mock.calls as unknown as Array<
+        [{ channel?: string; to?: string; accountId?: string }]
+      >
+    )[0],
+    "(deliveryMocks.routeReply.mock.calls as unknown as Array<\n      [{ channel?: string; to?: string; accountId?: string }]\n    >)[0] test invariant",
+  );
   expect(routeParams.channel).toBe("visiblechat");
   expect(routeParams.to).toBe("channel:thread-1");
   expect(routeParams.accountId).toBe(accountId);
@@ -1048,9 +1055,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
     expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
-    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
-      [{ sessionKey?: string; policySessionKey?: string }]
-    >;
+    const [routeParams] = expectDefined(
+      (
+        deliveryMocks.routeReply.mock.calls as unknown as Array<
+          [{ sessionKey?: string; policySessionKey?: string }]
+        >
+      )[0],
+      "(deliveryMocks.routeReply.mock.calls as unknown as Array<\n        [{ sessionKey?: string; policySessionKey?: string }]\n      >)[0] test invariant",
+    );
     expect(routeParams.sessionKey).toBe("agent:claude:acp:spawned");
     expect(routeParams.policySessionKey).toBe("agent:main:main");
   });
@@ -1078,14 +1090,19 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
-    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
-      [
-        {
-          threadId?: string | number;
-          replyDelivery?: { chatType?: string; replyToMode?: string };
-        },
-      ]
-    >;
+    const [routeParams] = expectDefined(
+      (
+        deliveryMocks.routeReply.mock.calls as unknown as Array<
+          [
+            {
+              threadId?: string | number;
+              replyDelivery?: { chatType?: string; replyToMode?: string };
+            },
+          ]
+        >
+      )[0],
+      "(deliveryMocks.routeReply.mock.calls as unknown as Array<\n        [\n          {\n            threadId?: string | number;\n            replyDelivery?: { chatType?: string; replyToMode?: string };\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(routeParams.threadId).toBe("101.000");
     expect(routeParams.replyDelivery).toEqual({
       chatType: "direct",
@@ -1112,9 +1129,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
-    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
-      [{ replyDelivery?: { chatType?: string; replyToMode?: string } }]
-    >;
+    const [routeParams] = expectDefined(
+      (
+        deliveryMocks.routeReply.mock.calls as unknown as Array<
+          [{ replyDelivery?: { chatType?: string; replyToMode?: string } }]
+        >
+      )[0],
+      "(deliveryMocks.routeReply.mock.calls as unknown as Array<\n        [{ replyDelivery?: { chatType?: string; replyToMode?: string } }]\n      >)[0] test invariant",
+    );
     expect(routeParams.replyDelivery).toEqual({
       chatType: "channel",
       replyToMode: "all",
@@ -1129,14 +1151,19 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
-    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
-      [
-        {
-          accountId?: string;
-          replyDelivery?: { chatType?: string; replyToMode?: string };
-        },
-      ]
-    >;
+    const [routeParams] = expectDefined(
+      (
+        deliveryMocks.routeReply.mock.calls as unknown as Array<
+          [
+            {
+              accountId?: string;
+              replyDelivery?: { chatType?: string; replyToMode?: string };
+            },
+          ]
+        >
+      )[0],
+      "(deliveryMocks.routeReply.mock.calls as unknown as Array<\n        [\n          {\n            accountId?: string;\n            replyDelivery?: { chatType?: string; replyToMode?: string };\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(routeParams.accountId).toBe("work");
     expect(routeParams.replyDelivery).toEqual({
       chatType: "direct",
@@ -1163,9 +1190,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
-    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
-      [{ accountId?: string; threadId?: string | number }]
-    >;
+    const [routeParams] = expectDefined(
+      (
+        deliveryMocks.routeReply.mock.calls as unknown as Array<
+          [{ accountId?: string; threadId?: string | number }]
+        >
+      )[0],
+      "(deliveryMocks.routeReply.mock.calls as unknown as Array<\n        [{ accountId?: string; threadId?: string | number }]\n      >)[0] test invariant",
+    );
     expect(routeParams.accountId).toBe("work");
     expect(routeParams.threadId).toBe("thread:om_123");
   });

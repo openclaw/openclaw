@@ -2,8 +2,9 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { formatTimeMs } from "../../lib/format.ts";
+import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
+import "../../styles/activity.css";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
@@ -42,19 +43,7 @@ function formatDuration(value: number): string {
   if (!Number.isFinite(value) || value < 0) {
     return t("common.na");
   }
-  if (value < 1_000) {
-    return t("activity.duration.ms", { count: String(Math.round(value)) });
-  }
-  if (value < 60_000) {
-    return t("activity.duration.seconds", { count: (value / 1_000).toFixed(1) });
-  }
-  const roundedSeconds = Math.round(value / 1_000);
-  const minutes = Math.floor(roundedSeconds / 60);
-  const seconds = roundedSeconds % 60;
-  return t("activity.duration.minutes", {
-    minutes: String(minutes),
-    seconds: String(seconds),
-  });
+  return formatDurationCompact(value, { spaced: true }) ?? "0ms";
 }
 
 function statusLabel(status: ActivityStatus): string {

@@ -42,6 +42,69 @@ function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhi
   return { lastNewline, lastWhitespace };
 }
 
+export type TextChunkRange = {
+  start: number;
+  end: number;
+};
+
+export type ChunkTextRangesOptions = {
+  limit: number;
+  mode?: "hard" | "preferred";
+};
+
+function findPreferredRangeEnd(text: string, start: number, end: number): number | undefined {
+  const slice = text.slice(start, end);
+  let paragraphEnd: number | undefined;
+  for (const match of slice.matchAll(/\n[\t ]*\n+/g)) {
+    if (match.index !== undefined) {
+      paragraphEnd = start + match.index + match[0].length;
+    }
+  }
+  if (paragraphEnd !== undefined) {
+    return paragraphEnd;
+  }
+
+  const newlineIndex = text.lastIndexOf("\n", end - 1);
+  if (newlineIndex >= start) {
+    return newlineIndex + 1;
+  }
+
+  for (let index = end - 1; index > start; index -= 1) {
+    if (/\s/.test(text.charAt(index))) {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Splits text into contiguous UTF-16 ranges without dropping separator whitespace.
+ * Preferred mode selects paragraph, newline, then whitespace boundaries.
+ */
+export function chunkTextRanges(text: string, options: ChunkTextRangesOptions): TextChunkRange[] {
+  if (!text) {
+    return [];
+  }
+  if (options.limit <= 0 || text.length <= options.limit) {
+    return [{ start: 0, end: text.length }];
+  }
+
+  const ranges: TextChunkRange[] = [];
+  let start = 0;
+  while (start < text.length) {
+    const maxEnd = Math.min(text.length, start + options.limit);
+    const preferredEnd =
+      options.mode === "preferred" && maxEnd < text.length
+        ? findPreferredRangeEnd(text, start, maxEnd)
+        : undefined;
+    const candidateEnd = preferredEnd && preferredEnd > start ? preferredEnd : maxEnd;
+    const end = avoidTrailingHighSurrogateBreak(text, start, candidateEnd);
+    ranges.push({ start, end });
+    start = end;
+  }
+  return ranges;
+}
+
 /**
  * Keeps UTF-16 chunk boundaries from separating a supplementary-plane character.
  * A one-unit positive limit still needs to emit an entire surrogate pair.

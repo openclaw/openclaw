@@ -1,16 +1,29 @@
 // Browser tests cover profiles plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveBrowserConfig } from "./config.js";
 import {
   allocateCdpPort,
   allocateColor,
-  CDP_PORT_RANGE_END,
-  CDP_PORT_RANGE_START,
   getUsedColors,
   getUsedPorts,
   isValidProfileName,
-  PROFILE_COLORS,
 } from "./profiles.js";
+
+const CDP_PORT_RANGE_START = 18800;
+const CDP_PORT_RANGE_END = 18899;
+const PROFILE_COLORS = [
+  "#FF4500",
+  "#0066CC",
+  "#00AA00",
+  "#9933FF",
+  "#FF6699",
+  "#00CCCC",
+  "#FF9900",
+  "#6666FF",
+  "#CC3366",
+  "#339966",
+];
 
 describe("profile name validation", () => {
   it.each(["openclaw", "work", "my-profile", "test123", "a", "a-b-c-1-2-3", "1test"])(
@@ -186,21 +199,21 @@ describe("port collision prevention", () => {
 
 describe("color allocation", () => {
   it("allocates next unused color from palette", () => {
+    const first = expectDefined(PROFILE_COLORS[0], "first browser profile color");
+    const second = expectDefined(PROFILE_COLORS[1], "second browser profile color");
+    const third = expectDefined(PROFILE_COLORS[2], "third browser profile color");
+    const fourth = expectDefined(PROFILE_COLORS[3], "fourth browser profile color");
     const cases = [
-      { name: "none used", used: new Set<string>(), expected: PROFILE_COLORS[0] },
+      { name: "none used", used: new Set<string>(), expected: first },
       {
         name: "first color used",
-        used: new Set([PROFILE_COLORS[0].toUpperCase()]),
-        expected: PROFILE_COLORS[1],
+        used: new Set([first.toUpperCase()]),
+        expected: second,
       },
       {
         name: "multiple used colors",
-        used: new Set([
-          PROFILE_COLORS[0].toUpperCase(),
-          PROFILE_COLORS[1].toUpperCase(),
-          PROFILE_COLORS[2].toUpperCase(),
-        ]),
-        expected: PROFILE_COLORS[3],
+        used: new Set([first.toUpperCase(), second.toUpperCase(), third.toUpperCase()]),
+        expected: fourth,
       },
     ] as const;
     for (const testCase of cases) {

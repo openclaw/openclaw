@@ -459,19 +459,10 @@ public actor GatewayChannelActor {
             selectedAuth: selectedAuth)
 
         let reqId = UUID().uuidString
-        var client: [String: ProtoAnyCodable] = [
-            "id": ProtoAnyCodable(clientId),
-            "displayName": ProtoAnyCodable(clientDisplayName),
-            "version": ProtoAnyCodable(
-                Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"),
-            "platform": ProtoAnyCodable(platform),
-            "mode": ProtoAnyCodable(clientMode),
-            "instanceId": ProtoAnyCodable(InstanceIdentity.instanceId),
-        ]
-        client["deviceFamily"] = ProtoAnyCodable(InstanceIdentity.deviceFamily)
-        if let model = InstanceIdentity.modelIdentifier {
-            client["modelIdentifier"] = ProtoAnyCodable(model)
-        }
+        let client = GatewayConnectPayload.makeClient(
+            options: options,
+            displayName: clientDisplayName,
+            platform: platform)
         var params: [String: ProtoAnyCodable] = [
             "minProtocol": ProtoAnyCodable(GATEWAY_MIN_PROTOCOL_VERSION),
             "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
@@ -484,6 +475,9 @@ public actor GatewayChannelActor {
         ]
         if !options.commands.isEmpty {
             params["commands"] = ProtoAnyCodable(options.commands)
+        }
+        if let pathEnv = options.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines), !pathEnv.isEmpty {
+            params["pathEnv"] = ProtoAnyCodable(pathEnv)
         }
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
@@ -775,7 +769,7 @@ extension GatewayChannelActor {
         }
         guard scheme == "ws", let host = self.url.host else { return false }
         // Setup codes intentionally allow plaintext WebSocket bootstrap on local networks
-        // for QR pairing. Persist the resulting bounded device token so reconnects do not
+        // for QR pairing. Persist the resulting server-bounded device token so reconnects do not
         // fall back to auth=none after the single-use bootstrap token is cleared.
         return LoopbackHost.isLocalNetworkHost(host)
     }
@@ -787,6 +781,7 @@ extension GatewayChannelActor {
             return []
         case "operator":
             let allowedOperatorScopes: Set = [
+                "operator.admin",
                 "operator.approvals",
                 "operator.read",
                 "operator.talk.secrets",

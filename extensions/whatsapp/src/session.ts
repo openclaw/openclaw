@@ -50,19 +50,10 @@ export { formatError, getStatusCode } from "./session-errors.js";
 export {
   getWebAuthAgeMs,
   logoutWeb,
-  logWebSelfId,
-  pickWebChannel,
-  readWebAuthSnapshot,
-  readWebAuthState,
-  readWebAuthExistsBestEffort,
   readWebAuthExistsForDecision,
-  readWebAuthSnapshotBestEffort,
-  readWebSelfIdentityForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
-  type WhatsAppWebAuthState,
-  webAuthExists,
 } from "./auth-store.js";
 export {
   waitForCredsSaveQueue,
@@ -513,9 +504,10 @@ export async function waitForWaConnection(
       }
       if (update.connection === "close") {
         cleanup();
+        const disconnectError = update.lastDisconnect?.error ?? update.lastDisconnect;
         reject(
           toLintErrorObject(
-            update.lastDisconnect ?? new Error("Connection closed"),
+            disconnectError ?? new Error("Connection closed"),
             "Non-Error rejection",
           ),
         );

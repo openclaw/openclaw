@@ -45,7 +45,7 @@ type ForkSessionFromParentParams = {
   targetStorePath?: string;
 };
 
-export type ForkedParentSessionEntry = ParentForkedSessionTranscript;
+type ForkedParentSessionEntry = ParentForkedSessionTranscript;
 
 export type ForkSessionEntryFromParentResult =
   | {

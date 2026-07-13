@@ -313,6 +313,9 @@ describe("gateway/node-command-policy", () => {
     });
     expect(iosAllowlist.has("device.info")).toBe(true);
     expect(iosAllowlist.has("photos.latest")).toBe(true);
+    expect(iosAllowlist.has("watch.status")).toBe(true);
+    expect(iosAllowlist.has("watch.notify")).toBe(true);
+    expect(iosAllowlist.has("health.summary")).toBe(false);
     expect(iosAllowlist.has("system.run")).toBe(false);
 
     const ipadAllowlist = resolveNodeCommandAllowlist(cfg, {
@@ -321,6 +324,8 @@ describe("gateway/node-command-policy", () => {
     });
     expect(ipadAllowlist.has("device.info")).toBe(true);
     expect(ipadAllowlist.has("motion.activity")).toBe(true);
+    expect(ipadAllowlist.has("watch.status")).toBe(false);
+    expect(ipadAllowlist.has("watch.notify")).toBe(false);
     expect(ipadAllowlist.has("system.run")).toBe(false);
 
     const macAllowlist = resolveNodeCommandAllowlist(cfg, {
@@ -338,6 +343,8 @@ describe("gateway/node-command-policy", () => {
     expect(watchAllowlist.has("device.info")).toBe(true);
     expect(watchAllowlist.has("device.status")).toBe(true);
     expect(watchAllowlist.has("system.notify")).toBe(true);
+    expect(watchAllowlist.has("watch.status")).toBe(false);
+    expect(watchAllowlist.has("watch.notify")).toBe(false);
     expect(watchAllowlist.has("camera.list")).toBe(false);
     expect(watchAllowlist.has("system.run")).toBe(false);
   });
@@ -527,6 +534,33 @@ describe("gateway/node-command-policy", () => {
       gateway: { nodes: { allowCommands: ["computer.act"] } },
     } as OpenClawConfig;
     expect(resolveNodeCommandAllowlist(armedCfg, macNode).has("computer.act")).toBe(true);
+  });
+
+  it("requires explicit gateway opt-in for iOS health summaries", () => {
+    const node = {
+      platform: "iOS 18.4.0",
+      deviceFamily: "iPhone",
+      commands: ["health.summary"],
+    };
+    expect(resolveNodeCommandAllowlist({} as OpenClawConfig, node).has("health.summary")).toBe(
+      false,
+    );
+
+    const armed = {
+      gateway: { nodes: { allowCommands: ["health.summary"] } },
+    } as OpenClawConfig;
+    expect(resolveNodePairingCommandAllowlist(armed, node).has("health.summary")).toBe(true);
+    expect(resolveNodeCommandAllowlist(armed, node).has("health.summary")).toBe(true);
+
+    const denied = {
+      gateway: {
+        nodes: {
+          allowCommands: ["health.summary"],
+          denyCommands: ["health.summary"],
+        },
+      },
+    } as OpenClawConfig;
+    expect(resolveNodeCommandAllowlist(denied, node).has("health.summary")).toBe(false);
   });
 
   it("reads foreground restriction metadata from plugin node policies", () => {

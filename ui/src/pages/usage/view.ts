@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import "../../styles/usage.css";
 import { getUsageCacheRefreshTitle } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
@@ -345,7 +346,7 @@ export function renderUsage(props: UsageProps) {
         ? filteredSessions
         : filters.selectedDays.length > 0
           ? dayFilteredSessions
-          : sortedSessions;
+          : agentScopedSessions;
   const hasAggregateFilters =
     filters.selectedSessions.length > 0 ||
     hasQuery ||
@@ -353,7 +354,7 @@ export function renderUsage(props: UsageProps) {
     filters.selectedDays.length > 0 ||
     Boolean(filters.agentId);
   const activeAggregates = hasAggregateFilters
-    ? buildAggregatesFromSessions(aggregateSessions, data.aggregates)
+    ? buildAggregatesFromSessions(aggregateSessions)
     : buildAggregatesFromSessions([], data.aggregates);
   const insightsUseVisiblePage = data.sessionsLimitReached && !hasAggregateFilters;
   const insightTotals = insightsUseVisiblePage

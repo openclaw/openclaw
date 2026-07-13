@@ -1,4 +1,5 @@
 // Verifies optional plugin tool registration and absence handling.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -36,7 +37,7 @@ let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
 let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
 let getPluginToolMeta: typeof import("./tools.js").getPluginToolMeta;
-let resetPluginToolFactoryCache: typeof import("./tools.js").resetPluginToolFactoryCache;
+let resetPluginToolDescriptorCacheForTest: typeof import("./tools.test-fixtures.js").resetPluginToolDescriptorCacheForTest;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let pinActivePluginChannelRegistry: typeof import("./runtime.js").pinActivePluginChannelRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
@@ -481,7 +482,6 @@ describe("resolvePluginTools optional tools", () => {
       buildPluginToolMetadataKey,
       ensureStandalonePluginToolRegistryLoaded,
       getPluginToolMeta,
-      resetPluginToolFactoryCache,
       resolvePluginTools,
     } = await import("./tools.js"));
     ({
@@ -494,6 +494,7 @@ describe("resolvePluginTools optional tools", () => {
       await import("./runtime/gateway-request-scope.js"));
     ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata-snapshot.js"));
+    ({ resetPluginToolDescriptorCacheForTest } = await import("./tools.test-fixtures.js"));
   });
 
   beforeEach(() => {
@@ -509,13 +510,13 @@ describe("resolvePluginTools optional tools", () => {
     }));
     resetPluginRuntimeStateForTest?.();
     clearCurrentPluginMetadataSnapshot?.();
-    resetPluginToolFactoryCache?.();
+    resetPluginToolDescriptorCacheForTest?.();
   });
 
   afterEach(() => {
     resetPluginRuntimeStateForTest?.();
     clearCurrentPluginMetadataSnapshot?.();
-    resetPluginToolFactoryCache?.();
+    resetPluginToolDescriptorCacheForTest?.();
     setLoggerOverride(null);
     loggingState.rawConsole = null;
     resetLogger();
@@ -1289,7 +1290,9 @@ describe("resolvePluginTools optional tools", () => {
     });
 
     expectResolvedToolNames(tools, ["x_search"]);
-    expect(getPluginToolMeta(tools[0])?.replaySafe).toBe(true);
+    expect(getPluginToolMeta(expectDefined(tools[0], "tools[0] test invariant"))?.replaySafe).toBe(
+      true,
+    );
     expect(factory).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
@@ -1797,12 +1800,24 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(first, ["other_tool", "optional_tool"]);
     expectResolvedToolNames(second, ["other_tool", "optional_tool"]);
-    expect(getPluginToolMeta(first[0])?.optional).toBe(false);
-    expect(getPluginToolMeta(first[0])?.trustedLocalMedia).toBe(true);
-    expect(getPluginToolMeta(first[1])?.optional).toBe(true);
-    expect(getPluginToolMeta(first[1])?.trustedLocalMedia).toBe(true);
-    expect(getPluginToolMeta(second[1])?.optional).toBe(true);
-    expect(getPluginToolMeta(second[1])?.trustedLocalMedia).toBe(true);
+    expect(getPluginToolMeta(expectDefined(first[0], "first[0] test invariant"))?.optional).toBe(
+      false,
+    );
+    expect(
+      getPluginToolMeta(expectDefined(first[0], "first[0] test invariant"))?.trustedLocalMedia,
+    ).toBe(true);
+    expect(getPluginToolMeta(expectDefined(first[1], "first[1] test invariant"))?.optional).toBe(
+      true,
+    );
+    expect(
+      getPluginToolMeta(expectDefined(first[1], "first[1] test invariant"))?.trustedLocalMedia,
+    ).toBe(true);
+    expect(getPluginToolMeta(expectDefined(second[1], "second[1] test invariant"))?.optional).toBe(
+      true,
+    );
+    expect(
+      getPluginToolMeta(expectDefined(second[1], "second[1] test invariant"))?.trustedLocalMedia,
+    ).toBe(true);
     expect(factory).toHaveBeenCalledTimes(1);
   });
 

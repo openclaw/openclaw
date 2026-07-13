@@ -427,6 +427,30 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("sends idle stop aliases as ordinary chat messages", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      await composer.fill("wait");
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(sendRequest.params).message).toBe("wait");
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("persists the chat send shortcut and keeps multiline and IME input safe", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -452,15 +476,15 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       await page.getByText("Default shortcut received.").waitFor({ timeout: 10_000 });
 
-      await page.getByRole("button", { name: "Chat settings" }).click();
-      const shortcutSelect = page.getByLabel("Send shortcut");
+      // The send shortcut moved to the Settings appearance page; picking it
+      // there must apply to the chat composer after navigating back.
+      await page.goto(`${server.baseUrl}settings/appearance`);
+      const shortcutSelect = page.locator("[data-settings-send-shortcut]");
       await shortcutSelect.selectOption("modifier-enter");
       expect(await shortcutSelect.inputValue()).toBe("modifier-enter");
 
-      await page.reload();
+      await page.goto(`${server.baseUrl}chat`);
       await composer.waitFor({ state: "visible", timeout: 10_000 });
-      await page.getByRole("button", { name: "Chat settings" }).click();
-      expect(await page.getByLabel("Send shortcut").inputValue()).toBe("modifier-enter");
       expect(await composer.getAttribute("aria-keyshortcuts")).toBe("Control+Enter Meta+Enter");
 
       await composer.fill("plain enter stays in the draft");
@@ -1279,10 +1303,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
         timeout: 10_000,
       });
-      await page.locator(".markdown-plain-text-fallback").getByText("working **tail").waitFor({
+      await page.locator(".chat-bubble.streaming strong").getByText("tail").waitFor({
         timeout: 10_000,
       });
-      expect(await page.locator(".markdown-plain-text-fallback strong").count()).toBe(0);
+      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
@@ -1338,9 +1362,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-thread h2").getByText("Unicode stream").waitFor({
         timeout: 10_000,
       });
-      await page.locator(".markdown-plain-text-fallback").getByText("working **tail").waitFor({
+      await page.locator(".chat-bubble.streaming strong").getByText("tail").waitFor({
         timeout: 10_000,
       });
+      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       await gateway.emitChatFinal({
@@ -1422,9 +1447,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      const newSessionButton = page
-        .locator("openclaw-app-sidebar")
-        .getByRole("button", { name: "New session" });
+      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-session-new");
       await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
       await newSessionButton.click();
 
@@ -1771,6 +1794,46 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.getByText(response).waitFor({ timeout: 10_000 });
       await page.locator(".chat-reading-indicator").waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps a steerable queued message above the composer while a run is active", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const activePrompt = "keep this run active";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(activePrompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const queuedPrompt = "show this only above the composer";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
+      await page.getByRole("button", { name: "Queue message" }).click();
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
+      await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-thread").getByText(queuedPrompt).count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/steer-queue-composer-only.png`,
+          fullPage: true,
+        });
+      }
     } finally {
       await closeBrowserContext(context);
     }
@@ -2235,6 +2298,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           type: "file",
         },
       ]);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/02-reconnected-active.png`, fullPage: true });
+      }
       await expectRequestCountStable(gateway, "chat.send", 1);
       const requestsAfterReconnect = await gateway.getRequests("chat.send");
       await gateway.setHistoryMessages([
@@ -2254,7 +2322,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator("openclaw-connection-banner").waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/02-online-delivered.png`, fullPage: true });
+        await page.screenshot({ path: `${artifactDir}/03-online-delivered.png`, fullPage: true });
       }
       if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
         process.stdout.write(
@@ -2591,6 +2659,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.clock.install();
     const sessions = chatSessionListResponse();
     const firstSession = expectDefined(sessions.sessions[0], "first chat session fixture");
     const secondSession = expectDefined(sessions.sessions[1], "second chat session fixture");
@@ -2621,12 +2690,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
 
       await recentRow.dispatchEvent("mouseenter");
-      await page.waitForTimeout(250);
+      await page.clock.runFor(250);
       expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
         "hover-marquee--scrolling",
       );
       await recentRow.dispatchEvent("mouseleave");
-      await page.waitForTimeout(300);
+      await page.clock.runFor(300);
       expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
         "hover-marquee--scrolling",
       );
@@ -2711,6 +2780,110 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const params = requireRecord(sendRequest.params);
       expect(params.message).toBe(prompt);
       expect(params.sessionKey).toBe("agent:main:session-a");
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("applies provider-specific reasoning after the selected model is saved", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:session-a";
+    const fableSession = {
+      key: sessionKey,
+      kind: "direct",
+      label: "Session A",
+      model: "claude-fable-5",
+      modelProvider: "anthropic",
+      thinkingDefault: "high",
+      thinkingLevel: "high",
+      thinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "adaptive", label: "adaptive" },
+        { id: "high", label: "high" },
+        { id: "xhigh", label: "xhigh" },
+        { id: "max", label: "max" },
+      ],
+      updatedAt: 2,
+    };
+    const solSession = {
+      ...fableSession,
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      thinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "low" },
+        { id: "medium", label: "medium" },
+        { id: "high", label: "high" },
+        { id: "ultra", label: "ultra" },
+      ],
+    };
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.patch"],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([fableSession]),
+      },
+      models: [
+        { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+      ],
+      sessionKey,
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const main = page.getByRole("main");
+      await main.locator('[data-chat-model-select="true"]').click();
+      await main.locator('[data-chat-model-provider="openai"]').click();
+      await main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+
+      const modelPatch = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(modelPatch.params)).toMatchObject({
+        key: sessionKey,
+        model: "openai/gpt-5.6-sol",
+      });
+      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
+      await expect.poll(() => thinkingSlider.isDisabled()).toBe(true);
+      await thinkingSlider.evaluate((input) => {
+        const slider = input as HTMLInputElement;
+        slider.value = slider.max;
+        slider.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await expectRequestCountStable(gateway, "sessions.patch", 1);
+
+      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([solSession]));
+      await gateway.resolveDeferred("sessions.patch");
+      await expect
+        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+        .toContain("ultra");
+      await expect.poll(() => thinkingSlider.isEnabled()).toBe(true);
+
+      await thinkingSlider.evaluate((input) => {
+        const slider = input as HTMLInputElement;
+        const values = (slider.dataset.chatThinkingValues ?? "").split(",");
+        slider.value = String(values.indexOf("ultra"));
+        slider.dispatchEvent(new Event("input", { bubbles: true }));
+        slider.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      const patches = await waitForRequests(gateway, "sessions.patch", 2);
+      expect(requireRecord(patches[1]?.params)).toMatchObject({
+        key: sessionKey,
+        thinkingLevel: "ultra",
+      });
+      await expect.poll(() => page.getByText(/not supported for/u).count()).toBe(0);
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/model-thinking-sync.png`,
+          fullPage: true,
+        });
+      }
     } finally {
       await closeBrowserContext(context);
     }

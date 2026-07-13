@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -349,46 +350,37 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   };
 });
 
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({
-    hasHooks: (hookName: string) =>
-      (hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks) ||
-      (hookName === "before_message_write" &&
-        (mockState.beforeMessageWriteBlock || mockState.beforeMessageWriteContent !== null)),
-    runBeforeMessageWrite: (event: { message: unknown }, ctx: unknown) => {
-      mockState.beforeMessageWriteCalls.push({ message: event.message, ctx });
-      if (mockState.beforeMessageWriteBlock) {
-        return { block: true };
-      }
-      if (mockState.beforeMessageWriteContent !== null) {
-        return {
-          message: {
-            ...(typeof event.message === "object" && event.message !== null ? event.message : {}),
-            role: "user",
-            content: mockState.beforeMessageWriteContent,
-          },
-        };
-      }
-      return undefined;
-    },
-  }),
-}));
+vi.mock("../../plugins/hook-runner-global.js", () => {
+  const hasHooks = (hookName: string) =>
+    (hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks) ||
+    (hookName === "before_message_write" &&
+      (mockState.beforeMessageWriteBlock || mockState.beforeMessageWriteContent !== null));
+  return {
+    getGlobalHookRunner: () => ({
+      hasHooks,
+      runBeforeMessageWrite: (event: { message: unknown }, ctx: unknown) => {
+        mockState.beforeMessageWriteCalls.push({ message: event.message, ctx });
+        if (mockState.beforeMessageWriteBlock) {
+          return { block: true };
+        }
+        if (mockState.beforeMessageWriteContent !== null) {
+          return {
+            message: {
+              ...(typeof event.message === "object" && event.message !== null ? event.message : {}),
+              role: "user",
+              content: mockState.beforeMessageWriteContent,
+            },
+          };
+        }
+        return undefined;
+      },
+    }),
+    hasGlobalHooks: hasHooks,
+  };
+});
 
 vi.mock("../../sessions/transcript-events.js", () => ({
   emitSessionTranscriptUpdate: vi.fn(
-    (update: {
-      sessionFile?: string;
-      target?: { agentId: string; sessionId: string; sessionKey: string };
-      agentId?: string;
-      sessionId?: string;
-      sessionKey?: string;
-      message?: unknown;
-      messageId?: string;
-    }) => {
-      mockState.emittedTranscriptUpdates.push(update);
-    },
-  ),
-  emitInternalSessionTranscriptUpdate: vi.fn(
     (update: {
       sessionFile?: string;
       target?: { agentId: string; sessionId: string; sessionKey: string };
@@ -884,7 +876,10 @@ async function runNonStreamingChatSend(params: {
   if (typeof params.deliver === "boolean") {
     sendParams.deliver = params.deliver;
   }
-  await chatHandlers["chat.send"]({
+  await expectDefined(
+    chatHandlers["chat.send"],
+    'chatHandlers["chat.send"] test invariant',
+  )({
     params: {
       ...sendParams,
       ...params.requestParams,
@@ -1323,7 +1318,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const context = createChatContext();
     mockState.loadSessionEntryCalls = [];
 
-    await chatHandlers["chat.history"]({
+    await expectDefined(
+      chatHandlers["chat.history"],
+      'chatHandlers["chat.history"] test invariant',
+    )({
       params: { sessionKey: "agent:work:main" },
       respond: respond as never,
       req: {} as never,
@@ -3452,7 +3450,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.inject"]({
+    await expectDefined(
+      chatHandlers["chat.inject"],
+      'chatHandlers["chat.inject"] test invariant',
+    )({
       params: { sessionKey: "main", message: "[[reply_to_current]]" },
       respond,
       req: {} as never,
@@ -3479,7 +3480,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.inject"]({
+    await expectDefined(
+      chatHandlers["chat.inject"],
+      'chatHandlers["chat.inject"] test invariant',
+    )({
       params: { sessionKey: "main", message: "must stay read-only" },
       respond,
       req: {} as never,
@@ -3513,7 +3517,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const context = createChatContext();
 
     try {
-      const inject = chatHandlers["chat.inject"]({
+      const inject = expectDefined(
+        chatHandlers["chat.inject"],
+        'chatHandlers["chat.inject"] test invariant',
+      )({
         params: { sessionKey: "main", message: "must lose the archive race" },
         respond,
         req: {} as never,
@@ -3543,7 +3550,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const respond = vi.fn();
       const context = createChatContext();
 
-      await chatHandlers["chat.inject"]({
+      await expectDefined(
+        chatHandlers["chat.inject"],
+        'chatHandlers["chat.inject"] test invariant',
+      )({
         params: { sessionKey: "main", message: "hello sqlite inject" },
         respond,
         req: {} as never,
@@ -3610,7 +3620,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: `agent:main:${"x".repeat(CHAT_SEND_SESSION_KEY_MAX_LENGTH)}`,
         message: "hello",
@@ -3636,7 +3649,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "agent:main:harness:codex:supervision:native-thread",
         message: "claim reserved session",
@@ -3664,7 +3680,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.inject"]({
+    await expectDefined(
+      chatHandlers["chat.inject"],
+      'chatHandlers["chat.inject"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         message: `hello\n\n${UNTRUSTED_CONTEXT_SUFFIX}`,
@@ -3690,7 +3709,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.inject"]({
+    await expectDefined(
+      chatHandlers["chat.inject"],
+      'chatHandlers["chat.inject"] test invariant',
+    )({
       params: {
         sessionKey: "legacy-key",
         message: "hello",
@@ -3726,7 +3748,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(appendedAt);
     try {
-      await chatHandlers["chat.inject"]({
+      await expectDefined(
+        chatHandlers["chat.inject"],
+        'chatHandlers["chat.inject"] test invariant',
+      )({
         params: {
           sessionKey: "main",
           message: "hello with registry marker",
@@ -3759,7 +3784,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.inject"]({
+    await expectDefined(
+      chatHandlers["chat.inject"],
+      'chatHandlers["chat.inject"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         agentId: "work",
@@ -6822,6 +6850,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
 describe("chat.send operator UI client sender context", () => {
   it("does not inject sender identity fields for Control UI clients", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-control-ui-sender-");
     const respond = vi.fn();
     const context = createChatContext();
 

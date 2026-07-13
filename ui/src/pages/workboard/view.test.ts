@@ -502,9 +502,9 @@ describe("renderWorkboard", () => {
       "Unsaved edit",
     );
 
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const cancelButton = container.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]');
+    expect(cancelButton?.disabled).toBe(false);
+    cancelButton?.click();
 
     expect(state.draftOpen).toBe(false);
   });
@@ -660,7 +660,7 @@ describe("renderWorkboard", () => {
         onOpenSession: () => undefined,
       });
 
-      expect(container.textContent).toContain("heartbeat 42 s");
+      expect(container.textContent).toContain("heartbeat 42s");
     } finally {
       vi.useRealTimers();
     }

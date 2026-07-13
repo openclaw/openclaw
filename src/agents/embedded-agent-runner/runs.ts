@@ -55,7 +55,6 @@ export {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
-  type ActiveEmbeddedRunSnapshot,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
 } from "./run-state.js";
@@ -948,4 +947,3 @@ export const testing = {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   },
 };
-export { testing as __testing };

@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
-  OPENCLAW_CRABLINE_MANIFEST_PATH,
   startOpenClawCrablineAdapter,
   type OpenClawCrablineChannelDriverSelection,
   type OpenClawCrablineInbound,
@@ -50,6 +49,11 @@ type QaCrablineTransportState = QaTransportState & {
   observeEvent: (event: unknown) => void;
   rememberProviderTarget: (providerTargetKey: string, qaTarget: string) => void;
 };
+
+function formatLogicalQaTarget({ conversation, threadId }: QaBusInboundMessageInput) {
+  const prefix = conversation.kind === "direct" ? "dm" : conversation.kind;
+  return threadId ? `thread:${conversation.id}/${threadId}` : `${prefix}:${conversation.id}`;
+}
 
 const TELEGRAM_LIFECYCLE_METHOD_RE = /\/(sendMessage|editMessageText|deleteMessage)$/u;
 
@@ -297,10 +301,16 @@ function createCrablineState(params: {
       const providerInbound = params.adapter.createInbound({
         input: {
           ...input,
+          conversation: {
+            ...input.conversation,
+            kind: input.conversation.kind === "direct" ? "direct" : "group",
+          },
           senderId: providerSenderId,
         },
       });
-      targetByProviderTarget.set(providerInbound.providerTargetKey, providerInbound.qaTarget);
+      // Providers may coerce channel conversations to groups; preserve the scenario's logical
+      // target so outbound waits and assertions still match the original input.
+      targetByProviderTarget.set(providerInbound.providerTargetKey, formatLogicalQaTarget(input));
       const providerMessageId = await postCrablineInbound({
         adapter: params.adapter,
         providerInbound,
@@ -473,11 +483,6 @@ export async function createQaCrablineTransportAdapter(params: {
     openclawConfig: {},
     recorderPath,
   });
-  await fs.writeFile(
-    path.join(params.outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH),
-    `${JSON.stringify(adapter.manifest, null, 2)}\n`,
-    "utf8",
-  );
 
   const state = createCrablineState({
     adapter,
