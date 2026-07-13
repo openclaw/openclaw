@@ -467,10 +467,8 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: params.agentId,
     });
-    // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
     let yieldMessage: string | null = null;
-    // Late-binding reference so onYield can abort the session (declared after tool creation)
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
@@ -491,7 +489,8 @@ export async function runEmbeddedAttempt(
     });
     bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
     bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
-    const { clientTools, tools, uncompactedEffectiveTools } = preparedBundleTools;
+    const { clientTools, middlewarePluginMetadataSnapshot, tools, uncompactedEffectiveTools } =
+      preparedBundleTools;
     const preparedToolCatalog = prepareEmbeddedAttemptToolCatalog({
       attempt: params,
       preparedToolBase,
@@ -758,6 +757,8 @@ export async function runEmbeddedAttempt(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        workspaceDir: effectiveWorkspace,
+        pluginMetadataSnapshot: middlewarePluginMetadataSnapshot,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
@@ -782,7 +783,6 @@ export async function runEmbeddedAttempt(
       applyAgentAutoCompactionGuard(autoCompactionGuardArgs);
       prepStages.mark("session-resource-loader");
 
-      // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
 
       const {

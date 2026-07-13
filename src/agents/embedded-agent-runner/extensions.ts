@@ -3,6 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
@@ -50,11 +51,21 @@ function snapshotToolSendReceipt(details: unknown): unknown {
     : toolSend;
 }
 
-function buildAgentToolResultMiddlewareFactory(
-  sessionManager: SessionManager,
-  runId?: string,
-): ExtensionFactory {
-  const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
+function buildAgentToolResultMiddlewareFactory(params: {
+  cfg: OpenClawConfig | undefined;
+  sessionManager: SessionManager;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry" | "pluginIds">;
+  runId?: string;
+}): ExtensionFactory {
+  const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, undefined, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    manifestRegistry:
+      params.pluginMetadataSnapshot?.pluginIds === undefined
+        ? params.pluginMetadataSnapshot?.manifestRegistry
+        : undefined,
+  });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
       const event = recordFromUnknown(rawEvent) as AgentToolResultEvent;
@@ -74,11 +85,11 @@ function buildAgentToolResultMiddlewareFactory(
       const rawToolSend = snapshotToolSendReceipt(current.details);
       if (eventToolCallId && rawToolSend !== undefined) {
         // Routing evidence stays private so middleware may fully replace result details.
-        recordEmbeddedToolSendReceipt(sessionManager, eventToolCallId, rawToolSend);
+        recordEmbeddedToolSendReceipt(params.sessionManager, eventToolCallId, rawToolSend);
       }
       const inputHadErrorStatus = isToolResultError(current);
       const adjustedInput = eventToolCallId
-        ? peekAdjustedParamsForToolCall(eventToolCallId, runId)
+        ? peekAdjustedParamsForToolCall(eventToolCallId, params.runId)
         : undefined;
       const result = await runner.applyToolResultMiddleware({
         threadId: event.threadId,
@@ -101,7 +112,7 @@ function buildAgentToolResultMiddlewareFactory(
       if (eventToolCallId) {
         finalizeToolTerminalPresentation({
           toolCallId: eventToolCallId,
-          runId,
+          runId: params.runId,
           result,
           isError,
         });
@@ -175,6 +186,7 @@ export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
   workspaceDir?: string;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry" | "pluginIds">;
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
@@ -212,6 +224,14 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
-  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
+  factories.push(
+    buildAgentToolResultMiddlewareFactory({
+      cfg: params.cfg,
+      sessionManager: params.sessionManager,
+      workspaceDir: params.workspaceDir,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      runId: params.runId,
+    }),
+  );
   return factories;
 }

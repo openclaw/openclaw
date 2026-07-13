@@ -8,6 +8,7 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareContext,
   AgentToolResultMiddlewareEvent,
+  AgentToolResultMiddlewareLoaderContext,
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
@@ -480,15 +481,14 @@ function reconcileDeliveredMessagingFailure(
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
+  loaderContext?: AgentToolResultMiddlewareLoaderContext,
 ) {
   const middlewareContext = { ...ctx, harness: ctx.harness ?? ctx.runtime };
   let resolvedHandlers = handlers;
   const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
     const { loadAgentToolResultMiddlewaresForRuntime } =
       await import("../../plugins/agent-tool-result-middleware-loader.js");
-    return loadAgentToolResultMiddlewaresForRuntime({
-      runtime: ctx.runtime,
-    });
+    return loadAgentToolResultMiddlewaresForRuntime({ runtime: ctx.runtime, ...loaderContext });
   });
   const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
     if (resolvedHandlers) {

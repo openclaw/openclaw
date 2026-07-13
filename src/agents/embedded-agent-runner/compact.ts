@@ -1482,7 +1482,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
         },
       });
     };
-
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -1522,22 +1521,23 @@ async function compactEmbeddedAgentSessionDirectOnce(
       });
       compactionSessionManager = sessionManager;
       trackSessionManagerAccess(params.sessionFile);
+      const pluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+      });
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
         cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
-        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-          config: params.config,
-          env: process.env,
-          workspaceDir: effectiveWorkspace,
-        }),
+        pluginMetadataSnapshot,
         contextTokenBudget,
       });
-      // Sets compaction/pruning runtime state and returns extension factories
-      // that must be passed to the resource loader for the safeguard to be active.
+      // Sets compaction/pruning runtime state and extension factories for the resource loader.
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        workspaceDir: effectiveWorkspace,
+        pluginMetadataSnapshot,
         provider,
         modelId,
         model: effectiveModel,
