@@ -153,7 +153,6 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
     });
 
     await page.goto(`${server.baseUrl}chat`);
-    await expandCompletedWorkGroups(page);
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
     expect(await activity.textContent()).toContain("Read a file, edited 2 files");
@@ -186,6 +185,55 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
     await rawDetails.click();
     await page.getByText("Applied patch", { exact: true }).waitFor();
     await captureToolActivityProof(page, "parallel-multifile-expanded");
+    await context.close();
+  });
+
+  it("keeps a message-only turn visible with its first message line", async () => {
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const page = await context.newPage();
+    const message = "Hello Molty, first claw-to-claw hello.";
+    await installMockGateway(page, {
+      historyMessages: [
+        { role: "user", content: "Send the Reef greeting.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message",
+              name: "message",
+              arguments: {
+                action: "send",
+                channel: "reef",
+                target: "@molty",
+                message: `${message}\nHidden second line.`,
+              },
+            },
+          ],
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-message",
+          toolName: "message",
+          content: [{ type: "text", text: '{"status":"sent"}' }],
+          timestamp: 3,
+        },
+      ],
+    });
+
+    await page.goto(`${server.baseUrl}chat`);
+    const row = page.locator(".chat-tool-msg-summary", { hasText: message });
+    await row.waitFor();
+
+    expect(await page.locator(".chat-work-group").count()).toBe(0);
+    expect(await row.locator(".chat-tool-msg-summary__label").textContent()).toBe("Message");
+    expect(await row.locator(".chat-tool-msg-summary__names").textContent()).toBe(message);
+    await captureToolActivityProof(page, "message-only-turn-visible");
+    await row.click();
+    await page.getByText("action:", { exact: true }).waitFor();
+    expect(await page.getByText("send", { exact: true }).count()).toBe(1);
+    expect(await page.getByText("Hidden second line.", { exact: false }).count()).toBeGreaterThan(0);
     await context.close();
   });
 

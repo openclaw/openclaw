@@ -14,6 +14,7 @@ import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
+  resolveCollapsedToolArgumentPreview,
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
@@ -476,12 +477,17 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     isError: outcome === "failed",
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const displayName = formatDistinctCollapsedToolSummaryText(summary.name, displayLabel);
+  const argumentPreview =
+    outcome === "failed" ? undefined : resolveCollapsedToolArgumentPreview(card.args);
+  const displayName = formatDistinctCollapsedToolSummaryText(
+    argumentPreview ?? summary.name,
+    displayLabel,
+  );
   const aiTitle = getToolCallTitle(card.name, card.args);
   if (aiTitle) {
     return html`
       <span class="chat-tool-row__title">${aiTitle}</span>
-      <span class="chat-tool-row__detail">${displayLabel}</span>
+      <span class="chat-tool-row__detail">${argumentPreview ?? displayLabel}</span>
     `;
   }
   return html`
@@ -742,7 +748,8 @@ export function resolveToolRowText(card: ToolCard, runActive?: boolean): string 
     return `${verb} ${view.target}`;
   }
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  return display.label;
+  const preview = resolveCollapsedToolArgumentPreview(card.args);
+  return preview ? `${display.label} ${preview}` : display.label;
 }
 
 export function renderToolCard(
