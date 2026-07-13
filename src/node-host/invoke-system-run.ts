@@ -7,14 +7,8 @@ import {
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import type { ExecDenylistEntry } from "../infra/exec-approvals-denylist.js";
 import {
-  buildExecDenylistRuleKey,
-  type ExecDenylistEntry,
-  evaluateExecDenylist,
-  resolveEffectiveExecDenylist,
-} from "../infra/exec-approvals-denylist.js";
-import {
-  assertCurrentDenylistAuthorization,
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
   createExecApprovalPolicySnapshot,
@@ -29,7 +23,6 @@ import {
   resolveExecApprovalsLocked,
   resolveExecModePolicy,
   type ExecAllowlistEntry,
-  type ExecDenylistAuthorizationBinding,
   type ExecApprovalUsageAuthorization,
   type ExecApprovalPolicySnapshot,
   type ExecApprovalsResolved,
@@ -41,12 +34,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
-import type {
-  ExecHostDenylistAuthorizationSnapshot,
-  ExecHostRequest,
-  ExecHostResponse,
-  ExecHostRunResult,
-} from "../infra/exec-host.js";
+import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
@@ -71,15 +59,27 @@ import {
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
 import {
+  normalizeDeniedReason,
+  sendSystemRunDenied,
+  type SystemRunExecutionContext,
+} from "./invoke-system-run-denial.js";
+import {
+  assertSystemRunDenylistAuthorization,
+  buildSystemRunDenylistBinding,
+  evaluateSystemRunDenylistPolicy,
+  resolveRuntimeConfigAccessor,
+  toPortableDenylistBinding,
+} from "./invoke-system-run-denylist.js";
+import {
   hardenApprovedExecutionPaths,
   revalidateApprovedCwdSnapshot,
   revalidateApprovedMutableFileOperand,
   resolveMutableFileOperandSnapshotSync,
   type ApprovedCwdSnapshot,
 } from "./invoke-system-run-plan.js";
+import { sendSystemRunCompleted } from "./invoke-system-run-result.js";
 import type {
   ExecEventPayload,
-  ExecFinishedResult,
   ExecFinishedEventParams,
   RunResult,
   SkillBinsProvider,
@@ -90,23 +90,6 @@ type SystemRunInvokeResult = {
   ok: boolean;
   payloadJSON?: string | null;
   error?: { code?: string; message?: string } | null;
-};
-
-type SystemRunDeniedReason =
-  | "security=deny"
-  | "approval-required"
-  | "approval-state-write-failed"
-  | "allowlist-miss"
-  | "denylist-hit"
-  | "execution-plan-miss"
-  | "companion-unavailable"
-  | "permission:screenRecording";
-
-type SystemRunExecutionContext = {
-  sessionKey: string;
-  runId: string;
-  commandText: string;
-  suppressNotifyOnExit: boolean;
 };
 
 type SystemRunParsePhase = {
@@ -191,21 +174,6 @@ function warnWritableTrustedDirOnce(message: string): void {
   }
   safeBinTrustedDirWarningCache.add(message);
   logWarn(message);
-}
-
-function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
-  switch (reason) {
-    case "security=deny":
-    case "approval-required":
-    case "allowlist-miss":
-    case "denylist-hit":
-    case "execution-plan-miss":
-    case "companion-unavailable":
-    case "permission:screenRecording":
-      return reason;
-    default:
-      return "approval-required";
-  }
 }
 
 function resolveAgentExecConfig(
@@ -319,124 +287,6 @@ async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<
   }
   const { getRuntimeConfig } = await import("../config/config.js");
   return getRuntimeConfig();
-}
-
-/**
- * Resolves the runtime-config accessor used for the locked commit re-screen:
- * the injected test/embedding accessor when present, otherwise the same config
- * module {@link loadSystemRunConfig} reads, so production node hosts also see
- * hot config changes.
- */
-async function resolveRuntimeConfigAccessor(
-  opts: HandleSystemRunInvokeOptions,
-): Promise<() => OpenClawConfig> {
-  if (opts.getRuntimeConfig) {
-    return opts.getRuntimeConfig;
-  }
-  const { getRuntimeConfig } = await import("../config/config.js");
-  return getRuntimeConfig;
-}
-
-/**
- * Re-resolves the current config-layer exec denylist (global + agent override
- * union) so a STOP rule hot-added while a system.run approval was pending
- * revokes the pending authority at commit time.
- */
-function resolveCurrentSystemRunConfigDenylist(
-  getConfig: () => OpenClawConfig,
-  agentId: string | undefined,
-): readonly ExecDenylistEntry[] {
-  const cfg = getConfig();
-  const agentExec = resolveAgentExecConfig(cfg, agentId);
-  return resolveEffectiveExecDenylist({
-    layers: [cfg.tools?.exec?.denylist, agentExec?.denylist],
-  });
-}
-
-function buildSystemRunDenylistBinding(
-  phase: SystemRunPolicyPhase,
-  getConfig: () => OpenClawConfig,
-  execArgv?: readonly string[],
-): ExecDenylistAuthorizationBinding {
-  // Screen the ACTUAL dispatch argv too: the resolved execution plan can pin
-  // absolute executable paths that the pre-approval command text/segments do
-  // not carry, and a STOP rule written against the resolved path must still
-  // revoke the pending authority. Only added when analysis succeeded so the
-  // conservative fail-closed path (!analysisOk && segments.length === 0) is
-  // never weakened by a synthetic segment.
-  const segments =
-    phase.analysisOk && execArgv && execArgv.length > 0
-      ? [...phase.segments, { argv: [...execArgv] }]
-      : phase.segments;
-  return {
-    command: phase.commandText,
-    segments,
-    analysisOk: phase.analysisOk,
-    configDenylist: phase.denylistConfigEntries,
-    resolveCurrentConfigDenylist: () =>
-      resolveCurrentSystemRunConfigDenylist(getConfig, phase.agentId),
-    approvedRuleKeys: phase.approvedDenylistRuleKeys,
-  };
-}
-
-function toPortableDenylistBinding(
-  phase: SystemRunPolicyPhase,
-): ExecHostDenylistAuthorizationSnapshot {
-  return {
-    command: phase.commandText,
-    analysisOk: phase.analysisOk,
-    configDenylist: [...phase.denylistConfigEntries],
-    approvedRuleKeys: [...phase.approvedDenylistRuleKeys],
-    denylisted: phase.denylisted,
-  };
-}
-
-async function sendSystemRunDenied(
-  opts: Pick<
-    HandleSystemRunInvokeOptions,
-    "client" | "sendNodeEvent" | "buildExecEventPayload" | "sendInvokeResult"
-  >,
-  execution: SystemRunExecutionContext,
-  params: {
-    reason: SystemRunDeniedReason;
-    message: string;
-  },
-) {
-  await opts.sendNodeEvent(
-    opts.client,
-    "exec.denied",
-    opts.buildExecEventPayload({
-      sessionKey: execution.sessionKey,
-      runId: execution.runId,
-      host: "node",
-      command: execution.commandText,
-      reason: params.reason,
-      suppressNotifyOnExit: execution.suppressNotifyOnExit,
-    }),
-  );
-  await opts.sendInvokeResult({
-    ok: false,
-    error: { code: "UNAVAILABLE", message: params.message },
-  });
-}
-
-async function sendSystemRunCompleted(
-  opts: Pick<HandleSystemRunInvokeOptions, "sendExecFinishedEvent" | "sendInvokeResult">,
-  execution: SystemRunExecutionContext,
-  result: ExecFinishedResult,
-  payloadJSON: string,
-) {
-  await opts.sendExecFinishedEvent({
-    sessionKey: execution.sessionKey,
-    runId: execution.runId,
-    commandText: execution.commandText,
-    result,
-    suppressNotifyOnExit: execution.suppressNotifyOnExit,
-  });
-  await opts.sendInvokeResult({
-    ok: true,
-    payloadJSON,
-  });
 }
 
 function argvArraysMatch(left: readonly string[] | undefined, right: readonly string[]): boolean {
@@ -716,30 +566,14 @@ async function evaluateSystemRunPolicyPhase(
   const inlineEvalExecutableTrusted =
     inlineEvalHit !== null &&
     segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
-  // Deny-over-allow screening: union the openclaw.json layers (global +
-  // per-agent) with the exec-approvals.json file layer, then force approval on
-  // any hit. Unanalyzable commands with a configured denylist fail closed.
-  const denylistConfigEntries = resolveEffectiveExecDenylist({
-    layers: [cfg.tools?.exec?.denylist, agentExec?.denylist],
-  });
-  const effectiveDenylist = resolveEffectiveExecDenylist({
-    layers: [denylistConfigEntries, approvals.denylist],
-  });
-  // Snapshot the rule keys effective when the approval is requested so the
-  // locked pre-dispatch commit can reject a STOP rule added during the wait.
-  const approvedDenylistRuleKeys = effectiveDenylist.map(buildExecDenylistRuleKey);
-  const denylistEvaluation = evaluateExecDenylist({
-    command: parsed.commandText,
+  const denylistPolicy = evaluateSystemRunDenylistPolicy({
+    config: cfg,
+    agentExecDenylist: agentExec?.denylist,
+    approvalsDenylist: approvals.denylist,
+    commandText: parsed.commandText,
     segments,
-    denylist: effectiveDenylist,
     analysisOk,
   });
-  const denylisted = denylistEvaluation.match !== null || denylistEvaluation.conservativeApproval;
-  const denylistReason = denylistEvaluation.match
-    ? `${denylistEvaluation.match.pattern}${denylistEvaluation.match.reason ? `: ${denylistEvaluation.match.reason}` : ""}`
-    : denylistEvaluation.conservativeApproval
-      ? "command could not be screened against the configured exec denylist"
-      : null;
   const forwardedAutoReview = parsed.approvalSource === "auto-review";
   let approvalDecision = forwardedAutoReview ? "allow-once" : parsed.approvalDecision;
   let approvalGrantSource: SystemRunPolicyPhase["approvalGrantSource"] = forwardedAutoReview
@@ -760,8 +594,8 @@ async function evaluateSystemRunPolicyPhase(
     // Keep cmd.exe approval gating scoped to inline shell-wrapper transport.
     // Env sanitization uses broader shell-wrapper detection in parse phase.
     shellWrapperInvocation: parsed.shellPayload !== null,
-    denylisted,
-    denylistReason,
+    denylisted: denylistPolicy.denylisted,
+    denylistReason: denylistPolicy.denylistReason,
   });
   const requiresSecurityAuditSuppressionApproval =
     commandRequiresSecurityAuditSuppressionApproval({
@@ -831,7 +665,7 @@ async function evaluateSystemRunPolicyPhase(
       !requiresSecurityAuditSuppressionApproval &&
       // A denylist hit must reach a HUMAN reviewer; the model auto-reviewer
       // cannot clear an operator STOP rule.
-      !denylisted &&
+      !denylistPolicy.denylisted &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
       const reviewer = await resolveSystemRunAutoReviewer({
@@ -874,8 +708,8 @@ async function evaluateSystemRunPolicyPhase(
           isWindows,
           cmdInvocation,
           shellWrapperInvocation: parsed.shellPayload !== null,
-          denylisted,
-          denylistReason,
+          denylisted: denylistPolicy.denylisted,
+          denylistReason: denylistPolicy.denylistReason,
         });
       } else {
         autoReviewDeferredMessage = `${policy.errorMessage} (exec auto-review deferred to human approval: ${decision.rationale})`;
@@ -966,9 +800,9 @@ async function evaluateSystemRunPolicyPhase(
     allowlistMatches,
     analysisOk,
     allowlistSatisfied,
-    denylisted,
-    denylistConfigEntries,
-    approvedDenylistRuleKeys,
+    denylisted: denylistPolicy.denylisted,
+    denylistConfigEntries: denylistPolicy.denylistConfigEntries,
+    approvedDenylistRuleKeys: denylistPolicy.approvedDenylistRuleKeys,
     allowlistAuthorizationSatisfied,
     safeBins,
     safeBinProfiles,
@@ -1079,7 +913,7 @@ async function executeSystemRunPhase(
   const denylistBinding = buildSystemRunDenylistBinding(phase, getCurrentRuntimeConfig, execArgv);
   if (useMacAppExec) {
     try {
-      assertCurrentDenylistAuthorization({
+      assertSystemRunDenylistAuthorization({
         file: loadExecApprovals(),
         agentId: phase.agentId,
         binding: denylistBinding,

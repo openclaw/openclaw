@@ -667,13 +667,6 @@ public actor GatewayNodeSession {
         return serverMethods.contains(method)
     }
 
-    public func currentMainSessionKey(
-        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) -> String?
-    {
-        guard self.isCurrentRoute(expectedRoute), self.channel != nil else { return nil }
-        return self.mainSessionKey
-    }
-
     public func waitForCurrentMainSessionKey(
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) async -> String?
     {

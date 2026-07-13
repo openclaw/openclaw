@@ -4,22 +4,16 @@
  * requirements, and formats node invoke results for the exec tool.
  */
 import crypto from "node:crypto";
-import {
-  describeInterpreterInlineEval,
-  type InterpreterInlineEvalHit,
-} from "../infra/command-analysis/inline-eval.js";
+import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
-  evaluateExecDenylist,
   type ExecDenylistEntry,
-  formatExecDenylistWarning,
   resolveEffectiveExecDenylist,
 } from "../infra/exec-approvals-denylist.js";
 import {
   type ExecApprovalsFile,
   type ExecAllowlistEntry,
   type ExecAsk,
-  type AllowAlwaysPersistenceDecision,
   type ExecCommandSegment,
   type ExecSecurity,
   type SystemRunApprovalPlan,
@@ -42,6 +36,12 @@ import {
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
+import {
+  addNodePolicyCommandEval,
+  analyzeNodeDenylistRequirement,
+  type NodeApprovalAnalysis,
+  type NodePolicyCommandEval,
+} from "./bash-tools.exec-host-node-phases-denylist.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -71,26 +71,6 @@ type PreparedNodeRun = {
   allowAlwaysCoverage?: NodeAllowAlwaysCoverage;
 };
 
-type NodeApprovalAnalysis = {
-  analysisOk: boolean;
-  allowlistSatisfied: boolean;
-  durableApprovalSatisfied: boolean;
-  nodeApprovalPolicyKnown: boolean;
-  nodeSecurity?: ExecSecurity;
-  nodeAsk?: ExecAsk;
-  inlineEvalHit: InterpreterInlineEvalHit | null;
-  requiresSecurityAuditSuppressionApproval: boolean;
-  requiresDenylistApproval: boolean;
-  denylistWarning: string | null;
-  denylistScreenings: readonly {
-    command: string;
-    segments: readonly ExecCommandSegment[];
-    analysisOk: boolean;
-  }[];
-  autoReviewArgv?: string[];
-  allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
-};
-
 function resolveNodeRunTimeoutSec(
   timeoutSec: number | null | undefined,
   defaultTimeoutSec: number,
@@ -114,12 +94,6 @@ function resolveNodeRunTimeoutMs(runTimeoutSec: number): number {
     ? addSafeTimeoutDelayGraceMs(runTimeoutSec * 1000, 0, { minMs: 0 })
     : 0;
 }
-
-type NodePolicyCommandEval = {
-  command: string;
-  cwd: string | undefined;
-  allowlistEval: Awaited<ReturnType<typeof evaluateShellAllowlistWithAuthorization>>;
-};
 
 type NodeAllowAlwaysCoverage = {
   complete: boolean;
@@ -506,32 +480,6 @@ export async function analyzeNodeApprovalRequirement(params: {
       allowlistEval: baseAllowlistEval,
     },
   ];
-  const addCommandEval = async (
-    entries: NodePolicyCommandEval[],
-    command: string | null | undefined,
-    cwd: string | undefined,
-  ) => {
-    const normalizedCommand = command?.trim();
-    if (!normalizedCommand) {
-      return;
-    }
-    if (entries.some((entry) => entry.command.trim() === normalizedCommand && entry.cwd === cwd)) {
-      return;
-    }
-    entries.push({
-      command: normalizedCommand,
-      cwd,
-      allowlistEval: await evaluateShellAllowlistWithAuthorization({
-        command: normalizedCommand,
-        allowlist: [],
-        safeBins: new Set(),
-        cwd,
-        env: analysisEnv,
-        platform: params.target.platform,
-        trustedSafeBinDirs: params.request.trustedSafeBinDirs,
-      }),
-    });
-  };
   const preparedCommand = resolveSystemRunCommandRequest({
     command: params.prepared.argv,
     rawCommand: params.prepared.rawCommand,
@@ -539,7 +487,13 @@ export async function analyzeNodeApprovalRequirement(params: {
   const preparedShellPayload =
     extractPreparedNodeShellPayload(params.prepared.argv) ??
     (preparedCommand.ok ? preparedCommand.shellPayload : null);
-  await addCommandEval(bindingCommandEvals, preparedShellPayload, approvalCwd);
+  await addNodePolicyCommandEval(bindingCommandEvals, {
+    command: preparedShellPayload,
+    cwd: approvalCwd,
+    env: analysisEnv,
+    platform: params.target.platform,
+    trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+  });
   const autoReviewBindingCommand = preparedShellPayload?.trim() || approvalCommand;
   const autoReviewBindingEval =
     bindingCommandEvals.find(
@@ -547,8 +501,20 @@ export async function analyzeNodeApprovalRequirement(params: {
         entry.command.trim() === autoReviewBindingCommand.trim() && entry.cwd === approvalCwd,
     )?.allowlistEval ?? baseAllowlistEval;
   const policyCommandEvals = [...bindingCommandEvals];
-  await addCommandEval(policyCommandEvals, params.prepared.plan.commandPreview, approvalCwd);
-  await addCommandEval(policyCommandEvals, params.request.command, params.request.workdir);
+  await addNodePolicyCommandEval(policyCommandEvals, {
+    command: params.prepared.plan.commandPreview,
+    cwd: approvalCwd,
+    env: analysisEnv,
+    platform: params.target.platform,
+    trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+  });
+  await addNodePolicyCommandEval(policyCommandEvals, {
+    command: params.request.command,
+    cwd: params.request.workdir,
+    env: analysisEnv,
+    platform: params.target.platform,
+    trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+  });
   let analysisOk = baseAllowlistEval.analysisOk;
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
@@ -581,7 +547,7 @@ export async function analyzeNodeApprovalRequirement(params: {
         command: entry.command,
         cwd: entry.cwd,
         env: analysisEnv,
-        segments: entry.allowlistEval.segments,
+        segments: [...entry.allowlistEval.segments],
       }),
     ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
   if (
@@ -668,26 +634,11 @@ export async function analyzeNodeApprovalRequirement(params: {
       // Fall back to requiring approval if node approvals cannot be fetched.
     }
   }
-  let denylistWarning: string | null = null;
-  let requiresDenylistApproval = false;
-  for (const entry of policyCommandEvals) {
-    const denylistEvaluation = evaluateExecDenylist({
-      command: entry.command,
-      segments: entry.allowlistEval.segments,
-      denylist: effectiveDenylist,
-      analysisOk,
-    });
-    if (denylistEvaluation.match) {
-      requiresDenylistApproval = true;
-      denylistWarning = formatExecDenylistWarning(denylistEvaluation.match);
-      break;
-    }
-    if (denylistEvaluation.conservativeApproval) {
-      requiresDenylistApproval = true;
-      denylistWarning =
-        "Warning: command could not be screened against the exec denylist; explicit approval is required.";
-    }
-  }
+  const denylistAnalysis = analyzeNodeDenylistRequirement({
+    policyCommandEvals,
+    effectiveDenylist,
+    analysisOk,
+  });
   return {
     analysisOk,
     allowlistSatisfied,
@@ -697,13 +648,9 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
-    requiresDenylistApproval,
-    denylistWarning,
-    denylistScreenings: policyCommandEvals.map((entry) => ({
-      command: entry.command,
-      segments: entry.allowlistEval.segments,
-      analysisOk: entry.allowlistEval.analysisOk,
-    })),
+    requiresDenylistApproval: denylistAnalysis.requiresDenylistApproval,
+    denylistWarning: denylistAnalysis.denylistWarning,
+    denylistScreenings: denylistAnalysis.denylistScreenings,
     allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
       segments: baseAllowlistEval.segments,
       commandText: approvalCommand,

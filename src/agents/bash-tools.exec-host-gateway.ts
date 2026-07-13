@@ -8,13 +8,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
-import {
-  buildExecDenylistRuleKey,
-  evaluateExecDenylist,
-  type ExecDenylistEntry,
-  formatExecDenylistWarning,
-  resolveEffectiveExecDenylist,
-} from "../infra/exec-approvals-denylist.js";
+import type { ExecDenylistEntry } from "../infra/exec-approvals-denylist.js";
 import {
   type AllowAlwaysPersistenceDecision,
   commitExecAuthorizationLocked,
@@ -40,11 +34,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
-import {
-  defaultExecAutoReviewer,
-  type ExecAutoReviewer,
-  type ExecAutoReviewInput,
-} from "../infra/exec-auto-review.js";
+import { defaultExecAutoReviewer, type ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import {
   GatewayDrainingError,
@@ -57,6 +47,15 @@ import {
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import {
+  hasGatewayAllowlistMiss,
+  resolveGatewayAutoReviewReason,
+  resolveGatewayEffectiveAllowAlwaysPersistence,
+} from "./bash-tools.exec-host-gateway-approval.js";
+import {
+  buildGatewayDenylistAuthorization,
+  evaluateGatewayDenylistApproval,
+} from "./bash-tools.exec-host-gateway-denylist.js";
 import {
   buildDefaultExecApprovalRequestArgs,
   buildHeadlessExecApprovalDeniedMessage,
@@ -147,74 +146,6 @@ type ProcessGatewayAllowlistResult = {
   pendingResult?: AgentToolResult<ExecToolDetails>;
   deniedResult?: AgentToolResult<ExecToolDetails>;
 };
-
-function hasGatewayAllowlistMiss(params: {
-  hostSecurity: ExecSecurity;
-  analysisOk: boolean;
-  allowlistSatisfied: boolean;
-  durableApprovalSatisfied: boolean;
-}): boolean {
-  return (
-    params.hostSecurity === "allowlist" &&
-    (!params.analysisOk || !params.allowlistSatisfied) &&
-    !params.durableApprovalSatisfied
-  );
-}
-
-function resolveGatewayAutoReviewReason(params: {
-  requiresInlineEvalApproval: boolean;
-  requiresHeredocApproval: boolean;
-  requiresAllowlistPlanApproval: boolean;
-  hostSecurity: ExecSecurity;
-  analysisOk: boolean;
-  allowlistSatisfied: boolean;
-  durableApprovalSatisfied: boolean;
-}): ExecAutoReviewInput["reason"] {
-  if (params.requiresInlineEvalApproval) {
-    return "strict-inline-eval";
-  }
-  if (params.requiresHeredocApproval) {
-    return "heredoc";
-  }
-  if (params.requiresAllowlistPlanApproval) {
-    return "execution-plan-miss";
-  }
-  if (
-    hasGatewayAllowlistMiss({
-      hostSecurity: params.hostSecurity,
-      analysisOk: params.analysisOk,
-      allowlistSatisfied: params.allowlistSatisfied,
-      durableApprovalSatisfied: params.durableApprovalSatisfied,
-    })
-  ) {
-    return "allowlist-miss";
-  }
-  return "approval-required";
-}
-
-function createOneShotAllowAlwaysDecision(): AllowAlwaysPersistenceDecision {
-  return { kind: "one-shot", reasons: ["no-reusable-pattern"] };
-}
-
-function resolveGatewayEffectiveAllowAlwaysPersistence(params: {
-  command: string;
-  allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
-  requiresAllowlistPlanApproval: boolean;
-  requiresDenylistApproval: boolean;
-}): AllowAlwaysPersistenceDecision {
-  if (params.requiresDenylistApproval) {
-    return createOneShotAllowAlwaysDecision();
-  }
-  if (!params.requiresAllowlistPlanApproval) {
-    return params.allowAlwaysPersistence;
-  }
-  if (params.allowAlwaysPersistence.kind !== "patterns") {
-    return params.allowAlwaysPersistence;
-  }
-  // If the gateway cannot rebuild an enforceable command, a reusable grant
-  // would only be keyed by command text and could run under a different cwd/env.
-  return createOneShotAllowAlwaysDecision();
-}
 
 function resolveGatewayEnforcedCommand(params: {
   command: string;
@@ -606,39 +537,16 @@ export async function processGatewayAllowlist(
     }
     return { ...state, approvedByAsk: true, deniedReason: null };
   };
-  // Deny-over-allow TOCTOU guard: capture the effective denylist that authorized
-  // this command BEFORE the approval wait. The commit re-reads the approvals
-  // file under lock and unions it with this config layer, rejecting dispatch if
-  // an operator added/tightened a matching STOP rule while approval was pending.
-  // Also screen the enforced dispatch command texts: allowlist enforcement can
-  // rewrite the command onto resolved absolute executable paths that the
-  // original command text/segments do not carry, and a STOP rule written
-  // against the resolved path must still revoke the pending authority. Both
-  // candidates are computed before the approval wait and only exist when
-  // analysis succeeded, so the conservative fail-closed path
-  // (!analysisOk && segments.length === 0) is never weakened.
-  const enforcedDispatchCommandTexts = [enforcedCommand, fallbackEnforcedCommand].filter(
-    (text): text is string => typeof text === "string" && text.trim().length > 0,
-  );
-  const denylistScreenedSegments =
-    enforcedDispatchCommandTexts.length > 0
-      ? [
-          ...allowlistEval.segments,
-          ...enforcedDispatchCommandTexts.map((raw) => ({ argv: [], raw })),
-        ]
-      : allowlistEval.segments;
-  const denylistAuthorizationBinding: ExecApprovalUsageAuthorization["denylistBinding"] = {
+  const denylistAuthorizationBinding = buildGatewayDenylistAuthorization({
     command: params.command,
-    segments: denylistScreenedSegments,
+    segments: allowlistEval.segments,
     analysisOk,
-    configDenylist: params.execConfigDenylist ?? [],
-    ...(params.resolveCurrentExecConfigDenylist
-      ? { resolveCurrentConfigDenylist: params.resolveCurrentExecConfigDenylist }
-      : {}),
-    approvedRuleKeys: resolveEffectiveExecDenylist({
-      layers: [approvals.denylist, params.execConfigDenylist],
-    }).map(buildExecDenylistRuleKey),
-  };
+    approvalsDenylist: approvals.denylist,
+    execConfigDenylist: params.execConfigDenylist,
+    resolveCurrentExecConfigDenylist: params.resolveCurrentExecConfigDenylist,
+    enforcedCommand,
+    fallbackEnforcedCommand,
+  });
   const commitExecutionAuthorization = (options: {
     source: ExecApprovalUsageAuthorization["source"];
     resolvedPath?: string;
@@ -716,26 +624,15 @@ export async function processGatewayAllowlist(
       env: params.env,
       segments: allowlistEval.segments,
     }) && !(hostSecurity === "full" && hostAsk === "off");
-  // Deny-over-allow: a denylist hit forces explicit human approval even at
-  // security=full/ask=off and even when the allowlist or a durable grant would
-  // auto-run the command. Unlike the audit-suppression gate there is NO
-  // full/off bypass — interrupting auto-allowed commands is the whole point.
-  const effectiveDenylist = resolveEffectiveExecDenylist({
-    layers: [approvals.denylist, params.execConfigDenylist],
-  });
-  const denylistEvaluation = evaluateExecDenylist({
+  const denylistApproval = evaluateGatewayDenylistApproval({
     command: params.command,
     segments: allowlistEval.segments,
-    denylist: effectiveDenylist,
     analysisOk,
+    approvalsDenylist: approvals.denylist,
+    execConfigDenylist: params.execConfigDenylist,
   });
-  const requiresDenylistApproval =
-    denylistEvaluation.match !== null || denylistEvaluation.conservativeApproval;
+  const requiresDenylistApproval = denylistApproval.requiresApproval;
   const requiresAsk =
-    // A denylist hit is its own standalone STOP gate: force approval even if the
-    // base policy would otherwise auto-run the command. Kept independent of
-    // requiresExecApproval so the deny-over-allow guarantee cannot regress if
-    // that helper's denylist handling changes.
     requiresDenylistApproval ||
     requiresExecApproval({
       ask: hostAsk,
@@ -749,12 +646,8 @@ export async function processGatewayAllowlist(
     requiresHeredocApproval ||
     requiresInlineEvalApproval ||
     requiresSecurityAuditSuppressionApproval;
-  if (requiresDenylistApproval) {
-    params.warnings.push(
-      denylistEvaluation.match
-        ? formatExecDenylistWarning(denylistEvaluation.match)
-        : "Warning: command could not be screened against the exec denylist; explicit approval is required.",
-    );
+  if (denylistApproval.warning) {
+    params.warnings.push(denylistApproval.warning);
   }
   if (requiresHeredocApproval) {
     params.warnings.push(
@@ -767,7 +660,6 @@ export async function processGatewayAllowlist(
     );
   }
   const effectiveAllowAlwaysPersistence = resolveGatewayEffectiveAllowAlwaysPersistence({
-    command: params.command,
     allowAlwaysPersistence,
     requiresAllowlistPlanApproval,
     requiresDenylistApproval,

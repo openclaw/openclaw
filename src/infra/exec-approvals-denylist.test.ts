@@ -4,7 +4,6 @@ import {
   evaluateExecDenylist,
   formatExecDenylistWarning,
   normalizeExecDenylist,
-  normalizeExecDenylistEntry,
   resolveEffectiveExecDenylist,
 } from "./exec-approvals-denylist.js";
 import { requiresExecApproval } from "./exec-approvals.js";
@@ -15,15 +14,17 @@ function seg(argv: string[], raw?: string) {
 
 describe("normalizeExecDenylist", () => {
   it("trims patterns and coerces reasons", () => {
-    expect(normalizeExecDenylistEntry({ pattern: "  git push*--force*  ", reason: " x " })).toEqual(
+    expect(normalizeExecDenylist([{ pattern: "  git push*--force*  ", reason: " x " }])).toEqual([
       {
         pattern: "git push*--force*",
         reason: "x",
       },
-    );
-    expect(normalizeExecDenylistEntry({ pattern: "launchctl*" })).toEqual({
-      pattern: "launchctl*",
-    });
+    ]);
+    expect(normalizeExecDenylist([{ pattern: "launchctl*" }])).toEqual([
+      {
+        pattern: "launchctl*",
+      },
+    ]);
   });
 
   it("drops malformed entries (self-healing file surface)", () => {

@@ -1,8 +1,3 @@
-/**
- * Builds the effective OpenClaw agent tool surface.
- * Assembles core, shell, channel, OpenClaw, plugin, and Tool Search tools, then
- * applies sandbox, profile, provider, sender, group, and sub-agent policy.
- */
 import path from "node:path";
 import type {
   SourceReplyDeliveryMode,

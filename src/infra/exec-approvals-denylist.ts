@@ -22,7 +22,7 @@ export type ExecDenylistEntry = {
   reason?: string;
 };
 
-export type ExecDenylistMatch = {
+type ExecDenylistMatch = {
   pattern: string;
   reason?: string;
 } | null;
@@ -40,7 +40,7 @@ function basename(token: string): string {
 }
 
 /** Normalizes a single raw denylist entry, dropping malformed input. */
-export function normalizeExecDenylistEntry(raw: unknown): ExecDenylistEntry | null {
+function normalizeExecDenylistEntry(raw: unknown): ExecDenylistEntry | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return null;
   }
@@ -155,7 +155,7 @@ function segmentTargets(segment: ExecDenylistSegment): string[] {
   return [...targets];
 }
 
-export type ExecDenylistEvaluation = {
+type ExecDenylistEvaluation = {
   /** Non-null when a denylist entry matched -> approval is mandatory. */
   match: ExecDenylistMatch;
   /**

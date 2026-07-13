@@ -1,7 +1,6 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
-
 export const FIELD_LABELS: Record<string, string> = {
   meta: "Metadata",
   "meta.lastTouchedVersion": "Config Last Touched Version",

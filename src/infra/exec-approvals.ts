@@ -18,19 +18,31 @@ import {
   canonicalizeExecApprovalPolicyRules,
   type ExecApprovalPolicySnapshot,
 } from "./exec-approval-policy-snapshot.js";
+export { requiresExecApproval } from "./exec-approval-requirement.js";
 import {
   type AllowAlwaysPattern,
   resolveAllowAlwaysPatternEntries,
 } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
+import type {
+  ExecApprovalsAgent,
+  ExecApprovalsDefaults,
+  ExecApprovalsFile,
+  ExecApprovalsResolved,
+  ExecApprovalsSnapshot,
+} from "./exec-approvals-file.js";
+export type {
+  ExecApprovalsAgent,
+  ExecApprovalsDefaults,
+  ExecApprovalsFile,
+  ExecApprovalsResolved,
+  ExecApprovalsSnapshot,
+} from "./exec-approvals-file.js";
 import {
-  buildExecDenylistRuleKey,
-  type ExecDenylistEntry,
-  type ExecDenylistSegment,
-  evaluateExecDenylist,
-  normalizeExecDenylist,
-  resolveEffectiveExecDenylist,
-} from "./exec-approvals-denylist.js";
+  assertCurrentDenylistAuthorization,
+  type ExecDenylistAuthorizationBinding,
+} from "./exec-approvals-denylist-authorization.js";
+import { normalizeExecDenylist, resolveEffectiveExecDenylist } from "./exec-approvals-denylist.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
 import {
@@ -265,58 +277,6 @@ export type ExecApprovalResolved = {
   resolvedBy?: string | null;
   ts: number;
   request?: ExecApprovalRequest["request"];
-};
-
-export type ExecApprovalsDefaults = {
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  askFallback?: ExecSecurity;
-  autoAllowSkills?: boolean;
-  /**
-   * Operator STOP list. Matching commands always require explicit approval,
-   * even at `security=full`/`ask=off` and even with a durable allowlist grant.
-   * Merged (union) with any `tools.exec.denylist` from openclaw.json.
-   */
-  denylist?: ExecDenylistEntry[];
-};
-
-export type ExecApprovalsAgent = ExecApprovalsDefaults & {
-  allowlist?: ExecAllowlistEntry[];
-};
-
-export type ExecApprovalsFile = {
-  version: 1;
-  socket?: {
-    path?: string;
-    token?: string;
-  };
-  defaults?: ExecApprovalsDefaults;
-  agents?: Record<string, ExecApprovalsAgent>;
-};
-
-export type ExecApprovalsSnapshot = {
-  path: string;
-  exists: boolean;
-  raw: string | null;
-  file: ExecApprovalsFile;
-  hash: string;
-};
-
-export type ExecApprovalsResolved = {
-  path: string;
-  socketPath: string;
-  token: string;
-  defaults: Required<ExecApprovalsDefaults>;
-  agent: Required<ExecApprovalsDefaults>;
-  agentSources: {
-    security: string | null;
-    ask: string | null;
-    askFallback: string | null;
-  };
-  allowlist: ExecAllowlistEntry[];
-  /** File-layer denylist (defaults + `*` + agent), de-duplicated union. */
-  denylist: ExecDenylistEntry[];
-  file: ExecApprovalsFile;
 };
 
 // Keep CLI + gateway defaults in sync.
@@ -1001,8 +961,6 @@ function sanitizeExecApprovalPolicy(
   const security = toStringOrUndefined(policy?.security)?.trim();
   const ask = toStringOrUndefined(policy?.ask)?.trim();
   const askFallback = toStringOrUndefined(policy?.askFallback)?.trim();
-  // Preserve the deny-over-allow STOP list through persistence. Dropping it here
-  // would let a routine policy write silently disarm an operator denylist.
   const denylist = normalizeExecDenylist(policy?.denylist);
   return {
     security:
@@ -1833,9 +1791,6 @@ export function resolveExecApprovalsFromFile(params: {
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
-  // Resolve the file-layer denylist from the RAW file so sanitization is owned
-  // by normalizeExecDenylist and no policy-normalization pass can silently drop
-  // it. Union across defaults + wildcard + agent (deny anywhere = deny).
   const denylist = resolveEffectiveExecDenylist({
     layers: [rawFile.defaults?.denylist, rawWildcard.denylist, rawAgent.denylist],
   });
@@ -1856,35 +1811,6 @@ export function resolveExecApprovalsFromFile(params: {
     denylist,
     file,
   };
-}
-
-export function requiresExecApproval(params: {
-  ask: ExecAsk;
-  security: ExecSecurity;
-  analysisOk: boolean;
-  allowlistSatisfied: boolean;
-  durableApprovalSatisfied?: boolean;
-  /**
-   * True when the command matches the effective exec denylist. A denylist hit
-   * forces approval unconditionally: it wins over `ask=off`, `security=full`,
-   * and any durable allowlist grant. Checked first so deny beats allow.
-   */
-  denylisted?: boolean;
-}): boolean {
-  if (params.denylisted === true) {
-    return true;
-  }
-  if (params.ask === "always") {
-    return true;
-  }
-  if (params.durableApprovalSatisfied === true) {
-    return false;
-  }
-  return (
-    params.ask === "on-miss" &&
-    params.security === "allowlist" &&
-    (!params.analysisOk || !params.allowlistSatisfied)
-  );
 }
 
 function normalizeCommandName(value: string | undefined): string {
@@ -2141,47 +2067,6 @@ export function isExecApprovalPolicySnapshotCurrent(
   );
 }
 
-/**
- * Captures the effective exec denylist that authorized a specific command
- * dispatch so the locked pre-dispatch commit can detect a STOP rule that an
- * operator added/tightened while the approval was pending (a TOCTOU gap: the
- * denylist is screened before the approval wait, but the locked revalidation
- * historically only re-checked scalar policy + allowlist).
- *
- * The approvals-file denylist layer is intentionally NOT captured here: it is
- * re-read fresh under the approvals lock at commit time (operators edit
- * exec-approvals.json live), mirroring how allowlist revalidation re-reads the
- * current file. The openclaw.json config layer is also re-resolved under the
- * lock when the caller can provide {@link resolveCurrentConfigDenylist}; the
- * captured {@link configDenylist} remains the fallback for runtimes without
- * access to live gateway config.
- */
-export type ExecDenylistAuthorizationBinding = {
-  /** Canonical command text screened at approval time. */
-  command: string;
-  /** Analyzed command segments used to screen argv/basename targets. */
-  segments: readonly ExecDenylistSegment[];
-  /** Whether the command was analyzable (drives conservative fail-closed). */
-  analysisOk: boolean;
-  /**
-   * openclaw.json config-layer denylist (`tools.exec.denylist` +
-   * `agents.list.<id>.tools.exec.denylist`) captured before the approval wait.
-   */
-  configDenylist: readonly ExecDenylistEntry[];
-  /**
-   * Re-resolves the current openclaw.json config-layer denylist under the
-   * approvals lock. This lets hot-reloaded STOP rules revoke pending authority
-   * before dispatch.
-   */
-  resolveCurrentConfigDenylist?: () => readonly ExecDenylistEntry[];
-  /**
-   * Rule keys of the FULL effective denylist (config + approvals-file) present
-   * when the approval was requested. Any currently-effective rule whose key is
-   * absent here is treated as newly-added and re-screened before dispatch.
-   */
-  approvedRuleKeys: readonly string[];
-};
-
 export type ExecApprovalUsageAuthorization = {
   source: "current-policy" | "ask-fallback" | "explicit-approval" | "auto-review";
   security: ExecSecurity;
@@ -2191,58 +2076,9 @@ export type ExecApprovalUsageAuthorization = {
   requireAutoAllowSkills?: boolean;
   requireExactCommandApproval?: boolean;
   requireDurableAllowlistApproval?: boolean;
-  /**
-   * Denylist provenance for the locked pre-dispatch revalidation. When present,
-   * a denylist rule that became effective after the approval was requested and
-   * that matches the approved command binding fails the commit closed.
-   */
+  /** Denylist provenance for locked pre-dispatch revalidation. */
   denylistBinding?: ExecDenylistAuthorizationBinding;
 };
-
-/**
- * Deny-over-allow re-screen under the approvals lock. Re-reads the current
- * approvals-file denylist (operators edit exec-approvals.json live) and unions
- * it with the live config-layer denylist when available (fallback: config
- * layer captured before the approval wait), then screens the approved command
- * against only the rules that became effective AFTER the authorization was
- * snapshotted. A newly-current STOP rule that matches — or that leaves an
- * unanalyzable command unscreenable — fails the commit closed so the
- * already-pending approval cannot reach dispatch.
- */
-export function assertCurrentDenylistAuthorization(params: {
-  file: ExecApprovalsFile;
-  agentId: string | undefined;
-  binding: ExecDenylistAuthorizationBinding | undefined;
-}): void {
-  const binding = params.binding;
-  if (!binding) {
-    return;
-  }
-  const currentFileDenylist = resolveExecApprovalsFromFile({
-    file: params.file,
-    agentId: params.agentId,
-  }).denylist;
-  const currentConfigDenylist = binding.resolveCurrentConfigDenylist?.() ?? binding.configDenylist;
-  const currentEffective = resolveEffectiveExecDenylist({
-    layers: [currentConfigDenylist, currentFileDenylist],
-  });
-  const approvedRuleKeys = new Set(binding.approvedRuleKeys);
-  const newlyCurrent = currentEffective.filter(
-    (entry) => !approvedRuleKeys.has(buildExecDenylistRuleKey(entry)),
-  );
-  if (newlyCurrent.length === 0) {
-    return;
-  }
-  const evaluation = evaluateExecDenylist({
-    command: binding.command,
-    segments: binding.segments,
-    denylist: newlyCurrent,
-    analysisOk: binding.analysisOk,
-  });
-  if (evaluation.match !== null || evaluation.conservativeApproval) {
-    throw new Error("Exec approval changed before execution");
-  }
-}
 
 function assertCurrentUsageAuthorization(params: {
   file: ExecApprovalsFile;
@@ -2251,12 +2087,11 @@ function assertCurrentUsageAuthorization(params: {
   matchKeys: ReadonlySet<string>;
   authorization: ExecApprovalUsageAuthorization;
 }): void {
-  // Re-screen the denylist for every authorization source: a STOP rule added
-  // while the approval was pending must block dispatch regardless of how the
-  // command was otherwise authorized (deny-over-allow).
   assertCurrentDenylistAuthorization({
-    file: params.file,
-    agentId: params.agentId,
+    fileDenylist: resolveExecApprovalsFromFile({
+      file: params.file,
+      agentId: params.agentId,
+    }).denylist,
     binding: params.authorization.denylistBinding,
   });
   const current = resolveExecApprovalsFromFile({

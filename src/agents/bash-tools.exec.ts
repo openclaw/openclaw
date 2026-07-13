@@ -1,8 +1,3 @@
-/**
- * Exec tool factory and request pipeline.
- * Resolves host/sandbox/node target, policy, approval, env, script preflight,
- * process launch, foreground result, and background session handoff.
- */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,8 +7,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
-import { getRuntimeConfig } from "../config/config.js";
-import { resolveEffectiveExecDenylist } from "../infra/exec-approvals-denylist.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -54,11 +47,11 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
-import { resolveAgentConfig } from "./agent-scope.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
+import { resolveCurrentExecConfigDenylist } from "./bash-tools.exec-denylist.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
@@ -1319,33 +1312,6 @@ function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
   return normalizeChatChannelId(defaults?.messageProvider) !== null;
 }
 
-/**
- * Re-resolves the effective config-layer exec denylist from the live runtime
- * config so a hot-reloaded STOP rule can revoke a pending approval at the
- * locked commit point. Mirrors the config + agent-override denylist union used
- * when exec tool defaults are built (see resolveExecToolConfig).
- */
-function resolveCurrentExecConfigDenylist(params: {
-  defaults?: ExecToolDefaults;
-  agentId?: string;
-}) {
-  try {
-    const cfg = getRuntimeConfig();
-    const globalExec = cfg.tools?.exec;
-    const agentExec = params.agentId
-      ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec
-      : undefined;
-    return resolveEffectiveExecDenylist({
-      layers: [globalExec?.denylist, agentExec?.denylist],
-    });
-  } catch {
-    // Never screen with less than the pre-wait capture: if live config is
-    // unavailable, fall back to the denylist resolved at tool creation.
-    return params.defaults?.denylist ?? [];
-  }
-}
-
-/** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
@@ -1397,13 +1363,12 @@ export function createExecTool(
     threadId: defaults?.currentThreadTs,
   });
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
-  // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
   const resolveCurrentConfigDenylist = () =>
-    resolveCurrentExecConfigDenylist({ defaults, agentId });
+    resolveCurrentExecConfigDenylist({ fallback: defaults?.denylist, agentId });
   const resolveHostForParams = (params: ExecToolArgs): ExecHost => {
     const elevatedDefaults = defaults?.elevated;
     const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
