@@ -571,7 +571,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
             .checked=${!skill.disabled}
             ?disabled=${locked}
             aria-label=${t("skillsPage.enabledNamed", { name: skill.name })}
-            @change=${(e: Event) => {
+            @change=${() => {
               props.onToggle(skill.skillKey, skill.disabled);
             }}
           />
