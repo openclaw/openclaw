@@ -197,18 +197,23 @@ describe("server-runtime-services", () => {
     };
     const cronReconciliation = createTestCronReconciliation();
     const logCron = { error: vi.fn() };
+    const onStartError = vi.fn(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    });
 
     startGatewayCronWithLogging({
       cronState: createTestCronState(cron),
       cronReconciliation,
       reason: "startup",
       config: {} as never,
+      onStartError,
       logCron,
     });
 
     await vi.waitFor(() =>
       expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: store unavailable"),
     );
+    expect(onStartError).toHaveBeenCalledOnce();
     expect(cronReconciliation.complete).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });

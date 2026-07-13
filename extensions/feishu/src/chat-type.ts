@@ -10,7 +10,7 @@ export function normalizeFeishuChatType(value: unknown): ResolvedFeishuChatType 
   return undefined;
 }
 
-export function normalizeFeishuChatMode(value: unknown): ResolvedFeishuChatType | undefined {
+function normalizeFeishuChatMode(value: unknown): ResolvedFeishuChatType | undefined {
   if (value === "group" || value === "topic" || value === "topic_group") {
     return "group";
   }

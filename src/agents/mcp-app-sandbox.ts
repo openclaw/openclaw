@@ -6,7 +6,7 @@ export type McpAppCsp = {
 };
 
 export const MCP_APP_SANDBOX_PATH = "/mcp-app-sandbox";
-export const MCP_APP_SANDBOX_PORT_OFFSET = 1;
+const MCP_APP_SANDBOX_PORT_OFFSET = 1;
 const MCP_APP_SANDBOX_CSP_QUERY = "csp";
 const MCP_APP_SANDBOX_CSP_MAX_JSON_BYTES = 5 * 1024;
 const MCP_APP_SANDBOX_CSP_MAX_HEADER_BYTES = 6 * 1024;
@@ -113,7 +113,12 @@ export function buildMcpAppSandboxProxyHtml(): string {
 <script>
 (() => {
   if (window.self === window.top) throw new Error("invalid MCP App sandbox host");
-  let hostOrigin = null;
+  let hostOrigin;
+  try {
+    const referrer = new URL(document.referrer);
+    if (referrer.protocol !== "http:" && referrer.protocol !== "https:") throw new Error();
+    hostOrigin = referrer.origin;
+  } catch { throw new Error("invalid MCP App sandbox parent"); }
   try { void window.top.document; throw new Error("MCP App sandbox isolation failed"); } catch (error) {
     if (error instanceof Error && error.message === "MCP App sandbox isolation failed") throw error;
   }
@@ -122,7 +127,6 @@ export function buildMcpAppSandboxProxyHtml(): string {
   document.body.appendChild(inner);
   window.addEventListener("message", (event) => {
     if (event.source === window.parent) {
-      if (hostOrigin === null) hostOrigin = event.origin;
       if (event.origin !== hostOrigin) return;
       if (event.data?.method === "ui/notifications/sandbox-resource-ready") {
         const params = event.data.params ?? {};
@@ -135,12 +139,12 @@ export function buildMcpAppSandboxProxyHtml(): string {
       inner.contentWindow?.postMessage(event.data, "*");
       return;
     }
-    if (event.source === inner.contentWindow && hostOrigin !== null) {
+    if (event.source === inner.contentWindow) {
       if (typeof event.data?.method === "string" && event.data.method.startsWith("ui/notifications/sandbox-")) return;
       window.parent.postMessage(event.data, hostOrigin);
     }
   });
-  window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/sandbox-proxy-ready", params: {} }, "*");
+  window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/sandbox-proxy-ready", params: {} }, hostOrigin);
 })();
 </script>
 </body>`;
@@ -164,6 +168,7 @@ export function buildMcpAppContentSecurityPolicy(csp?: McpAppCsp): string {
     `base-uri ${bases.length > 0 ? bases.join(" ") : "'self'"}`,
     "object-src 'none'",
     "form-action 'none'",
+    "frame-ancestors http: https:",
   ];
   if (csp) {
     directives.splice(5, 0, `font-src 'self' ${resources.join(" ")}`.trim());

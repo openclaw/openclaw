@@ -11,6 +11,7 @@ struct AgentProTab: View {
     @State var overview: AgentOverviewSnapshot?
     @State var overviewErrorText: String?
     @State var overviewLoading: Bool = false
+    @State var overviewRefreshGate = AgentOverviewRefreshGate()
     @State var agentRosterFilter: AgentRosterFilter = .all
     @State var agentSearchPresented = false
     @State var agentSearchText = ""
@@ -54,11 +55,11 @@ struct AgentProTab: View {
 
         var title: String {
             switch self {
-            case .all: "All"
-            case .enabled: "Enabled"
-            case .off: "Off"
-            case .setup: "Setup"
-            case .blocked: "Blocked"
+            case .all: String(localized: "All")
+            case .enabled: String(localized: "Enabled")
+            case .off: String(localized: "Off")
+            case .setup: String(localized: "Setup")
+            case .blocked: String(localized: "Blocked")
             }
         }
     }
@@ -74,9 +75,9 @@ struct AgentProTab: View {
 
         var title: String {
             switch self {
-            case .all: "All"
-            case .online: "Online"
-            case .ready: "Ready"
+            case .all: String(localized: "All")
+            case .online: String(localized: "Online")
+            case .ready: String(localized: "Ready")
             }
         }
 

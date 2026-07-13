@@ -7,7 +7,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueCommandInLane, resetCommandQueueStateForTest } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { createDeferred } from "../test-utils/deferred.js";
-import { applyGatewayLaneConcurrency } from "./server-lanes.js";
+import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
+
+function applyConfigLaneConcurrency(config: OpenClawConfig): void {
+  applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config));
+}
 
 describe("applyGatewayLaneConcurrency", () => {
   afterEach(() => {
@@ -15,7 +19,7 @@ describe("applyGatewayLaneConcurrency", () => {
   });
 
   it("uses the higher cron default when maxConcurrentRuns is unset", async () => {
-    applyGatewayLaneConcurrency({} as OpenClawConfig);
+    applyConfigLaneConcurrency({} as OpenClawConfig);
 
     let activeRuns = 0;
     let peakActiveRuns = 0;
@@ -53,7 +57,7 @@ describe("applyGatewayLaneConcurrency", () => {
   });
 
   it("applies cron maxConcurrentRuns to the cron-nested lane used by cron agent turns", async () => {
-    applyGatewayLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig);
+    applyConfigLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig);
 
     let activeRuns = 0;
     let peakActiveRuns = 0;
@@ -92,7 +96,7 @@ describe("applyGatewayLaneConcurrency", () => {
   });
 
   it("keeps the shared nested lane at its default concurrency", async () => {
-    applyGatewayLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig);
+    applyConfigLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig);
 
     let startedRuns = 0;
     const releaseRuns = createDeferred();

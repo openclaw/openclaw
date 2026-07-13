@@ -1183,24 +1183,6 @@ export async function respondToObservedDialogOnPage(opts: {
   });
 }
 
-/** Resolve a page and respond to one of its observed dialogs. */
-export async function respondToObservedDialogViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  dialogId?: string;
-  accept: boolean;
-  promptText?: string;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<BrowserObservedDialogRecord> {
-  const page = await getPageForTargetId(opts);
-  return await respondToObservedDialogOnPage({
-    page,
-    accept: opts.accept,
-    ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
-    ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
-  });
-}
-
 /** Mark pending observed dialogs as handled by a remote/browser-side hook. */
 export function markObservedDialogsHandledRemotelyForPage(page: Page): BrowserObservedState {
   const state = ensurePageState(page);
@@ -1520,7 +1502,7 @@ export async function getPageForTargetId(opts: {
   }
 }
 
-export type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
+type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
 
 /** Classify requests that can navigate the selected page or one of its frames. */
 export function classifyBrowserDocumentNavigationRequest(

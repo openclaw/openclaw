@@ -699,46 +699,43 @@ describe("memory_search unavailable payloads", () => {
   });
 
   it("includes manager acquisition timing and cache-state debug payload", async () => {
-    setMemorySearchManagerImpl(
-      async () =>
-        ({
-          manager: {
-            search: vi.fn(async () => {
-              return [
-                {
-                  path: "MEMORY.md",
-                  startLine: 1,
-                  endLine: 2,
-                  score: 0.9,
-                  snippet: "ramen",
-                  source: "memory",
-                },
-              ];
-            }),
-            readFile: vi.fn(),
-            status: vi.fn(() => ({
-              backend: "qmd",
-              provider: "qmd",
-              model: "qmd",
-              requestedProvider: "qmd",
-              files: 0,
-              chunks: 0,
-              dirty: false,
-              workspaceDir: "/tmp/workspace",
-              dbPath: "/tmp/workspace/index.sqlite",
-              sources: ["memory"],
-              sourceCounts: [{ source: "memory", files: 0, chunks: 0 }],
-            })),
-            sync: vi.fn(async () => {}),
-            probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
-            probeVectorAvailability: vi.fn(async () => true),
-          },
-          debug: {
-            managerMs: 17,
-            managerCacheState: "cached-full-hit",
-          },
-        }) as any,
-    );
+    setMemorySearchManagerImpl(async () => ({
+      manager: {
+        search: vi.fn(async () => {
+          return [
+            {
+              path: "MEMORY.md",
+              startLine: 1,
+              endLine: 2,
+              score: 0.9,
+              snippet: "ramen",
+              source: "memory",
+            },
+          ];
+        }),
+        readFile: vi.fn(),
+        status: vi.fn(() => ({
+          backend: "qmd",
+          provider: "qmd",
+          model: "qmd",
+          requestedProvider: "qmd",
+          files: 0,
+          chunks: 0,
+          dirty: false,
+          workspaceDir: "/tmp/workspace",
+          dbPath: "/tmp/workspace/index.sqlite",
+          sources: ["memory"],
+          sourceCounts: [{ source: "memory", files: 0, chunks: 0 }],
+        })),
+        sync: vi.fn(async () => {}),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        probeVectorAvailability: vi.fn(async () => true),
+      },
+      debug: {
+        managerMs: 17,
+        managerCacheState: "cached-full-hit",
+      },
+    }));
     setMemorySearchImpl(async () => [
       {
         path: "MEMORY.md",

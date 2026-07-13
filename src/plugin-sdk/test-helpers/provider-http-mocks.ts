@@ -17,7 +17,6 @@ type ResolveProviderHttpRequestConfigParams = Parameters<
   typeof resolveProviderHttpRequestConfig
 >[0];
 type FetchWithTimeoutGuardedParams = Parameters<typeof fetchWithTimeoutGuarded>;
-type FetchWithTimeoutGuardedOptions = NonNullable<FetchWithTimeoutGuardedParams[4]>;
 type ResolveProviderRequestHeadersParams = Parameters<typeof resolveProviderRequestHeaders>[0];
 type PollProviderOperationJsonParams = Parameters<typeof pollProviderOperationJson>[0];
 type PostMultipartRequestParams = Parameters<typeof postMultipartRequest>[0];
@@ -31,7 +30,7 @@ type ResolveProviderHttpRequestConfigResult = {
   baseUrl: string;
   allowPrivateNetwork: boolean;
   headers: Headers;
-  dispatcherPolicy?: FetchWithTimeoutGuardedOptions["dispatcherPolicy"];
+  dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
 };
 
 type AnyMock = Mock<(...args: unknown[]) => unknown>;
