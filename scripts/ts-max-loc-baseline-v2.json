@@ -670,7 +670,7 @@
   "src/agents/worktrees/service.ts": 851,
   "src/audit/audit-event-store.ts": 703,
   "src/auto-reply/chunk.ts": 557,
-  "src/auto-reply/command-auth.ts": 710,
+  "src/auto-reply/command-auth.ts": 699,
   "src/auto-reply/commands-registry.shared.ts": 1061,
   "src/auto-reply/dispatch.ts": 737,
   "src/auto-reply/reply/abort.ts": 524,
