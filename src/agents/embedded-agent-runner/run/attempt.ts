@@ -398,7 +398,10 @@ import {
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
+import {
+  createQueuedRawBodyTracker,
+  steerActiveSessionWithOptionalDeliveryWait,
+} from "./attempt.queue-message.js";
 import {
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
@@ -3734,6 +3737,11 @@ export async function runEmbeddedAttempt(
         abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
       let acceptingSteerMessages = true;
+      // Latest user-input rawBody for before_prompt_build / agent_end events.
+      // Queued injections refresh it after delivery, in issue order (see
+      // createQueuedRawBodyTracker for the ordering contract).
+      const rawBodyTracker = createQueuedRawBodyTracker(params.rawBody);
+
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
@@ -3744,7 +3752,10 @@ export async function runEmbeddedAttempt(
           if (options?.steeringMode) {
             activeSession.agent.steeringMode = options.steeringMode;
           }
-          await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
+          await rawBodyTracker.deliver(
+            () => steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options),
+            options,
+          );
         },
         isStreaming: () => activeSession.isStreaming,
         isStopped: () => !acceptingSteerMessages || aborted || runAbortController.signal.aborted,
@@ -3989,6 +4000,7 @@ export async function runEmbeddedAttempt(
               config: params.config ?? getRuntimeConfig(),
               prompt: params.prompt,
               messages: promptBuildMessages,
+              rawBody: rawBodyTracker.current(),
               hookCtx,
               hookRunner,
               beforeAgentStartResult: params.beforeAgentStartResult,
@@ -5392,6 +5404,7 @@ export async function runEmbeddedAttempt(
               success: !aborted && !promptError,
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
+              rawBody: rawBodyTracker.current(),
             },
             ctx: buildEmbeddedAgentEndContext({
               run: params,

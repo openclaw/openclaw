@@ -1211,6 +1211,12 @@ export function scheduleFollowupDrain(
             }
 
             const routing = resolveOriginRoutingMetadata(activeGroupItems);
+            // Join individual rawBody values so plugins can still access the
+            // original user texts even when collect mode batches them.
+            const collectedRawBody = activeGroupItems
+              .map((i) => i.rawBody)
+              .filter(Boolean)
+              .join("\n\n");
             const prompt = buildCollectPrompt({
               title: "[Queued messages while agent was busy]",
               items: activeGroupItems,
@@ -1256,6 +1262,7 @@ export function scheduleFollowupDrain(
                 prompt,
                 transcriptPrompt,
                 ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
+                rawBody: collectedRawBody || undefined,
                 run,
                 messageId:
                   groupSource?.messageId ??

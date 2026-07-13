@@ -75,6 +75,8 @@ export type FollowupRun = {
   queuedLifecycle?: QueuedReplyLifecycle;
   /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
   onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
+  /** The user's original input text before channel context and metadata. Threaded to plugin hooks. */
+  rawBody?: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;

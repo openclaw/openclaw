@@ -1294,6 +1294,10 @@ export async function runReplyAgent(params: {
         ...(followupRun.userTurnTranscriptRecorder
           ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
           : {}),
+        // Carry this steered turn's gated rawBody (possibly undefined) so the
+        // active run refreshes its tracked value; the runner clears by default,
+        // so gated input never leaks the previous direct-user text.
+        rawBody: followupRun.rawBody,
       },
     );
     if (steerOutcome.queued) {

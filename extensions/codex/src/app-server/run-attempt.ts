@@ -1294,6 +1294,7 @@ export async function runCodexAppServerAttempt(
       messages: codexModelInputHistoryMessages,
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
+      rawBody: params.rawBody,
       ...("beforeAgentStartResult" in params
         ? { beforeAgentStartResult: params.beforeAgentStartResult }
         : {}),
@@ -3209,6 +3210,7 @@ export async function runCodexAppServerAttempt(
           success: false,
           error: turnStartErrorMessage,
           durationMs: Date.now() - attemptStartedAt,
+          rawBody: params.rawBody,
         },
         ctx: hookContext,
         hookRunner,
@@ -3726,6 +3728,7 @@ export async function runCodexAppServerAttempt(
         success: !finalAborted && !finalPromptError,
         ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
         durationMs: Date.now() - attemptStartedAt,
+        rawBody: params.rawBody,
       },
       ctx: hookContext,
       hookRunner,

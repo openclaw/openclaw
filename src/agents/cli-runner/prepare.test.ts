@@ -1509,6 +1509,48 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("forwards rawBody to the before_prompt_build hook for CLI-backed channel runs", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => undefined),
+        runBeforeAgentStart: vi.fn(),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        trigger: "user",
+        sessionFile,
+        workspaceDir: dir,
+        // Decorated prompt carries channel metadata; rawBody is the clean text.
+        prompt: "[from alice] please summarize",
+        rawBody: "please summarize",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test",
+        messageChannel: "telegram",
+        messageProvider: "acp",
+        config: {
+          ...createCliBackendConfig(),
+        },
+      });
+
+      expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
+      const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
+        [{ prompt?: string; rawBody?: string }, unknown]
+      >;
+      expect(beforePromptBuildCalls[0]?.[0]?.rawBody).toBe("please summarize");
+      expect(beforePromptBuildCalls[0]?.[0]?.prompt).toBe("[from alice] please summarize");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("prepends current-turn context after prompt-build hooks without changing hook or transcript prompt", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

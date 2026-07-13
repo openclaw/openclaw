@@ -76,7 +76,11 @@ import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { InlineDirectives } from "./directive-handling.js";
-import { isSystemEventProvider, resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import {
+  isSystemEventProvider,
+  resolveDirectUserRawBody,
+  resolveEffectiveReplyRoute,
+} from "./effective-reply-route.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import type {
@@ -722,8 +726,9 @@ export async function runPreparedReply(
       ? "none"
       : "generic";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
-  const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
+  // Candidate text for bare reset detection and (when from a user channel) the plugin hook rawBody payload.
+  const rawBodyCandidate = ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const rawBodyTrimmed = rawBodyCandidate.trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   const normalizedCommandBody = command.commandBodyNormalized.trim();
   const softResetTriggered = command.softResetTriggered === true;
@@ -734,6 +739,18 @@ export async function runPreparedReply(
   const isWholeMessageCommand =
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
+  const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
+  // Gate the plugin hook field to direct external-user channel input. System
+  // events (heartbeat, cron, exec) reuse system prompt text in
+  // Body/CommandBody/RawBody, and inter-session/internal-system handoffs carry a
+  // model-facing "not a direct user instruction" annotation (see
+  // input-provenance.ts). Neither may leak to plugins as clean user rawBody, so
+  // only external_user (or unmarked direct-channel) input qualifies.
+  const rawBodyForPluginEvent = resolveDirectUserRawBody({
+    candidate: rawBodyCandidate,
+    provider: ctx.Provider,
+    inputProvenance,
+  });
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
   if (
     allowTextCommands &&
@@ -1458,7 +1475,6 @@ export async function runPreparedReply(
   });
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
-  const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
   const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
     hasMedia: userTurnMediaForPersistence.length > 0,
@@ -1539,6 +1555,7 @@ export async function runPreparedReply(
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     queuedLifecycle: opts?.queuedFollowupLifecycle,
     onFollowupAdmissionWaitChange: opts?.onFollowupAdmissionWaitChange,
+    rawBody: rawBodyForPluginEvent,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),

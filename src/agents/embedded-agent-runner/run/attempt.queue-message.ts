@@ -4,6 +4,7 @@
 import { toErrorObject } from "../../../infra/errors.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { log } from "../logger.js";
+import type { EmbeddedAgentQueueMessageOptions } from "../run-state.js";
 
 /**
  * Minimal active-session surface needed to steer a running attempt and observe
@@ -250,4 +251,35 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
     options.userTurnTranscriptRecorder,
   );
+}
+
+/**
+ * Tracks the rawBody an active embedded run reports on before_prompt_build /
+ * agent_end. Clear-by-default per injection: direct-user steers gate their
+ * clean text in via options.rawBody; internal injections omit it, clearing
+ * the previous direct-user text. Updates only after delivery succeeds (a
+ * rejected or timed-out steer never entered the run) and only in issue order,
+ * so a slow transcript-commit wait cannot overwrite a newer injection.
+ */
+export function createQueuedRawBodyTracker(initial: string | undefined): {
+  current: () => string | undefined;
+  deliver: (
+    steer: () => Promise<void>,
+    options: EmbeddedAgentQueueMessageOptions | undefined,
+  ) => Promise<void>;
+} {
+  let current = initial;
+  let issuedSeq = 0;
+  let appliedSeq = 0;
+  return {
+    current: () => current,
+    deliver: async (steer, options) => {
+      const seq = ++issuedSeq;
+      await steer();
+      if (seq > appliedSeq) {
+        appliedSeq = seq;
+        current = options?.rawBody;
+      }
+    },
+  };
 }
