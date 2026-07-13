@@ -1403,217 +1403,334 @@ describe("gateway server chat", () => {
     }
   });
 
-  test.each([
-    {
-      caseName: "attachment preparation succeeds",
-      content:
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-    },
-    {
-      caseName: "attachment preparation fails",
-      content: "not-valid-base64",
-    },
-  ])(
-    "chat.abort cancels chat.send during attachment preparation before ACK when $caseName",
-    async ({ content }) => {
-      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-      const firstCatalog =
-        createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
-      try {
-        testState.sessionStorePath = path.join(sessionDir, "sessions.json");
-        await writeSessionStore({
-          entries: {
-            main: {
-              sessionId: "sess-main",
-              modelProvider: "test-provider",
-              model: "vision-model",
-              updatedAt: Date.now(),
-            },
+  test("chat.abort cancels chat.send during attachment preparation before ACK", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const firstCatalog =
+      createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "vision-model",
+            updatedAt: Date.now(),
           },
-        });
+        },
+      });
 
-        const sendResponses: Array<{
-          id: string;
-          ok: boolean;
-          payload?: unknown;
-          error?: unknown;
-        }> = [];
-        const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-        const context = {
-          loadGatewayModelCatalog: vi
-            .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
-            .mockImplementationOnce(() => firstCatalog.promise),
-          logGateway: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-            debug: vi.fn(),
-          },
-          agentRunSeq: new Map<string, number>(),
-          chatAbortControllers: new Map(),
-          chatAbortedRuns: new Map(),
-          chatRunBuffers: new Map(),
-          chatDeltaSentAt: new Map(),
-          chatDeltaLastBroadcastLen: new Map(),
-          chatDeltaLastBroadcastText: new Map(),
-          agentDeltaSentAt: new Map(),
-          bufferedAgentEvents: new Map(),
-          clearChatRunState: vi.fn(),
-          addChatRun: vi.fn(),
-          removeChatRun: vi.fn(),
-          broadcast: vi.fn(),
-          nodeSendToSession: vi.fn(),
-          registerToolEventRecipient: vi.fn(),
-          getRuntimeConfig: () => ({}),
-          dedupe: new Map(),
-        } as unknown as GatewayRequestContext;
+      const sendResponses: Array<{
+        id: string;
+        ok: boolean;
+        payload?: unknown;
+        error?: unknown;
+      }> = [];
+      const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockImplementationOnce(() => firstCatalog.promise),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        getRuntimeConfig: () => ({}),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
 
-        const pngB64 = content;
-        const params = {
-          sessionKey: "main",
-          message: "abort this image",
-          idempotencyKey: "idem-attachment-abort",
-          attachments: [
-            {
-              type: "image",
-              mimeType: "image/png",
-              fileName: "dot.png",
-              content: pngB64,
-            },
-          ],
-        };
-        const client = {
-          connId: "conn-owner",
-          connect: {
-            device: { id: "dev-owner" },
-            scopes: ["operator.write"],
-          },
-        } as never;
-        const { chatHandlers } = await import("./server-methods/chat.js");
-        const first = Promise.resolve(
-          expectDefined(
-            chatHandlers["chat.send"],
-            'chatHandlers["chat.send"] test invariant',
-          )({
-            req: { type: "req", id: "first", method: "chat.send", params },
-            params,
-            client,
-            isWebchatConnect: () => false,
-            respond: ((ok, payload, error) => {
-              sendResponses.push({ id: "first", ok, payload, error });
-            }) as RespondFn,
-            context,
-          }),
-        );
-        await vi.waitFor(() => {
-          expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
-          expect(context.chatAbortControllers.has("idem-attachment-abort")).toBe(true);
-        }, FAST_WAIT_OPTS);
-
-        await expectDefined(
-          chatHandlers["chat.abort"],
-          'chatHandlers["chat.abort"] test invariant',
-        )({
-          req: {
-            type: "req",
-            id: "abort",
-            method: "chat.abort",
-            params: { sessionKey: "main", runId: "idem-attachment-abort" },
-          },
-          params: { sessionKey: "main", runId: "idem-attachment-abort" },
-          client,
-          isWebchatConnect: () => false,
-          respond: ((ok, payload, error) => {
-            abortResponses.push({ ok, payload, error });
-          }) as RespondFn,
-          context,
-        });
-
-        expect(abortResponses).toEqual([
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      const params = {
+        sessionKey: "main",
+        message: "abort this image",
+        idempotencyKey: "idem-attachment-abort",
+        attachments: [
           {
-            ok: true,
-            payload: { ok: true, aborted: true, runIds: ["idem-attachment-abort"] },
-            error: undefined,
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: pngB64,
           },
-        ]);
-        expect(context.chatAbortControllers.has("idem-attachment-abort")).toBe(false);
-
-        await expectDefined(
+        ],
+      };
+      const client = {
+        connId: "conn-owner",
+        connect: {
+          device: { id: "dev-owner" },
+          scopes: ["operator.write"],
+        },
+      } as never;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const first = Promise.resolve(
+        expectDefined(
           chatHandlers["chat.send"],
           'chatHandlers["chat.send"] test invariant',
         )({
-          req: { type: "req", id: "retry", method: "chat.send", params },
+          req: { type: "req", id: "first", method: "chat.send", params },
           params,
           client,
           isWebchatConnect: () => false,
           respond: ((ok, payload, error) => {
-            sendResponses.push({ id: "retry", ok, payload, error });
+            sendResponses.push({ id: "first", ok, payload, error });
           }) as RespondFn,
           context,
-        });
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+        expect(context.chatAbortControllers.has("idem-attachment-abort")).toBe(true);
+      }, FAST_WAIT_OPTS);
 
-        expect(sendResponses).toEqual([
-          {
-            id: "retry",
-            ok: true,
-            payload: {
-              runId: "idem-attachment-abort",
-              status: "timeout",
-              summary: "aborted",
-              endedAt: expect.any(Number),
-            },
-            error: undefined,
-          },
-        ]);
+      await expectDefined(
+        chatHandlers["chat.abort"],
+        'chatHandlers["chat.abort"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "abort",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId: "idem-attachment-abort" },
+        },
+        params: { sessionKey: "main", runId: "idem-attachment-abort" },
+        client,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          abortResponses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
 
-        firstCatalog.resolve([
-          {
-            id: "vision-model",
-            name: "Vision Model",
-            provider: "test-provider",
-            input: ["text", "image"],
-          },
-        ]);
-        await first;
+      expect(abortResponses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: true, runIds: ["idem-attachment-abort"] },
+          error: undefined,
+        },
+      ]);
+      expect(context.chatAbortControllers.has("idem-attachment-abort")).toBe(false);
 
-        expect(sendResponses).toEqual([
-          {
-            id: "retry",
-            ok: true,
-            payload: {
-              runId: "idem-attachment-abort",
-              status: "timeout",
-              summary: "aborted",
-              endedAt: expect.any(Number),
-            },
-            error: undefined,
-          },
-          {
-            id: "first",
-            ok: true,
-            payload: {
-              runId: "idem-attachment-abort",
-              status: "timeout",
-              summary: "aborted",
-              stopReason: "rpc",
-              endedAt: expect.any(Number),
-            },
-            error: undefined,
-          },
-        ]);
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-        expect(context.addChatRun).not.toHaveBeenCalled();
-        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-      } finally {
-        firstCatalog.resolve([]);
-        dispatchInboundMessageMock.mockReset();
-        testState.sessionStorePath = undefined;
-        clearConfigCache();
-        await removeTempDir(sessionDir);
-      }
-    },
-  );
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
+        req: { type: "req", id: "retry", method: "chat.send", params },
+        params,
+        client,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          sendResponses.push({ id: "retry", ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
 
+      expect(sendResponses).toEqual([
+        {
+          id: "retry",
+          ok: true,
+          payload: {
+            runId: "idem-attachment-abort",
+            status: "timeout",
+            summary: "aborted",
+            endedAt: expect.any(Number),
+          },
+          error: undefined,
+        },
+      ]);
+
+      firstCatalog.resolve([
+        {
+          id: "vision-model",
+          name: "Vision Model",
+          provider: "test-provider",
+          input: ["text", "image"],
+        },
+      ]);
+      await first;
+
+      expect(sendResponses).toEqual([
+        {
+          id: "retry",
+          ok: true,
+          payload: {
+            runId: "idem-attachment-abort",
+            status: "timeout",
+            summary: "aborted",
+            endedAt: expect.any(Number),
+          },
+          error: undefined,
+        },
+        {
+          id: "first",
+          ok: true,
+          payload: {
+            runId: "idem-attachment-abort",
+            status: "timeout",
+            summary: "aborted",
+            stopReason: "rpc",
+            endedAt: expect.any(Number),
+          },
+          error: undefined,
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(context.addChatRun).not.toHaveBeenCalled();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+    } finally {
+      firstCatalog.resolve([]);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.abort keeps accepted abort when attachment preparation fails", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const catalog =
+      createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+    const runId = "idem-attachment-error-after-abort";
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "vision-model",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = {
+        ...createDirectChatContext(),
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockImplementationOnce(() => catalog.promise),
+      } as GatewayRequestContext;
+      const sendResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const params = {
+        sessionKey: "main",
+        message: "abort invalid image",
+        idempotencyKey: runId,
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "invalid.png",
+            content: "not-valid-base64",
+          },
+        ],
+      };
+      const client = {
+        connId: "conn-owner",
+        connect: {
+          device: { id: "dev-owner" },
+          scopes: ["operator.write"],
+        },
+      } as never;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const send = Promise.resolve(
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
+          req: { type: "req", id: "send", method: "chat.send", params },
+          params,
+          client,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            sendResponses.push({ ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+        expect(context.chatAbortControllers.has(runId)).toBe(true);
+      }, FAST_WAIT_OPTS);
+
+      await expectDefined(
+        chatHandlers["chat.abort"],
+        'chatHandlers["chat.abort"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "abort",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId },
+        },
+        params: { sessionKey: "main", runId },
+        client,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          abortResponses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+      expect(abortResponses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: true, runIds: [runId] },
+          error: undefined,
+        },
+      ]);
+
+      catalog.resolve([
+        {
+          id: "vision-model",
+          name: "Vision Model",
+          provider: "test-provider",
+          input: ["text", "image"],
+        },
+      ]);
+      await send;
+
+      expect(sendResponses).toEqual([
+        {
+          ok: true,
+          payload: {
+            runId,
+            status: "timeout",
+            summary: "aborted",
+            stopReason: "rpc",
+            endedAt: expect.any(Number),
+          },
+          error: undefined,
+        },
+      ]);
+      expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+        expect.objectContaining({ runId, status: "timeout", summary: "aborted" }),
+      );
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(context.addChatRun).not.toHaveBeenCalled();
+      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+    } finally {
+      catalog.resolve([]);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
   test("chat.send post-dispatch rejection after abort preserves the terminal abort", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred();
