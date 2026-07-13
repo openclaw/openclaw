@@ -344,6 +344,10 @@ describe("normalizeToolParameterSchema", () => {
         hexadecimal: { $ref: "#/$defs/Choice/anyOf/0x1" },
         exponent: { $ref: "#/$defs/Choice/anyOf/1e0" },
         leadingZero: { $ref: "#/$defs/Choice/anyOf/01" },
+        plusZero: { $ref: "#/$defs/Choice/anyOf/+0" },
+        negativeZero: { $ref: "#/$defs/Choice/anyOf/-0" },
+        empty: { $ref: "#/$defs/Choice/anyOf/" },
+        whitespace: { $ref: "#/$defs/Choice/anyOf/ " },
         escapedObjectKey: { $ref: "#/$defs/Escaped/properties/a~1b" },
       },
       $defs: {
@@ -371,6 +375,18 @@ describe("normalizeToolParameterSchema", () => {
     });
     expect(normalized.properties?.leadingZero).toEqual({
       $ref: "#/$defs/Choice/anyOf/01",
+    });
+    expect(normalized.properties?.plusZero).toEqual({
+      $ref: "#/$defs/Choice/anyOf/+0",
+    });
+    expect(normalized.properties?.negativeZero).toEqual({
+      $ref: "#/$defs/Choice/anyOf/-0",
+    });
+    expect(normalized.properties?.empty).toEqual({
+      $ref: "#/$defs/Choice/anyOf/",
+    });
+    expect(normalized.properties?.whitespace).toEqual({
+      $ref: "#/$defs/Choice/anyOf/ ",
     });
     expect(normalized.properties?.escapedObjectKey).toEqual({ type: "boolean" });
   });

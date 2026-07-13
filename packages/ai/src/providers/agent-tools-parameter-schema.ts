@@ -465,8 +465,6 @@ function decodeJsonPointerSegment(segment: string): string {
   return segment.replaceAll("~1", "/").replaceAll("~0", "~");
 }
 
-const CANONICAL_JSON_POINTER_ARRAY_INDEX = /^(0|[1-9]\d*)$/;
-
 function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
   let current = value;
   for (const segment of segments) {
@@ -475,12 +473,8 @@ function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
     }
     const key = decodeJsonPointerSegment(segment);
     if (Array.isArray(current)) {
-      // RFC 6901 array indices are base-10 digits without leading zeros.
-      if (!CANONICAL_JSON_POINTER_ARRAY_INDEX.test(key)) {
-        return undefined;
-      }
-      const index = Number(key);
-      if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+      const index = /^(?:0|[1-9]\d*)$/.test(key) ? Number(key) : -1;
+      if (index < 0 || index >= current.length) {
         return undefined;
       }
       current = current[index];
