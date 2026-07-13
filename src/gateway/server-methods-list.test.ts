@@ -137,6 +137,7 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.endTurn");
     expect(methods).toContain("talk.session.cancelTurn");
     expect(methods).toContain("talk.session.cancelOutput");
+    expect(methods).toContain("talk.session.acknowledgeMark");
     expect(methods).toContain("talk.session.submitToolResult");
     expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");

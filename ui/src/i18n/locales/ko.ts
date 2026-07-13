@@ -406,6 +406,7 @@ export const ko: TranslationMap = {
     working: "작업 중…",
     ready: "채팅할 준비가 되었습니다",
     whatCanAgentDo: "{name}님은 무엇을 할 수 있나요?",
+    help: "도움말",
     getHelp: "도움말 보기",
     discord: "Discord 커뮤니티",
     viewChangelog: "변경 로그 보기",

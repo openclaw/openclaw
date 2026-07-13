@@ -584,31 +584,20 @@ export function getCommandPositionalsWithRootOptions(
   return positionals;
 }
 
-export function buildParseArgv(params: {
-  programName?: string;
-  rawArgs?: string[];
-  fallbackArgv?: string[];
-}): string[] {
-  const baseArgv =
-    params.rawArgs && params.rawArgs.length > 0
-      ? params.rawArgs
-      : params.fallbackArgv && params.fallbackArgv.length > 0
-        ? params.fallbackArgv
-        : process.argv;
-  const programName = params.programName ?? "";
+export function buildParseArgv(rawArgs: string[], programName = "openclaw"): string[] {
   const normalizedArgv =
-    programName && baseArgv[0] === programName
-      ? baseArgv.slice(1)
-      : baseArgv[0]?.endsWith("openclaw")
-        ? baseArgv.slice(1)
-        : baseArgv;
+    rawArgs[0] === programName
+      ? rawArgs.slice(1)
+      : rawArgs[0]?.endsWith("openclaw")
+        ? rawArgs.slice(1)
+        : rawArgs;
   const looksLikeNode =
     normalizedArgv.length >= 2 &&
     (isNodeRuntime(normalizedArgv[0] ?? "") || isBunRuntime(normalizedArgv[0] ?? ""));
   if (looksLikeNode) {
     return normalizedArgv;
   }
-  return ["node", programName || "openclaw", ...normalizedArgv];
+  return ["node", programName, ...normalizedArgv];
 }
 
 export function shouldMigrateStateFromPath(path: string[]): boolean {
