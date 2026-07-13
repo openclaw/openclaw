@@ -182,6 +182,9 @@ struct OpenClawTypographyTests {
         let channels = try String(
             contentsOf: Self.sourceURL("Design/SettingsChannelsDestination.swift"),
             encoding: .utf8)
+        let skills = try String(
+            contentsOf: Self.sourceURL("Design/SettingsSkillsDestination.swift"),
+            encoding: .utf8)
         let docs = try String(contentsOf: Self.sourceURL("Design/OpenClawDocsScreen.swift"), encoding: .utf8)
         let chatTab = try String(contentsOf: Self.sourceURL("Design/ChatProTab.swift"), encoding: .utf8)
         let chatTypography = try String(
@@ -322,7 +325,11 @@ struct OpenClawTypographyTests {
         #expect(skillWorkshop.contains("Text(\"Apply\")"))
         #expect(skillWorkshop.contains("Text(\"Reject\")"))
 
-        for source in [agentDestinations, dreaming, instances, channels, docs] {
+        #expect(skills.contains("Text(\"Gateway warning\").font(OpenClawType.headline)"))
+        #expect(skills.contains("Text(\"Acknowledge and install\").font(OpenClawType.subheadSemiBold)"))
+        #expect(skills.contains("prompt: Text(\"Search ClawHub\").font(OpenClawType.body)"))
+
+        for source in [agentDestinations, dreaming, instances, channels, skills, docs] {
             #expect(source.contains(".font(OpenClawType.body)"))
         }
 

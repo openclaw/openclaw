@@ -6152,6 +6152,12 @@ class NodeRuntime private constructor(
               ?.trim()
               ?.takeIf(String::isNotEmpty),
           clawHubValid = clawHub?.boolean("valid") == true,
+          clawHubOwnerHandle =
+            clawHub
+              ?.get("ownerHandle")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf(String::isNotEmpty),
           clawHubInstalledVersion =
             clawHub
               ?.get("installedVersion")
@@ -6894,6 +6900,7 @@ data class GatewaySkillSummary(
   val installCount: Int,
   val clawHubSlug: String? = null,
   val clawHubValid: Boolean = false,
+  val clawHubOwnerHandle: String? = null,
   val clawHubInstalledVersion: String? = null,
 )
 
