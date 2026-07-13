@@ -238,6 +238,8 @@ async function createSessionEntry(
         let created: { key: string; agentId: string; entry: SessionEntry };
         if (matchingEntry) {
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
+          const expectedExecNode = params.execNode?.trim() || undefined;
+          const expectedExecCwd = params.execCwd?.trim() || undefined;
           const initialEntryMatches =
             matchingEntry.initializationPending === true &&
             matchingEntry.agentHarnessId === harnessInitial?.agentHarnessId &&
@@ -251,6 +253,8 @@ async function createSessionEntry(
                   cliInitial.cliSessionBinding,
                 ))) &&
             matchingEntry.spawnedCwd === expectedSpawnedCwd &&
+            matchingEntry.execNode === expectedExecNode &&
+            matchingEntry.execCwd === expectedExecCwd &&
             isDeepStrictEqual(matchingEntry.pluginExtensions, params.initialEntry.pluginExtensions);
           if (!initialEntryMatches) {
             throw new Error(
@@ -277,6 +281,8 @@ async function createSessionEntry(
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
             ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
+            ...(params.execNode !== undefined ? { execNode: params.execNode } : {}),
+            ...(params.execCwd !== undefined ? { execCwd: params.execCwd } : {}),
             initialEntry: {
               ...(harnessInitial ? { agentHarnessId: harnessInitial.agentHarnessId } : {}),
               ...(cliInitial

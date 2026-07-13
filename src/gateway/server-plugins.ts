@@ -28,6 +28,7 @@ import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
@@ -683,8 +684,39 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
                 (node as { connected?: unknown }).connected === true,
             )
           : nodes;
+      const context = getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext();
+      const projectedNodes = filteredNodes.map((node) => {
+        if (
+          !node ||
+          typeof node !== "object" ||
+          Array.isArray(node) ||
+          !context?.nodeRegistry?.get ||
+          !context.getRuntimeConfig
+        ) {
+          return node;
+        }
+        const nodeRecord = node as Record<string, unknown>;
+        const nodeId = typeof nodeRecord.nodeId === "string" ? nodeRecord.nodeId : "";
+        const liveNode = nodeId ? context.nodeRegistry.get(nodeId) : undefined;
+        if (!liveNode) {
+          return node;
+        }
+        const allowlist = resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
+          ...liveNode,
+          approvedCommands: liveNode.commands,
+        });
+        const invocableCommands = liveNode.commands.filter(
+          (command) =>
+            isNodeCommandAllowed({
+              command,
+              declaredCommands: liveNode.commands,
+              allowlist,
+            }).ok,
+        );
+        return Object.assign({}, nodeRecord, { invocableCommands });
+      });
       return {
-        nodes: filteredNodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
+        nodes: projectedNodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
       };
     },
     async invoke(params) {
