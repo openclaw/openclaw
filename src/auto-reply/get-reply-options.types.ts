@@ -198,6 +198,11 @@ export type GetReplyOptions = {
    */
   onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
   /**
+   * When provided and returning false, the narrator must not start utility-model
+   * completions. Activity notes keep accumulating for the first visible update.
+   */
+  isProgressDraftVisible?: () => boolean;
+  /**
    * Omit exec/bash command text from narration model input, mirroring the
    * channel's `streaming.progress.commandText: "status"` display policy so
    * narration never receives more command detail than the draft shows.

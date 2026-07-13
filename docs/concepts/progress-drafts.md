@@ -43,9 +43,9 @@ Shelling...
 }
 ```
 
-Defaults from here: a start delay of 5 seconds (or immediately on a second work
-event), compact progress lines while useful work happens, and suppression of
-the older standalone progress messages for that turn. Raw tool-line drafts use
+Defaults from here: a start delay of 5 seconds, compact progress lines while
+useful work happens, and suppression of the older standalone progress messages
+for that turn. Raw tool-line drafts use
 an automatic one-word label; narrated status omits that redundant title unless
 you configure one explicitly.
 
@@ -61,7 +61,7 @@ migration, see [Streaming and chunking](/concepts/streaming).
 | Progress lines | Compact run updates using the same tool icons and detail formatter as `/verbose`. |
 
 For raw tool progress, the label appears once the agent starts meaningful work
-and stays busy for the initial delay, or a second work event fires immediately.
+and stays busy for the initial delay.
 It sits at the top of the rolling progress-line list, so it scrolls away once
 enough concrete work lines appear. Narrated progress shows only the agent's
 plain-language status unless a label is configured explicitly. Plain text-only

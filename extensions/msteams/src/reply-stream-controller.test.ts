@@ -266,27 +266,35 @@ describe("createTeamsReplyStreamController", () => {
   });
 
   it("streams compact Teams progress lines when tool progress is enabled", async () => {
+    vi.useFakeTimers();
     const stream = makeStream();
-    const ctrl = createTeamsReplyStreamController({
-      conversationType: "personal",
-      context: makeContext(stream),
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: {
-        streaming: {
-          mode: "progress",
-          progress: {
-            label: "Working",
-            maxLines: 3,
+    try {
+      const ctrl = createTeamsReplyStreamController({
+        conversationType: "personal",
+        context: makeContext(stream),
+        feedbackLoopEnabled: false,
+        log: { debug: vi.fn() } as never,
+        msteamsConfig: {
+          streaming: {
+            mode: "progress",
+            progress: {
+              label: "Working",
+              maxLines: 3,
+            },
           },
-        },
-      } as never,
-    });
+        } as never,
+      });
 
-    await ctrl.pushProgressLine("tool: search");
-    await ctrl.pushProgressLine("tool: exec");
+      await ctrl.pushProgressLine("tool: search");
+      await ctrl.pushProgressLine("tool: exec");
+      expect(stream.update).not.toHaveBeenCalled();
 
-    expect(stream.update).toHaveBeenLastCalledWith("Working\n\n- tool: search\n- tool: exec");
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(stream.update).toHaveBeenLastCalledWith("Working\n\n- tool: search\n- tool: exec");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("suppresses block delivery when progress final text is emitted to the stream", () => {

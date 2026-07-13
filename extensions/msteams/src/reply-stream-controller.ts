@@ -143,8 +143,8 @@ export function createTeamsReplyStreamController(params: {
 
   // Gate informative updates so they only start firing once meaningful work
   // has begun (avoids flickering "Thinking..." before the first real tool
-  // call). The gate is shape-agnostic — it just calls `onStart` once when the
-  // first noteWork() arrives.
+  // call). The gate is shape-agnostic — it calls `onStart` once the initial
+  // work delay elapses.
   const progressDraftGate = createChannelProgressDraftGate({
     onStart: renderInformativeUpdate,
   });

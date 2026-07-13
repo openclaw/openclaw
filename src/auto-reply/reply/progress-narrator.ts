@@ -183,6 +183,7 @@ export function createProgressNarrator(params: {
   agentId: string;
   userMessage?: string;
   onUpdate: (payload: { text: string }) => Promise<void> | void;
+  isProgressDraftVisible?: () => boolean;
   abortSignal?: AbortSignal;
   /** Mirror of the channel's commandText: "status" policy for narration input. */
   hideCommandText?: boolean;
@@ -269,6 +270,9 @@ export function createProgressNarrator(params: {
 
   const maybeRun = (immediate: boolean) => {
     if (disabled) {
+      return;
+    }
+    if (params.isProgressDraftVisible?.() === false) {
       return;
     }
     if (inFlight) {
@@ -395,6 +399,7 @@ export function attachProgressNarratorToReplyOptions(params: {
     agentId: params.agentId,
     userMessage: params.userMessage,
     onUpdate: onNarrationUpdate,
+    isProgressDraftVisible: opts.isProgressDraftVisible,
     abortSignal: opts.abortSignal,
     hideCommandText: opts.narrationHideCommandText === true,
   });

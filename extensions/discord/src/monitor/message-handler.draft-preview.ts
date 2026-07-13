@@ -156,6 +156,9 @@ export function createDiscordDraftPreviewController(params: {
     get isProgressMode() {
       return discordStreamMode === "progress";
     },
+    get hasProgressDraftStarted() {
+      return progressDraft.hasStarted;
+    },
     get hasProgressDraftToCollapse() {
       return (
         !progressDraftCollapsed && (progressDraft.hasStarted || progressDraftStartedBeforeFinal)
