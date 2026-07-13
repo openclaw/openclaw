@@ -88,10 +88,20 @@ class NewSessionPage extends OpenClawLightDomElement {
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
+  private gatewaySource: ApplicationContext["gateway"] | null = null;
+  private gatewayConnected = false;
+  private gatewayConnectionEpoch = 0;
+  private catalogRetryKey = "";
+  private catalogRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   // Re-render when agents/sessions hydrate so the hero identity and the
   // recent-chats list appear without a route change.
   private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) => this.synchronizeGateway(gateway),
+    )
     .watch(
       () => this.context?.agents,
       (agents, notify) => agents.subscribe(notify),
@@ -100,6 +110,48 @@ class NewSessionPage extends OpenClawLightDomElement {
       () => this.context?.sessions,
       (sessions, notify) => sessions.subscribe(notify),
     );
+
+  private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
+    if (this.gatewaySource !== gateway) {
+      this.gatewaySource = gateway;
+      this.gatewayConnected = false;
+    }
+    const connected = gateway.snapshot.connected;
+    const becameConnected = connected && !this.gatewayConnected;
+    this.gatewayConnected = connected;
+    if (becameConnected) {
+      this.gatewayConnectionEpoch += 1;
+      this.retryPendingCatalogTarget();
+    }
+  }
+
+  private retryPendingCatalogTarget() {
+    if (
+      !this.gatewayConnected ||
+      !catalog.isTarget(this.data) ||
+      catalog.isResolvedTarget(this.data)
+    ) {
+      return;
+    }
+    const retryKey = `${this.gatewayConnectionEpoch}:${catalog.routeKey(this.data)}`;
+    if (this.catalogRetryKey === retryKey) {
+      return;
+    }
+    this.catalogRetryKey = retryKey;
+    globalThis.clearTimeout(this.catalogRetryTimer);
+    this.catalogRetryTimer = globalThis.setTimeout(() => {
+      this.catalogRetryTimer = undefined;
+      if (
+        this.catalogRetryKey !== retryKey ||
+        !this.gatewayConnected ||
+        !catalog.isTarget(this.data) ||
+        catalog.isResolvedTarget(this.data)
+      ) {
+        return;
+      }
+      void this.context?.revalidate("new-session").catch(() => undefined);
+    }, 0);
+  }
 
   override connectedCallback() {
     super.connectedCallback();
@@ -111,6 +163,12 @@ class NewSessionPage extends OpenClawLightDomElement {
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.subscriptions.clear();
+    this.gatewaySource = null;
+    this.gatewayConnected = false;
+    this.gatewayConnectionEpoch = 0;
+    this.catalogRetryKey = "";
+    globalThis.clearTimeout(this.catalogRetryTimer);
+    this.catalogRetryTimer = undefined;
     super.disconnectedCallback();
   }
 
@@ -204,6 +262,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   };
 
   override updated() {
+    this.retryPendingCatalogTarget();
     const agentsReady = this.agents().length > 0;
     const openKey = catalog.routeKey(this.data);
     if (this.openedFor !== openKey) {

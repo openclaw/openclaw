@@ -2,48 +2,8 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
-
-async function connectedGatewayClient(
-  context: ApplicationContext,
-): Promise<GatewayBrowserClient | null> {
-  const current = context.gateway.snapshot;
-  if (current.connected && current.client) {
-    return current.client;
-  }
-  return await new Promise((resolve) => {
-    let done = false;
-    let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
-    let unsubscribe: () => void = () => undefined;
-    const finish = (client: GatewayBrowserClient | null) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      globalThis.clearTimeout(timer);
-      unsubscribe();
-      resolve(client);
-    };
-    unsubscribe = context.gateway.subscribe((snapshot) => {
-      if (snapshot.connected && snapshot.client) {
-        finish(snapshot.client);
-      }
-    });
-    if (done) {
-      unsubscribe();
-      return;
-    }
-    const refreshed = context.gateway.snapshot;
-    if (refreshed.connected && refreshed.client) {
-      finish(refreshed.client);
-    }
-    if (!done) {
-      timer = globalThis.setTimeout(() => finish(null), 5_000);
-    }
-  });
-}
 
 async function loadNewSessionData(
   context: ApplicationContext,
@@ -54,22 +14,25 @@ async function loadNewSessionData(
   if (!location.catalogId) {
     return plain;
   }
-  const client = await connectedGatewayClient(context);
-  if (!client) {
-    return { ...plain, catalogId: "" };
+  const gateway = context.gateway.snapshot;
+  if (!gateway.connected || !gateway.client) {
+    return plain;
   }
   try {
-    const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-      catalogId: location.catalogId,
-      limitPerHost: 1,
-    });
+    const result = await gateway.client.request<SessionsCatalogListResult>(
+      "sessions.catalog.list",
+      {
+        catalogId: location.catalogId,
+        limitPerHost: 1,
+      },
+    );
     const catalog = result.catalogs.find((candidate) => candidate.id === location.catalogId);
     const model = catalog?.capabilities.createSession?.model.trim();
     return catalog && model
       ? { ...location, model, catalogLabel: catalog.label }
       : { ...plain, catalogId: "" };
   } catch {
-    return { ...plain, catalogId: "" };
+    return plain;
   }
 }
 

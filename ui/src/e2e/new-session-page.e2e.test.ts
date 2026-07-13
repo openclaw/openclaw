@@ -346,6 +346,100 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("resolves a pending catalog target after reconnect without clearing the draft", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+            {
+              id: "research",
+              identity: { name: "Research" },
+              name: "Research",
+              workspace: "/home/peter/research",
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: {
+                continueSession: true,
+                archive: false,
+                createSession: { model: "anthropic/claude-opus-4-8" },
+              },
+              hosts: [],
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:claude-reconnect" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new?agent=research`);
+      await page.getByRole("heading", { name: "Research" }).waitFor();
+      await gateway.setOnline(false);
+      await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+
+      await page.evaluate(() => {
+        history.pushState(null, "", "new?agent=research&catalog=claude");
+        dispatchEvent(new PopStateEvent("popstate"));
+      });
+
+      const message = page.locator(".new-session-page__message");
+      await message.fill("keep this reconnect draft");
+      await expect
+        .poll(() => page.locator(".new-session-page__runtime").textContent())
+        .toContain("claude");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
+        .toBe(false);
+      expect(await gateway.getRequests("sessions.catalog.list")).toHaveLength(0);
+
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("sessions.catalog.list");
+      await expect
+        .poll(() => page.locator(".new-session-page__runtime").textContent())
+        .toContain("Claude Code");
+      await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
+      await expect.poll(() => page.getByRole("heading").first().textContent()).toContain("Main");
+
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        message: "keep this reconnect draft",
+        model: "anthropic/claude-opus-4-8",
+      });
+      expect(create.params).not.toHaveProperty("cwd");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("resets agent-derived workspace state when retargeted to a catalog", async () => {
     const context = await browser.newContext({
       locale: "en-US",
