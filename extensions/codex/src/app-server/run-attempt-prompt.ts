@@ -135,8 +135,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       sessionId: params.sessionId,
       sessionKey: contextSessionKey,
       engineId: activeContextEngine.info.id,
-      mode:
-        contextEngineProjection?.mode ?? assembled.contextProjection?.mode ?? "per_turn",
+      mode: contextEngineProjection?.mode ?? assembled.contextProjection?.mode ?? "per_turn",
       epoch: contextEngineProjection?.epoch,
       fingerprint: contextEngineProjection?.fingerprint,
       previousThreadId: decisionBinding?.threadId,
