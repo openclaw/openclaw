@@ -882,7 +882,7 @@ export async function shouldRetainQaGatewayCredentialLease(env: NodeJS.ProcessEn
   }
 }
 
-export const testing = {
+const testing = {
   commandLineBytes,
   normalizeEnvKeys,
   parseQaGatewayProcessHandoff,
@@ -890,3 +890,5 @@ export const testing = {
   parseQaGatewayProcessSandboxProof,
   parseQaGatewayProcStat,
 };
+
+export { testing as __testing };

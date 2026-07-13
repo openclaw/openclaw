@@ -52,6 +52,8 @@ The mounted repo source should be available read-only under \`./repo/\`.
   }
 }
 
-export const testing = {
+const testing = {
   resolveQaAgentWorkspaceRepoLinkType,
 };
+
+export { testing as __testing };

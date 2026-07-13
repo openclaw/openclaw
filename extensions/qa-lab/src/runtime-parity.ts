@@ -1156,10 +1156,12 @@ export async function runRuntimeParityScenario(params: {
   };
 }
 
-export const testing = {
+const testing = {
   classifyRuntimeParityCells,
   filterMockRequestsForParentPrompt,
   hasProvenTerminalImageResult,
   resolveRuntimeParityToolCalls,
   resolveToolCallOrderFromMockRequests,
 };
+
+export { testing as __testing };

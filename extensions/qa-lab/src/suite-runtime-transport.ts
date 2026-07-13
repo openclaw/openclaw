@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements suite runtime transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import {
+  createFailureAwareTransportWaitForCondition,
   findFailureOutboundMessage as findTransportFailureOutboundMessage,
   waitForQaTransportCondition,
   type QaTransportState,
@@ -17,6 +18,10 @@ function findFailureOutboundMessage(
   options?: { sinceIndex?: number; cursorSpace?: "all" | "outbound" },
 ) {
   return findTransportFailureOutboundMessage(state, options);
+}
+
+function createScenarioWaitForCondition(state: QaTransportState) {
+  return createFailureAwareTransportWaitForCondition(state);
 }
 
 async function waitForOutboundMessage(
@@ -161,6 +166,7 @@ async function waitForNoTransportOutbound(
 }
 
 export {
+  createScenarioWaitForCondition,
   findFailureOutboundMessage,
   formatConversationTranscript,
   formatTransportTranscript,

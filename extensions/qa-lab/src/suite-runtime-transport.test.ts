@@ -1,8 +1,8 @@
 // Qa Lab tests cover suite runtime transport plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { createFailureAwareTransportWaitForCondition } from "./qa-transport.js";
 import {
+  createScenarioWaitForCondition,
   findFailureOutboundMessage,
   formatTransportTranscript,
   readTransportTranscript,
@@ -126,7 +126,7 @@ describe("qa suite transport helpers", () => {
 
   it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
     const state = createQaBusState();
-    const waitForCondition = createFailureAwareTransportWaitForCondition(state);
+    const waitForCondition = createScenarioWaitForCondition(state);
 
     const pending = waitForCondition(
       () =>
@@ -173,7 +173,7 @@ describe("qa suite transport helpers", () => {
       text: "ok do it",
     });
 
-    const waitForCondition = createFailureAwareTransportWaitForCondition(state);
+    const waitForCondition = createScenarioWaitForCondition(state);
     const pending = waitForCondition(
       () =>
         state

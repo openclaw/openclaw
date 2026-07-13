@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  testing as __testing,
+  __testing,
   assertQaGatewayCredentialLeaseQuarantine,
   createQaGatewayProcessBoundaryController,
   parseQaGatewayProcStat,
