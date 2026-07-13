@@ -72,15 +72,30 @@ function piHome(env: NodeJS.ProcessEnv): string {
   return configured || os.homedir();
 }
 
-function expandHome(value: string, env: NodeJS.ProcessEnv): string {
+export function isPiSessionCatalogPathAbsolute(
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "win32") {
+    return path.posix.isAbsolute(value);
+  }
+  const root = path.win32.parse(value).root;
+  return path.win32.isAbsolute(value) && root !== "\\" && root !== "/";
+}
+
+function resolveConfiguredPath(value: string, env: NodeJS.ProcessEnv): string {
   const home = piHome(env);
+  let resolved = value;
   if (value === "~") {
-    return home;
+    resolved = home;
   }
   if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return path.join(home, value.slice(2));
+    resolved = path.join(home, value.slice(2));
   }
-  return path.resolve(value);
+  if (!isPiSessionCatalogPathAbsolute(resolved)) {
+    throw new Error("Pi session catalog requires absolute or home-relative storage paths");
+  }
+  return path.resolve(resolved);
 }
 
 function settingsSessionDir(file: string): string | undefined {
@@ -95,17 +110,17 @@ function settingsSessionDir(file: string): string | undefined {
 function piSessionStore(env: NodeJS.ProcessEnv): { root: string; flat: boolean } {
   const customSessionDir = env.PI_CODING_AGENT_SESSION_DIR?.trim();
   if (customSessionDir) {
-    return { root: expandHome(customSessionDir, env), flat: true };
+    return { root: resolveConfiguredPath(customSessionDir, env), flat: true };
   }
   const home = piHome(env);
   const agentDir = env.PI_CODING_AGENT_DIR?.trim()
-    ? expandHome(env.PI_CODING_AGENT_DIR, env)
+    ? resolveConfiguredPath(env.PI_CODING_AGENT_DIR, env)
     : path.join(home, ".pi", "agent");
   const configuredSessionDir =
     settingsSessionDir(path.join(process.cwd(), ".pi", "settings.json")) ??
     settingsSessionDir(path.join(agentDir, "settings.json"));
   if (configuredSessionDir) {
-    return { root: expandHome(configuredSessionDir, env), flat: true };
+    return { root: resolveConfiguredPath(configuredSessionDir, env), flat: true };
   }
   return {
     root: path.join(agentDir, "sessions"),

@@ -11,6 +11,7 @@ import {
   registerPiSessionCatalog,
 } from "./pi-session-catalog-plugin.js";
 import { listLocalPiSessionPage, readLocalPiTranscriptPage } from "./pi-session-catalog.js";
+import { isPiSessionCatalogPathAbsolute } from "./pi-session-store.js";
 
 const temporaryDirectories: string[] = [];
 const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -105,6 +106,12 @@ afterEach(async () => {
 });
 
 describe("Pi session catalog", () => {
+  it("rejects Windows drive-less rooted session paths", () => {
+    expect(isPiSessionCatalogPathAbsolute("\\sessions", "win32")).toBe(false);
+    expect(isPiSessionCatalogPathAbsolute("C:\\sessions", "win32")).toBe(true);
+    expect(isPiSessionCatalogPathAbsolute("\\\\server\\share\\sessions", "win32")).toBe(true);
+  });
+
   it("lists named sessions and reads the active JSONL branch", async () => {
     await createPiStore();
     const listed = await listLocalPiSessionPage({ limit: 20 });
@@ -384,6 +391,14 @@ describe("Pi session catalog", () => {
         command.isAvailable?.({
           config: {},
           env: { PI_CODING_AGENT_SESSION_DIR: path.join(directory, "missing") },
+        } as never),
+      ),
+    ).toBe(false);
+    expect(
+      commands.every((command) =>
+        command.isAvailable?.({
+          config: {},
+          env: { PI_CODING_AGENT_SESSION_DIR: ".pi/sessions" },
         } as never),
       ),
     ).toBe(false);
