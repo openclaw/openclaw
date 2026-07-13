@@ -262,9 +262,10 @@ function appendTranscriptEntry(
 }
 
 describe("shouldSkipLocalCliCredentialEpoch", () => {
-  it("uses the prepared backend model provider for Claude CLI context tokens", async () => {
+  it("applies the backend model provider and selected agent context cap", async () => {
     const { dir, sessionFile } = createSessionFile();
     const prepareExecution = vi.fn(async () => undefined);
+    const baseConfig = createCliBackendConfig();
     try {
       setClaudeCliBackendForPrepareTest({
         modelProvider: "fixture-anthropic",
@@ -280,7 +281,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         timeoutMs: 1_000,
         runId: "run-configured-context-budget",
         config: {
-          ...createCliBackendConfig(),
+          ...baseConfig,
+          agents: {
+            ...baseConfig.agents,
+            list: [{ id: "main", contextTokens: 80_000 }],
+          },
           models: {
             providers: {
               "fixture-anthropic": {
@@ -304,9 +309,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.backendResolved.modelProvider).toBe("fixture-anthropic");
-      expect(context.contextWindowInfo?.tokens).toBe(100_000);
+      expect(context.contextWindowInfo?.tokens).toBe(80_000);
       expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ contextTokenBudget: 100_000 }),
+        expect.objectContaining({ contextTokenBudget: 80_000 }),
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

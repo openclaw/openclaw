@@ -42,7 +42,7 @@ import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-ru
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
-import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -529,6 +529,7 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
+  const agentContextTokens = resolveAgentConfig(params.config ?? {}, sessionAgentId)?.contextTokens;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   let effectiveAuthProfileId =
@@ -660,6 +661,7 @@ export async function prepareCliRunContext(
     provider: params.provider,
     modelId,
     modelContextTokens,
+    agentContextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
   const autoReseedHistoryChars = isClaudeCli
