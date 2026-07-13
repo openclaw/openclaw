@@ -122,24 +122,24 @@ describe("collapseCompletedTurnWork", () => {
     expect(items.some((item) => item.kind === "work-group")).toBe(false);
   });
 
-  it("collapses reply-less turns only once the run is idle", () => {
+  it("keeps reply-less turns expanded after the run finishes", () => {
     const messages = [
       { role: "user", content: "do it", timestamp: 1_000 },
       toolResult("call-1", 2_000),
     ];
 
-    // Mid-run the executing turn can trail a queued send, so reply-less turns
-    // stay expanded until the run reaches terminal.
+    // A reply-less executing turn stays expanded while live and remains visible
+    // after completion instead of becoming an opaque worked-for rollup.
     expect(collapsedItems({ messages }, true).some((item) => item.kind === "work-group")).toBe(
       false,
     );
 
     const idle = collapsedItems({ messages });
-    expect(idle.map((item) => item.kind)).toEqual(["group", "work-group"]);
-    expect(requireWorkGroup(idle[1]).durationMs).toBe(1_000);
+    expect(idle.map((item) => item.kind)).toEqual(["group", "group"]);
+    expect(requireGroup(idle[1]).role).toBe("tool");
   });
 
-  it("flags failed work in turns that never replied", () => {
+  it("keeps failed work visible in turns that never replied", () => {
     const items = collapsedItems({
       messages: [
         { role: "user", content: "go", timestamp: 1_000 },
@@ -147,7 +147,8 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(requireWorkGroup(items[1]).hasError).toBe(true);
+    expect(items.map((item) => item.kind)).toEqual(["group", "group"]);
+    expect(requireGroup(items[1]).role).toBe("tool");
   });
 
   it("does not flag errors once the turn recovered with a reply", () => {

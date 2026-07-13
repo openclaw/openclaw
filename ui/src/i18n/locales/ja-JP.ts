@@ -510,6 +510,8 @@ export const ja_JP: TranslationMap = {
     start: "セッションを開始",
     starting: "開始中…",
     createFailed: "セッションを作成できませんでした。",
+    createOutcomeUnknown:
+      "このセッションの開始中に Gateway が変更されました。このタスクを再度開始する前に、最近のセッションを確認してください。",
     catalogUnavailable: "このセッションのターゲットは利用できません。",
   },
   sessionsView: {

@@ -512,6 +512,8 @@ export const fr: TranslationMap = {
     start: "Démarrer la session",
     starting: "Démarrage…",
     createFailed: "Impossible de créer la session.",
+    createOutcomeUnknown:
+      "Le Gateway a changé pendant le démarrage de cette session. Consultez les sessions récentes avant de relancer cette tâche.",
     catalogUnavailable: "La cible de cette session est indisponible.",
   },
   sessionsView: {

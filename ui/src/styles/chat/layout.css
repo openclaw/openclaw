@@ -114,8 +114,12 @@ openclaw-chat-page {
   /* The tall top inset is a titlebar band: it keeps the floating rail
      openers (.chat-floating-toggles, 28px at top 10px) clear of the first
      message and gives the native macOS app an empty strip that starts a
-     window drag (see the thread mousedown handler in chat-thread.ts). */
-  padding: clamp(44px, 5vh, 52px) clamp(6px, 1vw, 12px) 6px;
+     window drag (see the thread mousedown handler in chat-thread.ts).
+     No horizontal padding: macOS overlay scrollbars render inside the
+     scroll container's padding, which floats the thumb away from the pane
+     edge (visible next to the sidebar divider). The side inset lives on
+     .chat-thread-inner instead so the scrollbar hugs the edge. */
+  padding: clamp(44px, 5vh, 52px) 0 6px;
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
@@ -145,7 +149,10 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .chat-thread-inner {
   box-sizing: border-box;
-  width: calc(100% - 36px);
+  /* 36px shared gutter plus the responsive side inset that used to be
+     .chat-thread's horizontal padding (moved off the scroll container so
+     overlay scrollbars sit flush at the pane edge). */
+  width: calc(100% - 36px - 2 * clamp(6px, 1vw, 12px));
   max-width: var(--chat-thread-max-width);
   margin-inline: auto;
 }

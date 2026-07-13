@@ -4776,21 +4776,76 @@ describe("chat model controls", () => {
     expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
     modelPatch.resolve(patchResult);
     await expect(modelSwitch).resolves.toBe(true);
-    await vi.waitFor(() => expect(patches).toHaveLength(3));
-    expect(patches).not.toContainEqual({ model: "google/gemini-3-pro" });
+    await vi.waitFor(() => expect(patches).toHaveLength(2));
+    expect(patches.at(-1)).toEqual({ thinkingLevel: "ultra" });
     thinkingUpdate.resolve(patchResult);
-    await expect(Promise.all([thinkingPatch, fastModePatch, laterModelSwitch])).resolves.toEqual([
-      true,
-      true,
-      true,
-    ]);
+    await expect(thinkingPatch).resolves.toBe(true);
+    await vi.waitFor(() => expect(patches).toHaveLength(4));
+    await expect(Promise.all([fastModePatch, laterModelSwitch])).resolves.toEqual([true, true]);
     expect(patches.at(-1)).toEqual({ model: "google/gemini-3-pro" });
-    expect(patches.slice(1, -1)).toEqual(
-      expect.arrayContaining([{ thinkingLevel: "ultra" }, { fastMode: true }]),
-    );
+    expect(patches).toEqual([
+      { model: "openai/gpt-5.6-sol" },
+      { thinkingLevel: "ultra" },
+      { fastMode: true },
+      { model: "google/gemini-3-pro" },
+    ]);
   });
 
-  it("drops model-dependent patches when the pending model switch fails", async () => {
+  it("keeps reconciliation inside the session settings lane", async () => {
+    const reconciliationStarted = createDeferred<void>();
+    const releaseReconciliation = createDeferred<void>();
+    const patches: Array<Record<string, unknown>> = [];
+    const patchResult = {
+      ok: true,
+      path: "",
+      key: "main",
+      entry: { sessionId: "main" },
+    };
+    const sessions = {
+      state: { modelOverrides: {} },
+      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
+        patches.push(patch);
+        return Promise.resolve(patchResult);
+      }),
+      refresh: async () => {},
+      setModelOverride: vi.fn(),
+    };
+    const host = {
+      client: {},
+      connected: true,
+      sessionKey: "main",
+      chatModelCatalog: [],
+      chatModelSwitchPromises: {},
+      chatThinkingLevel: "high",
+      sessions,
+      sessionsResult: createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          model: "claude-fable-5",
+          modelProvider: "anthropic",
+          thinkingLevel: "high",
+        },
+      ]),
+      onModelChanged: async () => {
+        reconciliationStarted.resolve();
+        await releaseReconciliation.promise;
+      },
+    } as unknown as Parameters<typeof switchChatModel>[0];
+
+    const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
+    await reconciliationStarted.promise;
+    const thinkingPatch = switchChatThinkingLevel(host, "ultra");
+    await Promise.resolve();
+    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
+
+    releaseReconciliation.resolve();
+    await expect(Promise.all([modelSwitch, thinkingPatch])).resolves.toEqual([true, true]);
+    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }, { thinkingLevel: "ultra" }]);
+  });
+
+  it("validates queued settings independently after a model switch fails", async () => {
     const modelPatch = createDeferred<unknown>();
     const patches: Array<Record<string, unknown>> = [];
     const sessions = {
@@ -4828,7 +4883,7 @@ describe("chat model controls", () => {
 
     await expect(modelSwitch).resolves.toBe(false);
     await expect(thinkingPatch).resolves.toBe(false);
-    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
+    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }, { thinkingLevel: "ultra" }]);
     expect(host.chatThinkingLevel).toBe("high");
   });
 
@@ -4864,15 +4919,14 @@ describe("chat model controls", () => {
     const first = switchChatFastMode(host, "on");
     await vi.waitFor(() => expect(pendingPatches).toHaveLength(1));
     const second = switchChatFastMode(host, "off");
-    await vi.waitFor(() => expect(pendingPatches).toHaveLength(2));
 
-    pendingPatches[1]?.resolve();
-    await expect(second).resolves.toBe(true);
     pendingPatches[0]?.reject(new Error("boom"));
     await expect(first).resolves.toBe(false);
+    await vi.waitFor(() => expect(pendingPatches).toHaveLength(2));
+    pendingPatches[1]?.resolve();
+    await expect(second).resolves.toBe(true);
 
-    // Without the per-session patch token, the older failure would roll the
-    // row back to its pre-"on" value and clobber the newer selection.
+    // The newer selection keeps its own validation turn after the older failure.
     const row = host.sessionsResult?.sessions.find((entry) => entry.key === "main");
     expect(row?.fastMode).toBe(false);
   });

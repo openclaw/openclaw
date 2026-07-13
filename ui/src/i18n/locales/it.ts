@@ -508,6 +508,8 @@ export const it: TranslationMap = {
     start: "Avvia sessione",
     starting: "Avvio…",
     createFailed: "Impossibile creare la sessione.",
+    createOutcomeUnknown:
+      "Il Gateway è cambiato durante l’avvio di questa sessione. Controlla le sessioni recenti prima di avviare nuovamente questa attività.",
     catalogUnavailable: "La destinazione di questa sessione non è disponibile.",
   },
   sessionsView: {

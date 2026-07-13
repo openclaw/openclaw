@@ -7,6 +7,7 @@ import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
+  resolveCollapsedToolArgumentPreview,
 } from "../../../lib/chat/tool-cards.ts";
 import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
 
@@ -488,6 +489,48 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
+  it("shows the first message line in collapsed message tool rows", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:5-message:call-5-message",
+          name: "message",
+          args: {
+            action: "send",
+            channel: "reef",
+            target: "@molty",
+            message: "Hello Molty, first claw-to-claw hello.\nSecond line stays in details.",
+          },
+          inputText: "message input",
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Message",
+    );
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
+      "Hello Molty, first claw-to-claw hello.",
+    );
+  });
+
+  it("previews common intent arguments across generic tools", () => {
+    expect(resolveCollapsedToolArgumentPreview({ task: "Review the PR" })).toBe("Review the PR");
+    expect(resolveCollapsedToolArgumentPreview({ prompt: "Draw a crab" })).toBe("Draw a crab");
+    expect(resolveCollapsedToolArgumentPreview({ text: "First line\nSecond line" })).toBe(
+      "First line",
+    );
+    expect(resolveCollapsedToolArgumentPreview({ query: " \r\rSecond line" })).toBe("Second line");
+    const credential = ["sk", "1234567890abcdef"].join("-");
+    expect(
+      resolveCollapsedToolArgumentPreview({ description: `OPENAI_API_KEY=${credential}` }),
+    ).not.toContain(credential);
+  });
+
   it("keeps tool display labels primary for collapsed result rows with action details", () => {
     const container = document.createElement("div");
     render(
@@ -571,6 +614,9 @@ describe("tool-cards", () => {
   it("keeps collapsed markdown previews bounded after display cleanup", () => {
     const preview = formatCollapsedToolPreviewText(`with ${"A".repeat(200)}`);
 
+    expect(formatCollapsedToolPreviewText("First line\nSecond line")).toBe(
+      "First line Second line",
+    );
     expect(preview).toHaveLength(120);
     expect(preview?.startsWith("A")).toBe(true);
     expect(preview).not.toContain("with ");

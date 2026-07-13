@@ -507,6 +507,8 @@ export const tr: TranslationMap = {
     start: "Oturumu başlat",
     starting: "Başlatılıyor…",
     createFailed: "Oturum oluşturulamadı.",
+    createOutcomeUnknown:
+      "Bu oturum başlatılırken Gateway değişti. Bu görevi yeniden başlatmadan önce son oturumları kontrol edin.",
     catalogUnavailable: "Bu oturum hedefi kullanılamıyor.",
   },
   sessionsView: {
