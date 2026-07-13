@@ -1500,6 +1500,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/npm-runner.d.mts", ["test/scripts/npm-runner.test.ts"]],
       ["scripts/pnpm-runner.d.mts", ["test/scripts/pnpm-runner.test.ts"]],
       [
+        "scripts/lib/cross-os-release-checks/runtime.ts",
+        ["test/scripts/openclaw-cross-os-release-checks.test.ts"],
+      ],
+      [
         "scripts/install.sh",
         [
           "test/scripts/install-sh.test.ts",

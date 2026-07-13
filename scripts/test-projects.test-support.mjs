@@ -2060,6 +2060,27 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
 
+const CROSS_OS_RELEASE_CHECK_SOURCE_PATHS = [
+  "scripts/openclaw-cross-os-release-checks.ts",
+  "scripts/lib/cross-os-release-checks/agent.ts",
+  "scripts/lib/cross-os-release-checks/config.ts",
+  "scripts/lib/cross-os-release-checks/index.ts",
+  "scripts/lib/cross-os-release-checks/install.ts",
+  "scripts/lib/cross-os-release-checks/installed.ts",
+  "scripts/lib/cross-os-release-checks/lanes.ts",
+  "scripts/lib/cross-os-release-checks/logs.ts",
+  "scripts/lib/cross-os-release-checks/network-smokes.ts",
+  "scripts/lib/cross-os-release-checks/process.ts",
+  "scripts/lib/cross-os-release-checks/reporting.ts",
+  "scripts/lib/cross-os-release-checks/runtime.ts",
+  "scripts/lib/cross-os-release-checks/shared.ts",
+];
+for (const sourcePath of CROSS_OS_RELEASE_CHECK_SOURCE_PATHS) {
+  TOOLING_SOURCE_TEST_TARGETS.set(sourcePath, [
+    "test/scripts/openclaw-cross-os-release-checks.test.ts",
+  ]);
+}
+
 const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
