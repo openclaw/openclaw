@@ -3,7 +3,9 @@ import type { AnyAgentTool } from "./browser-tool.runtime.js";
 import {
   acquireTrackedBrowserSessionAccess,
   claimTrackedBrowserSessionOwner,
+  normalizeOptionalString,
   readPositiveIntegerParam,
+  readStringValue,
 } from "./browser-tool.runtime.js";
 
 export type BrowserToolSessionDeps = {
@@ -81,4 +83,9 @@ export function readToolTimeoutMs(params: Record<string, unknown>) {
 
 export function formatScreenshotShareHint(filePath: string): string {
   return `[Screenshot saved to ${JSON.stringify(filePath)}. Use this path with the message tool to share the screenshot explicitly.]`;
+}
+
+export function resolveConsoleTargetId(result: unknown, fallback: unknown): string | undefined {
+  const resultTargetId = (result as { details?: { targetId?: unknown } }).details?.targetId;
+  return readStringValue(resultTargetId) ?? normalizeOptionalString(fallback);
 }

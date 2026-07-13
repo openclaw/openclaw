@@ -588,9 +588,7 @@ export function createBrowserTool(opts?: {
             });
           }
           return jsonResult({
-            profiles: await browserToolDeps.browserProfiles(baseUrl, {
-              timeoutMs: toolTimeoutMs,
-            }),
+            profiles: await browserToolDeps.browserProfiles(baseUrl, { timeoutMs: toolTimeoutMs }),
             systemProfiles,
           });
         }
@@ -894,10 +892,7 @@ export function createBrowserTool(opts?: {
             profile,
             proxyRequest,
           });
-          touchTrackedTab(
-            readStringValue((result as { details?: { targetId?: unknown } }).details?.targetId) ??
-              normalizeOptionalString(params.targetId),
-          );
+          touchTrackedTab(browserToolSession.resolveConsoleTargetId(result, params.targetId));
           return result;
         }
         case "pdf": {
