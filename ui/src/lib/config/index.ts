@@ -82,6 +82,8 @@ type LoadConfigOptions = {
 export type ConfigPatchOptions = {
   raw: string | Record<string, unknown>;
   note: string;
+  /** Array paths the caller intentionally shrinks; required by the gateway's destructive-array guard. */
+  replacePaths?: string[];
 };
 
 type ConfigGatewayClient = {
@@ -555,6 +557,7 @@ async function patchConfig(
       raw: typeof options.raw === "string" ? options.raw : JSON.stringify(options.raw),
       sessionKey: state.applySessionKey,
       note: options.note,
+      ...(options.replacePaths?.length ? { replacePaths: options.replacePaths } : {}),
     });
     return isCurrentConfigConnection(state, client, connectionEpoch);
   } catch (err) {

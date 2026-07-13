@@ -25,7 +25,11 @@ import {
   MODEL_PROVIDERS_COST_DAYS,
   type ModelProvidersData,
 } from "./load.ts";
-import { buildDefaultModelsPatch, buildProviderApiKeyPatch } from "./mutations.ts";
+import {
+  buildDefaultModelsPatch,
+  buildProviderApiKeyPatch,
+  DEFAULT_MODELS_REPLACE_PATHS,
+} from "./mutations.ts";
 import { renderModelProviders, type ModelProviderRowMessage } from "./view.ts";
 
 export type ModelProvidersRouteData = {
@@ -244,6 +248,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     raw: Record<string, unknown>;
     note: string;
     success: string;
+    replacePaths?: string[];
   }): Promise<boolean> {
     if (!this.canMutate() || this.busy[params.key]) {
       return false;
@@ -261,7 +266,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       if (!this.isCurrentClient(client, clientEpoch)) {
         return false;
       }
-      const patched = await runtimeConfig.patch({ raw: params.raw, note: params.note });
+      const patched = await runtimeConfig.patch({
+        raw: params.raw,
+        note: params.note,
+        ...(params.replacePaths ? { replacePaths: params.replacePaths } : {}),
+      });
       if (!this.isCurrentClient(client, clientEpoch)) {
         return false;
       }
@@ -470,6 +479,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       raw: buildDefaultModelsPatch(selection.primary, selection.fallbacks, selection.utilityModel),
       note: t("modelProviders.notes.defaultModel"),
       success: t("modelProviders.defaults.saved"),
+      replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
     });
     if (ok) {
       this.defaultsDraft = null;
