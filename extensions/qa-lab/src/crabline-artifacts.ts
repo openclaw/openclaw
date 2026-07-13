@@ -1,7 +1,7 @@
 // Qa Lab plugin module resolves Crabline artifact paths reported by completed generations.
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 
-export type QaCrablineChannelDriverArtifactPaths = {
+type QaCrablineChannelDriverArtifactPaths = {
   capabilityMatrixPath: string;
   providerReadinessArtifactPath?: string;
   smokeArtifactPath: string;
