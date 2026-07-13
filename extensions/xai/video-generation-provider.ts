@@ -8,8 +8,6 @@ import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
-  fetchProviderDownloadResponse,
-  fetchProviderOperationResponse,
   fetchWithTimeoutGuarded,
   postJsonRequest,
   readProviderJsonResponse,
@@ -376,7 +374,7 @@ function resolveCreateEndpoint(req: VideoGenerationRequest): string {
   }
 }
 
-function resolveXaiVideoDownloadTimeoutMs(timeoutMs: ProviderOperationTimeoutMs | undefined) {
+function resolveXaiVideoFetchTimeoutMs(timeoutMs: ProviderOperationTimeoutMs | undefined) {
   const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
   return typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0
     ? resolved
@@ -394,36 +392,6 @@ async function fetchXaiVideoResponse(
     fetchFn: typeof fetch;
   } & XaiVideoRequestPolicy,
 ) {
-  if (!params.allowPrivateNetwork && !params.dispatcherPolicy) {
-    if (params.stage === "download") {
-      const response = await fetchProviderDownloadResponse({
-        url: params.url,
-        init: params.init,
-        timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        fetchFn: params.fetchFn,
-        provider: "xai",
-        requestFailedMessage: params.requestFailedMessage,
-      });
-      return {
-        response,
-        release: async () => {},
-      };
-    }
-    const response = await fetchProviderOperationResponse({
-      stage: params.stage,
-      url: params.url,
-      init: params.init,
-      timeoutMs: params.timeoutMs,
-      fetchFn: params.fetchFn,
-      provider: "xai",
-      requestFailedMessage: params.requestFailedMessage,
-    });
-    return {
-      response,
-      release: async () => {},
-    };
-  }
-
   return await executeProviderOperationWithRetry({
     provider: "xai",
     stage: params.stage,
@@ -431,7 +399,7 @@ async function fetchXaiVideoResponse(
       const result = await fetchWithTimeoutGuarded(
         params.url,
         params.init,
-        resolveXaiVideoDownloadTimeoutMs(params.timeoutMs),
+        resolveXaiVideoFetchTimeoutMs(params.timeoutMs),
         params.fetchFn,
         {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
@@ -477,9 +445,9 @@ async function pollXaiVideo(
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
       }),
-      fetchFn: params.fetchFn,
       allowPrivateNetwork: params.allowPrivateNetwork,
       dispatcherPolicy: params.dispatcherPolicy,
+      fetchFn: params.fetchFn,
     });
     const payload = await (async () => {
       try {
@@ -519,10 +487,10 @@ async function downloadXaiVideo(
     requestFailedMessage: "xAI generated video download failed",
     auditContext: "xai-video-download",
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    fetchFn: params.fetchFn,
+    timeoutMs: params.timeoutMs,
     allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
+    fetchFn: params.fetchFn,
   });
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
@@ -659,9 +627,9 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           baseUrl,
-          fetchFn,
           allowPrivateNetwork,
           dispatcherPolicy,
+          fetchFn,
         });
         const videoUrl = normalizeOptionalString(completed.video?.url);
         if (!videoUrl) {
@@ -673,10 +641,10 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
             deadline,
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
-          fetchFn,
-          maxBytes: resolveGeneratedVideoMaxBytes(req),
           allowPrivateNetwork,
           dispatcherPolicy,
+          fetchFn,
+          maxBytes: resolveGeneratedVideoMaxBytes(req),
         });
         return {
           videos: [video],

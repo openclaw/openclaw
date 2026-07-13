@@ -170,4 +170,35 @@ describe("xai video generation provider transport", () => {
     expect(server.requests[2]?.headers.authorization).toBeUndefined();
     expect(server.requests[2]?.headers["x-xai-trace"]).toBeUndefined();
   });
+
+  it.each([
+    ["default", undefined],
+    ["explicit false", { allowPrivateNetwork: false }],
+  ] as const)(
+    "blocks %s loopback xAI video requests before reaching the server",
+    async (policyName, requestPolicy) => {
+      const server = await startXaiVideoServer();
+      const provider = await buildTransportProofProvider();
+
+      await expect(
+        provider.generateVideo({
+          provider: "xai",
+          model: "grok-imagine-video",
+          prompt: `${policyName} policy loopback proof`,
+          cfg: {
+            models: {
+              providers: {
+                xai: {
+                  baseUrl: server.baseUrl,
+                  ...(requestPolicy ? { request: requestPolicy } : {}),
+                },
+              },
+            },
+          } as never,
+        }),
+      ).rejects.toThrow();
+
+      expect(server.requests).toHaveLength(0);
+    },
+  );
 });

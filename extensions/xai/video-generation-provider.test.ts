@@ -8,9 +8,10 @@ import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generatio
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
+  executeProviderOperationWithRetryMock,
   postJsonRequestMock,
-  fetchWithTimeoutMock,
   fetchWithTimeoutGuardedMock,
+  fetchWithTimeoutMock,
   readProviderJsonResponseMock,
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
@@ -106,7 +107,33 @@ function requireFetchInitCall(index: number): {
   return {
     url: call[0],
     init: call[1],
-    timeoutMs: call[2],
+    timeoutMs: typeof call[2] === "function" ? call[2]() : call[2],
+  };
+}
+
+function requireGuardedFetchCall(index: number): {
+  url?: string;
+  init?: { method?: string; headers?: Headers };
+  options?: { ssrfPolicy?: unknown; dispatcherPolicy?: unknown; auditContext?: string };
+} {
+  const call = (
+    fetchWithTimeoutGuardedMock.mock.calls as unknown as Array<
+      [
+        string,
+        { method?: string; headers?: Headers },
+        unknown,
+        typeof fetch,
+        { ssrfPolicy?: unknown; dispatcherPolicy?: unknown; auditContext?: string } | undefined,
+      ]
+    >
+  )[index];
+  if (!call) {
+    throw new Error(`Expected fetchWithTimeoutGuarded call ${index}`);
+  }
+  return {
+    url: call[0],
+    init: call[1],
+    options: call[4],
   };
 }
 
@@ -442,14 +469,20 @@ describe("xai video generation provider", () => {
     expect(pollCall?.[4]).toMatchObject({
       ssrfPolicy: { allowPrivateNetwork: true },
       dispatcherPolicy,
+      auditContext: "xai-video-status",
     });
 
     const downloadOptions = fetchWithTimeoutGuardedMock.mock.calls[1]?.[4] as
-      | { ssrfPolicy?: { allowPrivateNetwork?: boolean }; dispatcherPolicy?: unknown }
+      | {
+          ssrfPolicy?: { allowPrivateNetwork?: boolean };
+          dispatcherPolicy?: unknown;
+          auditContext?: string;
+        }
       | undefined;
     expect(downloadOptions).toMatchObject({
       ssrfPolicy: { allowPrivateNetwork: true },
       dispatcherPolicy,
+      auditContext: "xai-video-download",
     });
     const downloadInit = fetchWithTimeoutGuardedMock.mock.calls[1]?.[1] as
       | { headers?: Headers; method?: string }
