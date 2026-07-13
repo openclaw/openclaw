@@ -9500,6 +9500,7 @@ public struct CronDeclarativeAddResult: Codable, Sendable {
 }
 
 public struct CronRunsParams: Codable, Sendable {
+    public let agentid: String?
     public let scope: AnyCodable?
     public let id: String?
     public let jobid: String?
@@ -9514,6 +9515,7 @@ public struct CronRunsParams: Codable, Sendable {
     public let sortdir: AnyCodable?
 
     public init(
+        agentid: String? = nil,
         scope: AnyCodable? = nil,
         id: String? = nil,
         jobid: String? = nil,
@@ -9527,6 +9529,7 @@ public struct CronRunsParams: Codable, Sendable {
         query: String? = nil,
         sortdir: AnyCodable? = nil)
     {
+        self.agentid = agentid
         self.scope = scope
         self.id = id
         self.jobid = jobid
@@ -9542,6 +9545,7 @@ public struct CronRunsParams: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
         case scope
         case id
         case jobid = "jobId"
