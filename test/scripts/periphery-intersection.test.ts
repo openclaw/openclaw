@@ -129,8 +129,8 @@ describe("shared OpenClawKit Periphery workflow", () => {
     const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
       "context",
       "core",
-      "github",
-    ]) as (context: unknown, core: unknown, github: unknown) => Promise<void>;
+      "exec",
+    ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
 
     for (const filename of [
       "apps/ios/Sources/App.swift",
@@ -142,13 +142,20 @@ describe("shared OpenClawKit Periphery workflow", () => {
       await execute(
         {
           eventName: "pull_request",
-          payload: { pull_request: { draft: false, number: 1 } },
+          payload: { pull_request: { base: { sha: "base-sha" }, draft: false, number: 1 } },
           repo: {},
         },
         { setOutput: (name: string, value: string) => outputs.set(name, value) },
         {
-          paginate: async () => [{ filename }],
-          rest: { pulls: { listFiles() {} } },
+          async getExecOutput(command: string, args: string[]) {
+            expect(command).toBe("git");
+            expect(args.slice(0, 5)).toEqual(["diff", "--quiet", "base-sha", "HEAD", "--"]);
+            const pathspecs = args.slice(5);
+            const changed = pathspecs.some((pathspec) =>
+              pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec,
+            );
+            return { exitCode: changed ? 1 : 0 };
+          },
         },
       );
       expect(outputs.get("should-scan"), filename).toBe("true");

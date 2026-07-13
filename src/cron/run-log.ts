@@ -33,6 +33,7 @@ type ReadCronRunLogPageOptions = {
   limit?: number;
   offset?: number;
   jobId?: string;
+  jobIds?: readonly string[];
   runId?: string;
   status?: CronRunLogStatusFilter;
   statuses?: CronRunStatus[];
@@ -298,6 +299,7 @@ export async function readCronRunLogEntriesPage(
       db,
       storeKey,
       jobId,
+      jobIds: opts.jobIds,
       statuses,
       deliveryStatuses,
       runId: opts.runId,
@@ -307,6 +309,7 @@ export async function readCronRunLogEntriesPage(
       db,
       storeKey,
       jobId,
+      jobIds: opts.jobIds,
       statuses,
       deliveryStatuses,
       runId: opts.runId,
@@ -339,6 +342,7 @@ export async function readCronRunLogEntriesPage(
     db,
     storeKey,
     jobId,
+    jobIds: opts.jobIds,
     statuses,
     deliveryStatuses,
     runId: opts.runId,

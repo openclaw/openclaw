@@ -13,7 +13,7 @@ import {
   enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
   reportOmittedChatHistory,
-} from "./chat.js";
+} from "./chat-history-budget.js";
 
 type Captured = DiagnosticPayloadLargeEvent[];
 

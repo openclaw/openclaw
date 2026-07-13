@@ -2,9 +2,11 @@ export type ProfileId = "smoke" | "default" | "large";
 
 export type ProfileConfig = {
   iterations: number;
+  maxWalBytes: number;
   payloadBytes: number;
   retainedBatches: number;
   rowsPerBatch: number;
+  walAutoCheckpointPages: number;
   writerPauseMs: number;
 };
 
@@ -16,9 +18,45 @@ export type CliOptions = {
   stateDir: string | null;
 };
 
+export type ReliabilityStateProof = {
+  batches: number;
+  rows: number;
+  sha256: string;
+};
+
 export type ReliabilityReport = {
   arch: string;
+  concurrentRestoresVerified: number;
   iterations: number;
+  maintenanceProof: {
+    bloatBytes: number;
+    compaction: {
+      autoVacuum: {
+        after: 2;
+        before: number;
+      };
+      databaseBytes: {
+        after: number;
+        before: number;
+      };
+      freelistPages: {
+        after: 0;
+        before: number;
+      };
+      reclaimedBytes: number;
+      walBytes: {
+        after: 0;
+        before: number;
+      };
+    };
+    postCompact: {
+      restoreMs: number;
+      restoreVerified: true;
+      snapshotBytes: number;
+      snapshotMs: number;
+      state: ReliabilityStateProof;
+    };
+  };
   node: string;
   paths: {
     repository: string;
@@ -52,6 +90,8 @@ export type ReliabilityReport = {
   walBytes: {
     after: number;
     before: number;
+    limit: number;
+    peak: number;
   };
   writer: {
     batchesCommitted: number;
@@ -62,23 +102,29 @@ export type ReliabilityReport = {
 export const PROFILES: Record<ProfileId, ProfileConfig> = {
   smoke: {
     iterations: 4,
+    maxWalBytes: 64 * 1024 * 1024,
     payloadBytes: 512,
     retainedBatches: 32,
     rowsPerBatch: 8,
+    walAutoCheckpointPages: 256,
     writerPauseMs: 5,
   },
   default: {
     iterations: 25,
+    maxWalBytes: 512 * 1024 * 1024,
     payloadBytes: 4 * 1024,
     retainedBatches: 128,
     rowsPerBatch: 32,
+    walAutoCheckpointPages: 4 * 1024,
     writerPauseMs: 5,
   },
   large: {
     iterations: 100,
+    maxWalBytes: 8 * 1024 * 1024 * 1024,
     payloadBytes: 8 * 1024,
     retainedBatches: 256,
     rowsPerBatch: 64,
+    walAutoCheckpointPages: 16 * 1024,
     writerPauseMs: 1,
   },
 };

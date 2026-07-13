@@ -2092,4 +2092,3 @@ export const testing = {
     REM_SLEEP_EVENT_TEXT,
   },
 };
-export { testing as __testing };

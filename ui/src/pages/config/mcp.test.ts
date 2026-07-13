@@ -69,7 +69,7 @@ describe("renderMcp", () => {
 
     render(renderMcp(createProps({ configObject: {} })), container);
 
-    expect(container.querySelector(".data-table-empty-state")?.textContent).toContain(
+    expect(container.querySelector(".settings-empty")?.textContent).toContain(
       "No MCP servers configured.",
     );
   });

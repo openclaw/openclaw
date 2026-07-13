@@ -53,6 +53,9 @@ const SETTINGS_ROUTE_PATHS = [
     alias: "/infrastructure",
   },
   { routeId: "worktrees", path: "/settings/worktrees", alias: "/worktrees" },
+  { routeId: "sessions", path: "/settings/sessions", alias: "/sessions" },
+  { routeId: "nodes", path: "/settings/devices", alias: "/nodes" },
+  { routeId: "agents", path: "/settings/agents", alias: "/agents" },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
   {
     routeId: "model-providers",
@@ -85,7 +88,7 @@ describe("navigationIconForRoute", () => {
       skills: "zap",
       plugins: "puzzle",
       "skill-workshop": "wrench",
-      nodes: "monitor",
+      nodes: "monitorSmartphone",
       config: "settings",
       profile: "lobster",
       communications: "send",
@@ -171,7 +174,7 @@ describe("subtitleForRoute", () => {
       skills: "Skills and API keys.",
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
-      nodes: "Paired devices, live connections, and commands.",
+      nodes: "Paired devices, pairing approvals, and exec bindings.",
       config: "Edit openclaw.json.",
       profile: "Your agent's stats, streaks, and life in the reef.",
       communications: "Channels, messages, and audio settings.",
@@ -237,7 +240,7 @@ describe("pathForRoute", () => {
 
   it("prepends base path", () => {
     expect(pathForRoute("chat", "/ui")).toBe("/ui/chat");
-    expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
+    expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/settings/sessions");
   });
 });
 
@@ -396,11 +399,14 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "connection",
       "channels",
       "communications",
+      "agents",
       "ai-agents",
+      "sessions",
       "model-providers",
       "automation",
       "mcp",
       "infrastructure",
+      "nodes",
       "worktrees",
       "debug",
       "logs",

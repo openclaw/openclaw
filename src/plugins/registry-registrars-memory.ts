@@ -141,5 +141,3 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     registerMemoryEmbeddingProvider,
   };
 }
-
-export type MemoryRegistrars = ReturnType<typeof createMemoryRegistrars>;

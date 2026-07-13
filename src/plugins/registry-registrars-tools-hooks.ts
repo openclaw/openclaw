@@ -513,5 +513,3 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     rollbackHooks,
   };
 }
-
-export type ToolHookRegistrars = ReturnType<typeof createToolHookRegistrars>;

@@ -338,5 +338,3 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     registerChannel,
   };
 }
-
-export type NetworkRegistrars = ReturnType<typeof createNetworkRegistrars>;

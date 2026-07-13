@@ -13,7 +13,7 @@ export type DoctorSqliteCompactSnapshot = {
   walSizeBytes: number;
 };
 
-export type DoctorSqliteCompactResult = {
+type DoctorSqliteCompactResult = {
   after: DoctorSqliteCompactSnapshot;
   before: DoctorSqliteCompactSnapshot;
   integrityCheck: "ok";

@@ -14,12 +14,3 @@ export interface RenderLifecycle {
    */
   afterCommit(effect: AfterCommitEffect, onCancel?: () => void): CancelAfterCommit;
 }
-
-export function waitForCommit(renderLifecycle: RenderLifecycle): Promise<boolean> {
-  return new Promise((resolve) => {
-    renderLifecycle.afterCommit(
-      () => resolve(true),
-      () => resolve(false),
-    );
-  });
-}

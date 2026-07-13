@@ -714,7 +714,9 @@ struct ChatOutboxStatusLabel: View {
         }
         .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(self.accessibilityText))
+        .accessibilityLabel(
+            Text(self.accessibilityText)
+                .font(OpenClawChatTypography.caption))
     }
 
     private var title: LocalizedStringResource {

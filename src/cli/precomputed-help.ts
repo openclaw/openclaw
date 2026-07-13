@@ -2,7 +2,7 @@ import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import { getCommandPathWithRootOptions, hasFlag } from "./argv.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 
-export type PrecomputedSubcommandHelpName =
+type PrecomputedSubcommandHelpName =
   | "doctor"
   | "gateway"
   | "models"

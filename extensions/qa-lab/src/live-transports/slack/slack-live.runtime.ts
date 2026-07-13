@@ -374,7 +374,7 @@ type SlackQaScenarioResult = {
   title: string;
 };
 
-export type SlackQaRunResult = {
+type SlackQaRunResult = {
   gatewayDebugDirPath?: string;
   observedMessagesPath: string;
   outputDir: string;

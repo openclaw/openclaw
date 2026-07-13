@@ -82,6 +82,7 @@ export const uk: TranslationMap = {
     relink: "Пов’язати знову",
     waitForScan: "Очікування сканування",
     logout: "Вийти",
+    skipToMainContent: "Перейти до основного вмісту",
   },
   nativeLinkMenu: {
     label: "Дії з посиланням",
@@ -125,6 +126,7 @@ export const uk: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, від {author}",
   },
   channels: {
+    lastError: "Остання помилка",
     refreshingStaleSnapshot:
       "Оновлення статусу каналу у фоновому режимі; показано останній успішний знімок.",
     config: {
@@ -218,10 +220,11 @@ export const uk: TranslationMap = {
   lazyView: {
     loadingTitle: "Завантаження панелі",
     errorTitle: "Не вдалося завантажити панель",
-    errorSubtitle:
-      "Перезавантажте сторінку, щоб завантажити найновіший пакет Control UI, або повторіть спробу, якщо мережевий запит не вдався.",
+    genericSubtitle: "Під час завантаження цієї панелі сталася помилка.",
+    staleTitle: "Доступна нова версія",
+    staleSubtitle:
+      "OpenClaw оновлено у фоновому режимі. Перезавантажте, щоб отримати найновішу панель.",
     retry: "Повторити",
-    unknownError: "Невідома помилка завантаження модуля.",
   },
   nodes: {
     pairing: {
@@ -230,6 +233,15 @@ export const uk: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Відскануйте цей QR-код у мобільному застосунку, щоб підключити новий телефон.",
       generating: "Створення безпечного коду налаштування…",
+      accessTitle: "Мобільний доступ",
+      fullAccess: "Повний доступ (рекомендовано)",
+      fullAccessHint: "Вузол і повне керування Gateway, включно з налаштуваннями та оновленнями.",
+      limitedAccess: "Обмежений доступ",
+      limitedAccessHint: "Вузол, чат і схвалення без адміністративного керування.",
+      generateCode: "Створити код налаштування",
+      transportLimitedTitle: "Обмежено задля безпеки мережі",
+      transportLimitedHint:
+        "Ця URL-адреса Gateway використовує незашифрований протокол ws://. Використовуйте wss:// або Tailscale Serve, а потім створіть новий код для повного доступу.",
       failed: "Не вдалося створити код налаштування.",
       qrAlt: "QR-код сполучення OpenClaw mobile",
       qrUnavailable: "QR-код недоступний. Натомість скопіюйте код налаштування.",
@@ -264,7 +276,8 @@ export const uk: TranslationMap = {
     },
     inventory: {
       title: "Пристрої",
-      subtitle: "Один рядок на кожен пов'язаний клієнт: статус, ролі, токени.",
+      summaryConnected: "Підключено: {connected} із {total}",
+      summaryPending: "Очікують схвалення: {count}",
       cleanupStale: "Очистити {count} застарілих",
       pendingApproval: "Очікує підтвердження",
       paired: "Пов'язано",
@@ -372,19 +385,26 @@ export const uk: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Новий worktree",
-    owner: "Власник",
     ownerManual: "Вручну",
     ownerSession: "Сесія",
     ownerWorkboard: "Workboard",
     title: "Керовані Worktrees",
     subtitle: "Ізольовані копії репозиторію, що належать OpenClaw.",
     cleanNow: "Очистити зараз",
+    cleanupTitle: "Очищення",
+    cleanupSubtitle:
+      "OpenClaw періодично видаляє старі робочі дерева, щоб звільнити місце на диску. Налаштуйте інтенсивність очищення.",
+    cleanupMaxCount: "Максимальна кількість робочих дерев",
+    cleanupMaxCountHelp:
+      "Максимальна кількість керованих робочих дерев, які зберігатимуться в усіх репозиторіях. Для старіших робочих дерев спочатку створюються знімки, після чого їх видаляють. Установіть значення 0, щоб вимкнути обмеження кількості.",
+    cleanupMaxSize: "Максимальний загальний розмір (ГБ)",
+    cleanupMaxSizeHelp:
+      "Максимальний загальний розмір у ГБ для всіх керованих робочих дерев. Установіть значення 0, щоб вимкнути обмеження розміру.",
+    cleanupDecrease: "Зменшити {label}",
+    cleanupIncrease: "Збільшити {label}",
+    cleanupSaveFailed: "Не вдалося зберегти обмеження очищення.",
     name: "Назва",
     repo: "Репозиторій",
-    branch: "Гілка",
-    status: "Статус",
-    lastActive: "Остання активність",
-    actions: "Дії",
     empty: "Немає керованих worktrees.",
     restorable: "Можна відновити",
     restore: "Відновити",
@@ -392,12 +412,22 @@ export const uk: TranslationMap = {
     confirmForceDelete: "Не вдалося створити знімок: {error}\n\nВидалити без знімка?",
   },
   agentChip: {
-    openConversation: "Відкрити вашу розмову з {name}",
     menuLabel: "Меню агента",
     agents: "Агенти",
     working: "Працює…",
     ready: "Готовий до спілкування",
     whatCanAgentDo: "Що може робити {name}?",
+    help: "Довідка",
+    getHelp: "Отримати допомогу",
+    discord: "Спільнота Discord",
+    viewChangelog: "Переглянути журнал змін",
+    agentSettings: "Налаштування агента",
+    filterAgents: "Знайти агента…",
+    noAgentMatches: "Відповідних агентів не знайдено",
+  },
+  agentScope: {
+    label: "Область дії агента",
+    allAgents: "Усі агенти",
   },
   newSession: {
     title: "Новий сеанс",
@@ -427,6 +457,7 @@ export const uk: TranslationMap = {
     start: "Почати сеанс",
     starting: "Запуск…",
     createFailed: "Не вдалося створити сеанс.",
+    catalogUnavailable: "Ціль цього сеансу недоступна.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -566,6 +597,7 @@ export const uk: TranslationMap = {
     groupBy: "Групувати за",
     groupByNone: "Немає",
     groupByCategory: "Власні групи",
+    showCronSessions: "Показувати сеанси cron",
     groupByChannel: "Канал",
     groupByKind: "Тип",
     groupByAgent: "Агент",
@@ -605,6 +637,8 @@ export const uk: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Закріпити в перемикачі",
+    unpinFromSwitcher: "Відкріпити від перемикача",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -629,6 +663,19 @@ export const uk: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Ідентичність",
+      subtitle: "Ім’я, емодзі й аватар, які відображаються в чатах і на бічній панелі.",
+      name: "Відображуване ім’я",
+      namePlaceholder: "Ім’я агента",
+      emoji: "Емодзі",
+      chooseImage: "Вибрати зображення…",
+      replaceImage: "Замінити зображення…",
+      imageUnusable:
+        "Це зображення не можна використати. Виберіть файл зображення розміром до 2 МБ.",
+      fileHint:
+        "Агенти можуть налаштувати це самостійно, відредагувавши IDENTITY.md у своєму робочому просторі.",
     },
     overview: {
       title: "Огляд",
@@ -776,6 +823,7 @@ export const uk: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "Виклик не виконано",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1077,6 +1125,7 @@ export const uk: TranslationMap = {
     settingsView: "Перегляд налаштувань",
     simple: "Простий",
     advanced: "Розширений",
+    content: "Вміст налаштувань",
     themeImported: "Імпортовано {name}.",
     themeRemoved: "Користувацьку тему видалено.",
     channels: {
@@ -1204,6 +1253,10 @@ export const uk: TranslationMap = {
       inlineHintAfter:
         "щоб додати одну локальну для браузера тему tweakcn. У tweakcn скористайтеся Share і вставте скопійоване посилання сюди.",
       textSize: "Розмір тексту",
+    },
+    chatPrefs: {
+      title: "Чат",
+      hint: "Локальні налаштування чату в браузері.",
     },
     connection: {
       title: "Підключення",
@@ -1364,6 +1417,7 @@ export const uk: TranslationMap = {
     moreLiveTitle: "Ще {count} активних інструментів доступно в групах нижче.",
     moreLive: "+{count} активних інструментів",
     quickPresets: "Швидкі шаблони",
+    catalogTitle: "Каталог інструментів",
     inherit: "Успадкувати",
     profile: "Профіль",
     source: "Джерело",
@@ -1428,6 +1482,8 @@ export const uk: TranslationMap = {
     platforms: "Платформи: {platforms}",
     installNamed: "Встановити {name}",
     notFound: "Skill не знайдено.",
+    openDetails: "Відкрити відомості про {name}",
+    enabledNamed: "{name} увімкнено",
     invalidLink: "Недійсне посилання ClawHub",
     overview: "Огляд",
     skillCard: "Картка Skill",
@@ -1460,6 +1516,8 @@ export const uk: TranslationMap = {
     blockedAgentFilter: "заблоковано фільтром агента",
   },
   nav: {
+    back: "Назад",
+    forward: "Вперед",
     chat: "Чат",
     settings: "Налаштування",
     settingsGeneral: "Загальні",
@@ -1704,7 +1762,6 @@ export const uk: TranslationMap = {
     filterAll: "Усі",
     filterIssues: "Проблеми",
     filterLabel: "Фільтрувати встановлені плагіни",
-    pulseLabel: "{enabled} увімкнено, {disabled} вимкнено, {issues} з проблемами",
     categoryChannels: "Канали",
     categoryProviders: "Постачальники моделей",
     categoryMemory: "Пам’ять",
@@ -1734,8 +1791,6 @@ export const uk: TranslationMap = {
     cancel: "Скасувати",
     removedRestart: "Видалено {name}. Щоб застосувати зміну, потрібен перезапуск Gateway.",
     verifiedSource: "Перевірене джерело",
-    menuLabel: "Дії для {name}",
-    menuDetails: "Переглянути деталі",
     enableAction: "Увімкнути",
     disableAction: "Вимкнути",
     working: "Обробка…",
@@ -1870,6 +1925,10 @@ export const uk: TranslationMap = {
       useCurrentChatAria: "Використовувати поточний чат для запитів на перегляд",
       useCurrentChatTooltip:
         "Надсилати запити на перегляд до поточної сесії чату замість сесії воркшопу пропозиції.",
+      selfLearning: "Самонавчання",
+      selfLearningAria: "Увімкнути або вимкнути пропозиції навичок на основі самонавчання",
+      selfLearningTooltip:
+        "Фіксує виправлення та аналізує суттєві завершені завдання, перетворюючи їх на чернетки пропозицій навичок. Використовує додаткові фонові токени; чернетки з’являються на цій дошці як пропозиції, що очікують розгляду.",
       view: "Вигляд майстерні",
       board: "Дошка",
       today: "Сьогодні",
@@ -1949,6 +2008,14 @@ export const uk: TranslationMap = {
       noProposalsTitle: "Пропозицій поки немає",
       noProposalsBody: "{agent} ще не створив жодної пропозиції навички.",
       noProposalsFooter: "Нові пропозиції з’являтимуться тут для перегляду.",
+    },
+    selfLearning: {
+      pitchTitle: "Увімкнути самонавчання",
+      pitchBody:
+        "OpenClaw аналізує виправлення та суттєві завершені запуски, а потім створює чернетки пропозицій навичок для цієї дошки. Він використовує додаткові фонові токени, а чернетки надходять як пропозиції, що очікують розгляду.",
+      enable: "Увімкнути самонавчання",
+      enabling: "Увімкнення…",
+      updateError: "Не вдалося оновити налаштування самонавчання.",
     },
     today: {
       emptyTitle: "Сьогодні нічого не очікує",
@@ -2436,6 +2503,7 @@ export const uk: TranslationMap = {
       uptime: "Час роботи",
       tickInterval: "Інтервал оновлення",
       lastChannelsRefresh: "Останнє оновлення каналів",
+      lastError: "Остання помилка",
     },
     help: {
       title: "Як підключитися",
@@ -3080,24 +3148,16 @@ export const uk: TranslationMap = {
       rateLimited:
         "Досягнуто обмеження швидкості GitHub API. Статус pull request може бути застарілим, доки обмеження не буде скинуто.",
     },
-    refreshTitle: "Оновити дані чату",
-    settings: "Налаштування чату",
     usageRemaining: "Залишок використання",
-    voiceSettings: "Голос",
-    thinkingToggle: "Перемкнути показ мислення/роботи асистента",
-    toolCallsToggle: "Перемкнути виклики інструментів і результати інструментів",
-    commentaryToggle: "Зберігати коментар після остаточної відповіді",
-    commentaryLabel: "Коментар",
-    autoScrollMode: "Режим автопрокручування",
-    autoScrollAlways: "Завжди",
-    autoScrollNearBottom: "Біля низу",
-    autoScrollOff: "Вимкнено",
+    view: {
+      menu: "Вигляд",
+      reasoning: "Міркування",
+      toolCalls: "Виклики інструментів",
+      commentary: "Зберігати коментарі",
+    },
     sendShortcut: "Комбінація для надсилання",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Сховати сеанси Cron",
-    showCronSessions: "Показати сеанси Cron",
-    showCronSessionsHidden: "Показати сеанси Cron ({count} приховано)",
     onboardingDisabled: "Вимкнено під час налаштування",
     gatewayStatus: "Стан Gateway: {status}",
     commandPaletteTitle: "Пошук або перехід до… (⌘K)",
@@ -3288,7 +3348,6 @@ export const uk: TranslationMap = {
       },
       takePhoto: "Зробити фото",
       dismissVoiceInputError: "Закрити помилку голосового введення",
-      loadingMicrophones: "Завантаження мікрофонів…",
       microphoneAccessFailed: "Не вдалося отримати доступ до входів мікрофона.",
       microphoneBusy: "Входи мікрофона зайняті або недоступні для браузера.",
       microphoneFallback: "Мікрофон {number}",
@@ -3307,19 +3366,6 @@ export const uk: TranslationMap = {
       stillListening: "Все ще слухаємо",
       stopVoiceInput: "Зупинити голосове введення",
       systemDefaultMicrophone: "Системний за замовчуванням",
-      talkAdvancedSettingsRequiresAdmin: "Розширені налаштування потребують прав адміністратора",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Розширені налаштування Talk потребують доступу operator.admin.",
-      talkDefault: "За замовчуванням",
-      talkModel: "Модель",
-      talkModelAuto: "Автоматично",
-      talkMoreInSettings: "Більше в налаштуваннях",
-      talkSensitivity: "Чутливість",
-      talkSensitivityHigh: "Висока",
-      talkSensitivityLow: "Низька",
-      talkSensitivityMedium: "Середня",
-      talkVoice: "Голос",
-      voiceOptions: "Параметри голосу",
       voiceTranscript: "Транскрипція голосу",
     },
     selectors: {
@@ -3404,6 +3450,8 @@ export const uk: TranslationMap = {
       empty: "Для цього агента ще немає фонових завдань.",
       running: "Виконуються ({count})",
       finished: "Завершено ({count})",
+      statusRunningOne: "1 активне завдання",
+      statusRunningMany: "{count} активних завдань",
       stopTask: "Зупинити {title}",
       viewTranscript: "Переглянути транскрипт",
       toolUseOne: "1 використання інструмента",
@@ -3491,11 +3539,13 @@ export const uk: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Стан автоматизації",
       all: "Усі",
       active: "Активні",
       paused: "Призупинено",
     },
     list: {
+      viewLabel: "Подання автоматизації",
       searchPlaceholder: "Пошук запланованих завдань",
       newTask: "Нове завдання",
       filters: "Фільтри",
@@ -3561,12 +3611,12 @@ export const uk: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Планувальник",
       tasks: "Завдання",
       failing: "З помилками",
       nextWake: "Наступне пробудження",
     },
     detail: {
+      tabsLabel: "Відомості про автоматизацію",
       newTitle: "Нове заплановане завдання",
       newSubtitle: "Опишіть, що має зробити OpenClaw, потім виберіть час запуску.",
       back: "Усі автоматизації",
@@ -3586,7 +3636,14 @@ export const uk: TranslationMap = {
       clone: "Клонувати",
       remove: "Видалити",
       more: "Більше дій",
-      history: "Історія",
+    },
+    runNotStarted: {
+      notDue: "Час запуску цієї автоматизації ще не настав.",
+      alreadyRunning: "Ця автоматизація вже виконується.",
+      recoveryPending: "Відновлення планувальника ще триває.",
+      invalidSpec: "Ця автоматизація має некоректний розклад або корисне навантаження.",
+      stopped: "Планувальник зупинено.",
+      unknown: "Не вдалося запустити цю автоматизацію.",
     },
     jobs: {
       schedule: "Розклад",

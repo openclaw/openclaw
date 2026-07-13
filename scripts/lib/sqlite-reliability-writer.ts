@@ -57,6 +57,8 @@ export function startWriter(databasePath: string, profile: ProfileConfig): Write
       String(profile.rowsPerBatch),
       String(profile.payloadBytes),
       String(profile.retainedBatches),
+      String(profile.walAutoCheckpointPages),
+      String(profile.maxWalBytes),
       String(profile.writerPauseMs),
     ],
     {
@@ -181,12 +183,25 @@ function parseWriterChildArgs(argv: string[]): {
   payloadBytes: number;
   retainedBatches: number;
   rowsPerBatch: number;
+  walAutoCheckpointPages: number;
+  walSizeLimitBytes: number;
   writerPauseMs: number;
 } {
-  const [databasePath, rowsRaw, payloadRaw, retainedRaw, pauseRaw, ...extra] = argv;
+  const [
+    databasePath,
+    rowsRaw,
+    payloadRaw,
+    retainedRaw,
+    checkpointRaw,
+    walSizeLimitRaw,
+    pauseRaw,
+    ...extra
+  ] = argv;
   const rowsPerBatch = Number(rowsRaw);
   const payloadBytes = Number(payloadRaw);
   const retainedBatches = Number(retainedRaw);
+  const walAutoCheckpointPages = Number(checkpointRaw);
+  const walSizeLimitBytes = Number(walSizeLimitRaw);
   const writerPauseMs = Number(pauseRaw);
   if (
     !databasePath ||
@@ -197,12 +212,24 @@ function parseWriterChildArgs(argv: string[]): {
     payloadBytes < 1 ||
     !Number.isSafeInteger(retainedBatches) ||
     retainedBatches < 1 ||
+    !Number.isSafeInteger(walAutoCheckpointPages) ||
+    walAutoCheckpointPages < 1 ||
+    !Number.isSafeInteger(walSizeLimitBytes) ||
+    walSizeLimitBytes < 1 ||
     !Number.isSafeInteger(writerPauseMs) ||
     writerPauseMs < 0
   ) {
     throw new Error("invalid SQLite reliability writer arguments");
   }
-  return { databasePath, payloadBytes, retainedBatches, rowsPerBatch, writerPauseMs };
+  return {
+    databasePath,
+    payloadBytes,
+    retainedBatches,
+    rowsPerBatch,
+    walAutoCheckpointPages,
+    walSizeLimitBytes,
+    writerPauseMs,
+  };
 }
 
 async function runWriterChild(argv: string[]): Promise<void> {
@@ -227,7 +254,8 @@ async function runWriterChild(argv: string[]): Promise<void> {
   };
   try {
     database.exec("PRAGMA journal_mode = WAL;");
-    database.exec("PRAGMA wal_autocheckpoint = 0;");
+    database.exec(`PRAGMA wal_autocheckpoint = ${options.walAutoCheckpointPages};`);
+    database.exec(`PRAGMA journal_size_limit = ${options.walSizeLimitBytes};`);
     database.exec("PRAGMA busy_timeout = 30000;");
     database.exec(STRESS_TABLE_SQL);
     const next = database

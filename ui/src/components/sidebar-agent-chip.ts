@@ -6,8 +6,8 @@ import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
 /** Sidebar footer identity chip: the beginner-facing entrance to the active
-    agent. The body resumes the agent's latest conversation; the trailing
-    controls create a session or open the utility menu owned by app-sidebar. */
+    agent. The body opens the agent/utility menu owned by app-sidebar; the
+    trailing control creates a session. */
 class SidebarAgentChip extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) agentName = "";
   @property({ attribute: false }) avatarUrl: string | null = null;
@@ -16,8 +16,9 @@ class SidebarAgentChip extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) statusLabel = "";
   @property({ attribute: false }) subtitle = "";
   @property({ attribute: false }) menuOpen = false;
+  /** Unread sessions exist on non-active agents; surfaces on the menu toggle. */
+  @property({ attribute: false }) menuUnread = false;
   @property({ attribute: false }) newSessionDisabled = false;
-  @property({ attribute: false }) onOpenConversation?: () => void;
   @property({ attribute: false }) onNewSession?: () => void;
   @property({ attribute: false }) onToggleMenu?: (trigger: HTMLElement) => void;
 
@@ -26,9 +27,11 @@ class SidebarAgentChip extends OpenClawLightDomContentsElement {
       <div class="sidebar-agent-chip">
         <button
           type="button"
-          class="sidebar-agent-chip__main"
-          aria-label=${t("agentChip.openConversation", { name: this.agentName })}
-          @click=${() => this.onOpenConversation?.()}
+          class="sidebar-agent-chip__main ${this.menuOpen ? "sidebar-agent-chip__main--open" : ""}"
+          aria-haspopup="menu"
+          aria-expanded=${String(this.menuOpen)}
+          aria-label="${this.agentName} · ${t("agentChip.menuLabel")}"
+          @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
         >
           <span class="sidebar-agent-chip__avatar">
             ${this.avatarUrl
@@ -58,6 +61,13 @@ class SidebarAgentChip extends OpenClawLightDomContentsElement {
               ? html`<span class="sidebar-agent-chip__subtitle">${this.subtitle}</span>`
               : nothing}
           </span>
+          ${this.menuUnread && !this.menuOpen
+            ? html`<span
+                class="session-unread-dot sidebar-agent-chip__menu-unread"
+                role="img"
+                aria-label=${t("sessionsView.unread")}
+              ></span>`
+            : nothing}
         </button>
         <openclaw-tooltip .content=${t("chat.runControls.newSession")}>
           <button
@@ -70,21 +80,11 @@ class SidebarAgentChip extends OpenClawLightDomContentsElement {
             ${icons.plus}
           </button>
         </openclaw-tooltip>
-        <button
-          type="button"
-          class="sidebar-agent-chip__action sidebar-agent-chip__menu-toggle ${this.menuOpen
-            ? "sidebar-agent-chip__menu-toggle--open"
-            : ""}"
-          aria-label=${t("agentChip.menuLabel")}
-          aria-haspopup="menu"
-          aria-expanded=${String(this.menuOpen)}
-          @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
-        >
-          ${icons.chevronDown}
-        </button>
       </div>
     `;
   }
 }
 
-customElements.define("openclaw-sidebar-agent-chip", SidebarAgentChip);
+if (!customElements.get("openclaw-sidebar-agent-chip")) {
+  customElements.define("openclaw-sidebar-agent-chip", SidebarAgentChip);
+}

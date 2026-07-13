@@ -82,6 +82,7 @@ export const nl: TranslationMap = {
     relink: "Opnieuw koppelen",
     waitForScan: "Wachten op scan",
     logout: "Uitloggen",
+    skipToMainContent: "Ga naar hoofdinhoud",
   },
   nativeLinkMenu: {
     label: "Linkacties",
@@ -125,6 +126,7 @@ export const nl: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, door {author}",
   },
   channels: {
+    lastError: "Laatste fout",
     refreshingStaleSnapshot:
       "Kanaalstatus wordt op de achtergrond vernieuwd; de laatste succesvolle momentopname wordt getoond.",
     config: {
@@ -218,10 +220,11 @@ export const nl: TranslationMap = {
   lazyView: {
     loadingTitle: "Paneel laden",
     errorTitle: "Paneel kan niet worden geladen",
-    errorSubtitle:
-      "Laad de pagina opnieuw om de nieuwste Control UI-bundel te laden, of probeer het opnieuw als de netwerkaanvraag is mislukt.",
+    genericSubtitle: "Er is iets misgegaan bij het laden van dit paneel.",
+    staleTitle: "Er is een nieuwe versie beschikbaar",
+    staleSubtitle:
+      "OpenClaw is op de achtergrond bijgewerkt. Laad opnieuw om het nieuwste paneel te zien.",
     retry: "Opnieuw proberen",
-    unknownError: "Onbekende fout bij laden van module.",
   },
   nodes: {
     pairing: {
@@ -230,6 +233,15 @@ export const nl: TranslationMap = {
       title: "OpenClaw mobiel",
       subtitle: "Scan deze QR-code in de mobiele app om een nieuwe telefoon te verbinden.",
       generating: "Een veilige installatiecode maken…",
+      accessTitle: "Mobiele toegang",
+      fullAccess: "Volledige toegang (aanbevolen)",
+      fullAccessHint: "Node plus volledige Gateway-bediening, inclusief instellingen en upgrades.",
+      limitedAccess: "Beperkte toegang",
+      limitedAccessHint: "Node, chat en goedkeuringen zonder beheerdersfuncties.",
+      generateCode: "Installatiecode maken",
+      transportLimitedTitle: "Beperkt voor netwerkveiligheid",
+      transportLimitedHint:
+        "Deze Gateway-URL gebruikt ws:// zonder versleuteling. Gebruik wss:// of Tailscale Serve en maak vervolgens een nieuwe code voor volledige toegang.",
       failed: "Kan geen installatiecode maken.",
       qrAlt: "QR-code voor koppeling met OpenClaw mobiel",
       qrUnavailable: "QR niet beschikbaar. Kopieer in plaats daarvan de installatiecode.",
@@ -265,7 +277,8 @@ export const nl: TranslationMap = {
     },
     inventory: {
       title: "Apparaten",
-      subtitle: "Eén rij per gekoppelde client: status, rollen, tokens.",
+      summaryConnected: "{connected} van {total} verbonden",
+      summaryPending: "{count} in afwachting van goedkeuring",
       cleanupStale: "{count} verouderde opschonen",
       pendingApproval: "In afwachting van goedkeuring",
       paired: "Gekoppeld",
@@ -373,19 +386,26 @@ export const nl: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Nieuwe worktree",
-    owner: "Eigenaar",
     ownerManual: "Handmatig",
     ownerSession: "Sessie",
     ownerWorkboard: "Workboard",
     title: "Beheerde worktrees",
     subtitle: "Geïsoleerde repository-checkouts beheerd door OpenClaw.",
     cleanNow: "Nu opschonen",
+    cleanupTitle: "Opschonen",
+    cleanupSubtitle:
+      "OpenClaw verwijdert periodiek oude worktrees om schijfruimte vrij te maken. Stel in hoe agressief de opschoning wordt uitgevoerd.",
+    cleanupMaxCount: "Maximaal aantal worktrees",
+    cleanupMaxCountHelp:
+      "Maximaal aantal beheerde worktrees dat in alle repository's samen wordt bewaard. Van oudere worktrees wordt eerst een snapshot gemaakt, waarna ze worden verwijderd. Stel in op 0 om de limiet voor het aantal uit te schakelen.",
+    cleanupMaxSize: "Maximale totale grootte (GB)",
+    cleanupMaxSizeHelp:
+      "Maximale totale grootte in GB van alle beheerde worktrees samen. Stel in op 0 om de groottelimiet uit te schakelen.",
+    cleanupDecrease: "{label} verlagen",
+    cleanupIncrease: "{label} verhogen",
+    cleanupSaveFailed: "Opslaan van opschoningslimieten is mislukt.",
     name: "Naam",
     repo: "Repository",
-    branch: "Branch",
-    status: "Status",
-    lastActive: "Laatst actief",
-    actions: "Acties",
     empty: "Geen beheerde worktrees.",
     restorable: "Herstelbaar",
     restore: "Herstellen",
@@ -393,12 +413,22 @@ export const nl: TranslationMap = {
     confirmForceDelete: "Snapshot mislukt: {error}\n\nVerwijderen zonder snapshot?",
   },
   agentChip: {
-    openConversation: "Open je gesprek met {name}",
     menuLabel: "Agentmenu",
     agents: "Agents",
     working: "Bezig…",
     ready: "Klaar om te chatten",
     whatCanAgentDo: "Wat kan {name} doen?",
+    help: "Help",
+    getHelp: "Hulp krijgen",
+    discord: "Discord-community",
+    viewChangelog: "Wijzigingslogboek bekijken",
+    agentSettings: "Agentinstellingen",
+    filterAgents: "Agent zoeken…",
+    noAgentMatches: "Geen overeenkomende agents",
+  },
+  agentScope: {
+    label: "Agentbereik",
+    allAgents: "Alle agents",
   },
   newSession: {
     title: "Nieuwe sessie",
@@ -428,6 +458,7 @@ export const nl: TranslationMap = {
     start: "Sessie starten",
     starting: "Starten…",
     createFailed: "Kan de sessie niet maken.",
+    catalogUnavailable: "Dit sessiedoel is niet beschikbaar.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -569,6 +600,7 @@ export const nl: TranslationMap = {
     groupBy: "Groeperen op",
     groupByNone: "Geen",
     groupByCategory: "Aangepaste groepen",
+    showCronSessions: "Cron-sessies tonen",
     groupByChannel: "Kanaal",
     groupByKind: "Type",
     groupByAgent: "Agent",
@@ -609,6 +641,8 @@ export const nl: TranslationMap = {
     setDefault: "Als standaard instellen",
     alreadyDefaultTitle: "Al de standaardagent",
     setDefaultTitle: "Als standaardagent instellen",
+    pinToSwitcher: "Vastmaken aan wisselaar",
+    unpinFromSwitcher: "Losmaken van wisselaar",
     selectTitle: "Selecteer een agent",
     selectSubtitle: "Kies een agent om de workspace en tools te bekijken.",
     tabs: {
@@ -633,6 +667,18 @@ export const nl: TranslationMap = {
       default: "Standaard",
       configurationSubtitle: "Workspace-, identiteit- en modelconfiguratie.",
       schedulingSubtitle: "Workspace- en planningsdoelen.",
+    },
+    identity: {
+      title: "Identiteit",
+      subtitle: "Naam, emoji en avatar die worden weergegeven in chats en de zijbalk.",
+      name: "Weergavenaam",
+      namePlaceholder: "Agentnaam",
+      emoji: "Emoji",
+      chooseImage: "Afbeelding kiezen…",
+      replaceImage: "Afbeelding vervangen…",
+      imageUnusable:
+        "Die afbeelding kan niet worden gebruikt. Kies een afbeeldingsbestand van maximaal 2 MB.",
+      fileHint: "Agents kunnen dit zelf instellen door IDENTITY.md in hun werkruimte te bewerken.",
     },
     overview: {
       title: "Overzicht",
@@ -779,6 +825,7 @@ export const nl: TranslationMap = {
     },
     manualRpcTitle: "Handmatige RPC",
     manualRpcSubtitle: "Stuur een ruwe gateway-methode met JSON-params.",
+    callFailed: "Aanroep mislukt",
     method: "Methode",
     selectMethod: "Selecteer een methode…",
     paramsJson: "Params (JSON)",
@@ -1078,6 +1125,7 @@ export const nl: TranslationMap = {
     settingsView: "Instellingenweergave",
     simple: "Eenvoudig",
     advanced: "Geavanceerd",
+    content: "Instellingen",
     themeImported: "{name} geïmporteerd.",
     themeRemoved: "Aangepast thema verwijderd.",
     channels: {
@@ -1205,6 +1253,10 @@ export const nl: TranslationMap = {
       inlineHintAfter:
         "om één browserlokaal tweakcn-thema toe te voegen. Gebruik in tweakcn de optie Delen en plak de gekopieerde link hier.",
       textSize: "Tekstgrootte",
+    },
+    chatPrefs: {
+      title: "Chat",
+      hint: "Browserlokale chatvoorkeuren.",
     },
     connection: {
       title: "Verbinding",
@@ -1365,6 +1417,7 @@ export const nl: TranslationMap = {
     moreLiveTitle: "{count} extra live tools zijn beschikbaar in de onderstaande groepen.",
     moreLive: "+{count} extra live tools",
     quickPresets: "Snelle presets",
+    catalogTitle: "Toolcatalogus",
     inherit: "Overnemen",
     profile: "Profiel",
     source: "Bron",
@@ -1429,6 +1482,8 @@ export const nl: TranslationMap = {
     platforms: "Platforms: {platforms}",
     installNamed: "{name} installeren",
     notFound: "Skill niet gevonden.",
+    openDetails: "Details van {name} openen",
+    enabledNamed: "{name} ingeschakeld",
     invalidLink: "ClawHub-link ongeldig",
     overview: "Overzicht",
     skillCard: "Skill-kaart",
@@ -1461,6 +1516,8 @@ export const nl: TranslationMap = {
     blockedAgentFilter: "geblokkeerd door agentfilter",
   },
   nav: {
+    back: "Terug",
+    forward: "Vooruit",
     chat: "Chat",
     settings: "Instellingen",
     settingsGeneral: "Algemeen",
@@ -1700,7 +1757,6 @@ export const nl: TranslationMap = {
     filterAll: "Alle",
     filterIssues: "Problemen",
     filterLabel: "Geïnstalleerde plugins filteren",
-    pulseLabel: "{enabled} ingeschakeld, {disabled} uitgeschakeld, {issues} met problemen",
     categoryChannels: "Kanalen",
     categoryProviders: "Modelproviders",
     categoryMemory: "Geheugen",
@@ -1732,8 +1788,6 @@ export const nl: TranslationMap = {
     removedRestart:
       "{name} verwijderd. Een herstart van de Gateway is vereist om de wijziging toe te passen.",
     verifiedSource: "Geverifieerde bron",
-    menuLabel: "{name}-acties",
-    menuDetails: "Details bekijken",
     enableAction: "Inschakelen",
     disableAction: "Uitschakelen",
     working: "Bezig…",
@@ -1870,6 +1924,10 @@ export const nl: TranslationMap = {
       useCurrentChatAria: "Huidige chat gebruiken voor revisieverzoeken",
       useCurrentChatTooltip:
         "Stuur revisieverzoeken naar de huidige chatsessie in plaats van de workshopsessie van het voorstel.",
+      selfLearning: "Zelflerend",
+      selfLearningAria: "Voorstellen voor zelflerende Skills in- of uitschakelen",
+      selfLearningTooltip:
+        "Leg correcties vast en zet omvangrijk voltooid werk na beoordeling om in openstaande skillvoorstellen. Verbruikt extra tokens op de achtergrond; concepten verschijnen op dit bord als openstaande voorstellen.",
       view: "Workshopweergave",
       board: "Bord",
       today: "Vandaag",
@@ -1950,6 +2008,14 @@ export const nl: TranslationMap = {
       noProposalsTitle: "Nog geen voorstellen",
       noProposalsBody: "{agent} heeft nog geen skill-voorstellen opgesteld.",
       noProposalsFooter: "Nieuwe voorstellen verschijnen hier ter beoordeling.",
+    },
+    selfLearning: {
+      pitchTitle: "Zelfleren inschakelen",
+      pitchBody:
+        "OpenClaw beoordeelt correcties en omvangrijke voltooide runs en stelt vervolgens skillvoorstellen op voor dit bord. Het verbruikt extra tokens op de achtergrond en concepten verschijnen als openstaande voorstellen.",
+      enable: "Zelfleren inschakelen",
+      enabling: "Inschakelen…",
+      updateError: "De instelling voor zelfleren kon niet worden bijgewerkt.",
     },
     today: {
       emptyTitle: "Vandaag niets in wachtrij",
@@ -2439,6 +2505,7 @@ export const nl: TranslationMap = {
       uptime: "Bedrijfstijd",
       tickInterval: "Tickinterval",
       lastChannelsRefresh: "Laatste vernieuwing van kanalen",
+      lastError: "Laatste fout",
     },
     help: {
       title: "Verbinding maken",
@@ -3086,24 +3153,16 @@ export const nl: TranslationMap = {
       rateLimited:
         "Limiet voor GitHub API-aanvragen bereikt. De status van pull requests kan verouderd zijn totdat de limiet wordt gereset.",
     },
-    refreshTitle: "Chatgegevens vernieuwen",
-    settings: "Chatinstellingen",
     usageRemaining: "Resterend gebruik",
-    voiceSettings: "Spraak",
-    thinkingToggle: "Denken-/werken-output van assistent schakelen",
-    toolCallsToggle: "Tool-aanroepen en toolresultaten schakelen",
-    commentaryToggle: "Commentaar na het uiteindelijke antwoord behouden",
-    commentaryLabel: "Commentaar",
-    autoScrollMode: "Automatisch scrollen",
-    autoScrollAlways: "Altijd",
-    autoScrollNearBottom: "Bijna onderaan",
-    autoScrollOff: "Uit",
+    view: {
+      menu: "Weergave",
+      reasoning: "Redenering",
+      toolCalls: "Toolaanroepen",
+      commentary: "Commentaar behouden",
+    },
     sendShortcut: "Sneltoets voor verzenden",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Cron-sessies verbergen",
-    showCronSessions: "Cron-sessies weergeven",
-    showCronSessionsHidden: "Cron-sessies weergeven ({count} verborgen)",
     onboardingDisabled: "Uitgeschakeld tijdens configuratie",
     gatewayStatus: "Gateway-status: {status}",
     commandPaletteTitle: "Zoeken of springen naar… (⌘K)",
@@ -3293,7 +3352,6 @@ export const nl: TranslationMap = {
       },
       takePhoto: "Foto maken",
       dismissVoiceInputError: "Fout bij spraakinvoer sluiten",
-      loadingMicrophones: "Microfoons laden…",
       microphoneAccessFailed: "Kan geen toegang krijgen tot microfooningangen.",
       microphoneBusy: "Microfooningangen zijn bezet of niet beschikbaar voor de browser.",
       microphoneFallback: "Microfoon {number}",
@@ -3313,19 +3371,6 @@ export const nl: TranslationMap = {
       stillListening: "Luistert nog",
       stopVoiceInput: "Spraakinvoer stoppen",
       systemDefaultMicrophone: "Systeemstandaard",
-      talkAdvancedSettingsRequiresAdmin: "Geavanceerde instellingen vereisen beheerderstoegang",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Geavanceerde Talk-instellingen vereisen operator.admin-toegang.",
-      talkDefault: "Standaard",
-      talkModel: "Model",
-      talkModelAuto: "Automatisch",
-      talkMoreInSettings: "Meer in Instellingen",
-      talkSensitivity: "Gevoeligheid",
-      talkSensitivityHigh: "Hoog",
-      talkSensitivityLow: "Laag",
-      talkSensitivityMedium: "Gemiddeld",
-      talkVoice: "Stem",
-      voiceOptions: "Spraakopties",
       voiceTranscript: "Spraaktranscript",
     },
     selectors: {
@@ -3410,6 +3455,8 @@ export const nl: TranslationMap = {
       empty: "Nog geen achtergrondtaken voor deze agent.",
       running: "Actief ({count})",
       finished: "Voltooid ({count})",
+      statusRunningOne: "1 actieve taak",
+      statusRunningMany: "{count} actieve taken",
       stopTask: "{title} stoppen",
       viewTranscript: "Transcript bekijken",
       toolUseOne: "1 toolgebruik",
@@ -3498,11 +3545,13 @@ export const nl: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Automatiseringsstatus",
       all: "Alle",
       active: "Actief",
       paused: "Gepauzeerd",
     },
     list: {
+      viewLabel: "Automatiseringsweergaven",
       searchPlaceholder: "Geplande taken zoeken",
       newTask: "Nieuwe taak",
       filters: "Filters",
@@ -3568,12 +3617,12 @@ export const nl: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Planner",
       tasks: "Taken",
       failing: "Mislukt",
       nextWake: "Volgende activering",
     },
     detail: {
+      tabsLabel: "Automatiseringsdetails",
       newTitle: "Nieuwe geplande taak",
       newSubtitle: "Beschrijf wat OpenClaw moet doen en kies wanneer het wordt uitgevoerd.",
       back: "Alle automatiseringen",
@@ -3593,7 +3642,14 @@ export const nl: TranslationMap = {
       clone: "Klonen",
       remove: "Verwijderen",
       more: "Meer acties",
-      history: "Geschiedenis",
+    },
+    runNotStarted: {
+      notDue: "Deze automatisering hoeft nog niet te worden uitgevoerd.",
+      alreadyRunning: "Deze automatisering wordt al uitgevoerd.",
+      recoveryPending: "Het herstel van de planner is nog bezig.",
+      invalidSpec: "Deze automatisering heeft een ongeldig schema of een ongeldige payload.",
+      stopped: "De planner is gestopt.",
+      unknown: "Deze automatisering kon niet worden gestart.",
     },
     jobs: {
       schedule: "Schema",

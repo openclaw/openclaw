@@ -13,6 +13,9 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
 // Bounds document probes across rapid re-renders of the same error state.
 const ATTEMPT_COOLDOWN_MS = 5_000;
+// Keep timeout below the cooldown so a timed-out retry re-render cannot start
+// another probe immediately while the gateway is still unreachable.
+const DOCUMENT_PROBE_TIMEOUT_MS = 3_000;
 
 const MODULE_IMPORT_ERROR_PATTERNS = [
   /importing a module script failed/i, // WebKit
@@ -25,11 +28,11 @@ type StaleChunkReloadDeps = {
   now?: () => number;
   buildId?: string;
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
-  probeDocument?: () => Promise<boolean>;
   reload?: () => void;
 };
 
 let lastAttemptAt: number | null = null;
+let inFlightDocumentProbe: Promise<boolean> | null = null;
 
 export function isStaleChunkImportError(error: unknown): boolean {
   return (
@@ -51,13 +54,33 @@ function sessionStorageOrNull(): Pick<Storage, "getItem" | "setItem"> | null {
   }
 }
 
-async function probeControlUiDocument(): Promise<boolean> {
-  try {
-    const response = await fetch(window.location.href, { method: "HEAD", cache: "no-store" });
-    return response.ok;
-  } catch {
-    return false;
+function probeControlUiDocument(): Promise<boolean> {
+  if (inFlightDocumentProbe) {
+    return inFlightDocumentProbe;
   }
+  const probe = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), DOCUMENT_PROBE_TIMEOUT_MS);
+    try {
+      const response = await fetch(window.location.href, {
+        method: "HEAD",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+    }
+  })();
+  const settledProbe = probe.finally(() => {
+    if (inFlightDocumentProbe === settledProbe) {
+      inFlightDocumentProbe = null;
+    }
+  });
+  inFlightDocumentProbe = settledProbe;
+  return settledProbe;
 }
 
 function readGuardBuildId(storage: Pick<Storage, "getItem" | "setItem"> | null): string | null {
@@ -104,7 +127,7 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   if (readGuardBuildId(storage) === buildId) {
     return false;
   }
-  if (!(await (deps.probeDocument ?? probeControlUiDocument)())) {
+  if (!(await probeControlUiDocument())) {
     return false;
   }
   // A reload resets the in-memory state, so without a persisted guard a broken
@@ -123,7 +146,7 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
  * recoverable panel error with a fatal navigation error in app webviews.
  */
 export async function retryStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
-  if (!(await (deps.probeDocument ?? probeControlUiDocument)())) {
+  if (!(await probeControlUiDocument())) {
     return false;
   }
   (deps.reload ?? reloadControlUiDocument)();
@@ -132,6 +155,7 @@ export async function retryStaleChunkReload(deps: StaleChunkReloadDeps = {}): Pr
 
 export function resetStaleChunkReloadStateForTest(): void {
   lastAttemptAt = null;
+  inFlightDocumentProbe = null;
 }
 
 /**

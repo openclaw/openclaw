@@ -120,7 +120,7 @@ type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
-export type MemoryIndexEntry = {
+type MemoryIndexEntry = {
   path: string;
   absPath: string;
   mtimeMs: number;

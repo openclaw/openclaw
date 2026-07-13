@@ -16,7 +16,7 @@ export type PluginSideEffectGuard = {
   active: boolean;
 };
 
-export type PluginRegistrationCapabilities = {
+type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */
   capabilityHandlers: boolean;
   /** Setup-runtime may publish pre-listen gateway surfaces without full activation. */
@@ -37,7 +37,7 @@ export function resolvePluginRegistrationCapabilities(
   };
 }
 
-export function normalizeHookTimeoutMs(value: unknown): number | undefined {
+function normalizeHookTimeoutMs(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }

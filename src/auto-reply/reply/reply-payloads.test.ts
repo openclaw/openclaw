@@ -4,10 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { shouldDedupeMessagingToolRepliesForRoute } from "./reply-payloads-dedupe.js";
 import {
   filterMessagingToolMediaDuplicates,
   resolveMessagingToolPayloadDedupe,
-  shouldDedupeMessagingToolRepliesForRoute,
 } from "./reply-payloads.js";
 
 function targetsMatchTelegramReplySuppression(params: {
