@@ -648,7 +648,10 @@ export async function runCommandWithTimeout(
     result.exitCode === undefined &&
     result.signal === undefined
   ) {
-    throw result;
+    if (result instanceof Error) {
+      throw result;
+    }
+    throw new Error(`Failed to launch command: ${argv[0] ?? "<empty>"}`, { cause: result });
   }
 
   const resolvedSignal = result.signal ?? child.signalCode ?? null;

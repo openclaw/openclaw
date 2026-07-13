@@ -20,6 +20,7 @@ vi.mock("../../process/exec.js", () => ({
       exitCode: code,
       failed: false,
     }));
+    // oxlint-disable-next-line unicorn/no-thenable -- Execa subprocesses are event emitters and promises.
     child.then = completion.then.bind(completion);
     return child;
   },
@@ -43,6 +44,7 @@ function createStubChild(): StubChild {
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn();
+  // oxlint-disable-next-line unicorn/no-thenable -- Stub matches Execa's event-emitting promise shape.
   child.then = vi.fn() as unknown as Promise<unknown>["then"];
   return child;
 }

@@ -72,6 +72,7 @@ function createMockSubprocess(params?: {
   const completion = new Promise<MockResult>((resolvePromise) => {
     resolve = resolvePromise;
   });
+  // oxlint-disable-next-line unicorn/no-thenable -- Stub matches Execa's event-emitting promise shape.
   child.then = completion.then.bind(completion);
   child.catch = completion.catch.bind(completion);
   child.finally = completion.finally.bind(completion);
@@ -166,10 +167,16 @@ describe("Windows command execution", () => {
         expect(requireExecaCall(0)[0]).toBe("C:\\Windows\\System32\\cmd.exe");
       });
     } finally {
-      if (previousComSpec === undefined) delete process.env.ComSpec;
-      else process.env.ComSpec = previousComSpec;
-      if (previousSystemRoot === undefined) delete process.env.SystemRoot;
-      else process.env.SystemRoot = previousSystemRoot;
+      if (previousComSpec === undefined) {
+        delete process.env.ComSpec;
+      } else {
+        process.env.ComSpec = previousComSpec;
+      }
+      if (previousSystemRoot === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = previousSystemRoot;
+      }
     }
   });
 
@@ -184,7 +191,7 @@ describe("Windows command execution", () => {
   it("spawns node plus npm-cli.js instead of npm.cmd when available", async () => {
     vi.spyOn(fs, "existsSync").mockReturnValue(true);
     await withMockedWindowsPlatform(async () => {
-      spawnCommand(["npm", "--version"]);
+      void spawnCommand(["npm", "--version"]);
       const [command, args, options] = requireExecaCall(0);
       expect(command).toBe(process.execPath);
       expect(args[0]).toContain(path.join("node_modules", "npm", "bin", "npm-cli.js"));
@@ -196,14 +203,14 @@ describe("Windows command execution", () => {
   it("falls back to a trusted npm.cmd wrapper when npm-cli.js is unavailable", async () => {
     vi.spyOn(fs, "existsSync").mockReturnValue(false);
     await withMockedWindowsPlatform(async () => {
-      spawnCommand(["npm", "--version"]);
+      void spawnCommand(["npm", "--version"]);
       expectCmdWrappedInvocation(requireExecaCall(0), "npm.cmd --version");
     });
   });
 
   it("sets windowsHide and disables shell on direct commands", async () => {
     await withMockedWindowsPlatform(async () => {
-      spawnCommand(["node", "script.js"]);
+      void spawnCommand(["node", "script.js"]);
       expect(requireExecaCall(0)[2]).toMatchObject({ shell: false, windowsHide: true });
     });
   });

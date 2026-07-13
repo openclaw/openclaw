@@ -99,7 +99,10 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         void child
           .then((result) => {
             if (result.failed && result.exitCode === undefined && result.signal === undefined) {
-              throw result;
+              if (result instanceof Error) {
+                throw result;
+              }
+              throw new Error(`Failed to launch shell: ${shell}`, { cause: result });
             }
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
