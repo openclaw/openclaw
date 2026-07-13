@@ -51,7 +51,7 @@ import {
 
 export { computeBackoffMs };
 
-export type RecoverySummary = {
+type RecoverySummary = {
   recovered: number;
   failed: number;
   skippedMaxRetries: number;
@@ -78,12 +78,12 @@ export interface RecoveryLogger {
   error(msg: string): void;
 }
 
-export interface PendingDeliveryDrainDecision {
+interface PendingDeliveryDrainDecision {
   match: boolean;
   bypassBackoff?: boolean;
 }
 
-export type ActiveDeliveryClaimResult<T> =
+type ActiveDeliveryClaimResult<T> =
   | { status: "claimed"; value: T }
   | { status: "claimed-by-other-owner" };
 

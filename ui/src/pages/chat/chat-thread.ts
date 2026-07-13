@@ -1595,6 +1595,80 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
 }
 
+function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
+  // Source message identity owns the row timestamp too: normalization supplies
+  // Date.now() for missing timestamps, which must not churn stable rows.
+  return (
+    previous.role === next.role &&
+    previous.senderLabel === next.senderLabel &&
+    previous.isStreaming === next.isStreaming &&
+    previous.turnSucceeded === next.turnSucceeded &&
+    previous.messages.length === next.messages.length &&
+    previous.messages.every((entry, index) => {
+      const candidate = next.messages[index];
+      return (
+        candidate !== undefined &&
+        entry.key === candidate.key &&
+        entry.message === candidate.message &&
+        entry.duplicateCount === candidate.duplicateCount
+      );
+    })
+  );
+}
+
+function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
+  if (previous.kind !== next.kind || previous.key !== next.key) {
+    return false;
+  }
+  switch (next.kind) {
+    case "group":
+      return previous.kind === "group" && sameMessageGroup(previous, next);
+    case "message":
+      return (
+        previous.kind === "message" &&
+        previous.message === next.message &&
+        previous.duplicateCount === next.duplicateCount
+      );
+    case "divider":
+      return (
+        previous.kind === "divider" &&
+        previous.label === next.label &&
+        previous.description === next.description &&
+        previous.timestamp === next.timestamp &&
+        previous.action?.kind === next.action?.kind &&
+        previous.action?.label === next.action?.label
+      );
+    case "stream":
+      return (
+        previous.kind === "stream" &&
+        previous.text === next.text &&
+        previous.startedAt === next.startedAt &&
+        previous.isStreaming === next.isStreaming
+      );
+    case "reading-indicator":
+      return previous.kind === "reading-indicator";
+  }
+  return false;
+}
+
+function stabilizeChatItems(
+  previous: ReturnType<typeof buildChatItems>,
+  next: ReturnType<typeof buildChatItems>,
+): ReturnType<typeof buildChatItems> {
+  if (previous.length === 0 || next.length === 0) {
+    return next;
+  }
+  const previousByKey = new Map(previous.map((item) => [`${item.kind}\u0000${item.key}`, item]));
+  const stabilized = next.map((item) => {
+    const prior = previousByKey.get(`${item.kind}\u0000${item.key}`);
+    return prior && sameChatItem(prior, item) ? prior : item;
+  });
+  return stabilized.length === previous.length &&
+    stabilized.every((item, index) => item === previous[index])
+    ? previous
+    : stabilized;
+}
+
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
@@ -1625,7 +1699,7 @@ export function buildCachedChatItems(
   if (cached.input && sameChatItemsInput(cached.input, input)) {
     return cached.items;
   }
-  const items = buildChatItems(input);
+  const items = stabilizeChatItems(cached.items, buildChatItems(input));
   cached.input = input;
   cached.items = items;
   return items;
