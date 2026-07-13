@@ -274,6 +274,36 @@ describe("channel-health-monitor", () => {
     await expectNoStart(manager);
   });
 
+  it("does not restart a channel with terminalDisconnect set", async () => {
+    const manager = createSnapshotManager({
+      whatsapp: {
+        default: {
+          running: false,
+          enabled: true,
+          configured: true,
+          terminalDisconnect: true,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("restarts a stopped channel without terminalDisconnect", async () => {
+    const manager = createSnapshotManager({
+      whatsapp: {
+        default: {
+          running: false,
+          enabled: true,
+          configured: true,
+          terminalDisconnect: false,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
+    monitor.stop();
+  });
+
   it("skips manually stopped channels", async () => {
     const manager = createSnapshotManager(
       {
@@ -452,6 +482,34 @@ describe("channel-health-monitor", () => {
     await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("continues pending recovery on the next check without waiting for cooldown", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+    await advanceHealthCheck();
+
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
     monitor.stop();
   });

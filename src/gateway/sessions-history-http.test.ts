@@ -14,6 +14,7 @@ import {
   emitInternalSessionTranscriptUpdate,
   emitSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -126,11 +127,14 @@ function makeTranscriptAssistantMessage(params: {
 function makeDeliveryMirrorAssistantMessage(
   params: Parameters<typeof makeTranscriptAssistantMessage>[0],
 ): AssistantMessage {
-  return makeTranscriptAssistantMessage({
-    ...params,
-    provider: "openclaw",
-    model: "delivery-mirror",
-  });
+  return {
+    ...makeTranscriptAssistantMessage({
+      ...params,
+      provider: "openclaw",
+      model: "delivery-mirror",
+    }),
+    api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+  };
 }
 
 async function appendTranscriptMessage(params: {

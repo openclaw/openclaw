@@ -2,8 +2,11 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxItem
+import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.tools.ToolDisplayRegistry
+import ai.openclaw.app.ui.MobileColorsAccessor
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentSoft
 import ai.openclaw.app.ui.mobileBorder
@@ -15,6 +18,7 @@ import ai.openclaw.app.ui.mobileCardSurface
 import ai.openclaw.app.ui.mobileCodeBg
 import ai.openclaw.app.ui.mobileCodeBorder
 import ai.openclaw.app.ui.mobileCodeText
+import ai.openclaw.app.ui.mobileDanger
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileWarning
@@ -39,6 +43,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -191,6 +196,72 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
   }
 }
 
+/** Queued/failed offline command with inline retry/delete controls; rendered as a user bubble. */
+@Composable
+fun ChatOutboxBubble(
+  item: ChatOutboxItem,
+  onRetry: () -> Unit,
+  onDelete: () -> Unit,
+) {
+  val failed = item.status == ChatOutboxStatus.Failed
+  val statusColor = if (failed) mobileDanger else mobileWarning
+  val statusLabel =
+    when (item.status) {
+      ChatOutboxStatus.Queued -> "Queued — sends when reconnected"
+      ChatOutboxStatus.Sending -> "Sending…"
+      ChatOutboxStatus.Failed ->
+        item.lastError
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?.let { "Failed — $it" } ?: "Failed"
+    }
+
+  ChatBubbleContainer(
+    style = bubbleStyle("user").copy(borderColor = statusColor.copy(alpha = 0.6f)),
+    roleLabel = "You",
+  ) {
+    ChatMarkdown(text = item.text, textColor = mobileText)
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text(
+        text = statusLabel,
+        style = mobileCaption1,
+        color = statusColor,
+        modifier = Modifier.weight(1f),
+      )
+      if (failed) {
+        ChatOutboxAction(label = "Retry", color = mobileAccent, onClick = onRetry)
+      }
+      if (item.status != ChatOutboxStatus.Sending) {
+        ChatOutboxAction(label = "Delete", color = mobileTextSecondary, onClick = onDelete)
+      }
+    }
+  }
+}
+
+@Composable
+private fun ChatOutboxAction(
+  label: String,
+  color: Color,
+  onClick: () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    shape = RoundedCornerShape(8.dp),
+    color = Color.Transparent,
+    contentColor = color,
+    border = BorderStroke(1.dp, color.copy(alpha = 0.5f)),
+  ) {
+    Text(
+      text = label,
+      style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+    )
+  }
+}
+
 /** Live assistant stream bubble shown before the final message is committed. */
 @Composable
 fun ChatStreamingAssistantBubble(text: String) {
@@ -198,7 +269,7 @@ fun ChatStreamingAssistantBubble(text: String) {
     style = bubbleStyle("assistant").copy(borderColor = mobileAccent),
     roleLabel = "OpenClaw · Live",
   ) {
-    ChatMarkdown(text = text, textColor = mobileText)
+    ChatMarkdown(text = text, textColor = mobileText, isStreaming = true)
   }
 }
 
@@ -290,7 +361,24 @@ private fun PulseDot(
 fun ChatCodeBlock(
   code: String,
   language: String?,
+  isComplete: Boolean = true,
 ) {
+  val display = code.trimEnd()
+  // Token colors come from the theme's code palette so light/dark both keep readable contrast.
+  val palette = MobileColorsAccessor.current
+  val tokenColors =
+    CodeTokenColors(
+      keyword = palette.codeKeyword,
+      string = palette.codeString,
+      comment = palette.codeComment,
+      number = palette.codeNumber,
+    )
+  // Keyed on content: streaming re-renders of unchanged blocks reuse the tokenized result,
+  // and still-open fences stay plain until the closing fence arrives.
+  val highlighted =
+    remember(display, language, isComplete, tokenColors) {
+      if (isComplete) buildHighlightedCode(display, language, tokenColors) else AnnotatedString(display)
+    }
   Surface(
     shape = RoundedCornerShape(8.dp),
     color = mobileCodeBg,
@@ -306,7 +394,7 @@ fun ChatCodeBlock(
         )
       }
       Text(
-        text = code.trimEnd(),
+        text = highlighted,
         fontFamily = FontFamily.Monospace,
         style = mobileCallout,
         color = mobileCodeText,

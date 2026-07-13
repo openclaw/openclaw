@@ -8,20 +8,14 @@ title: "Location command"
 
 ## TL;DR
 
-- `location.get` is a node command (via `node.invoke`).
+- `location.get` is a node command, invoked via `node.invoke` or `openclaw nodes location get`.
 - Off by default.
 - Android app settings use a selector: Off / While Using.
-- Separate toggle: Precise Location.
+- Precise Location is a separate toggle.
 
 ## Why a selector (not just a switch)
 
-OS permissions are multi-level. We can expose a selector in-app, but the OS still decides the actual grant.
-
-- iOS/macOS may expose **While Using** or **Always** in system prompts/Settings.
-- Android app currently supports foreground location only.
-- Precise location is a separate grant (iOS 14+ "Precise", Android "fine" vs "coarse").
-
-Selector in UI drives our requested mode; actual grant lives in OS settings.
+OS location permissions are multi-level (iOS/macOS expose While Using vs Always; Android currently supports foreground-only). Precise location is a separate OS grant too (iOS 14+ "Precise", Android "fine" vs "coarse"). The in-app selector drives the requested mode, but the OS still decides the actual grant.
 
 ## Settings model
 
@@ -33,17 +27,22 @@ Per node device:
 UI behavior:
 
 - Selecting `whileUsing` requests foreground permission.
-- If OS denies requested level, revert to the highest granted level and show status.
+- If the OS denies the requested level, the app reverts to the highest granted level and shows status.
 
 ## Permissions mapping (node.permissions)
 
-Optional. macOS node reports `location` via the permissions map; iOS/Android may omit it.
+Optional. The macOS node reports `location` via the `permissions` map on `node.list`/`node.describe`; iOS/Android may omit it.
 
 ## Command: `location.get`
 
-Called via `node.invoke`.
+Called via `node.invoke`, or the CLI helper:
 
-Params (suggested):
+```bash
+openclaw nodes location get --node <idOrNameOrIp>
+openclaw nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
+```
+
+Params:
 
 ```json
 {
@@ -52,6 +51,8 @@ Params (suggested):
   "desiredAccuracy": "coarse|balanced|precise"
 }
 ```
+
+CLI flags map directly: `--location-timeout` -> `timeoutMs`, `--max-age` -> `maxAgeMs`, `--accuracy` -> `desiredAccuracy`.
 
 Response payload:
 
@@ -73,21 +74,20 @@ Errors (stable codes):
 
 - `LOCATION_DISABLED`: selector is off.
 - `LOCATION_PERMISSION_REQUIRED`: permission missing for requested mode.
-- `LOCATION_BACKGROUND_UNAVAILABLE`: app is backgrounded but only While Using allowed.
+- `LOCATION_BACKGROUND_UNAVAILABLE`: app is backgrounded but only While Using is granted.
 - `LOCATION_TIMEOUT`: no fix in time.
-- `LOCATION_UNAVAILABLE`: system failure / no providers.
+- `LOCATION_UNAVAILABLE`: system failure or no providers.
 
 ## Background behavior
 
-- Android app denies `location.get` while backgrounded.
-- Keep OpenClaw open when requesting location on Android.
+- The Android app denies `location.get` while backgrounded; keep OpenClaw open when requesting location on Android.
 - Other node platforms may differ.
 
 ## Model/tooling integration
 
-- Tool surface: `nodes` tool adds `location_get` action (node required).
+- Agent tool: the `nodes` tool's `location_get` action (node required).
 - CLI: `openclaw nodes location get --node <id>`.
-- Agent guidelines: only call when user enabled location and understands the scope.
+- Agent guidelines: only call when the user enabled location and understands the scope.
 
 ## UX copy (suggested)
 
@@ -97,6 +97,7 @@ Errors (stable codes):
 
 ## Related
 
+- [Nodes overview](/nodes)
 - [Channel location parsing](/channels/location)
 - [Camera capture](/nodes/camera)
 - [Talk mode](/nodes/talk)

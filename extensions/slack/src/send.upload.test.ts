@@ -54,8 +54,7 @@ vi.mock("./runtime-api.js", async () => {
   };
 });
 
-const { sendMessageSlack, clearSlackDmChannelCache, clearSlackSendQueuesForTest } =
-  await import("./send.js");
+const { sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type UploadTestClient = WebClient & {
@@ -167,7 +166,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
     fetchWithSsrFGuard.mockClear();
     loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
-    clearSlackSendQueuesForTest();
     clearSlackThreadParticipationCache();
   });
 

@@ -40,6 +40,15 @@ const mockChatCommands: ChatCommandDefinition[] = [
     category: "session",
   },
   {
+    key: "login",
+    nativeName: "login",
+    nativeProviders: ["telegram"],
+    description: "Pair Codex login",
+    textAliases: ["/login"],
+    scope: "both",
+    category: "management",
+  },
+  {
     key: "commands",
     description: "List commands",
     textAliases: ["/commands"],
@@ -388,6 +397,22 @@ describe("commands.list handler", () => {
     const commands = listCommands({ provider: "discord" });
     expect(requireCommand(commands, "set_model").name).toBe("set_model");
     expect(commands.find((c) => c.name === "model")).toBeUndefined();
+  });
+
+  it("limits provider-specific native commands while keeping login text-visible", () => {
+    expect(listCommands({ provider: "discord" }).find((c) => c.name === "login")).toBeUndefined();
+    expect(
+      listCommands({ provider: "slack", scope: "native" }).find((c) => c.name === "login"),
+    ).toBeUndefined();
+    expect(requireCommand(listCommands({ provider: "telegram" }), "login").nativeName).toBe(
+      "login",
+    );
+    expect(requireCommand(listCommands({ provider: "discord", scope: "text" }), "login")).toEqual(
+      expect.objectContaining({
+        name: "login",
+        textAliases: ["/login"],
+      }),
+    );
   });
 
   it("normalizes mixed-case provider", () => {

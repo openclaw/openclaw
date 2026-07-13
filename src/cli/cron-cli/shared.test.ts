@@ -90,6 +90,40 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "isolated");
   });
 
+  it("shows declaration metadata and existing run status", () => {
+    const job = createBaseJob({
+      declarationKey: "daily-report",
+      displayName: "Daily summary",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+      sessionTarget: "isolated",
+      state: {
+        nextRunAtMs: Date.now() + 60_000,
+        lastRunAtMs: Date.now() - 60_000,
+        lastRunStatus: "error",
+        lastError: "boom",
+        lastDeliveryStatus: "not-delivered",
+        lastDeliveryError: "offline",
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expect(list.logs[0]).toContain("Declaration");
+    expect(list.logs[0]).toContain("Owner");
+    expectLogsToInclude(list.logs, "daily-report");
+    expectLogsToInclude(list.logs, "Daily summary");
+    expectLogsToInclude(list.logs, "agent:ops:main");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "declaration: daily-report");
+    expectLogsToInclude(show.logs, "display name: Daily summary");
+    expectLogsToInclude(show.logs, "owner agent: ops");
+    expectLogsToInclude(show.logs, "last error: boom");
+    expectLogsToInclude(show.logs, "last delivery: not-delivered");
+    expectLogsToInclude(show.logs, "last delivery error: offline");
+  });
+
   it("tolerates malformed rows in human-readable output", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const malformedJob = {
@@ -119,6 +153,25 @@ describe("printCronList", () => {
 
     printCronList([job], runtime);
     expectLogsToInclude(logs, "(stagger 5m)");
+  });
+
+  it("shows on-exit schedules in list and show output", () => {
+    const job = createBaseJob({
+      id: "on-exit-job",
+      name: "Watch build",
+      schedule: { kind: "on-exit", command: "pnpm build", cwd: "/repo" },
+      sessionTarget: "main",
+      state: {},
+      payload: { kind: "systemEvent", text: "done" },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "on-exit pnpm build @ /repo");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "schedule: on-exit pnpm build @ /repo");
   });
 
   it("shows dash for unset agentId instead of default", () => {
@@ -328,6 +381,8 @@ describe("parseDurationMs", () => {
 
   it("rejects non-positive and malformed durations", () => {
     expect(parseDurationMs("0s")).toBeNull();
+    expect(parseDurationMs("0.5ms")).toBeNull();
+    expect(parseDurationMs("0.001ms")).toBeNull();
     expect(parseDurationMs("-5s")).toBeNull();
     expect(parseDurationMs("abc")).toBeNull();
     expect(parseDurationMs("")).toBeNull();

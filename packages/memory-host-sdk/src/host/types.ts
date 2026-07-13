@@ -55,11 +55,39 @@ export type MemorySyncParams = {
 };
 
 /** Runtime backend/mode diagnostics for memory search. */
+export type MemorySearchRuntimeQmdCollectionValidationDebug = {
+  cacheState?: "hit" | "miss" | "write" | "bypass-force" | "error";
+  elapsedMs: number;
+  collectionCount: number;
+  listCalls?: number;
+  showCalls?: number;
+};
+
+export type MemorySearchRuntimeQmdMultiCollectionProbeDebug = {
+  cacheState?: "hit" | "miss" | "write" | "error";
+  elapsedMs: number;
+  supported: boolean;
+};
+
+export type MemorySearchRuntimeQmdSearchPlanDebug = {
+  command?: "query" | "search" | "vsearch";
+  collectionCount?: number;
+  groupCount?: number;
+  sources?: MemorySource[];
+};
+
+export type MemorySearchRuntimeQmdDebug = {
+  collectionValidation?: MemorySearchRuntimeQmdCollectionValidationDebug;
+  multiCollectionProbe?: MemorySearchRuntimeQmdMultiCollectionProbeDebug;
+  searchPlan?: MemorySearchRuntimeQmdSearchPlanDebug;
+};
+
 export type MemorySearchRuntimeDebug = {
   backend: "builtin" | "qmd";
   configuredMode?: string;
   effectiveMode?: string;
   fallback?: string;
+  qmd?: MemorySearchRuntimeQmdDebug;
 };
 
 /** Result of reading a memory file, optionally paginated/truncated. */

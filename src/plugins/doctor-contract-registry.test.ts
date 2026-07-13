@@ -19,6 +19,7 @@ let collectRelevantDoctorPluginIds: typeof import("./doctor-contract-registry.js
 let collectRelevantDoctorPluginIdsForTouchedPaths: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIdsForTouchedPaths;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
+let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
 let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
   | typeof import("./doctor-contract-registry.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
@@ -51,6 +52,7 @@ describe("doctor-contract-registry module loader", () => {
       collectRelevantDoctorPluginIdsForTouchedPaths,
       listPluginDoctorLegacyConfigRules,
       listPluginDoctorSessionRouteStateOwners,
+      listPluginDoctorSessionStoreAgentIds,
       setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
     } = await import("./doctor-contract-registry.js"));
     setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
@@ -213,6 +215,30 @@ describe("doctor-contract-registry module loader", () => {
         authProfilePrefixes: ["demo:"],
       },
     ]);
+  });
+
+  it("loads config-derived session-store agent IDs from doctor contract modules", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      "module.exports = { resolveSessionStoreAgentIds: ({ cfg }) => [cfg.plugins.entries.demo.config.agentId, 'voice', ' '] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", packageName: "@openclaw/demo", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+
+    expect(
+      listPluginDoctorSessionStoreAgentIds({
+        config: {
+          plugins: { entries: { demo: { config: { agentId: "cards" } } } },
+        },
+        workspaceDir: pluginRoot,
+        env: {},
+        pluginIds: ["@openclaw/demo"],
+      }),
+    ).toEqual(["cards", "voice"]);
   });
 
   it("loads multiple bundled CLI route-state owners from doctor contract modules", () => {

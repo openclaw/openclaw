@@ -12,11 +12,16 @@ import { createDiffsTool } from "./tool.js";
 import type { DiffRenderOptions } from "./types.js";
 
 describe("diffs tool", () => {
+  let rootDir: string;
   let store: DiffArtifactStore;
   let cleanupRootDir: () => Promise<void>;
 
   beforeEach(async () => {
-    ({ store, cleanup: cleanupRootDir } = await createDiffStoreHarness("openclaw-diffs-tool-"));
+    ({
+      rootDir,
+      store,
+      cleanup: cleanupRootDir,
+    } = await createDiffStoreHarness("openclaw-diffs-tool-"));
   });
 
   afterEach(async () => {
@@ -42,6 +47,32 @@ describe("diffs tool", () => {
     expect(String(readDetails(result).viewerUrl)).toContain(
       "http://127.0.0.1:18789/plugins/diffs/view/",
     );
+    expect(readDetails(result).changed).toBe(true);
+  });
+
+  it("short-circuits identical before/after input without creating an artifact", async () => {
+    const screenshotHtml = vi.fn<DiffScreenshotter["screenshotHtml"]>();
+    const tool = createToolWithScreenshotter(store, { screenshotHtml });
+
+    const result = await tool.execute?.("tool-identical", {
+      before: "same\n",
+      after: "same\n",
+    });
+
+    expect(readTextContent(result, 0)).toBe(
+      "Before and after are identical — no changes to render.",
+    );
+    expect(readDetails(result)).toEqual({
+      changed: false,
+      context: {
+        agentId: "main",
+        sessionId: "session-123",
+        messageChannel: "discord",
+        agentAccountId: "default",
+      },
+    });
+    expect(screenshotHtml).not.toHaveBeenCalled();
+    await expect(fs.readdir(rootDir)).resolves.toEqual([]);
   });
 
   it("uses configured viewerBaseUrl when tool input omits baseUrl", async () => {
@@ -386,6 +417,29 @@ describe("diffs tool", () => {
         mode: "view",
       }),
     ).rejects.toThrow("patch exceeds maximum size");
+  });
+
+  it("classifies patch render validation failures as tool input errors", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+
+    const error = await tool
+      .execute?.("tool-invalid-patch", {
+        patch: "not a unified patch",
+        mode: "view",
+      })
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+
+    expect(error).toMatchObject({
+      name: "ToolInputError",
+      message: "Patch input did not contain any file diffs.",
+    });
   });
 
   it("rejects oversized before/after payloads", async () => {

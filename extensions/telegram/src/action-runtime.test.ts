@@ -342,6 +342,24 @@ describe("handleTelegramAction", () => {
     await expectReactionAdded("minimal");
   });
 
+  it("routes omitted-account action tokens through the configured defaultAccount (#61012)", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          reactionLevel: "minimal",
+          defaultAccount: "kitt",
+          accounts: {
+            kitt: { botToken: "tok-kitt" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await handleTelegramAction(defaultReactionAction, cfg);
+    const call = mockCall(reactMessageTelegram, 0, "reaction add");
+    const options = requireRecord(call[3], "reaction add options");
+    expect(options.token).toBe("tok-kitt");
+  });
+
   it("surfaces non-fatal reaction warnings", async () => {
     reactMessageTelegram.mockResolvedValueOnce({
       ok: false,

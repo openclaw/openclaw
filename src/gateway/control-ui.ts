@@ -36,6 +36,7 @@ import {
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
@@ -74,6 +75,7 @@ const controlUiAssistantMediaTicketSecret = randomBytes(32);
 type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
+  terminalEnabled?: boolean;
   agentId?: string;
   root?: ControlUiRootState;
   auth?: ResolvedGatewayAuth;
@@ -758,15 +760,26 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath?: string) {
-  const prepared = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
+function serveResolvedIndexHtml(
+  res: ServerResponse,
+  body: string,
+  basePath?: string,
+  allowWasm?: boolean,
+) {
+  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
+  // Let the app initialize fail-closed without guessing whether this document
+  // was served with the terminal's WASM CSP allowance.
+  const prepared = withBasePath.replace(
+    /<html\b/i,
+    `<html ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
+  );
   const hashes = computeInlineScriptHashes(prepared);
-  if (hashes.length > 0) {
-    res.setHeader(
-      "Content-Security-Policy",
-      buildControlUiCspHeader({ inlineScriptHashes: hashes }),
-    );
-  }
+  // Always set the document CSP here (the index carries inline scripts) so the
+  // terminal's WASM relaxation is applied to the page that loads ghostty-web.
+  res.setHeader(
+    "Content-Security-Policy",
+    buildControlUiCspHeader({ inlineScriptHashes: hashes, allowWasm }),
+  );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(prepared);
@@ -921,6 +934,10 @@ export async function handleControlUiHttpRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
+  // The embedded terminal ships ghostty-web (WASM); relax the index CSP only
+  // for an explicitly enabled terminal so the default policy stays strict.
+  const terminalEnabled =
+    opts?.terminalEnabled ?? opts?.config?.gateway?.terminal?.enabled === true;
   const route = classifyControlUiRequest({
     basePath,
     pathname,
@@ -995,7 +1012,9 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
+      seamColor: config?.ui?.seamColor,
       timeFormat: config?.agents?.defaults?.timeFormat,
+      terminalEnabled,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -1085,7 +1104,12 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd), basePath);
+        serveResolvedIndexHtml(
+          res,
+          await readOpenedFileText(safeFile.fd),
+          basePath,
+          terminalEnabled,
+        );
         return true;
       }
       serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
@@ -1113,7 +1137,12 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd), basePath);
+      serveResolvedIndexHtml(
+        res,
+        await readOpenedFileText(safeIndex.fd),
+        basePath,
+        terminalEnabled,
+      );
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

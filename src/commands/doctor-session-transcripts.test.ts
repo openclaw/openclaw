@@ -12,8 +12,11 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 }));
 
 import {
+  detectSessionTranscriptHealthIssues,
   noteSessionTranscriptHealth,
   repairBrokenSessionTranscriptFile,
+  sessionTranscriptIssueToHealthFinding,
+  sessionTranscriptIssueToRepairEffect,
 } from "./doctor-session-transcripts.js";
 
 function countNonEmptyLines(value: string): number {
@@ -148,6 +151,44 @@ describe("doctor session transcript repair", () => {
     expect(message).toContain("legacy state");
     expect(message).toContain('Run "openclaw doctor --fix"');
     expect(countNonEmptyLines(await fs.readFile(filePath, "utf-8"))).toBe(3);
+  });
+
+  it("maps affected transcripts to structured findings and dry-run effects", async () => {
+    const filePath = await writeTranscript([
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "legacy-assistant",
+        parentId: null,
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          content: [{ type: "text", text: "hello" }],
+        },
+      },
+    ]);
+    const sessionsDir = path.dirname(filePath);
+
+    const [issue] = await detectSessionTranscriptHealthIssues({ sessionDirs: [sessionsDir] });
+
+    if (!issue) {
+      throw new Error("expected session transcript health issue");
+    }
+    expect(issue?.filePath).toBe(filePath);
+    expect(sessionTranscriptIssueToHealthFinding(issue)).toMatchObject({
+      checkId: "core/doctor/session-transcripts",
+      severity: "info",
+      path: filePath,
+      fixHint: expect.stringContaining("openclaw doctor --fix"),
+    });
+    expect(sessionTranscriptIssueToRepairEffect(issue)).toEqual({
+      kind: "file",
+      action: "would-rewrite-session-transcript",
+      target: filePath,
+      dryRunSafe: false,
+    });
+    expect(await fs.readFile(filePath, "utf-8")).toContain("openai-codex");
   });
 
   it("repairs supported current-version linear transcripts", async () => {

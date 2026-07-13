@@ -249,11 +249,23 @@ class InvokeCommandRegistryTest {
   fun find_returnsForegroundMetadataForCameraCommands() {
     val list = InvokeCommandRegistry.find(OpenClawCameraCommand.List.rawValue)
     val location = InvokeCommandRegistry.find(OpenClawLocationCommand.Get.rawValue)
+    val pttStart = InvokeCommandRegistry.find(OpenClawTalkCommand.PttStart.rawValue)
+    val pttStop = InvokeCommandRegistry.find(OpenClawTalkCommand.PttStop.rawValue)
+    val pttCancel = InvokeCommandRegistry.find(OpenClawTalkCommand.PttCancel.rawValue)
+    val pttOnce = InvokeCommandRegistry.find(OpenClawTalkCommand.PttOnce.rawValue)
 
     assertNotNull(list)
     assertEquals(true, list?.requiresForeground)
     assertNotNull(location)
     assertEquals(false, location?.requiresForeground)
+    assertNotNull(pttStart)
+    assertEquals(false, pttStart?.requiresForeground)
+    assertNotNull(pttStop)
+    assertEquals(false, pttStop?.requiresForeground)
+    assertNotNull(pttCancel)
+    assertEquals(false, pttCancel?.requiresForeground)
+    assertNotNull(pttOnce)
+    assertEquals(true, pttOnce?.requiresForeground)
   }
 
   @Test

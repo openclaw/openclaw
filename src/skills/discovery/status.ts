@@ -35,8 +35,6 @@ import {
   type SkillIndexEntry,
 } from "./skill-index.js";
 
-type SkillStatusConfigCheck = RequirementConfigCheck;
-
 type SkillInstallOption = {
   id: string;
   kind: SkillInstallSpec["kind"];
@@ -72,7 +70,7 @@ export type SkillStatusEntry = {
   commandVisible: boolean;
   requirements: Requirements;
   missing: Requirements;
-  configChecks: SkillStatusConfigCheck[];
+  configChecks: RequirementConfigCheck[];
   install: SkillInstallOption[];
   clawhub?: ClawHubSkillStatusLink;
   skillCard?: LocalSkillCardStatus;

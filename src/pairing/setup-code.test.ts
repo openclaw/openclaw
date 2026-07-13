@@ -67,6 +67,28 @@ describe("pairing setup code", () => {
     }));
   }
 
+  function createNoRouteRunner() {
+    return vi.fn(async () => ({
+      code: 1,
+      stdout: "",
+      stderr: "",
+    }));
+  }
+
+  function createDefaultRouteRunner(interfaceName: string) {
+    const stdout =
+      process.platform === "win32"
+        ? JSON.stringify({ InterfaceAlias: interfaceName })
+        : process.platform === "linux"
+          ? `default via 10.211.55.1 dev ${interfaceName} proto dhcp metric 100\n`
+          : `   route to: default\ninterface: ${interfaceName}\n`;
+    return vi.fn(async () => ({
+      code: 0,
+      stdout,
+      stderr: "",
+    }));
+  }
+
   function createIpv4NetworkInterfaces(
     address: string,
   ): ReturnType<NonNullable<NonNullable<ResolveSetupOptions>["networkInterfaces"]>> {
@@ -89,6 +111,7 @@ describe("pairing setup code", () => {
     params: {
       authLabel: string;
       url?: string;
+      urls?: string[];
       urlSource?: string;
     },
   ) {
@@ -107,6 +130,9 @@ describe("pairing setup code", () => {
     });
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
+    }
+    if (params.urls) {
+      expect(resolved.payload.urls).toEqual(params.urls);
     }
     if (params.urlSource) {
       expect(resolved.urlSource).toBe(params.urlSource);
@@ -127,6 +153,7 @@ describe("pairing setup code", () => {
     expected: {
       authLabel: string;
       url: string;
+      urls?: string[];
       urlSource: string;
     };
     runCommandWithTimeout?: ReturnType<typeof vi.fn>;
@@ -551,6 +578,7 @@ describe("pairing setup code", () => {
   });
 
   it("allows lan bind cleartext setup urls for mobile pairing", async () => {
+    const runCommandWithTimeout = createNoRouteRunner();
     await expectResolvedSetupSuccessCase({
       config: {
         gateway: {
@@ -560,12 +588,126 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupConfig,
       options: {
         networkInterfaces: () => createIpv4NetworkInterfaces("192.168.1.20"),
+        runCommandWithTimeout,
       } satisfies ResolveSetupOptions,
       expected: {
         authLabel: "password",
         url: "ws://192.168.1.20:18789",
         urlSource: "gateway.bind=lan",
       },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 3,
+    });
+  });
+
+  it("advertises the routed LAN interface instead of the first private interface", async () => {
+    const runCommandWithTimeout = createDefaultRouteRunner("en1");
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "password", password: "secret" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () =>
+          ({
+            bridge100: [
+              {
+                address: "10.37.129.4",
+                family: "IPv4",
+                internal: false,
+                netmask: "255.255.255.0",
+                mac: "00:00:00:00:00:00",
+                cidr: "10.37.129.4/24",
+              },
+            ],
+            en1: [
+              {
+                address: "10.211.55.3",
+                family: "IPv4",
+                internal: false,
+                netmask: "255.255.255.0",
+                mac: "00:00:00:00:00:00",
+                cidr: "10.211.55.3/24",
+              },
+            ],
+          }) as ReturnType<NonNullable<NonNullable<ResolveSetupOptions>["networkInterfaces"]>>,
+        runCommandWithTimeout,
+      } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "password",
+        url: "ws://10.211.55.3:18789",
+        urlSource: "gateway.bind=lan",
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 3,
+    });
+  });
+
+  it("adds a configured Tailscale Serve route to a LAN setup code", async () => {
+    const defaultRoute = createDefaultRouteRunner("en0");
+    const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
+      if (argv.includes("serve")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            TCP: { "8443": { HTTPS: true } },
+            Web: {
+              "clawmac.tail.ts.net:8443": {
+                Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+              },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      return defaultRoute();
+    });
+
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () => createIpv4NetworkInterfaces("192.168.139.3"),
+        runCommandWithTimeout,
+      } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "token",
+        url: "ws://192.168.139.3:18789",
+        urls: ["ws://192.168.139.3:18789", "wss://clawmac.tail.ts.net:8443"],
+        urlSource: "gateway.bind=lan",
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 2,
+    });
+  });
+
+  it("does not advertise a loopback Serve route for a custom bind", async () => {
+    const runCommandWithTimeout = vi.fn(async () => {
+      throw new Error("Tailscale Serve discovery must not run for a custom bind");
+    });
+
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "192.168.139.3",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: { runCommandWithTimeout } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "token",
+        url: "ws://192.168.139.3:18789",
+        urlSource: "gateway.bind=custom",
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 0,
     });
   });
 

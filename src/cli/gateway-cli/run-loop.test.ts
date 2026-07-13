@@ -87,6 +87,7 @@ const respawnGatewayProcessForUpdate = vi.fn<
 const markUpdateRestartSentinelFailure = vi.fn<(reason: string) => Promise<null>>(
   async (_reason: string) => null,
 );
+const abortPendingChannelReloads = vi.fn();
 const abortEmbeddedAgentRun = vi.fn(
   (_sessionId?: string, _opts?: { mode?: "all" | "compacting"; reason?: "restart" }) => false,
 );
@@ -213,6 +214,10 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
+}));
+
+vi.mock("../../gateway/server-reload-handlers.js", () => ({
+  abortPendingChannelReloads: () => abortPendingChannelReloads(),
 }));
 
 const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
@@ -1455,6 +1460,53 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:file-intent"]),
         reason: "gateway restart drain",
       });
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("calls abortPendingChannelReloads for file-intent restart even when authorization is false", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({
+      force: true,
+      reason: "file-intent restart",
+    });
+    consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
+    loadConfig.mockReturnValueOnce({
+      gateway: {
+        reload: {
+          deferralTimeoutMs: 90_000,
+        },
+      },
+    });
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-file-intent"]);
+    listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:file-intent"]);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigint = captureSignal("SIGINT");
+
+      sigusr1();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      // File-intent restart always restarts regardless of authorization.
+      // abortPendingChannelReloads must be called to cancel any stale
+      // deferred channel reload work before the in-process restart.
+      expect(abortPendingChannelReloads).toHaveBeenCalledOnce();
+      // Authorization was consumed but returned false.
+      expect(consumeGatewaySigusr1RestartAuthorization).toHaveBeenCalledOnce();
+      // markGatewaySigusr1RestartHandled should NOT be called when auth is false.
+      expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
+      // Restart still proceeds for file-intent regardless of auth result.
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();

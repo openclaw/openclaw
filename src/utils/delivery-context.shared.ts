@@ -229,7 +229,7 @@ export function deliveryContextFromSession(
   return normalizeSessionDeliveryFields(source).deliveryContext;
 }
 
-/** Merges delivery contexts without mixing target/account/thread fields across channels. */
+/** Merges delivery contexts without mixing target/account/thread fields across route owners. */
 export function mergeDeliveryContext(
   primary?: DeliveryContext,
   fallback?: DeliveryContext,
@@ -243,17 +243,22 @@ export function mergeDeliveryContext(
     normalizedPrimary?.channel &&
     normalizedFallback?.channel &&
     normalizedPrimary.channel !== normalizedFallback.channel;
+  const accountsConflict =
+    normalizedPrimary?.accountId &&
+    normalizedFallback?.accountId &&
+    normalizedPrimary.accountId !== normalizedFallback.accountId;
+  const routesConflict = channelsConflict || accountsConflict;
   return normalizeDeliveryContext({
-    channel: normalizedPrimary?.channel ?? normalizedFallback?.channel,
-    // Keep route fields paired to their channel; avoid crossing fields between
-    // unrelated channels during session context merges.
-    to: channelsConflict
-      ? normalizedPrimary?.to
-      : (normalizedPrimary?.to ?? normalizedFallback?.to),
-    accountId: channelsConflict
+    channel: accountsConflict
+      ? normalizedPrimary?.channel
+      : (normalizedPrimary?.channel ?? normalizedFallback?.channel),
+    // Keep route fields paired to their channel account; crossing either owner
+    // can address one account's target through another account's credentials.
+    to: routesConflict ? normalizedPrimary?.to : (normalizedPrimary?.to ?? normalizedFallback?.to),
+    accountId: routesConflict
       ? normalizedPrimary?.accountId
       : (normalizedPrimary?.accountId ?? normalizedFallback?.accountId),
-    threadId: channelsConflict
+    threadId: routesConflict
       ? normalizedPrimary?.threadId
       : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
   });

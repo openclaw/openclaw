@@ -3,10 +3,10 @@
  * The public helpers expose raw JSON payloads so normalization stays in the
  * store/state layers that own compatibility rules.
  */
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { sha256HexPrefix } from "../../infra/crypto-digest.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -46,8 +46,7 @@ function inferAgentIdFromDir(agentDir: string): string {
       return parent;
     }
   }
-  const hash = createHash("sha256").update(normalized).digest("hex").slice(0, 12);
-  return `custom-${hash}`;
+  return `custom-${sha256HexPrefix(normalized, 12)}`;
 }
 
 // The auth database lives in the agent dir and shares the openclaw-agent schema

@@ -57,6 +57,7 @@ describe("memory host event journal helpers", () => {
       type: "memory.dream.completed",
       timestamp: "2026-04-05T13:00:00.000Z",
       phase: "light",
+      outcome: "completed",
       lineCount: 4,
       storageMode: "both",
       inlinePath: path.join(workspaceDir, "memory", "2026-04-05.md"),
@@ -74,6 +75,10 @@ describe("memory host event journal helpers", () => {
     expect(events).toHaveLength(2);
     expect(events[0]?.type).toBe("memory.recall.recorded");
     expect(events[1]?.type).toBe("memory.dream.completed");
+    if (events[1]?.type !== "memory.dream.completed") {
+      throw new Error("expected dream completion event");
+    }
+    expect(events[1].outcome).toBe("completed");
     expect(tail).toHaveLength(1);
     expect(tail[0]?.type).toBe("memory.dream.completed");
   });
@@ -225,6 +230,20 @@ describe("createPersistentDedupe", () => {
         ttlMs: 400,
       },
     ]);
+  });
+
+  it("treats malformed legacy JSON cache files as empty", async () => {
+    const root = await createTempDir("openclaw-legacy-dedupe-malformed-");
+    const legacyPath = path.join(root, "legacy.json");
+    await fs.writeFile(legacyPath, "{not valid json");
+
+    await expect(
+      listPersistentDedupeLegacyJsonFileEntries({
+        filePath: legacyPath,
+        ttlMs: 500,
+        now: 1_100,
+      }),
+    ).resolves.toStrictEqual([]);
   });
 
   it("warms empty namespaces and ignores retired JSON cache files", async () => {

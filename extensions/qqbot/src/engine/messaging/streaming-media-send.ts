@@ -7,6 +7,7 @@
 
 import type { GatewayAccount } from "../types.js";
 import { normalizePath } from "../utils/platform.js";
+import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
   sendPhoto,
   sendVoice,
@@ -40,7 +41,7 @@ function createMediaTagRegex(): RegExp {
 }
 
 /** 媒体发送上下文（统一的，供流式和普通模式共用） */
-export interface MediaSendContext {
+export interface MediaSendContext extends OutboundMediaAccessContext {
   /** 媒体目标上下文（用于 sendPhoto/sendVoice 等） */
   mediaTarget: MediaTargetContext;
   /** qualifiedTarget（格式 "qqbot:c2c:xxx" 或 "qqbot:group:xxx"，用于 sendMediaAuto） */
@@ -249,7 +250,16 @@ export async function executeSendQueue(
     skipInterTagText?: boolean;
   } = {},
 ): Promise<void> {
-  const { mediaTarget, qualifiedTarget, account, replyToId, log } = ctx;
+  const {
+    mediaTarget,
+    qualifiedTarget,
+    account,
+    replyToId,
+    log,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  } = ctx;
   const prefix = mediaTarget.logPrefix ?? `[qqbot:${account.accountId}]`;
 
   /** 媒体发送失败时的兜底：通过 onSendText 发送错误文本给用户 */
@@ -338,6 +348,9 @@ export async function executeSendQueue(
           accountId: account.accountId,
           replyToId,
           account,
+          ...(mediaAccess ? { mediaAccess } : {}),
+          ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
+          ...(mediaReadFile ? { mediaReadFile } : {}),
         });
         if (result.error) {
           log?.error(`${prefix} sendMedia(auto) error: ${result.error}`);

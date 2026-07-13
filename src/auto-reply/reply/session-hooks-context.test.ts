@@ -1,11 +1,11 @@
 // Tests context passed to session lifecycle hooks.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { initSessionState } from "./session.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
@@ -61,8 +61,10 @@ vi.mock("../../agents/session-write-lock.js", async () => {
   };
 });
 
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-session-hooks-" });
+
 async function createStorePath(prefix: string): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
+  const root = await suiteTempDirs.make(prefix);
   return path.join(root, "sessions.json");
 }
 
@@ -165,6 +167,14 @@ function requireHookCall(
 }
 
 describe("session hook context wiring", () => {
+  beforeAll(async () => {
+    await suiteTempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await suiteTempDirs.cleanup();
+  });
+
   beforeEach(() => {
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runSessionStart.mockReset();

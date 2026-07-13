@@ -6,7 +6,7 @@ import { resolveClickClackAccount } from "./accounts.js";
 import { createClickClackClient } from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
 import { parseClickClackTarget } from "./target.js";
-import type { CoreConfig } from "./types.js";
+import type { ClickClackMessageProvenance, CoreConfig } from "./types.js";
 
 /**
  * Sends text to a normalized ClickClack target and returns the created message
@@ -19,6 +19,8 @@ export async function sendClickClackText(params: {
   text: string;
   threadId?: string | number | null;
   replyToId?: string | number | null;
+  /** Optional model/thinking attribution stamped onto the created message. */
+  provenance?: ClickClackMessageProvenance;
 }) {
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
   const client = createClickClackClient({ baseUrl: account.baseUrl, token: account.token });
@@ -30,7 +32,9 @@ export async function sendClickClackText(params: {
     // Explicit thread/reply context wins over the target kind so OpenClaw reply
     // hooks keep conversations attached to the original ClickClack root.
     const rootId = explicitThreadId || replyToId || parsed.id;
-    const message = await client.createThreadReply(rootId, params.text);
+    const message = await client.createThreadReply(rootId, params.text, {
+      provenance: params.provenance,
+    });
     return { to: params.to, messageId: message.id };
   }
   if (parsed.kind === "dm") {
@@ -39,6 +43,8 @@ export async function sendClickClackText(params: {
     return { to: params.to, messageId: message.id };
   }
   const channelId = await resolveChannelId(client, workspaceId, parsed.id);
-  const message = await client.createChannelMessage(channelId, params.text);
+  const message = await client.createChannelMessage(channelId, params.text, {
+    provenance: params.provenance,
+  });
   return { to: params.to, messageId: message.id };
 }

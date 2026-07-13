@@ -17,6 +17,7 @@ const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
   "timeout",
   "model_not_found",
   "session_expired",
+  "context_overflow",
   "empty_response",
   "no_error_details",
   "unclassified",

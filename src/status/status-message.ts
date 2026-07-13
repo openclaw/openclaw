@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { resolveCronStyleNow } from "../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -563,6 +564,10 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
 
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
+  // Derive the live wall clock here so both /status and session_status expose
+  // the same configured timezone without duplicating formatting at each caller.
+  const timeLine =
+    args.timeLine ?? (args.config ? resolveCronStyleNow(args.config, now).timeLine : undefined);
   const entry = args.sessionEntry;
   const selectionConfig = {
     agents: {
@@ -593,11 +598,17 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
   const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
+  const parseSelectedProvider = Boolean(
+    entry?.modelOverride?.trim() && !entry?.providerOverride?.trim(),
+  );
   const modelRefs = resolveSelectedAndActiveModel({
     selectedProvider,
     selectedModel,
     sessionEntry: entry,
+    parseSelectedProvider,
   });
+  const selectedLookupProvider = modelRefs.selected.provider || selectedProvider;
+  const selectedLookupModel = modelRefs.selected.model || selectedModel;
   const initialFallbackState = resolveActiveFallbackState({
     selectedModelRef: modelRefs.selected.label || "unknown",
     activeModelRef: modelRefs.active.label || "unknown",
@@ -718,8 +729,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
   const selectedContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
-    provider: selectedProvider,
-    model: selectedModel,
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
     allowAsyncLoad: false,
   });
   const explicitRuntimeContextTokens =
@@ -740,8 +751,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
     entry,
-    selectedProvider,
-    selectedModel,
+    selectedProvider: selectedLookupProvider,
+    selectedModel: selectedLookupModel,
     parentSessionKey: args.parentSessionKey,
   });
   const persistedContextTokens =
@@ -1007,7 +1018,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     { config: args.config },
   );
   const selectedAuthMode =
-    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedProvider, args.config);
+    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedLookupProvider, args.config);
   const rawSelectedAuthLabelValue =
     selectedAuthMode && selectedAuthMode !== "unknown"
       ? (args.modelAuth ?? selectedAuthMode)
@@ -1107,7 +1118,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   return [
     versionLine,
-    args.timeLine,
+    timeLine,
     args.uptimeLine,
     ...modelLines,
     configuredFallbacksLine,

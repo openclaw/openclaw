@@ -257,6 +257,21 @@ function notYetRunTaskQueryOutput() {
   ].join("\r\n");
 }
 
+function cleanExitTaskQueryOutput(lastRunTime = "5/2/2026 2:41:39 PM") {
+  return ["Status: Ready", `Last Run Time: ${lastRunTime}`, "Last Run Result: 0", ""].join("\r\n");
+}
+
+function addAcceptedRunCleanExitResponses(initialOutput = cleanExitTaskQueryOutput()): void {
+  addStartupFallbackMissingResponses([
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: initialOutput, stderr: "" },
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: cleanExitTaskQueryOutput(), stderr: "" },
+  ]);
+}
+
 beforeEach(() => {
   resetSchtasksBaseMocks();
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
@@ -389,6 +404,51 @@ describe("Windows startup fallback", () => {
       await installGatewayScheduledTask(env);
 
       expectStartupFallbackSpawn();
+    });
+  });
+
+  it("falls back after an accepted task exits cleanly without launch evidence", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      addAcceptedRunCleanExitResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("falls back when Task Scheduler records a fresh clean exit without launch evidence", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      addAcceptedRunCleanExitResponses(cleanExitTaskQueryOutput("5/2/2026 2:40:00 PM"));
+
+      await installGatewayScheduledTask(env);
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("keeps polling when an accepted task transitions from not-yet-run to clean exit", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      addAcceptedRunCleanExitResponses(notYetRunTaskQueryOutput());
+
+      await installGatewayScheduledTask(env);
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("does not fall back when a listener appears after the clean task exit", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4242]);
+      addAcceptedRunCleanExitResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expect(spawn).not.toHaveBeenCalled();
     });
   });
 
@@ -722,7 +782,7 @@ describe("Windows startup fallback", () => {
       });
 
       const runtime = await readScheduledTaskRuntime(nodeEnv);
-      expect(runtime.status).toBe("unknown");
+      expect(runtime.status).not.toBe("running");
       expect(runtime.pid).toBeUndefined();
       expect(inspectPortUsage).not.toHaveBeenCalled();
     });

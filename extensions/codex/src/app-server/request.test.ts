@@ -68,6 +68,27 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, { timeoutMs: 60_000 });
   });
 
+  it("allows current native thread management methods in sandboxed sessions", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+    for (const method of ["thread/name/set", "thread/archive", "thread/unarchive"] as const) {
+      await expect(
+        requestCodexAppServerJson({
+          method,
+          requestParams:
+            method === "thread/name/set"
+              ? { threadId: "thread-1", name: "Shared thread" }
+              : { threadId: "thread-1" },
+          config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+          sessionKey: "sandboxed-session",
+        }),
+      ).resolves.toEqual({ ok: true });
+    }
+
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it("fails closed for config-level exec host=node even without a session key", async () => {
     await expect(
       requestCodexAppServerJson({
@@ -110,6 +131,44 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     ).resolves.toEqual({ ok: true });
 
     expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, { timeoutMs: 60_000 });
+  });
+
+  it("allows config value writes in sandboxed sessions", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const params = {
+      keyPath: 'apps."google-calendar-app".tools',
+      value: null,
+      mergeStrategy: "replace",
+    };
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "config/value/write",
+        requestParams: params,
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        sessionKey: "sandboxed-session",
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(request).toHaveBeenCalledWith("config/value/write", params, { timeoutMs: 60_000 });
+  });
+
+  it("allows config reads in sandboxed sessions", async () => {
+    const request = vi.fn(async () => ({ config: { apps: { apps: {} } } }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const params = { includeLayers: false };
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "config/read",
+        requestParams: params,
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        sessionKey: "sandboxed-session",
+      }),
+    ).resolves.toEqual({ config: { apps: { apps: {} } } });
+
+    expect(request).toHaveBeenCalledWith("config/read", params, { timeoutMs: 60_000 });
   });
 
   it("allows sandbox-pinned thread starts in sandboxed sessions", async () => {

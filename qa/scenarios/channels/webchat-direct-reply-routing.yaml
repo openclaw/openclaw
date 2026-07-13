@@ -47,26 +47,28 @@ flow:
         - set: conversationId
           value:
             expr: config.conversationId
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${conversationId}` })"
         - set: sessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: 'default', peer: { kind: 'direct', id: `dm:${conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
         - set: startIndex
           value:
             expr: state.getSnapshot().messages.length
         - set: requestCountBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  ref: conversationId
-                kind: direct
-              senderId:
+        - sendInbound:
+            conversation:
+              id:
                 ref: conversationId
-              senderName: WebChat QA
-              text:
-                expr: "`Reply exactly \\`${config.expectedMarker}\\` in this current chat. Do not call the message tool.`"
+              kind: direct
+            senderId:
+              ref: conversationId
+            senderName: WebChat QA
+            text:
+              expr: "`Reply exactly \\`${config.expectedMarker}\\` in this current chat. Do not call the message tool.`"
         - try:
             actions:
               - call: waitForCondition

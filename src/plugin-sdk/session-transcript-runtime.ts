@@ -60,11 +60,13 @@ export type SessionTranscriptTarget = SessionTranscriptIdentity & {
   targetKind: "active-session-file" | "runtime-session";
 };
 
+/**
+ * @deprecated Use SessionTranscriptTarget with `{ agentId, sessionKey,
+ * sessionId }`. Active transcript file targets are transitional only and will
+ * be removed with the SQLite session/transcript storage flip.
+ */
 export type SessionTranscriptLegacyFileTarget = SessionTranscriptTarget & {
-  /**
-   * Deprecated transitional file target for callers that still pass active
-   * transcript files to plugin command handlers.
-   */
+  /** Deprecated transitional file path for active transcript artifact callers. */
   sessionFile: string;
 };
 
@@ -124,8 +126,9 @@ export async function resolveSessionTranscriptTarget(
 }
 
 /**
- * Resolves and persists the current file-backed target for legacy plugin
- * command calls that still require `sessionFile`.
+ * @deprecated Use resolveSessionTranscriptTarget with `{ agentId, sessionKey,
+ * sessionId }`. This persists an active transcript file target only for legacy
+ * plugin command calls that still require `sessionFile`.
  */
 export async function resolveSessionTranscriptLegacyFileTarget(
   params: SessionTranscriptTargetParams,

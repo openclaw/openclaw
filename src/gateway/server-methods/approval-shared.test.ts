@@ -299,7 +299,7 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(false);
   });
 
-  it("does not resolve turn-source routes when approval clients are already available", async () => {
+  it("reports an active approval client instead of the manual turn-source route", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
       {
@@ -334,6 +334,15 @@ describe("handlePendingApprovalRequest", () => {
 
     await Promise.resolve();
     expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        id: "approval-with-client",
+        status: "accepted",
+        deliveryRoute: "approval-client",
+      }),
+      undefined,
+    );
 
     expect(manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;

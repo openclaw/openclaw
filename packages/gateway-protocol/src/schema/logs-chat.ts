@@ -32,6 +32,7 @@ export const ChatHistoryParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+    offset: Type.Optional(Type.Integer({ minimum: 0 })),
     maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
   },
   { additionalProperties: false },
@@ -106,6 +107,7 @@ export const ChatAbortParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),
+    preserveSideRuns: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -170,6 +172,7 @@ export const ChatAbortedEventSchema = Type.Object(
     ...ChatEventBaseSchema,
     state: Type.Literal("aborted"),
     message: Type.Optional(Type.Unknown()),
+    errorMessage: Type.Optional(Type.String()),
     stopReason: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

@@ -554,6 +554,33 @@ describe("Twilio SMS helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects malformed JSON from Twilio Messaging Service lookup", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () => new Response("NOT JSON {{{", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+
+    await expect(
+      retrieveTwilioMessagingService({
+        account: createAccount({ messagingServiceSid: "MG123", fromNumber: "" }),
+        serviceSid: "MG123",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("Twilio Messaging Service lookup returned malformed JSON.");
+  });
+
+  it("returns empty list on malformed JSON from Twilio incoming phone number list", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () => new Response("NOT JSON {{{", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+
+    const result = await listTwilioIncomingPhoneNumbers({
+      account: createAccount(),
+      fetchImpl,
+    });
+
+    expect(result).toEqual([]);
+  });
+
   it("bounds and cancels oversized guarded Twilio success bodies", async () => {
     const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse("x".repeat(1024 * 1024 + 1), { status: 201 });

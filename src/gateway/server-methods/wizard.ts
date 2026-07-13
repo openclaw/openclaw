@@ -81,7 +81,11 @@ export const wizardHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        await session.answer(answer.stepId ?? "", answer.value);
+        const validationError = await session.answer(answer.stepId ?? "", answer.value);
+        if (validationError) {
+          respond(true, { ...(await session.next()), error: validationError }, undefined);
+          return;
+        }
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
         return;

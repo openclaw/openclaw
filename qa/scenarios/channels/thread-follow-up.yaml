@@ -47,19 +47,18 @@ flow:
         - assert:
             expr: "Boolean(threadId)"
             message: missing thread id
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id: qa-room
-                kind: channel
-                title: QA Room
-              senderId: alice
-              senderName: Alice
-              text:
-                expr: config.prompt
-              threadId:
-                ref: threadId
-              threadTitle: QA deep dive
+        - sendInbound:
+            conversation:
+              id: qa-room
+              kind: channel
+              title: QA Room
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+            threadId:
+              ref: threadId
+            threadTitle: QA deep dive
         - call: waitForOutboundMessage
           saveAs: outbound
           args:

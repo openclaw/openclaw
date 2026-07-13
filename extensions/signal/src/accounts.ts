@@ -32,6 +32,7 @@ function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): Signa
       | Record<string, Partial<SignalAccountConfig>>
       | undefined,
     accountId,
+    nestedObjectKeys: ["aliases"],
   });
 }
 

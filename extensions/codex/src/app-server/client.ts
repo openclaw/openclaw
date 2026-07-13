@@ -345,9 +345,9 @@ export class CodexAppServerClient {
   async closeAndWait(options?: {
     exitTimeoutMs?: number;
     forceKillDelayMs?: number;
-  }): Promise<void> {
+  }): Promise<boolean> {
     this.markClosed(new Error("codex app-server client is closed"));
-    await closeCodexAppServerTransportAndWait(this.child, options);
+    return await closeCodexAppServerTransportAndWait(this.child, options);
   }
 
   private writeMessage(message: RpcRequest | RpcResponse, onError?: (error: Error) => void): void {
@@ -637,6 +637,15 @@ function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse)
     );
   }
   return detectedVersion;
+}
+
+export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.startsWith(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
+    )
+  );
 }
 
 function buildCodexAppServerRuntimeIdentity(

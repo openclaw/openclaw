@@ -2,19 +2,45 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it } from "vitest";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
+  readMirroredSessionHistoryMessages,
   remapCodexContextFilePath,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("Codex app-server attempt context", () => {
+  it("treats missing mirrored session history as empty without hook warning", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-attempt-context-history-"));
+    const sessionFile = path.join(dir, "session.jsonl");
+    try {
+      await expect(
+        readMirroredSessionHistoryMessages({
+          sessionFile,
+          sessionId: "codex-session",
+          sessionKey: "codex-session",
+        }),
+      ).resolves.toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns a run context report without deferred Codex dynamic tool schemas", () => {
     const tools = [
       {

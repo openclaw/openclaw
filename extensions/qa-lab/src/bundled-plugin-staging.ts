@@ -194,12 +194,13 @@ function collectQaBundledPluginIds(params: {
   repoRoot: string;
   allowedPluginIds: readonly string[];
 }) {
-  const pluginIds = new Set(
-    params.allowedPluginIds.map((pluginId) => {
-      assertSafeQaBundledPluginId(pluginId);
-      return pluginId;
-    }),
-  );
+  const pluginIds = new Set<string>();
+  for (const pluginId of params.allowedPluginIds) {
+    assertSafeQaBundledPluginId(pluginId);
+    if (resolveQaBundledPluginSourceDir({ repoRoot: params.repoRoot, pluginId })) {
+      pluginIds.add(pluginId);
+    }
+  }
   for (const pluginId of QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS) {
     if (
       resolveQaBundledPluginSourceDir({

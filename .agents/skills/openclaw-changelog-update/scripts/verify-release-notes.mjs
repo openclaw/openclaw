@@ -19,7 +19,7 @@ const nonEditorialTypes = new Set([
 const nonEditorialTitlePattern =
   /(?:^|[\s:([{\-])(docs?|documentation|tests?|testing|qa|quality assurance|refactor(?:ing)?|ci|continuous integration|build|chore|style|lint|format)(?:$|[\s:)\]}\-])/i;
 const editorialTitlePattern =
-  /^\s*(?:\[[^\]]+\]\s*)?(?:#\d+:\s*)?(?:add|allow|block|enable|expose|fail|fix|harden|honor|improve|keep|migrate|move|persist|preserve|prevent|propagate|rate[- ]?limit|restore|revert|ship|support|treat|validate)\b|^\s*#\d+:/i;
+  /^\s*(?:\[[^\]]+\]\s*)?(?:#\d+:\s*)?(?:add|allow|block|enable|expose|fail|fix|harden|honor|improve|keep|migrate|move|persist|polish|preserve|prevent|propagate|rate[- ]?limit|restore|revert|ship|support|treat|validate)\b|^\s*#\d+:/i;
 const genericDirectCommitTerms = new Set([
   "add",
   "allow",
@@ -209,7 +209,7 @@ function sectionFor(changelog, version) {
 function referencesIn(text) {
   const references = [];
   for (const match of text.matchAll(
-    /(?<![A-Za-z0-9_.-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
+    /(?<![A-Za-z0-9_.&-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
   )) {
     const qualifiedRepository = match.groups?.owner
       ? `${match.groups.owner}/${match.groups.name}`.toLowerCase()
@@ -656,9 +656,12 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
     const pullRequests = pullRequestsByCommit.get(commitHash) ?? [];
     const seen = new Set(pullRequests);
     for (const pullRequest of connection?.nodes ?? []) {
+      // GitHub's mergedAt can trail the merge commit timestamp by a second.
+      // Keep an exact merge-commit association so a release ending there does not drop its PR.
+      const isExactMergeCommit = pullRequest.mergeCommit?.oid === commitHash;
       if (
         pullRequest.mergedAt &&
-        mergedByTarget(pullRequest.mergedAt, targetTimestamp) &&
+        (isExactMergeCommit || mergedByTarget(pullRequest.mergedAt, targetTimestamp)) &&
         !seen.has(pullRequest.number)
       ) {
         pullRequests.push(pullRequest.number);
@@ -682,6 +685,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
                   nodes {
                     number
                     mergedAt
+                    mergeCommit { oid }
                   }
                   pageInfo { hasNextPage endCursor }
                 }
@@ -707,6 +711,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
                   nodes {
                     number
                     mergedAt
+                    mergeCommit { oid }
                   }
                   pageInfo { hasNextPage endCursor }
                 }
@@ -1191,7 +1196,7 @@ function ledgerFor(
     (entry) =>
       entry.type === "PullRequest" &&
       entry.mergedAt &&
-      mergedByTarget(entry.mergedAt, targetTimestamp) &&
+      (sourcePullRequests.has(entry.number) || mergedByTarget(entry.mergedAt, targetTimestamp)) &&
       recordedPullRequests.has(entry.number) &&
       !revertedReferences.has(entry.number),
   );
@@ -1514,7 +1519,7 @@ function main() {
     return (
       node?.__typename !== "PullRequest" ||
       !node.mergedAt ||
-      !mergedByTarget(node.mergedAt, source.targetTimestamp)
+      (!source.pullRequests.has(number) && !mergedByTarget(node.mergedAt, source.targetTimestamp))
     );
   });
   if (!options.writeLedger && invalidRecordedPullRequests.length > 0) {

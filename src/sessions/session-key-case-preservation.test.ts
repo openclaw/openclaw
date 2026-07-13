@@ -7,6 +7,7 @@ import {
   isCasePreservingPeer,
   normalizeSessionKeyPreservingOpaquePeerIds,
   normalizeSessionPeerId,
+  parseRawSessionConversationRef,
   requiresFoldedSessionKeyAliasProof,
 } from "./session-key-utils.js";
 
@@ -47,6 +48,36 @@ describe("requiresFoldedSessionKeyAliasProof", () => {
     expect(requiresFoldedSessionKeyAliasProof(`agent:main:matrix:channel:${ROOM_A}`)).toBe(true);
     expect(requiresFoldedSessionKeyAliasProof("agent:ops:signal:group:AbC123=")).toBe(false);
     expect(requiresFoldedSessionKeyAliasProof("agent:main:telegram:group:MixedHandle")).toBe(false);
+  });
+
+  it("recognizes nested Matrix identities without trusting them as channel routes", () => {
+    const opaqueKey = `agent:voice:agent:other:matrix:channel:${ROOM_A}`;
+
+    expect(requiresFoldedSessionKeyAliasProof(opaqueKey)).toBe(true);
+    expect(parseRawSessionConversationRef(opaqueKey)).toBeNull();
+  });
+});
+
+describe("parseRawSessionConversationRef", () => {
+  it("preserves empty segments inside opaque Matrix room ids", () => {
+    expect(parseRawSessionConversationRef("agent:main:matrix:channel:!room:[2001:db8::1]")).toEqual(
+      {
+        channel: "matrix",
+        kind: "channel",
+        rawId: "!room:[2001:db8::1]",
+        prefix: "agent:main:matrix:channel",
+      },
+    );
+  });
+
+  it.each([
+    "agent::matrix:channel:room",
+    "agent:voice::matrix:channel:room",
+    "agent:voice:agent:channel:room",
+    "agent:voice:matrix::room",
+    "agent:voice:matrix:channel::room",
+  ])("rejects empty structural segments in %s", (sessionKey) => {
+    expect(parseRawSessionConversationRef(sessionKey)).toBeNull();
   });
 });
 
@@ -138,6 +169,35 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
     expect(normalizeSessionKeyPreservingOpaquePeerIds(`Agent:Main:Matrix:Channel:${ROOM_A}`)).toBe(
       `agent:main:matrix:channel:${ROOM_A}`,
     );
+  });
+
+  it("preserves Matrix tails under nested agent ownership wrappers", () => {
+    const key = `Agent:Voice:Agent:Other:Matrix:Channel:${ROOM_A}:Thread:${EVENT}`;
+    const normalized = `agent:voice:agent:other:matrix:channel:${ROOM_A}:thread:${EVENT}`;
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(key)).toBe(normalized);
+    expect(requiresFoldedSessionKeyAliasProof(normalized)).toBe(true);
+  });
+
+  it("preserves Matrix tails behind malformed nested ownership wrappers", () => {
+    const key = `Agent:Voice:Agent::Matrix:Channel:${ROOM_A}:Thread:${EVENT}`;
+    const normalized = `agent:voice:agent::matrix:channel:${ROOM_A}:thread:${EVENT}`;
+
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(key)).toBe(normalized);
+    expect(requiresFoldedSessionKeyAliasProof(normalized)).toBe(true);
+    expect(parseRawSessionConversationRef(normalized)).toBeNull();
+  });
+
+  it("preserves Matrix tails after an extra empty nested-wrapper segment", () => {
+    const mixed = `Agent:Voice:Agent:Voice::Matrix:Channel:${ROOM_A}`;
+    const lower = `agent:voice:agent:voice::matrix:channel:${ROOM_A.toLowerCase()}`;
+    const normalized = `agent:voice:agent:voice::matrix:channel:${ROOM_A}`;
+
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(mixed)).toBe(normalized);
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(mixed)).not.toBe(
+      normalizeSessionKeyPreservingOpaquePeerIds(lower),
+    );
+    expect(requiresFoldedSessionKeyAliasProof(normalized)).toBe(true);
+    expect(parseRawSessionConversationRef(normalized)).toBeNull();
   });
 
   it("preserves unscoped Matrix room and thread ids before agent scoping", () => {

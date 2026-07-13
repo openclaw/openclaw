@@ -4,8 +4,8 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct VoiceWakeManagerStateTests {
-    @Test @MainActor func suspendAndResumeCycleUpdatesState() async {
-        let manager = VoiceWakeManager()
+    @Test @MainActor func `suspend and resume cycle updates state`() async {
+        let manager = VoiceWakeManager._test_withoutRestartDelays()
         manager.isEnabled = true
         manager.isListening = true
         manager.statusText = "Listening"
@@ -16,12 +16,12 @@ import Testing
         #expect(manager.statusText == "Paused")
 
         manager.resumeAfterExternalAudioCapture(wasSuspended: true)
-        try? await Task.sleep(nanoseconds: 900_000_000)
-        #expect(manager.statusText.contains("Voice Wake") == true)
+        await manager._test_waitForScheduledStart()
+        #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
     }
 
-    @Test @MainActor func handleRecognitionCallbackRestartsOnError() async {
-        let manager = VoiceWakeManager()
+    @Test @MainActor func `handle recognition callback restarts on error`() async {
+        let manager = VoiceWakeManager._test_withoutRestartDelays()
         manager.isEnabled = true
         manager.isListening = true
 
@@ -29,18 +29,20 @@ import Testing
         #expect(manager.statusText.contains("Recognizer error") == true)
         #expect(manager.isListening == false)
 
-        try? await Task.sleep(nanoseconds: 900_000_000)
-        #expect(manager.statusText.contains("Voice Wake") == true)
+        await manager._test_waitForScheduledStart()
+        #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
     }
 
-    @Test @MainActor func handleRecognitionCallbackDispatchesCommand() async {
+    @Test @MainActor func `handle recognition callback dispatches command`() async throws {
         let manager = VoiceWakeManager()
         manager.triggerWords = ["openclaw"]
         manager.isEnabled = true
 
         actor CaptureBox {
             var value: String?
-            func set(_ next: String) { self.value = next }
+            func set(_ next: String) {
+                self.value = next
+            }
         }
         let capture = CaptureBox()
         manager.configure { cmd in
@@ -48,8 +50,8 @@ import Testing
         }
 
         let transcript = "openclaw hello"
-        let triggerRange = transcript.range(of: "openclaw")!
-        let helloRange = transcript.range(of: "hello")!
+        let triggerRange = try #require(transcript.range(of: "openclaw"))
+        let helloRange = try #require(transcript.range(of: "hello"))
         let segments = [
             WakeWordSegment(text: "openclaw", start: 0.0, duration: 0.2, range: triggerRange),
             WakeWordSegment(text: "hello", start: 0.8, duration: 0.2, range: helloRange),

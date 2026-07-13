@@ -108,6 +108,38 @@ describe("mirrorCopilotTranscript", () => {
     );
   });
 
+  it("preserves gateway user-turn identity across Copilot transcript mirroring", async () => {
+    const sessionFile = await createTempSessionFile();
+    const userMessage = castAgentMessage({
+      ...makeAgentUserMessage({
+        content: [{ type: "text", text: "client prompt" }],
+        timestamp: Date.now(),
+      }),
+      idempotencyKey: "client-run:user",
+    });
+
+    await mirrorCopilotTranscript({
+      sessionFile,
+      sessionId: "session-1",
+      sessionKey: "session-1",
+      messages: [userMessage],
+      idempotencyScope: "copilot:session-1",
+    });
+    await mirrorCopilotTranscript({
+      sessionFile,
+      sessionId: "session-1",
+      sessionKey: "session-1",
+      messages: [userMessage],
+      idempotencyScope: "copilot:session-1",
+    });
+
+    const raw = await fs.readFile(sessionFile, "utf8");
+    expect(raw).toContain('"idempotencyKey":"client-run:user"');
+    expect(raw).not.toContain('"idempotencyKey":"copilot:session-1:user:');
+    const records = parseJsonLines<{ message?: { role?: string } }>(raw);
+    expect(records.filter((record) => record.message?.role === "user")).toHaveLength(1);
+  });
+
   it("creates the transcript directory on first mirror", async () => {
     const root = await makeRoot("openclaw-copilot-mirror-missing-dir-");
     const sessionFile = path.join(root, "nested", "sessions", "session.jsonl");

@@ -1,21 +1,16 @@
-/** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-
 /**
  * Plugin node-host command registry bridge.
  *
  * Node hosts load the active plugin registry, expose registered capabilities
  * and commands, and dispatch incoming node-host commands by exact command id.
  */
-let pluginRegistryLoaderModulePromise:
-  | Promise<typeof import("../plugins/runtime/runtime-registry-loader.js")>
-  | undefined;
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
-async function loadPluginRegistryLoaderModule() {
-  pluginRegistryLoaderModulePromise ??= import("../plugins/runtime/runtime-registry-loader.js");
-  return await pluginRegistryLoaderModulePromise;
-}
+const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
+  () => import("../plugins/runtime/runtime-registry-loader.js"),
+);
 
 /** Ensure plugin registry data is loaded before node-host command dispatch. */
 export async function ensureNodeHostPluginRegistry(params: {

@@ -311,6 +311,29 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["google:no-refresh"]).toBe("expired");
   });
 
+  it("reports command-shaped API-key profiles as missing malformed auth", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "zai:default": {
+          type: "api_key" as const,
+          provider: "zai",
+          key: "openclaw onboard --auth-choice zai-coding-global",
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    expect(profileStatuses(summary)["zai:default"]).toBe("missing");
+    expect(profileReasonCodes(summary)["zai:default"]).toBe("malformed_api_key");
+    expect(summary.providers.find((entry) => entry.provider === "zai")?.status).toBe("missing");
+  });
+
   it("uses runtime provider credentials for profile health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const store = {

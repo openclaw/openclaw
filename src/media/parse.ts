@@ -9,6 +9,7 @@ import {
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "@openclaw/net-policy/ip";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
@@ -171,7 +172,7 @@ function isValidMedia(
   if (!opts?.allowSpaces && /\s/.test(candidate)) {
     return false;
   }
-  if (/^https?:\/\//i.test(candidate)) {
+  if (hasHttpUrlPrefix(candidate)) {
     return isAllowedRemoteMediaUrl(candidate);
   }
 
@@ -257,7 +258,7 @@ function findMatchingBracket(
 }
 
 function isRemoteMarkdownImageMedia(candidate: string): boolean {
-  return /^https?:\/\//i.test(candidate) && isValidMedia(candidate);
+  return hasHttpUrlPrefix(candidate) && isValidMedia(candidate);
 }
 
 function parseMarkdownTitle(input: string, start: number): number | undefined {

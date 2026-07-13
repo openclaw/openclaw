@@ -1,5 +1,6 @@
 // Telegram plugin module implements audit membership runtime behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
@@ -13,6 +14,8 @@ import { makeProxyFetch } from "./proxy.js";
 type TelegramApiOk<T> = { ok: true; result: T };
 type TelegramApiErr = { ok: false; description?: string };
 type TelegramGroupMembershipAuditData = Omit<TelegramGroupMembershipAudit, "elapsedMs">;
+// Telegram getChatMember responses are tiny (< 1 KiB). 4 MiB guards against hostile endpoints.
+const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 type TelegramChatMemberResult = { status?: string };
 
 export async function auditTelegramGroupMembershipImpl(
@@ -30,7 +33,9 @@ export async function auditTelegramGroupMembershipImpl(
     try {
       const url = `${base}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(String(params.botId))}`;
       const res = await fetchWithTimeout(url, {}, params.timeoutMs, fetcher);
-      const json = (await res.json()) as TelegramApiOk<TelegramChatMemberResult> | TelegramApiErr;
+      const json = JSON.parse(
+        (await readResponseWithLimit(res, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString("utf8"),
+      ) as TelegramApiOk<TelegramChatMemberResult> | TelegramApiErr;
       if (!res.ok || !isRecord(json) || !json.ok) {
         const desc =
           isRecord(json) && !json.ok && typeof json.description === "string"

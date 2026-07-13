@@ -7,6 +7,7 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
+import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import {
@@ -194,10 +195,7 @@ function formatManagedFlowResult(result: ManagedFlowSuccessResult) {
     flow: result.flow,
     mutation: result.mutation,
   };
-  return {
-    content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
-    details,
-  };
+  return jsonResult(details);
 }
 
 function requireTaskFlowRuntime(taskFlow: BoundTaskFlow | undefined, action: "run" | "resume") {
@@ -315,10 +313,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       if (!envelope.ok) {
         throw new Error(envelope.error.message);
       }
-      return {
-        content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
-        details: envelope,
-      };
+      return jsonResult(envelope);
     },
   };
 }

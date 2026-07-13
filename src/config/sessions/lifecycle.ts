@@ -15,6 +15,54 @@ type SessionLifecycleEntry = Pick<
   "sessionId" | "sessionFile" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
 >;
 
+type SessionWorkStartEntry = Pick<SessionEntry, "archivedAt" | "sessionId">;
+
+type SessionWorkStartOptions = {
+  expectedSessionId?: string;
+};
+
+/** Stable Gateway error detail for stale session lifecycle requests. */
+export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
+export const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
+
+export class SessionWorkStartInvalidatedError extends Error {
+  readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionWorkStartInvalidatedError";
+  }
+}
+
+export function isSessionWorkStartInvalidatedError(
+  error: unknown,
+): error is SessionWorkStartInvalidatedError {
+  return (
+    error instanceof SessionWorkStartInvalidatedError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE)
+  );
+}
+
+/** Archived sessions are read-only until the lifecycle owner restores them. */
+export function resolveSessionWorkStartError(
+  sessionKey: string,
+  entry: SessionWorkStartEntry | null | undefined,
+  options?: SessionWorkStartOptions,
+): string | undefined {
+  if (options?.expectedSessionId && !entry) {
+    return `Session "${sessionKey}" was deleted while starting work. Retry.`;
+  }
+  if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
+    return `Session "${sessionKey}" changed while starting work. Retry.`;
+  }
+  return entry?.archivedAt === undefined
+    ? undefined
+    : `Session "${sessionKey}" is archived. Restore it before starting new work.`;
+}
+
 // Transcript headers are read lazily to recover startedAt without parsing full files.
 
 type TerminalMainSessionTranscriptRegistryParams = {

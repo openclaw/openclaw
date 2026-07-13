@@ -1,0 +1,494 @@
+import { randomUUID } from "node:crypto";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  type ErrorShape,
+  errorShape,
+} from "../../packages/gateway-protocol/src/index.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createInternalHookEvent,
+  hasInternalHookListeners,
+  triggerInternalHook,
+} from "../hooks/internal-hooks.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
+import {
+  isSessionWorkAdmissionActive,
+  runExclusiveSessionLifecycleMutation,
+} from "../sessions/session-lifecycle-admission.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
+import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { applySessionsPatchToStore } from "./sessions-patch.js";
+
+const loadSessionLifecycleRuntime = createLazyRuntimeModule(
+  () => import("./server-methods/sessions.runtime.js"),
+);
+
+type RequestedSessionAgentIdResolution =
+  | { ok: true; agentId?: string }
+  | { ok: false; error: ErrorShape };
+
+export function resolveRequestedSessionAgentId(
+  cfg: OpenClawConfig,
+  key: string,
+  explicitAgentId?: string,
+): RequestedSessionAgentIdResolution {
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+  const parsed = parseAgentSessionKey(key);
+  const requestedAgentId = normalizeOptionalString(explicitAgentId);
+  if (requestedAgentId) {
+    const agentId = normalizeAgentId(requestedAgentId);
+    if (!listAgentIds(cfg).includes(agentId)) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
+      };
+    }
+    if (parsed?.agentId && normalizeAgentId(parsed.agentId) !== agentId) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      };
+    }
+    if (canonicalKey !== "global") {
+      const keyAgentId = parsed?.agentId
+        ? normalizeAgentId(parsed.agentId)
+        : normalizeAgentId(resolveSessionStoreAgentId(cfg, canonicalKey));
+      if (keyAgentId !== agentId) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+        };
+      }
+    }
+    return { ok: true, agentId };
+  }
+  if (!parsed?.agentId) {
+    return { ok: true };
+  }
+  const inferredAgentId = normalizeAgentId(parsed.agentId);
+  if (canonicalKey === "global" && !listAgentIds(cfg).includes(inferredAgentId)) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${parsed.agentId}"`),
+    };
+  }
+  return {
+    ok: true,
+    agentId: canonicalKey === "global" ? inferredAgentId : undefined,
+  };
+}
+
+export function buildDashboardSessionKey(agentId: string): string {
+  return `agent:${agentId}:dashboard:${randomUUID()}`;
+}
+
+function inheritSessionRuntimeSelection(
+  parentEntry: SessionEntry | undefined,
+): Partial<SessionEntry> {
+  if (!parentEntry) {
+    return {};
+  }
+  return {
+    ...(parentEntry.providerOverride ? { providerOverride: parentEntry.providerOverride } : {}),
+    ...(parentEntry.modelOverride ? { modelOverride: parentEntry.modelOverride } : {}),
+    ...(parentEntry.modelOverrideSource
+      ? { modelOverrideSource: parentEntry.modelOverrideSource }
+      : {}),
+    ...(parentEntry.agentRuntimeOverride
+      ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
+      : {}),
+    ...(parentEntry.modelProvider ? { modelProvider: parentEntry.modelProvider } : {}),
+    ...(parentEntry.model ? { model: parentEntry.model } : {}),
+    ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
+    ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
+    ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
+    ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
+    ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
+    ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
+    ...(parentEntry.authProfileOverride
+      ? { authProfileOverride: parentEntry.authProfileOverride }
+      : {}),
+    ...(parentEntry.authProfileOverrideSource
+      ? { authProfileOverrideSource: parentEntry.authProfileOverrideSource }
+      : {}),
+  };
+}
+
+type CreatedGatewaySession = {
+  key: string;
+  agentId: string;
+  entry: SessionEntry;
+  storePath: string;
+};
+
+type CreateGatewaySessionResult =
+  | {
+      ok: true;
+      key: string;
+      agentId: string;
+      entry: SessionEntry;
+      resetExisting: boolean;
+    }
+  | { ok: false; error: ErrorShape };
+
+export async function createGatewaySession(params: {
+  cfg: OpenClawConfig;
+  key?: string;
+  agentId?: string;
+  label?: string;
+  model?: string;
+  parentSessionKey?: string;
+  emitCommandHooks?: boolean;
+  resetMainWhenUnspecified?: boolean;
+  commandSource: string;
+  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
+}): Promise<CreateGatewaySessionResult> {
+  const requestedKey = normalizeOptionalString(params.key);
+  const agentId = normalizeAgentId(
+    normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
+  );
+  if (requestedKey) {
+    const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
+    if (
+      requestedAgentId &&
+      requestedAgentId !== agentId &&
+      normalizeOptionalString(params.agentId)
+    ) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `sessions.create key agent (${requestedAgentId}) does not match agentId (${agentId})`,
+        ),
+      };
+    }
+  }
+  const loweredRequestedKey = normalizeOptionalLowercaseString(requestedKey);
+  const explicitTargetKey = requestedKey
+    ? loweredRequestedKey === "global" || loweredRequestedKey === "unknown"
+      ? loweredRequestedKey
+      : toAgentStoreSessionKey({
+          agentId,
+          requestKey: requestedKey,
+          mainKey: params.cfg.session?.mainKey,
+        })
+    : undefined;
+
+  const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
+  let canonicalParentSessionKey: string | undefined;
+  let parentSessionEntry: SessionEntry | undefined;
+  let parentSelectedAgentId: string | undefined;
+  if (parentSessionKey) {
+    const parentCanonicalKey = resolveSessionStoreKey({
+      cfg: params.cfg,
+      sessionKey: parentSessionKey,
+    });
+    if (parentCanonicalKey === "global") {
+      const parentRequestedAgent = resolveRequestedSessionAgentId(
+        params.cfg,
+        parentSessionKey,
+        params.agentId,
+      );
+      if (!parentRequestedAgent.ok) {
+        return parentRequestedAgent;
+      }
+      parentSelectedAgentId = parentRequestedAgent.agentId;
+    }
+    const parent = loadSessionEntry(
+      parentSessionKey,
+      parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
+    );
+    if (!parent.entry?.sessionId) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unknown parent session: ${parentSessionKey}`,
+        ),
+      };
+    }
+    canonicalParentSessionKey = parent.canonicalKey;
+    parentSessionEntry = parent.entry;
+  }
+  if (
+    canonicalParentSessionKey &&
+    explicitTargetKey &&
+    resolveGatewaySessionStoreTarget({ cfg: params.cfg, key: explicitTargetKey, agentId })
+      .canonicalKey === canonicalParentSessionKey
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "sessions.create key must differ from parentSessionKey",
+      ),
+    };
+  }
+
+  if (
+    canonicalParentSessionKey &&
+    params.emitCommandHooks === true &&
+    !requestedKey &&
+    params.resetMainWhenUnspecified === true &&
+    params.cfg.session?.dmScope === "main"
+  ) {
+    const parentAgentId = normalizeAgentId(
+      parentSelectedAgentId ??
+        resolveAgentIdFromSessionKey(canonicalParentSessionKey) ??
+        resolveDefaultAgentId(params.cfg),
+    );
+    const parentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: parentAgentId });
+    if (canonicalParentSessionKey === parentMainKey) {
+      const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
+      const resetResult = await performGatewaySessionReset({
+        key: canonicalParentSessionKey,
+        ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
+          ? { agentId: parentSelectedAgentId }
+          : {}),
+        reason: "new",
+        commandSource: params.commandSource,
+      });
+      if (!resetResult.ok) {
+        return resetResult;
+      }
+      return {
+        ok: true,
+        key: resetResult.key,
+        agentId: resetResult.agentId,
+        entry: resetResult.entry,
+        resetExisting: true,
+      };
+    }
+  }
+
+  let createdContext: CreatedGatewaySession | undefined;
+  const createChildSession = async (): Promise<CreateGatewaySessionResult> => {
+    let currentParentSessionEntry = parentSessionEntry;
+    if (canonicalParentSessionKey && params.emitCommandHooks === true) {
+      const currentParent = loadSessionEntry(
+        canonicalParentSessionKey,
+        parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
+      );
+      const currentParentEntry = currentParent.entry;
+      if (
+        !currentParentEntry?.sessionId ||
+        currentParentEntry.sessionId !== parentSessionEntry?.sessionId
+      ) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Parent session ${parentSessionKey} changed before /new; retry.`,
+          ),
+        };
+      }
+      currentParentSessionEntry = currentParentEntry;
+      const parentTarget = resolveGatewaySessionStoreTarget({
+        cfg: params.cfg,
+        key: canonicalParentSessionKey,
+        ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
+          ? { agentId: parentSelectedAgentId }
+          : {}),
+      });
+      const parentHasActiveWork =
+        isEmbeddedAgentRunActive(currentParentEntry.sessionId) ||
+        isSessionWorkAdmissionActive(parentTarget.storePath, [
+          canonicalParentSessionKey,
+          currentParentEntry.sessionId,
+        ]);
+      if (parentHasActiveWork) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Parent session ${parentSessionKey} is still active; try again in a moment.`,
+          ),
+        };
+      }
+    }
+
+    if (canonicalParentSessionKey && params.emitCommandHooks === true) {
+      const parentEntry = currentParentSessionEntry;
+      const parentAgentId = normalizeAgentId(
+        parentSelectedAgentId ??
+          resolveAgentIdFromSessionKey(canonicalParentSessionKey) ??
+          resolveDefaultAgentId(params.cfg),
+      );
+      const workspaceDir = resolveAgentWorkspaceDir(params.cfg, parentAgentId);
+      if (hasInternalHookListeners("command", "new")) {
+        await triggerInternalHook(
+          createInternalHookEvent("command", "new", canonicalParentSessionKey, {
+            sessionEntry: parentEntry,
+            previousSessionEntry: parentEntry,
+            commandSource: params.commandSource,
+            cfg: params.cfg,
+            workspaceDir,
+          }),
+        );
+      }
+      const parentTarget = resolveGatewaySessionStoreTarget({
+        cfg: params.cfg,
+        key: canonicalParentSessionKey,
+        ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
+          ? { agentId: parentSelectedAgentId }
+          : {}),
+      });
+      const { emitGatewayBeforeResetPluginHook } = await loadSessionLifecycleRuntime();
+      await emitGatewayBeforeResetPluginHook({
+        cfg: params.cfg,
+        key: canonicalParentSessionKey,
+        target: parentTarget,
+        storePath: parentTarget.storePath,
+        entry: parentEntry,
+        reason: "new",
+      });
+    }
+
+    const key = explicitTargetKey ?? buildDashboardSessionKey(agentId);
+    const target = resolveGatewaySessionStoreTarget({ cfg: params.cfg, key, agentId });
+    const created = await createSessionEntryWithTranscript<ErrorShape>(
+      {
+        agentId: target.agentId,
+        sessionKey: target.canonicalKey,
+        storePath: target.storePath,
+      },
+      async ({ sessionEntries }) => {
+        const patched = await applySessionsPatchToStore({
+          cfg: params.cfg,
+          store: sessionEntries,
+          storeKey: target.canonicalKey,
+          agentId: target.agentId,
+          patch: {
+            key: target.canonicalKey,
+            label: normalizeOptionalString(params.label),
+            model: normalizeOptionalString(params.model),
+          },
+          loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+        });
+        if (!patched.ok || !canonicalParentSessionKey) {
+          return patched;
+        }
+        const inheritedSelection = normalizeOptionalString(params.model)
+          ? {}
+          : inheritSessionRuntimeSelection(currentParentSessionEntry);
+        return {
+          ...patched,
+          entry: {
+            ...patched.entry,
+            ...inheritedSelection,
+            parentSessionKey: canonicalParentSessionKey,
+          },
+        };
+      },
+    );
+    if (!created.ok) {
+      return {
+        ok: false,
+        error:
+          created.phase === "transcript"
+            ? errorShape(
+                ErrorCodes.UNAVAILABLE,
+                `failed to create session transcript: ${created.error}`,
+              )
+            : created.error,
+      };
+    }
+
+    createdContext = {
+      key: target.canonicalKey,
+      agentId: target.agentId,
+      entry: created.entry,
+      storePath: target.storePath,
+    };
+
+    if (canonicalParentSessionKey && params.emitCommandHooks === true) {
+      const parentEntry = currentParentSessionEntry;
+      const parentTarget = resolveGatewaySessionStoreTarget({
+        cfg: params.cfg,
+        key: canonicalParentSessionKey,
+        ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
+          ? { agentId: parentSelectedAgentId }
+          : {}),
+      });
+      const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
+        await loadSessionLifecycleRuntime();
+      emitGatewaySessionEndPluginHook({
+        cfg: params.cfg,
+        sessionKey: canonicalParentSessionKey,
+        sessionId: parentEntry?.sessionId,
+        storePath: parentTarget.storePath,
+        sessionFile: parentEntry?.sessionFile,
+        agentId: parentTarget.agentId,
+        reason: "new",
+        nextSessionId: created.entry.sessionId,
+        nextSessionKey: target.canonicalKey,
+      });
+      emitGatewaySessionStartPluginHook({
+        cfg: params.cfg,
+        sessionKey: target.canonicalKey,
+        sessionId: created.entry.sessionId,
+        resumedFrom: parentEntry?.sessionId,
+        storePath: target.storePath,
+        sessionFile: created.entry.sessionFile,
+        agentId: target.agentId,
+      });
+    }
+
+    return {
+      ok: true,
+      key: target.canonicalKey,
+      agentId: target.agentId,
+      entry: created.entry,
+      resetExisting: false,
+    };
+  };
+
+  if (
+    canonicalParentSessionKey &&
+    parentSessionEntry?.sessionId &&
+    params.emitCommandHooks === true
+  ) {
+    const parentTarget = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: canonicalParentSessionKey,
+      ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
+        ? { agentId: parentSelectedAgentId }
+        : {}),
+    });
+    const result = await runExclusiveSessionLifecycleMutation({
+      scope: parentTarget.storePath,
+      identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
+      run: createChildSession,
+    });
+    if (result.ok && !result.resetExisting && createdContext) {
+      await params.afterCreate?.(createdContext);
+    }
+    return result;
+  }
+  const result = await createChildSession();
+  if (result.ok && !result.resetExisting && createdContext) {
+    await params.afterCreate?.(createdContext);
+  }
+  return result;
+}

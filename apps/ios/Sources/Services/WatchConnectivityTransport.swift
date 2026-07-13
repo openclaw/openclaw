@@ -32,6 +32,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
 
     private let session: WCSession?
     private let callbacksLock = NSLock()
+    private let snapshotContextLock = NSLock()
     private var callbacks = WatchConnectivityTransportCallbacks()
 
     override init() {
@@ -145,7 +146,12 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         }
 
         do {
-            try session.updateApplicationContext(payload)
+            try self.snapshotContextLock.withLock {
+                let context = WatchMessagingPayloadCodec.encodeSnapshotApplicationContext(
+                    payload,
+                    merging: session.applicationContext)
+                try session.updateApplicationContext(context)
+            }
             return WatchNotificationSendResult(
                 deliveredImmediately: false,
                 queuedForDelivery: true,

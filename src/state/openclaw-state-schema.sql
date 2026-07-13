@@ -470,6 +470,20 @@ CREATE TABLE IF NOT EXISTS installed_plugin_index (
 CREATE INDEX IF NOT EXISTS idx_installed_plugin_index_generated
   ON installed_plugin_index(generated_at_ms DESC, index_key);
 
+CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
+  feed_url TEXT NOT NULL PRIMARY KEY,
+  body TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  checksum TEXT NOT NULL,
+  saved_at TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_official_external_plugin_catalog_snapshots_updated
+  ON official_external_plugin_catalog_snapshots(updated_at_ms DESC, feed_url);
+
 CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
   sentinel_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,
@@ -853,6 +867,10 @@ CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
+  declaration_key TEXT,
+  display_name TEXT,
+  owner_agent_id TEXT,
+  owner_session_key TEXT,
   name TEXT NOT NULL,
   description TEXT,
   enabled INTEGER NOT NULL,
@@ -884,6 +902,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   delivery_channel TEXT,
   delivery_to TEXT,
   delivery_thread_id TEXT,
+  delivery_thread_id_type TEXT,
   delivery_account_id TEXT,
   delivery_best_effort INTEGER,
   delivery_completion_mode TEXT,

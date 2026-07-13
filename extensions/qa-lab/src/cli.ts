@@ -1,5 +1,6 @@
 // Qa Lab plugin module implements cli behavior.
 import type { Command } from "commander";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { collectString } from "./cli-options.js";
 import type {
@@ -20,8 +21,6 @@ import {
 } from "./providers/live-frontier/parity.js";
 import type { QaProviderMode, QaProviderModeInput } from "./run-config.js";
 import { hasQaScenarioPack } from "./scenario-catalog.js";
-
-type QaLabCliRuntime = typeof import("./cli.runtime.js");
 
 type QaScenarioRunCliOptions = {
   repoRoot?: QaSuiteCommandOptions["repoRoot"];
@@ -83,12 +82,7 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
   runtimeParityTier?: QaSuiteCommandOptions["runtimeParityTier"];
 };
 
-let qaLabCliRuntimePromise: Promise<QaLabCliRuntime> | null = null;
-
-async function loadQaLabCliRuntime(): Promise<QaLabCliRuntime> {
-  qaLabCliRuntimePromise ??= import("./cli.runtime.js");
-  return await qaLabCliRuntimePromise;
-}
+const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
 function invalidQaCliArgument(message: string): Error & { code: string; exitCode: number } {
   const error = new Error(message) as Error & { code: string; exitCode: number };

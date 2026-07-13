@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { resolveChannelDmAllowFrom, resolveChannelDmPolicy } from "./dm-access.js";
 import {
@@ -28,14 +29,9 @@ import type {
   PromptAccountIdParams,
 } from "./setup-wizard-types.js";
 
-let providerAuthInputPromise:
-  | Promise<Pick<typeof import("../../plugins/provider-auth-ref.js"), "promptSecretRefForSetup">>
-  | undefined;
-
-function loadProviderAuthInput() {
-  providerAuthInputPromise ??= import("../../plugins/provider-auth-ref.js");
-  return providerAuthInputPromise;
-}
+const loadProviderAuthInput = createLazyRuntimeModule(
+  () => import("../../plugins/provider-auth-ref.js"),
+);
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value != null && typeof value === "object" && !Array.isArray(value)

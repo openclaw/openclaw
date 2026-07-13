@@ -339,6 +339,27 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
+  it("skips requester steps when ping-pong is disabled but still announces from the target", async () => {
+    const targetSessionKey = "agent:other:discord:group:ops";
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey,
+      displayKey: targetSessionKey,
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      requesterSessionKey: "agent:main:cron:job:run:abc",
+      requesterChannel: "telegram",
+      roundOneReply: "Worker completed successfully",
+    });
+
+    expect(runAgentStep).toHaveBeenCalledOnce();
+    expect(firstMockArg(vi.mocked(runAgentStep), "agent step")).toMatchObject({
+      sessionKey: targetSessionKey,
+      message: "Agent-to-agent announce step.",
+    });
+  });
+
   it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP"])(
     "suppresses exact announce control reply %s before channel delivery",
     async (announceReply) => {

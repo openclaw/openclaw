@@ -56,8 +56,31 @@ type MemoryTranscriptUpdateSubscriber = (
 const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
   "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
 );
+const originalStartupStateDir = process.env.OPENCLAW_STATE_DIR;
+const originalStartupConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 
 type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
+
+function setStartupStateDir(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function setStartupConfigPath(configPath: string): void {
+  Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
+}
+
+function restoreStartupEnv(): void {
+  if (originalStartupStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalStartupStateDir);
+  }
+  if (originalStartupConfigPath === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", originalStartupConfigPath);
+  }
+}
 
 class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected readonly cfg = {} as OpenClawConfig;
@@ -230,13 +253,13 @@ describe("session startup catch-up", () => {
 
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-startup-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    setStartupStateDir(stateDir);
   });
 
   afterEach(async () => {
     vi.clearAllTimers();
     vi.useRealTimers();
-    vi.unstubAllEnvs();
+    restoreStartupEnv();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -458,7 +481,7 @@ describe("session startup catch-up", () => {
       "utf-8",
     );
     await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    setStartupConfigPath(configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     const harness = new SessionStartupCatchupHarness([]);
@@ -505,7 +528,7 @@ describe("session startup catch-up", () => {
       "utf-8",
     );
     await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    setStartupConfigPath(configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     const harness = new SessionStartupCatchupHarness([]);
@@ -553,7 +576,7 @@ describe("session startup catch-up", () => {
       "utf-8",
     );
     await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    setStartupConfigPath(configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     const harness = new SessionStartupCatchupHarness([]);
@@ -660,7 +683,7 @@ describe("session startup catch-up", () => {
       "utf-8",
     );
     await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    setStartupConfigPath(configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     const harness = new SessionStartupCatchupHarness([]);

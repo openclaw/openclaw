@@ -29,4 +29,8 @@ export type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-registry.js";
+export {
+  archiveLegacyStateSource,
+  legacyStateFileExists,
+} from "../plugins/doctor-state-migration-fs.js";
 export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";

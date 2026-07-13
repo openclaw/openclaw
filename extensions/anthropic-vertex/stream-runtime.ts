@@ -135,8 +135,11 @@ export function createAnthropicVertexStreamFn(
   });
 
   return (model, context, options) => {
-    const transportModel = model as Model<"anthropic-messages"> & {
-      api: string;
+    // Simple completions use a synthetic registry API to select this plugin.
+    // The shared Anthropic transport must receive its canonical API or it recurses.
+    const transportModel = (
+      model.api === "anthropic-messages" ? model : { ...model, api: "anthropic-messages" as const }
+    ) as Model<"anthropic-messages"> & {
       baseUrl?: string;
       provider: string;
     };

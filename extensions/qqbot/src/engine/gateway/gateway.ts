@@ -260,6 +260,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     onReady: ctx.onReady,
     onResumed: ctx.onResumed,
     onError: ctx.onError,
+    onDisconnected: ctx.onDisconnected,
     onInteraction: handleInteraction,
     handleMessage,
   });

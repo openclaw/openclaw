@@ -1201,7 +1201,6 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.write",
       ]);
       expect(operatorHandoff?.scopes).not.toContain("operator.admin");
-      expect(operatorHandoff?.scopes).not.toContain("operator.pairing");
 
       const pendingAfterInitial = await listDevicePairing();
       const pendingForDevice = pendingAfterInitial.pending.filter(
@@ -1370,7 +1369,6 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.write",
       ]);
       expect(operatorHandoff?.scopes).not.toContain("operator.admin");
-      expect(operatorHandoff?.scopes).not.toContain("operator.pairing");
 
       const pendingAfterInitial = await listDevicePairing();
       expect(
@@ -1510,7 +1508,6 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.write",
       ]);
       expect(operatorHandoff?.scopes).not.toContain("operator.admin");
-      expect(operatorHandoff?.scopes).not.toContain("operator.pairing");
       wsRetry.close();
 
       await expect(

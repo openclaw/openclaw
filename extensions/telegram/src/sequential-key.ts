@@ -25,6 +25,8 @@ const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
   "whoami",
 ]);
 
+const TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set(["queue", "steer"]);
+
 type TelegramSequentialKeyContext = {
   chat?: { id?: number };
   me?: UserFromGetMe;
@@ -80,6 +82,50 @@ function isTelegramTargetedStopCommand(rawText?: string, botUsername?: string): 
   return match[1]?.toLowerCase() === normalizedBotUsername;
 }
 
+function resolveTelegramCommandAliasForControlLane(
+  rawText?: string,
+  botUsername?: string,
+): string | undefined {
+  const trimmed = rawText?.trim();
+  if (!trimmed?.startsWith("/")) {
+    return undefined;
+  }
+
+  const targetedMatch = trimmed.match(
+    /^\/([A-Za-z0-9_-]+)(?:@([A-Za-z0-9_]+))?(?:$|\s|[.!?…,，。;；:：'"’”)\]}])/iu,
+  );
+  const targetBotUsername = targetedMatch?.[2]?.trim().toLowerCase();
+  const normalizedBotUsername = botUsername?.trim().toLowerCase();
+  if (targetBotUsername && normalizedBotUsername && targetBotUsername !== normalizedBotUsername) {
+    return undefined;
+  }
+
+  if (targetBotUsername && !normalizedBotUsername) {
+    const commandAlias = `/${targetedMatch?.[1]?.toLowerCase() ?? ""}`;
+    return commandAlias === "/" ? undefined : commandAlias;
+  }
+
+  return (
+    maybeResolveTextAlias(
+      normalizeCommandBody(trimmed, botUsername ? { botUsername } : undefined),
+    ) ?? undefined
+  );
+}
+
+function isTelegramActiveRunControlLaneText(params: {
+  rawText?: string;
+  botUsername?: string;
+}): boolean {
+  const alias = resolveTelegramCommandAliasForControlLane(params.rawText, params.botUsername);
+  if (!alias) {
+    return false;
+  }
+  const command = listChatCommands().find((entry) =>
+    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
+  );
+  return command ? TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(command.key) : false;
+}
+
 export function isTelegramControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
@@ -93,6 +139,9 @@ export function isTelegramControlLaneText(params: {
     return true;
   }
   if (isTelegramTargetedStopCommand(params.rawText, params.botUsername)) {
+    return true;
+  }
+  if (isTelegramActiveRunControlLaneText(params)) {
     return true;
   }
   return isTelegramReadOnlyControlLaneText(params);

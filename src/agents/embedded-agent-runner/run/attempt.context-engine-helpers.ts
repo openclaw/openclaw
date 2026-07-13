@@ -3,7 +3,11 @@
  */
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import type { BootstrapMode } from "../../bootstrap-mode.js";
+import {
+  isHeartbeatLifecycleRunKind,
+  type BootstrapContextRunKind,
+  type BootstrapMode,
+} from "../../bootstrap-mode.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
@@ -30,7 +34,7 @@ type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> =
 export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
   contextInjectionMode: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
-  bootstrapContextRunKind?: string;
+  bootstrapContextRunKind?: BootstrapContextRunKind;
   bootstrapMode?: BootstrapMode;
   sessionFile: string;
   hasCompletedBootstrapTurn: (sessionFile: string) => Promise<boolean>;
@@ -43,10 +47,11 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     shouldRecordCompletedBootstrapTurn: boolean;
   }
 > {
+  const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind);
   const isContinuationTurn =
     params.bootstrapMode !== "full" &&
     params.contextInjectionMode === "continuation-skip" &&
-    params.bootstrapContextRunKind !== "heartbeat" &&
+    !isHeartbeatLifecycleRun &&
     (await params.hasCompletedBootstrapTurn(params.sessionFile));
   // Continuation-skip and explicit never both produce an empty injection set,
   // but only a clean full bootstrap later records a durable completion marker.
@@ -55,7 +60,7 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   const shouldRecordCompletedBootstrapTurn =
     !shouldSkipBootstrapInjection &&
     params.bootstrapContextMode !== "lightweight" &&
-    params.bootstrapContextRunKind !== "heartbeat" &&
+    !isHeartbeatLifecycleRun &&
     params.bootstrapMode === "full";
 
   const context = shouldSkipBootstrapInjection

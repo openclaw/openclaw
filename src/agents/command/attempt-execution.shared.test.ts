@@ -1,9 +1,14 @@
 // Covers shared attempt-execution helpers for prompt materialization and
 // guarded session-store persistence.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  saveSessionStore,
+} from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -14,6 +19,8 @@ import {
   resolveInternalEventTranscriptBody,
 } from "./attempt-execution.shared.js";
 import type { AgentCommandOpts } from "./types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeTaskCompletionEvents(): NonNullable<AgentCommandOpts["internalEvents"]> {
   // The result deliberately contains internal markers to prove child output
@@ -88,7 +95,7 @@ describe("attempt execution prompt materialization", () => {
 
 describe("persistSessionEntry", () => {
   it("clears stale local entries when guarded persistence sees no persisted entry", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const dir = tempDirs.make("openclaw-session-store-");
     try {
       const storePath = path.join(dir, "sessions.json");
       const sessionStore = {
@@ -104,6 +111,7 @@ describe("persistSessionEntry", () => {
         sessionStore,
         sessionKey: "main",
         storePath,
+        initialEntry: sessionStore.main,
         entry: {
           sessionId: "stale",
           updatedAt: 2,
@@ -114,7 +122,112 @@ describe("persistSessionEntry", () => {
       expect(persisted).toBeUndefined();
       expect(sessionStore.main).toBeUndefined();
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      clearSessionStoreCacheForTest();
+    }
+  });
+
+  it.each([
+    {
+      name: "rename and unpin",
+      current: { label: "Renamed", pinnedAt: undefined },
+      expected: { label: "Renamed", pinnedAt: undefined },
+    },
+    {
+      name: "label clear and pin",
+      current: { label: undefined, pinnedAt: 300 },
+      expected: { label: undefined, pinnedAt: 300 },
+    },
+  ])("preserves a concurrent $name", async ({ current, expected }) => {
+    const dir = tempDirs.make("openclaw-session-store-");
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const staleEntry: SessionEntry = {
+        sessionId: "session-1",
+        updatedAt: 100,
+        label: "Old label",
+        pinnedAt: 200,
+      };
+      const currentEntry: SessionEntry = {
+        ...staleEntry,
+        ...current,
+        updatedAt: 400,
+      };
+      if (current.label === undefined) {
+        delete currentEntry.label;
+      }
+      if (current.pinnedAt === undefined) {
+        delete currentEntry.pinnedAt;
+      }
+      await saveSessionStore(storePath, { main: currentEntry }, { skipMaintenance: true });
+      const sessionStore = { main: staleEntry };
+
+      const persisted = await persistSessionEntry({
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        initialEntry: staleEntry,
+        entry: {
+          ...staleEntry,
+          model: "gpt-5.5",
+          updatedAt: 250,
+        },
+      });
+
+      expect(persisted).toMatchObject({ sessionId: "session-1", model: "gpt-5.5" });
+      expect(persisted?.label).toBe(expected.label);
+      expect(persisted?.pinnedAt).toBe(expected.pinnedAt);
+      expect(persisted?.updatedAt).toBeGreaterThanOrEqual(currentEntry.updatedAt);
+      expect(sessionStore.main).toEqual(persisted);
+      expect(loadSessionStore(storePath, { skipCache: true }).main).toEqual(persisted);
+    } finally {
+      clearSessionStoreCacheForTest();
+    }
+  });
+
+  it("does not restore policy fields revoked during an active turn", async () => {
+    const dir = tempDirs.make("openclaw-session-store-");
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const initialEntry: SessionEntry = {
+        sessionId: "session-1",
+        updatedAt: 100,
+        model: "gpt-5.4",
+        elevatedLevel: "full",
+        inheritedToolAllow: ["exec"],
+        sendPolicy: "allow",
+      };
+      const currentEntry: SessionEntry = {
+        sessionId: "session-1",
+        updatedAt: 400,
+        model: "gpt-5.4",
+        sendPolicy: "deny",
+      };
+      await saveSessionStore(storePath, { main: currentEntry }, { skipMaintenance: true });
+      const sessionStore = { main: initialEntry };
+
+      const persisted = await persistSessionEntry({
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        initialEntry,
+        entry: {
+          ...initialEntry,
+          model: "gpt-5.5",
+          updatedAt: 250,
+        },
+      });
+
+      expect(persisted).toMatchObject({
+        sessionId: "session-1",
+        model: "gpt-5.5",
+        sendPolicy: "deny",
+        updatedAt: 400,
+      });
+      expect(persisted?.elevatedLevel).toBeUndefined();
+      expect(persisted?.inheritedToolAllow).toBeUndefined();
+      expect(loadSessionStore(storePath, { skipCache: true }).main).toEqual(persisted);
+    } finally {
+      clearSessionStoreCacheForTest();
     }
   });
 });

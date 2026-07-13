@@ -150,6 +150,9 @@ describe("resolveParentForkTokenCountRuntime", () => {
           },
         }),
         JSON.stringify({
+          type: "message",
+          id: "active-usage",
+          parentId: null,
           message: {
             role: "assistant",
             content: "latest",
@@ -175,7 +178,140 @@ describe("resolveParentForkTokenCountRuntime", () => {
     expect(tokens).toBe(78_000);
   });
 
-  it("keeps parent fork checks conservative for content appended after latest usage", async () => {
+  it("does not reconstruct parent context from billing buckets when context is unavailable", async () => {
+    const root = await makeRoot("openclaw-parent-fork-unavailable-context-");
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir);
+
+    const sessionId = "parent-unavailable-context";
+    const sessionFile = path.join(sessionsDir, "parent.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: sessionId,
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "latest",
+            usage: {
+              input: 12,
+              output: 15_104,
+              cacheRead: 819_661,
+              cacheWrite: 93_130,
+              contextUsage: { state: "unavailable" },
+              total: 927_907,
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const entry: SessionEntry = {
+      sessionId,
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 4_567,
+      totalTokensFresh: false,
+    };
+
+    const tokens = await resolveParentForkTokenCountRuntime({
+      parentEntry: entry,
+      storePath: path.join(root, "sessions.json"),
+    });
+
+    expect(tokens).toBe(4_567);
+  });
+
+  it("uses the exact final-iteration total when context usage is available", async () => {
+    const root = await makeRoot("openclaw-parent-fork-exact-context-");
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir);
+
+    const sessionId = "parent-exact-context";
+    const sessionFile = path.join(sessionsDir, "parent.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: sessionId,
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "active-usage",
+          parentId: null,
+          message: {
+            role: "assistant",
+            content: "latest",
+            usage: {
+              input: 12,
+              output: 15_104,
+              cacheRead: 819_661,
+              cacheWrite: 93_130,
+              contextUsage: {
+                state: "available",
+                promptTokens: 148_874,
+                totalTokens: 163_978,
+              },
+              total: 927_907,
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "inactive-side-usage",
+          parentId: "active-usage",
+          message: {
+            role: "assistant",
+            content: `side branch ${"x".repeat(1_100_000)}`,
+            usage: {
+              input: 9_000,
+              output: 1_000,
+              contextUsage: {
+                state: "available",
+                promptTokens: 9_000,
+                totalTokens: 10_000,
+              },
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "inactive-side-usage",
+          targetId: "active-usage",
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const entry: SessionEntry = {
+      sessionId,
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 900_000,
+      totalTokensFresh: false,
+    };
+
+    const tokens = await resolveParentForkTokenCountRuntime({
+      parentEntry: entry,
+      storePath: path.join(root, "sessions.json"),
+    });
+
+    expect(tokens).toBe(163_978);
+  });
+
+  it("adds only post-usage transcript pressure to an exact context snapshot", async () => {
     const root = await makeRoot("openclaw-parent-fork-post-usage-tail-");
     const sessionsDir = path.join(root, "sessions");
     await fs.mkdir(sessionsDir);
@@ -196,13 +332,21 @@ describe("resolveParentForkTokenCountRuntime", () => {
           message: {
             role: "assistant",
             content: "latest model call",
-            usage: { input: 40_000, output: 2_000 },
+            usage: {
+              input: 12,
+              output: 10_000,
+              contextUsage: {
+                state: "available",
+                promptTokens: 70_000,
+                totalTokens: 80_000,
+              },
+            },
           },
         }),
         JSON.stringify({
           message: {
             role: "tool",
-            content: `large appended tool result ${"x".repeat(450_000)}`,
+            content: `large appended tool result ${"x".repeat(100_000)}`,
           },
         }),
       ].join("\n"),
@@ -222,6 +366,7 @@ describe("resolveParentForkTokenCountRuntime", () => {
     });
 
     expect(tokens).toBeGreaterThan(100_000);
+    expect(tokens).toBeLessThan(110_000);
   });
 });
 
@@ -439,7 +584,7 @@ describe("forkSessionFromParentRuntime", () => {
     expect(records.at(-1)).toMatchObject({ type: "message", parentId: "plugin-metadata" });
     expect(records.at(-1)).not.toHaveProperty("appendMode");
     expect(reopened.buildSessionContext().messages).toMatchObject([
-      { role: "assistant", content: "active root" },
+      { role: "assistant", content: [{ type: "text", text: "active root" }] },
       { role: "user", content: "continued" },
     ]);
   });

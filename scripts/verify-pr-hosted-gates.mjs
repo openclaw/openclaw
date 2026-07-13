@@ -17,6 +17,8 @@ const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
   "Blacksmith ARM Testbox",
   "Workflow Sanity",
 ];
+const WORKFLOW_RUNS_PAGE_SIZE = 100;
+const MAX_WORKFLOW_RUN_SEARCH_RESULTS = 1_000;
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
@@ -168,8 +170,19 @@ function stripAnsi(raw) {
   return raw.replace(new RegExp(`${escape}\\[[0-?]*[ -/]*[@-~]`, "gu"), "");
 }
 
-export function parseWorkflowRunPages(raw) {
-  return JSON.parse(stripAnsi(raw)).flatMap((page) => page.workflow_runs ?? []);
+export function parseWorkflowRunPage(raw) {
+  const page = JSON.parse(stripAnsi(raw));
+  return {
+    totalCount: page.total_count ?? 0,
+    workflowRuns: page.workflow_runs ?? [],
+  };
+}
+
+export function workflowRunPageCount(totalCount) {
+  return Math.min(
+    Math.ceil(totalCount / WORKFLOW_RUNS_PAGE_SIZE),
+    MAX_WORKFLOW_RUN_SEARCH_RESULTS / WORKFLOW_RUNS_PAGE_SIZE,
+  );
 }
 
 export function collectHostedGateEvidence({ sha, workflowRuns, changelogOnly = false }) {
@@ -220,11 +233,24 @@ export function collectHostedGateEvidence({ sha, workflowRuns, changelogOnly = f
 }
 
 function loadWorkflowRuns(repo, sha) {
-  const raw = execPlainGh(
-    ["api", `repos/${repo}/actions/runs?head_sha=${sha}&per_page=100`, "--paginate", "--slurp"],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  return parseWorkflowRunPages(raw);
+  const loadPage = (page) =>
+    parseWorkflowRunPage(
+      execPlainGh(
+        [
+          "api",
+          `repos/${repo}/actions/runs?head_sha=${sha}&per_page=${WORKFLOW_RUNS_PAGE_SIZE}&page=${page}`,
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    );
+
+  // Keep every request pinned to the head SHA and bound it to GitHub's documented search window.
+  const firstPage = loadPage(1);
+  const workflowRuns = [...firstPage.workflowRuns];
+  for (let page = 2; page <= workflowRunPageCount(firstPage.totalCount); page += 1) {
+    workflowRuns.push(...loadPage(page).workflowRuns);
+  }
+  return workflowRuns;
 }
 
 export function main(argv = process.argv.slice(2)) {

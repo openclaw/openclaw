@@ -62,6 +62,9 @@ Archive locally without upload:
 pnpm android:release:archive
 ```
 
+This command is for local archive validation only. It is not a fallback upload
+path after `pnpm android:release:upload` fails.
+
 Generate deterministic Google Play screenshots:
 
 ```bash
@@ -73,7 +76,7 @@ uses it. With `ANDROID_SCREENSHOT_AVD` or `--avd <name>`, the script can boot a
 headless emulator, wait for boot completion, stabilize animation settings,
 capture screenshots, and shut down only the emulator it started.
 
-Upload metadata, release notes, and the Play AAB to the internal testing track:
+Upload metadata, release notes, and the Play AAB to the configured Google Play track:
 
 ```bash
 pnpm android:release:upload
@@ -85,6 +88,10 @@ Direct Fastlane entry point:
 cd apps/android
 fastlane android release_upload
 ```
+
+Use the direct Fastlane entry point only for maintainer debugging when explicitly
+requested. Agent-driven releases must use `pnpm android:release:upload` and stop
+if it fails.
 
 Release rules:
 
@@ -107,6 +114,7 @@ Release rules:
 - `pnpm android:release:archive` builds the signed Play AAB and third-party APK into `apps/android/build/release-artifacts/`.
 - `pnpm android:release:upload` uploads the Play AAB to the configured Google Play track. The default track is `internal`.
 - Production promotion remains manual in Google Play Console.
+- If `pnpm android:release:upload` fails, agent-driven releases must stop and report the failing step. Do not fall back to `pnpm android:release:archive`, `pnpm android:release:metadata`, direct Fastlane lanes, Gradle release artifacts plus Google Play upload commands, or mobile release ref recording.
 
 Screenshots:
 

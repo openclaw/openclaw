@@ -2,7 +2,10 @@ import type { Dirent } from "node:fs";
 // Matrix API module exposes the plugin public contract.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  legacyStateFileExists,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import {
   hasMatrixSyncCacheStateInStore,
   openMatrixSyncCacheStoreOptions,
@@ -42,15 +45,6 @@ export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-co
 
 const MATRIX_SYNC_CACHE_FILENAME = "bot-storage.json";
 const MATRIX_STORAGE_META_FILENAME = "storage-meta.json";
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
 
 async function collectLegacyMatrixStateRoots(
   stateDir: string,
@@ -105,7 +99,7 @@ async function archiveLegacySyncCache(params: {
 }): Promise<void> {
   const sourcePath = path.join(params.storageRootDir, MATRIX_SYNC_CACHE_FILENAME);
   const archivedPath = `${sourcePath}.migrated`;
-  if (await fileExists(archivedPath)) {
+  if (await legacyStateFileExists(archivedPath)) {
     params.warnings.push(
       `Left migrated Matrix sync cache in place because ${archivedPath} already exists`,
     );
@@ -128,7 +122,7 @@ async function archiveLegacyMatrixStateFile(params: {
 }): Promise<void> {
   const sourcePath = path.join(params.storageRootDir, params.filename);
   const archivedPath = `${sourcePath}.migrated`;
-  if (await fileExists(archivedPath)) {
+  if (await legacyStateFileExists(archivedPath)) {
     params.warnings.push(
       `Left migrated ${params.label} in place because ${archivedPath} already exists`,
     );

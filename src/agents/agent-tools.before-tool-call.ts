@@ -8,6 +8,7 @@ import path from "node:path";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   diagnosticErrorCategory,
   diagnosticHttpStatusCode,
@@ -30,6 +31,13 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { isEmbeddedMode } from "../infra/embedded-mode.js";
+import { getEmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  describeNativePluginApprovalClientSetup,
+  resolveApprovalInitiatingSurfaceState,
+} from "../infra/exec-approval-surface.js";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -73,6 +81,18 @@ export {
   consumePreExecutionBlockedToolCall,
   peekAdjustedParamsForToolCall,
 } from "./agent-tools.before-tool-call.state.js";
+import {
+  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
+  BEFORE_TOOL_CALL_HOOK_CONTEXT,
+  BEFORE_TOOL_CALL_SOURCE_TOOL,
+  BEFORE_TOOL_CALL_WRAPPED,
+  type BeforeToolCallDiagnosticOptions,
+} from "./before-tool-call-metadata.js";
+export {
+  copyBeforeToolCallHookMarker,
+  isToolWrappedWithBeforeToolCallHook,
+  setBeforeToolCallDiagnosticsEnabled,
+} from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
@@ -83,6 +103,7 @@ import {
 } from "./code-mode-control-tools.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import { getToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -110,6 +131,8 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
   /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
@@ -212,10 +235,6 @@ export function hasBeforeToolCallPolicy(): boolean {
 }
 
 const log = createSubsystemLogger("agents/tools");
-const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
-const BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS = Symbol("beforeToolCallDiagnosticOptions");
-const BEFORE_TOOL_CALL_SOURCE_TOOL = Symbol("beforeToolCallSourceTool");
-const BEFORE_TOOL_CALL_HOOK_CONTEXT = Symbol("beforeToolCallHookContext");
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
@@ -634,6 +653,43 @@ function notifyPluginApprovalResolution(
   }
 }
 
+function buildPluginApprovalFailureReason(params: {
+  fallbackReason: string;
+  ctx?: HookContext;
+}): string {
+  const turnSourceChannel = params.ctx?.turnSourceChannel;
+  if (!turnSourceChannel?.trim()) {
+    return params.fallbackReason;
+  }
+  const nativePluginSurface = resolveApprovalInitiatingSurfaceState({
+    channel: turnSourceChannel,
+    accountId: params.ctx?.turnSourceAccountId,
+    cfg: params.ctx?.config,
+    approvalKind: "plugin",
+  });
+  const setupText = describeNativePluginApprovalClientSetup({
+    channel: nativePluginSurface.channel,
+    channelLabel: nativePluginSurface.channelLabel,
+    accountId: nativePluginSurface.accountId,
+  });
+  if (!setupText) {
+    return params.fallbackReason;
+  }
+  const nativeDeliverySurface =
+    nativePluginSurface.kind === "disabled"
+      ? nativePluginSurface
+      : resolveApprovalInitiatingSurfaceState({
+          channel: turnSourceChannel,
+          accountId: params.ctx?.turnSourceAccountId,
+          cfg: params.ctx?.config,
+          approvalKind: "exec",
+        });
+  if (nativeDeliverySurface.kind !== "disabled") {
+    return params.fallbackReason;
+  }
+  return `${params.fallbackReason}\n\n${setupText}`;
+}
+
 async function requestPluginToolApproval(params: {
   approval: PluginApprovalRequest;
   toolName: string;
@@ -646,11 +702,78 @@ async function requestPluginToolApproval(params: {
   const approval = params.approval;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
+  let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   try {
+    const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
+    if (embeddedApprovalBroker) {
+      const result = await embeddedApprovalBroker.request({
+        request: {
+          pluginId: approval.pluginId,
+          title: approval.title,
+          description: approval.description,
+          severity: approval.severity,
+          allowedDecisions: approval.allowedDecisions,
+          toolName: params.toolName,
+          toolCallId: params.toolCallId,
+          agentId: params.ctx?.agentId,
+          sessionKey: params.ctx?.sessionKey,
+          turnSourceChannel: params.ctx?.turnSourceChannel,
+          turnSourceTo: params.ctx?.turnSourceTo,
+          turnSourceAccountId: params.ctx?.turnSourceAccountId,
+          turnSourceThreadId: params.ctx?.turnSourceThreadId,
+        },
+        timeoutMs,
+        signal: params.signal,
+      });
+      const decision = result.decision;
+      const resolution: PluginApprovalResolution =
+        decision === PluginApprovalResolutions.ALLOW_ONCE ||
+        decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
+        decision === PluginApprovalResolutions.DENY
+          ? decision
+          : PluginApprovalResolutions.TIMEOUT;
+      notifyPluginApprovalResolution(approval, resolution);
+      if (
+        decision === PluginApprovalResolutions.ALLOW_ONCE ||
+        decision === PluginApprovalResolutions.ALLOW_ALWAYS
+      ) {
+        return {
+          blocked: false,
+          params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
+          approvalResolution: resolution,
+        };
+      }
+      if (decision === PluginApprovalResolutions.DENY) {
+        return {
+          blocked: true,
+          kind: "failure",
+          deniedReason: "plugin-approval",
+          reason: "Denied by user",
+          params: params.baseParams,
+        };
+      }
+      if (approval.timeoutBehavior === "allow") {
+        return {
+          blocked: false,
+          params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
+          approvalResolution: resolution,
+        };
+      }
+      return {
+        blocked: true,
+        kind: "failure",
+        deniedReason: "plugin-approval",
+        reason: "Approval timed out",
+        params: params.baseParams,
+      };
+    }
+
+    gatewayApprovalPhase = "request";
     const requestResult: {
       id?: string;
       status?: string;
       decision?: string | null;
+      deliveryRoute?: string;
     } = await callGatewayTool(
       "plugin.approval.request",
       // Buffer beyond the approval timeout so the gateway can clean up
@@ -666,6 +789,9 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+        ...(params.ctx?.approvalReviewerDeviceId
+          ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
+          : {}),
         turnSourceChannel: params.ctx?.turnSourceChannel,
         turnSourceTo: params.ctx?.turnSourceTo,
         turnSourceAccountId: params.ctx?.turnSourceAccountId,
@@ -675,6 +801,7 @@ async function requestPluginToolApproval(params: {
       },
       { expectFinal: false },
     );
+    gatewayApprovalPhase = "none";
     const id = requestResult?.id;
     if (!id) {
       notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
@@ -696,13 +823,17 @@ async function requestPluginToolApproval(params: {
           blocked: true,
           kind: "failure",
           deniedReason: "plugin-approval",
-          reason: "Plugin approval unavailable (no approval route)",
+          reason: buildPluginApprovalFailureReason({
+            fallbackReason: "Plugin approval unavailable (no approval route)",
+            ctx: params.ctx,
+          }),
           params: params.baseParams,
         };
       }
     } else {
       // Wait for the decision, but abort early if the agent run is cancelled
       // so the user isn't blocked for the full approval timeout.
+      gatewayApprovalPhase = "wait";
       const waitPromise: Promise<{
         id?: string;
         decision?: string | null;
@@ -770,11 +901,18 @@ async function requestPluginToolApproval(params: {
         approvalResolution: resolution,
       };
     }
+    const timeoutReason =
+      requestResult?.deliveryRoute === "turn-source"
+        ? buildPluginApprovalFailureReason({
+            fallbackReason: "Approval timed out",
+            ctx: params.ctx,
+          })
+        : "Approval timed out";
     return {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: "Approval timed out",
+      reason: timeoutReason,
       params: params.baseParams,
     };
   } catch (err) {
@@ -795,12 +933,21 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
+    // INVALID_REQUEST means different things before and after registration.
+    const invalidRequest =
+      err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST";
+    const reason =
+      invalidRequest && gatewayApprovalPhase === "request"
+        ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
+        : invalidRequest && gatewayApprovalPhase === "wait"
+          ? `Plugin approval no longer available: ${formatErrorMessage(err)}`
+          : "Plugin approval required (gateway unavailable)";
     log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
     return {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: "Plugin approval required (gateway unavailable)",
+      reason,
       params: params.baseParams,
     };
   }
@@ -1558,12 +1705,13 @@ export function wrapToolWithBeforeToolCallHook(
   };
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
+  copyToolTerminalPresentation(tool, wrappedTool);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
     enumerable: true,
   });
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS, {
-    value: hookOptions,
+    value: hookOptions satisfies BeforeToolCallDiagnosticOptions,
     enumerable: false,
   });
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_SOURCE_TOOL, {
@@ -1575,21 +1723,6 @@ export function wrapToolWithBeforeToolCallHook(
     enumerable: false,
   });
   return wrappedTool;
-}
-
-/** Return true when a tool already carries the before_tool_call wrapper marker. */
-export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  return taggedTool[BEFORE_TOOL_CALL_WRAPPED] === true;
-}
-
-/** Toggle diagnostic event emission on an existing before_tool_call wrapper. */
-export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled: boolean): void {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  const options = taggedTool[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
-  if (options && typeof options === "object" && "emitDiagnostics" in options) {
-    (options as { emitDiagnostics: boolean }).emitDiagnostics = enabled;
-  }
 }
 
 /** Rebuild a before_tool_call wrapper while preserving the original source tool. */
@@ -1618,31 +1751,8 @@ export function rewrapToolWithBeforeToolCallHook(
   delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
+  copyToolTerminalPresentation(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
-}
-
-/** Copy before_tool_call marker metadata when another wrapper replaces a tool. */
-export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAgentTool): void {
-  if (!isToolWrappedWithBeforeToolCallHook(source)) {
-    return;
-  }
-  Object.defineProperty(target, BEFORE_TOOL_CALL_WRAPPED, {
-    value: true,
-    enumerable: true,
-  });
-  const taggedSource = source as unknown as Record<symbol, unknown>;
-  const sourceTool = taggedSource[BEFORE_TOOL_CALL_SOURCE_TOOL];
-  if (sourceTool && typeof sourceTool === "object") {
-    Object.defineProperty(target, BEFORE_TOOL_CALL_SOURCE_TOOL, {
-      value: sourceTool,
-      enumerable: false,
-    });
-  }
-  const hookContext = taggedSource[BEFORE_TOOL_CALL_HOOK_CONTEXT];
-  Object.defineProperty(target, BEFORE_TOOL_CALL_HOOK_CONTEXT, {
-    value: hookContext,
-    enumerable: false,
-  });
 }
 
 function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {

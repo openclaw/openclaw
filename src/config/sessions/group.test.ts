@@ -36,4 +36,29 @@ describe("resolveGroupSessionKey", () => {
       chatType: "group",
     });
   });
+
+  it("preserves empty opaque segments in originating group ids", () => {
+    const ctx = {
+      Provider: "matrix",
+      ChatType: "channel",
+      From: "matrix:channel:!room:[2001:db8::1]",
+    } satisfies Partial<MsgContext>;
+
+    expect(resolveGroupSessionKey(ctx as MsgContext)).toEqual({
+      key: "matrix:channel:!room:[2001:db8::1]",
+      channel: "matrix",
+      id: "!room:[2001:db8::1]",
+      chatType: "channel",
+    });
+  });
+
+  it("rejects empty structural group-route segments", () => {
+    const ctx = {
+      Provider: "telegram",
+      ChatType: "group",
+      From: "telegram::group:room",
+    } satisfies Partial<MsgContext>;
+
+    expect(resolveGroupSessionKey(ctx as MsgContext)).toBeNull();
+  });
 });

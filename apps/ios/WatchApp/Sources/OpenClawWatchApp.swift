@@ -27,12 +27,13 @@ struct OpenClawWatchApp: App {
                         self.inboxStore.markReplyResult(result, actionLabel: action.label)
                     }
                 },
-                onExecApprovalDecision: { approvalId, decision in
+                onExecApprovalDecision: { approvalId, gatewayStableID, decision in
                     guard let receiver = self.receiver else { return }
                     self.inboxStore.markExecApprovalSending(approvalId: approvalId, decision: decision)
                     Task { @MainActor in
                         let result = await receiver.sendExecApprovalResolve(
                             approvalId: approvalId,
+                            gatewayStableID: gatewayStableID,
                             decision: decision)
                         self.inboxStore.markExecApprovalSendResult(
                             approvalId: approvalId,
@@ -92,14 +93,14 @@ struct OpenClawWatchApp: App {
         }
     }
 
-    private func sendChatMessage(_ text: String) {
-        guard let receiver else { return }
+    private func sendChatMessage(_ text: String) -> String? {
+        guard let receiver else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return nil }
         guard self.inboxStore.hasGatewayTaggedAppSnapshot else {
             self.inboxStore.markAppCommandBlocked(.sendChat, reason: "refreshing iPhone state")
             self.refreshAppSnapshot()
-            return
+            return nil
         }
         let message = self.inboxStore.makeAppCommand(.sendChat, text: trimmed)
         self.inboxStore.markAppCommandSending(.sendChat)
@@ -109,6 +110,7 @@ struct OpenClawWatchApp: App {
             try? await Task.sleep(nanoseconds: 900_000_000)
             self.refreshAppSnapshot()
         }
+        return message.commandId
     }
 
     private func refreshExecApprovalReview(force: Bool = false) {
@@ -143,10 +145,11 @@ struct OpenClawWatchApp: App {
 extension WatchInboxStore {
     fileprivate func configureScreenshotFixture() {
         let sentAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        self.greetingTextOverride = "Good morning"
+        greetingTextOverride = "Good morning"
         self.consume(
             execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
                 approvals: [],
+                gatewayStableID: "watch-screenshot-gateway",
                 sentAtMs: sentAtMs,
                 snapshotId: nil),
             transport: "screenshot")

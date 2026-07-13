@@ -1,11 +1,11 @@
 // Debug proxy state migration imports the shipped capture sidecar into shared SQLite state.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 const DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
@@ -243,22 +243,21 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
     const blobs: LegacyCaptureBlobRow[] = [];
     for (const [blobId, referencingEvents] of blobEvents) {
       const candidateBlobDirs = [
-        ...new Set(
-          [
-            ...referencingEvents.map(
-              (event) => blobDirBySession.get(event.session_id) ?? params.blobDir,
-            ),
-            params.blobDir,
-          ],
-        ),
+        ...new Set([
+          ...referencingEvents.map(
+            (event) => blobDirBySession.get(event.session_id) ?? params.blobDir,
+          ),
+          params.blobDir,
+        ]),
       ];
       const blobPath =
         candidateBlobDirs
           .map((blobDir) => path.join(blobDir, `${blobId}.bin.gz`))
-          .find(fileExists) ?? path.join(candidateBlobDirs[0] ?? params.blobDir, `${blobId}.bin.gz`);
+          .find(fileExists) ??
+        path.join(candidateBlobDirs[0] ?? params.blobDir, `${blobId}.bin.gz`);
       const data = fs.readFileSync(blobPath);
       const raw = gunzipSync(data);
-      const sha256 = createHash("sha256").update(raw).digest("hex");
+      const sha256 = sha256Hex(raw);
       if (sha256.slice(0, 24) !== blobId) {
         throw new Error(`legacy debug proxy blob hash mismatch: ${blobPath}`);
       }

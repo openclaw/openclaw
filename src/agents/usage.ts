@@ -5,12 +5,17 @@
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 
+export type ContextUsage =
+  | { state: "available"; promptTokens: number; totalTokens: number }
+  | { state: "unavailable" };
+
 /** Provider/SDK usage payload variants accepted by usage normalization. */
 export type UsageLike = {
   input?: number;
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?: ContextUsage;
   total?: number;
   // Common alternates across providers/SDKs.
   inputTokens?: number;
@@ -53,6 +58,7 @@ export type NormalizedUsage = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?: ContextUsage;
   reasoningTokens?: number;
   total?: number;
 };
@@ -72,6 +78,7 @@ export type AssistantUsageSnapshot = {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  contextUsage?: ContextUsage;
   totalTokens: number;
   cost: {
     input: number;
@@ -105,14 +112,19 @@ export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is Normal
   if (!usage) {
     return false;
   }
-  return [
-    usage.input,
-    usage.output,
-    usage.cacheRead,
-    usage.cacheWrite,
-    usage.reasoningTokens,
-    usage.total,
-  ].some((v) => typeof v === "number" && Number.isFinite(v) && v > 0);
+  return (
+    [
+      usage.input,
+      usage.output,
+      usage.cacheRead,
+      usage.cacheWrite,
+      usage.contextUsage?.state === "available" ? usage.contextUsage.promptTokens : undefined,
+      usage.contextUsage?.state === "available" ? usage.contextUsage.totalTokens : undefined,
+      usage.reasoningTokens,
+      usage.total,
+    ].some((v) => typeof v === "number" && Number.isFinite(v) && v > 0) ||
+    usage.contextUsage?.state === "unavailable"
+  );
 }
 
 const normalizeTokenCount = (value: unknown): number | undefined => {
@@ -178,6 +190,26 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   const cacheWrite = normalizeTokenCount(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
+  const contextPromptTokens =
+    raw.contextUsage?.state === "available"
+      ? normalizeTokenCount(raw.contextUsage.promptTokens)
+      : undefined;
+  const contextTotalTokens =
+    raw.contextUsage?.state === "available"
+      ? normalizeTokenCount(raw.contextUsage.totalTokens)
+      : undefined;
+  const contextUsage =
+    raw.contextUsage?.state === "unavailable"
+      ? ({ state: "unavailable" } as const)
+      : contextPromptTokens !== undefined &&
+          contextTotalTokens !== undefined &&
+          contextTotalTokens >= contextPromptTokens
+        ? ({
+            state: "available",
+            promptTokens: contextPromptTokens,
+            totalTokens: contextTotalTokens,
+          } as const)
+        : undefined;
   const reasoningTokens = normalizeTokenCount(
     raw.reasoningTokens ??
       raw.reasoning_tokens ??
@@ -191,6 +223,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     output === undefined &&
     cacheRead === undefined &&
     cacheWrite === undefined &&
+    contextUsage === undefined &&
     reasoningTokens === undefined &&
     total === undefined
   ) {
@@ -202,6 +235,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     output,
     cacheRead,
     cacheWrite,
+    ...(contextUsage ? { contextUsage } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     total,
   };
@@ -266,6 +300,23 @@ export function derivePromptTokens(usage?: {
   return sum > 0 ? sum : undefined;
 }
 
+function derivePromptTokensFromTotal(usage?: NormalizedUsage): number | undefined {
+  const total = usage?.total;
+  const output = usage?.output;
+  if (
+    typeof total !== "number" ||
+    !Number.isFinite(total) ||
+    total <= 0 ||
+    typeof output !== "number" ||
+    !Number.isFinite(output) ||
+    output < 0
+  ) {
+    return undefined;
+  }
+  const promptTokens = total - output;
+  return promptTokens > 0 ? promptTokens : undefined;
+}
+
 /** Resolve context prompt tokens from explicit override, last call, or aggregate usage. */
 export function deriveContextPromptTokens(params: {
   lastCallUsage?: NormalizedUsage;
@@ -277,7 +328,24 @@ export function deriveContextPromptTokens(params: {
     return promptOverride;
   }
 
-  return derivePromptTokens(params.lastCallUsage) ?? derivePromptTokens(params.usage);
+  if (params.lastCallUsage?.contextUsage?.state === "unavailable") {
+    return undefined;
+  }
+  if (params.lastCallUsage?.contextUsage?.state === "available") {
+    return params.lastCallUsage.contextUsage.promptTokens;
+  }
+  const lastCallPromptTokens =
+    derivePromptTokens(params.lastCallUsage) ?? derivePromptTokensFromTotal(params.lastCallUsage);
+  if (lastCallPromptTokens !== undefined) {
+    return lastCallPromptTokens;
+  }
+  if (params.usage?.contextUsage?.state === "unavailable") {
+    return undefined;
+  }
+  if (params.usage?.contextUsage?.state === "available") {
+    return params.usage.contextUsage.promptTokens;
+  }
+  return derivePromptTokens(params.usage);
 }
 
 /** Derive the session prompt-token snapshot stored for context display. */
@@ -288,6 +356,7 @@ export function deriveSessionTotalTokens(params: {
     total?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    contextUsage?: ContextUsage;
   };
   contextTokens?: number;
   promptTokens?: number;

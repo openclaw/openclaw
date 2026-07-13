@@ -16,6 +16,8 @@ import {
 } from "./config.js";
 import type { v2 } from "./protocol.js";
 
+const CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME = `${CODEX_PLUGINS_MARKETPLACE_NAME}-remote`;
+
 /** Request callback used to call Codex app-server plugin/app methods. */
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -108,9 +110,7 @@ export async function readCodexPluginInventory(
   const listed = (await params.request("plugin/list", {
     cwds: [],
   } satisfies v2.PluginListParams)) as v2.PluginListResponse;
-  const marketplaceEntry = listed.marketplaces.find(
-    (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
-  );
+  const marketplaceEntry = listed.marketplaces.find(isOpenAiCuratedMarketplace);
   if (!marketplaceEntry) {
     return {
       policy,
@@ -126,7 +126,7 @@ export async function readCodexPluginInventory(
     };
   }
 
-  const marketplace = marketplaceRef(marketplaceEntry);
+  let marketplace = marketplaceRef(marketplaceEntry);
   const diagnostics: CodexPluginInventoryDiagnostic[] = [];
   const records: CodexPluginInventoryRecord[] = [];
   if (appInventory?.state === "missing") {
@@ -145,8 +145,8 @@ export async function readCodexPluginInventory(
     if (!pluginPolicy.enabled) {
       continue;
     }
-    const summary = findPluginSummary(marketplaceEntry, pluginPolicy.pluginName);
-    if (!summary) {
+    const resolvedPlugin = findOpenAiCuratedMarketplacePlugin(listed, pluginPolicy.pluginName);
+    if (!resolvedPlugin) {
       diagnostics.push({
         code: "plugin_missing",
         plugin: pluginPolicy,
@@ -154,8 +154,19 @@ export async function readCodexPluginInventory(
       });
       continue;
     }
+    const { summary } = resolvedPlugin;
+    const pluginMarketplace = marketplaceRef(resolvedPlugin.marketplace);
+    if (records.length === 0) {
+      marketplace = pluginMarketplace;
+    }
 
-    const detail = await readPluginDetail(params, marketplace, pluginPolicy, diagnostics);
+    const detail = await readPluginDetail(
+      params,
+      pluginMarketplace,
+      pluginPolicy,
+      summary,
+      diagnostics,
+    );
     const ownedAppIds =
       detail?.apps
         .map((app) => app.id)
@@ -213,14 +224,10 @@ export function findOpenAiCuratedPluginSummary(
   listed: v2.PluginListResponse,
   pluginName: string,
 ): { marketplace: CodexPluginMarketplaceRef; summary: v2.PluginSummary } | undefined {
-  const marketplaceEntry = listed.marketplaces.find(
-    (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
-  );
-  if (!marketplaceEntry) {
-    return undefined;
-  }
-  const summary = findPluginSummary(marketplaceEntry, pluginName);
-  return summary ? { marketplace: marketplaceRef(marketplaceEntry), summary } : undefined;
+  const resolved = findOpenAiCuratedMarketplacePlugin(listed, pluginName);
+  return resolved
+    ? { marketplace: marketplaceRef(resolved.marketplace), summary: resolved.summary }
+    : undefined;
 }
 
 /** Builds plugin/read or plugin/install params from a marketplace reference. */
@@ -257,6 +264,7 @@ async function readPluginDetail(
   params: ReadCodexPluginInventoryParams,
   marketplace: CodexPluginMarketplaceRef,
   pluginPolicy: ResolvedCodexPluginPolicy,
+  summary: v2.PluginSummary,
   diagnostics: CodexPluginInventoryDiagnostic[],
 ): Promise<v2.PluginDetail | undefined> {
   if (params.readPluginDetails === false) {
@@ -265,7 +273,12 @@ async function readPluginDetail(
   try {
     const response = (await params.request(
       "plugin/read",
-      pluginReadParams(marketplace, pluginPolicy.pluginName),
+      pluginReadParams(
+        marketplace,
+        marketplace.remoteMarketplaceName && summary.remotePluginId
+          ? summary.remotePluginId
+          : pluginPolicy.pluginName,
+      ),
     )) as v2.PluginReadResponse;
     return response.plugin;
   } catch (error) {
@@ -351,6 +364,22 @@ function findPluginSummary(
   );
 }
 
+function findOpenAiCuratedMarketplacePlugin(
+  listed: v2.PluginListResponse,
+  pluginName: string,
+): { marketplace: v2.PluginMarketplaceEntry; summary: v2.PluginSummary } | undefined {
+  for (const marketplace of listed.marketplaces) {
+    if (!isOpenAiCuratedMarketplace(marketplace)) {
+      continue;
+    }
+    const summary = findPluginSummary(marketplace, pluginName);
+    if (summary) {
+      return { marketplace, summary };
+    }
+  }
+  return undefined;
+}
+
 function pluginNameFromPluginId(pluginId: string, marketplaceName: string): string | undefined {
   const trimmed = pluginId.trim();
   if (!trimmed) {
@@ -369,4 +398,11 @@ function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMark
     ...(marketplace.path ? { path: marketplace.path } : {}),
     ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
   };
+}
+
+function isOpenAiCuratedMarketplace(marketplace: v2.PluginMarketplaceEntry): boolean {
+  return (
+    marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME ||
+    marketplace.name === CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME
+  );
 }

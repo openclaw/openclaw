@@ -1,6 +1,6 @@
 // Computes deterministic heartbeat schedule phases and due times.
 import { createHash } from "node:crypto";
-import { resolveIntegerOption } from "./numeric-options.js";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 
 function resolvePositiveIntervalMs(value: number): number {
   return resolveIntegerOption(value, 1, { min: 1 });

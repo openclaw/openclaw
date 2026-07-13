@@ -5,11 +5,12 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { QaProviderMode } from "./model-selection.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
+  QaBusEvent,
   QaBusInboundMessageInput,
   QaBusMessage,
   QaBusOutboundMessageInput,
-  QaBusSearchMessagesInput,
   QaBusReadMessageInput,
+  QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusWaitForInput,
 } from "./runtime-api.js";
@@ -56,30 +57,46 @@ type QaTransportFailureAssertionOptions = {
   cursorSpace?: QaTransportFailureCursorSpace;
 };
 
-type QaTransportCommonCapabilities = {
-  sendInboundMessage: QaTransportState["addInboundMessage"];
-  injectOutboundMessage: QaTransportState["addOutboundMessage"];
-  waitForOutboundMessage: (input: QaBusWaitForInput) => Promise<unknown>;
-  getNormalizedMessageState: () => QaBusStateSnapshot;
-  resetNormalizedMessageState: () => Promise<void>;
-  readNormalizedMessage: QaTransportState["readMessage"];
-  executeGenericAction: (params: {
-    action: QaTransportActionName;
-    args: Record<string, unknown>;
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => Promise<unknown>;
-  waitForReady: (params: {
-    gateway: QaTransportGatewayClient;
-    timeoutMs?: number;
-    pollIntervalMs?: number;
-  }) => Promise<void>;
-  waitForCondition: <T>(
-    check: () => T | Promise<T | null | undefined> | null | undefined,
-    timeoutMs?: number,
-    intervalMs?: number,
-  ) => Promise<T>;
-  assertNoFailureReplies: (options?: QaTransportFailureAssertionOptions) => void;
+export type QaTransportOutboundMatch = {
+  conversation?: QaBusInboundMessageInput["conversation"];
+  senderId?: string;
+  sinceIndex?: number;
+  textIncludes?: string;
+  threadId?: string;
+  timeoutMs?: number;
+};
+
+export type QaTransportWaitForNoOutboundInput = {
+  quietMs?: number;
+  sinceIndex?: number;
+};
+
+export type QaTransportOutboundEvent = {
+  cursor: number;
+  kind: "sent" | "edited" | "deleted";
+  message: QaBusMessage;
+};
+
+export type QaTransportOutboundSequenceMatch = {
+  conversationId?: string;
+  finalSettleMs?: number;
+  finalTextIncludes: string;
+  minimumPreviewEvents?: number;
+  sinceCursor?: number;
+  threadId?: string;
+  timeoutMs?: number;
+};
+
+export type QaTransportOutboundSequence = {
+  events: QaTransportOutboundEvent[];
+  final: QaBusMessage;
+};
+
+export type QaTransportNativeCommandInput = Omit<
+  QaBusInboundMessageInput,
+  "nativeCommand" | "text"
+> & {
+  command: string;
 };
 
 export async function waitForQaTransportCondition<T>(
@@ -162,8 +179,21 @@ export type QaTransportAdapter = {
   label: string;
   accountId: string;
   requiredPluginIds: readonly string[];
+  supportedActions: readonly QaTransportActionName[];
   state: QaTransportState;
-  capabilities: QaTransportCommonCapabilities;
+  reset: () => Promise<void>;
+  sendInbound: (input: QaBusInboundMessageInput) => Promise<QaBusMessage>;
+  sendNativeCommand?: (input: QaTransportNativeCommandInput) => Promise<void>;
+  waitForNoOutbound: (input?: QaTransportWaitForNoOutboundInput) => Promise<void>;
+  waitForOutbound: (input: QaTransportOutboundMatch) => Promise<QaBusMessage>;
+  waitForOutboundSequence?: (
+    input: QaTransportOutboundSequenceMatch,
+  ) => Promise<QaTransportOutboundSequence>;
+  waitForCondition: <T>(
+    check: () => T | Promise<T | null | undefined> | null | undefined,
+    timeoutMs?: number,
+    intervalMs?: number,
+  ) => Promise<T>;
   createGatewayConfig: (params: { baseUrl: string }) => QaTransportGatewayConfig;
   waitReady: (params: {
     gateway: QaTransportGatewayClient;
@@ -176,6 +206,7 @@ export type QaTransportAdapter = {
     replyChannel: string;
     replyTo: string;
   };
+  createRuntimeEnvPatch?: () => NodeJS.ProcessEnv;
   handleAction: (params: {
     action: QaTransportActionName;
     args: Record<string, unknown>;
@@ -191,37 +222,25 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   readonly label: string;
   readonly accountId: string;
   readonly requiredPluginIds: readonly string[];
+  readonly supportedActions: readonly QaTransportActionName[];
   readonly state: QaTransportState;
-  readonly capabilities: QaTransportCommonCapabilities;
+  readonly waitForCondition: QaTransportAdapter["waitForCondition"];
 
   protected constructor(params: {
     id: string;
     label: string;
     accountId: string;
     requiredPluginIds: readonly string[];
+    supportedActions?: readonly QaTransportActionName[];
     state: QaTransportState;
   }) {
     this.id = params.id;
     this.label = params.label;
     this.accountId = params.accountId;
     this.requiredPluginIds = params.requiredPluginIds;
+    this.supportedActions = params.supportedActions ?? [];
     this.state = params.state;
-    this.capabilities = {
-      sendInboundMessage: this.state.addInboundMessage.bind(this.state),
-      injectOutboundMessage: this.state.addOutboundMessage.bind(this.state),
-      waitForOutboundMessage: this.state.waitFor.bind(this.state),
-      getNormalizedMessageState: this.state.getSnapshot.bind(this.state),
-      resetNormalizedMessageState: async () => {
-        await this.state.reset();
-      },
-      readNormalizedMessage: this.state.readMessage.bind(this.state),
-      executeGenericAction: (paramsValue) => this.handleAction(paramsValue),
-      waitForReady: (paramsLocal) => this.waitReady(paramsLocal),
-      waitForCondition: createFailureAwareTransportWaitForCondition(this.state),
-      assertNoFailureReplies: (options) => {
-        assertNoFailureReplies(this.state, options);
-      },
-    };
+    this.waitForCondition = createFailureAwareTransportWaitForCondition(this.state);
   }
 
   abstract createGatewayConfig: (params: { baseUrl: string }) => QaTransportGatewayConfig;
@@ -243,4 +262,144 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     accountId?: string | null;
   }) => Promise<unknown>;
   abstract createReportNotes: (params: QaTransportReportParams) => string[];
+
+  async reset() {
+    await this.state.reset();
+  }
+
+  async sendInbound(input: QaBusInboundMessageInput) {
+    return await this.state.addInboundMessage(input);
+  }
+
+  async waitForNoOutbound(input: QaTransportWaitForNoOutboundInput = {}) {
+    const quietMs = resolveTimerTimeoutMs(input.quietMs, 1_200, 0);
+    await sleep(quietMs);
+    assertNoFailureReplies(this.state, {
+      sinceIndex: input.sinceIndex,
+      cursorSpace: "outbound",
+    });
+    const observed = this.outboundSince(input.sinceIndex);
+    if (observed.length > 0) {
+      const summary = observed.map((message) => `${message.id}:${message.text}`).join("\n");
+      throw new Error(`expected no outbound messages for ${quietMs}ms, saw:\n${summary}`);
+    }
+  }
+
+  async waitForOutbound(input: QaTransportOutboundMatch) {
+    return await waitForQaTransportCondition(() => {
+      assertNoFailureReplies(this.state, {
+        sinceIndex: input.sinceIndex,
+        cursorSpace: "outbound",
+      });
+      return this.outboundSince(input.sinceIndex).find((message) => {
+        if (input.conversation && message.conversation.id !== input.conversation.id) {
+          return false;
+        }
+        if (input.conversation && message.conversation.kind !== input.conversation.kind) {
+          return false;
+        }
+        if (input.senderId && message.senderId !== input.senderId) {
+          return false;
+        }
+        if (input.threadId && message.threadId !== input.threadId) {
+          return false;
+        }
+        return !input.textIncludes || message.text.includes(input.textIncludes);
+      });
+    }, input.timeoutMs);
+  }
+
+  private outboundSince(sinceIndex = 0) {
+    return this.state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound")
+      .slice(sinceIndex);
+  }
+}
+
+function normalizeQaBusOutboundEvent(event: QaBusEvent): QaTransportOutboundEvent | null {
+  switch (event.kind) {
+    case "outbound-message":
+      return { cursor: event.cursor, kind: "sent", message: event.message };
+    case "message-edited":
+      return { cursor: event.cursor, kind: "edited", message: event.message };
+    case "message-deleted":
+      return { cursor: event.cursor, kind: "deleted", message: event.message };
+    default:
+      return null;
+  }
+}
+
+function isQaTransportOutboundEvent(
+  event: QaBusEvent | QaTransportOutboundEvent,
+): event is QaTransportOutboundEvent {
+  return event.kind === "sent" || event.kind === "edited" || event.kind === "deleted";
+}
+
+export async function waitForQaTransportOutboundSequence(params: {
+  input: QaTransportOutboundSequenceMatch;
+  readEvents: () =>
+    | readonly (QaBusEvent | QaTransportOutboundEvent)[]
+    | Promise<readonly (QaBusEvent | QaTransportOutboundEvent)[]>;
+}): Promise<QaTransportOutboundSequence> {
+  const minimumPreviewEvents = params.input.minimumPreviewEvents ?? 1;
+  const finalSettleMs = params.input.finalSettleMs ?? 300;
+  let stableCursor: number | null = null;
+  let stableSince = 0;
+  return await waitForQaTransportCondition(async () => {
+    const events = (await params.readEvents())
+      .filter((event) => event.cursor > (params.input.sinceCursor ?? 0))
+      .map((event) =>
+        isQaTransportOutboundEvent(event) ? event : normalizeQaBusOutboundEvent(event),
+      )
+      .filter((event): event is QaTransportOutboundEvent => event !== null)
+      .filter(({ message }) => {
+        if (
+          params.input.conversationId &&
+          message.conversation.id !== params.input.conversationId
+        ) {
+          return false;
+        }
+        return !params.input.threadId || message.threadId === params.input.threadId;
+      });
+    const finalIndex = events.findLastIndex(
+      ({ kind, message }) =>
+        kind !== "deleted" && message.text.includes(params.input.finalTextIncludes),
+    );
+    if (finalIndex < 0) {
+      return undefined;
+    }
+    const candidate = events[finalIndex];
+    const sequenceEvents = events.filter(({ message }) => message.id === candidate.message.id);
+    const latest = sequenceEvents.at(-1);
+    if (
+      !latest ||
+      latest.kind === "deleted" ||
+      !latest.message.text.includes(params.input.finalTextIncludes)
+    ) {
+      stableCursor = null;
+      return undefined;
+    }
+    const previewEvents = sequenceEvents.filter(
+      ({ cursor, kind, message }) =>
+        cursor < candidate.cursor &&
+        kind !== "deleted" &&
+        !message.text.includes(params.input.finalTextIncludes),
+    );
+    if (previewEvents.length < minimumPreviewEvents) {
+      return undefined;
+    }
+    if (stableCursor !== latest.cursor) {
+      stableCursor = latest.cursor;
+      stableSince = Date.now();
+      return finalSettleMs === 0 ? { events: sequenceEvents, final: latest.message } : undefined;
+    }
+    if (Date.now() - stableSince < finalSettleMs) {
+      return undefined;
+    }
+    return {
+      events: sequenceEvents,
+      final: latest.message,
+    };
+  }, params.input.timeoutMs);
 }

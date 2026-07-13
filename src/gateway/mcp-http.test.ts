@@ -9,7 +9,7 @@ type MockGatewayTool = {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
-  execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text: string }> }>;
+  execute: (...args: unknown[]) => Promise<{ content: unknown[] }>;
 };
 
 type MockGatewayScopedTools = {
@@ -54,7 +54,7 @@ type BeforeToolCallHookInput = {
 type McpToolResultPayload = {
   result?: {
     tools?: Array<{ name: string; inputSchema?: Record<string, unknown> }>;
-    content?: Array<{ text?: string }>;
+    content?: Array<Record<string, unknown>>;
     isError?: boolean;
   };
 };
@@ -102,7 +102,9 @@ vi.mock("./tool-resolution.js", () => ({
     resolveGatewayScopedToolsMock(...args),
 }));
 
+import { resetAttachGrantsForTest, mintAttachGrant } from "./mcp-grant-store.js";
 import {
+  createMcpAttachGrantServerConfig,
   createMcpLoopbackServerConfig,
   closeMcpLoopbackServer,
   getActiveMcpLoopbackRuntime,
@@ -724,6 +726,43 @@ describe("mcp loopback server", () => {
     ]);
   });
 
+  it("binds an attach grant's session and ignores ALL spoofed context headers (no scope-shop)", async () => {
+    resetAttachGrantsForTest();
+    const grant = mintAttachGrant({ sessionKey: "agent:main:attach-host" });
+    const port = await getFreePortBlockWithPermissionFallback({
+      offsets: [0],
+      fallbackBase: 53_000,
+    });
+    const { port: serverPort } = await startLoopbackServerForTest(port);
+
+    const response = await sendRaw({
+      port: serverPort,
+      token: grant.token,
+      headers: jsonHeaders({
+        "x-session-key": "agent:main:SPOOFED-other-session",
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-account-id": "victim-account",
+        "x-openclaw-current-channel-id": "telegram:victim-chat",
+        "x-openclaw-current-thread-ts": "999",
+        "x-openclaw-source-reply-delivery-mode": "automatic",
+        "x-openclaw-inbound-event-kind": "room_event",
+      }),
+      body: mcpToolsListBody(),
+    });
+
+    expect(response.status).toBe(200);
+    const call = getScopedToolsCall(0);
+    expect(call.sessionKey).toBe("agent:main:attach-host");
+    expect(call.senderIsOwner).toBe(false);
+    expect(call.surface).toBe("loopback");
+    expect(call.messageProvider).toBeUndefined();
+    expect(call.accountId).toBeUndefined();
+    expect(call.currentChannelId).toBeUndefined();
+    expect(call.currentThreadTs).toBeUndefined();
+    expect(call.sourceReplyDeliveryMode).toBeUndefined();
+    expect(call.inboundEventKind).toBeUndefined();
+  });
+
   it("routes sessions_yield to the current CLI capture", async () => {
     resolveGatewayScopedToolsMock.mockImplementation((input): MockGatewayScopedTools => {
       const call = input as ScopedToolsCall;
@@ -1010,6 +1049,62 @@ describe("mcp loopback server", () => {
 
     expect(cronExecute).toHaveBeenCalledTimes(1);
     expectMcpResultText(payload, "CRON_EXECUTED");
+  });
+
+  it("preserves valid MCP content blocks returned by loopback tools", async () => {
+    const content = [
+      { type: "text", text: "caption", annotations: { audience: ["user"] } },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      {
+        type: "resource",
+        resource: { uri: "memo://one", text: "memo body", mimeType: "text/plain" },
+      },
+    ];
+    mockScopedTools([
+      makeMockTool({
+        name: "content_probe",
+        execute: async () => ({ content }),
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    const payload = await callMainSessionTool({
+      token: runtime?.ownerToken,
+      name: "content_probe",
+    });
+
+    expect(payload.result?.content).toEqual(content);
+  });
+
+  it("converts malformed, unknown, and unsupported MCP content blocks to text", async () => {
+    const malformed = [
+      { type: "image", mimeType: "image/png" },
+      { type: "audio", data: "not base64!", mimeType: "audio/mpeg" },
+      { type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" },
+      {
+        type: "resource_link",
+        name: "report",
+        uri: "https://example.test/report.pdf",
+        mimeType: "application/pdf",
+      },
+      { type: "tool_use", id: "unexpected" },
+    ];
+    mockScopedTools([
+      makeMockTool({
+        name: "malformed_content_probe",
+        execute: async () => ({ content: malformed }),
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    const payload = await callMainSessionTool({
+      token: runtime?.ownerToken,
+      name: "malformed_content_probe",
+    });
+
+    expect(payload.result?.content).toEqual(
+      malformed.map((block) => ({ type: "text", text: JSON.stringify(block) })),
+    );
   });
 
   it("captures only successful calls with an explicit CLI capture key", async () => {
@@ -1726,6 +1821,15 @@ describe("createMcpLoopbackServerConfig", () => {
       "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
     );
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
+  });
+
+  it("builds an attach grant config with only token-backed headers", () => {
+    const config = createMcpAttachGrantServerConfig(23119) as {
+      mcpServers?: Record<string, { headers?: Record<string, string> }>;
+    };
+    expect(config.mcpServers?.openclaw?.headers).toEqual({
+      Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+    });
   });
 
   it("opens an auth-gated SSE stream on GET (Streamable HTTP notification channel)", async () => {

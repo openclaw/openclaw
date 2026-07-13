@@ -1,5 +1,5 @@
 // Slack tests cover send.blocks plugin behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import {
   clearSlackThreadParticipationCache,
@@ -201,6 +201,25 @@ describe("sendMessageSlack chunking", () => {
         .filter((text) => text.length === null || text.length > 8000),
     ).toStrictEqual([]);
     expect(postedTexts.join("")).toBe(message);
+  });
+
+  it("reports the first Slack chunk before a later chunk fails", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage
+      .mockResolvedValueOnce({ ts: "m1", channel: "C123" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageSlack("channel:C123", "a".repeat(8500), {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["m1"]);
   });
 
   it("preserves the first canonical response thread across chunked sends", async () => {

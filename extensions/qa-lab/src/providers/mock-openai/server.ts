@@ -159,6 +159,7 @@ const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
+const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
@@ -170,6 +171,21 @@ const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
 const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
+const QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE =
+  /react to this whatsapp(?: group)? message with thumbs up for qa action check\s+(?:WHATSAPP_QA_AGENT_REACT|WHATSAPP_QA_GROUP_AGENT_REACT)_[A-Z0-9]+/i;
+const QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE =
+  /upload-file action to send a PNG with caption\s+((?:WHATSAPP_QA_AGENT_UPLOAD|WHATSAPP_QA_GROUP_AGENT_UPLOAD)_[A-Z0-9]+)/i;
+const QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE =
+  /\bWHATSAPP_QA_PENDING_HISTORY_TRIGGER_([A-Z0-9]+)\b/u;
+const QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL =
+  "Chat history since last reply (untrusted, for context):";
+const QA_WHATSAPP_BROADCAST_PROMPT_RE = /\bopenclawqa broadcast fanout check\s+([A-Z0-9_]+)\b/i;
+const QA_WHATSAPP_RUNTIME_AGENT_RE = /\bRuntime:\s*[^\n]*\bagent=([A-Za-z0-9_-]+)/i;
+const QA_WHATSAPP_ACTIVATION_ALWAYS_MARKER_RE = /\bWHATSAPP_QA_ACTIVATION_ALWAYS_([A-Z0-9]+)\b/u;
+const QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE = /\bWHATSAPP_QA_REPLY_TO_BOT_SEED_[A-Z0-9]+\b/u;
+const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
+  /\bWHATSAPP_QA_REPLY_TO_BOT_TRIGGER_[A-Z0-9]+\b/u;
+const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -190,7 +206,7 @@ const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
   "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
-const QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS = 48_000;
+const QA_GROUP_AUDIO_TRIGGER_SENTINEL = "OPENCLAW_QA_GROUP_AUDIO_TRIGGER";
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
@@ -252,7 +268,7 @@ function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
 }
 
 function transcriptionTextForAudioRequest(rawBody: string) {
-  if (rawBody.length >= QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS) {
+  if (rawBody.includes(QA_GROUP_AUDIO_TRIGGER_SENTINEL)) {
     return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
   }
   return QA_AUDIO_TRANSCRIPTION_TEXT;
@@ -267,6 +283,31 @@ function writeSse(res: ServerResponse, events: StreamEvent[]) {
     "content-length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+async function writeSseWithPreviewPause(
+  res: ServerResponse,
+  events: StreamEvent[],
+  pauseMs: number,
+) {
+  const completionIndex = events.findIndex((event) => event.type === "response.output_text.done");
+  if (completionIndex < 0) {
+    writeSse(res, events);
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  for (const event of events.slice(0, completionIndex)) {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+  await sleep(pauseMs);
+  for (const event of events.slice(completionIndex)) {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+  res.end("data: [DONE]\n\n");
 }
 
 type AnthropicStreamEvent = Record<string, unknown> & {
@@ -639,6 +680,79 @@ function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string
     texts.push(inputText);
   }
   return texts.join("\n");
+}
+
+function buildWhatsAppPendingHistoryReply(allInputText: string) {
+  const triggerMatch = QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE.exec(allInputText);
+  if (!triggerMatch?.[1]) {
+    return undefined;
+  }
+  const suffix = triggerMatch[1];
+  const beforeTrigger = allInputText.slice(0, triggerMatch.index);
+  const priorGroupContext = extractStructuredWhatsAppPendingHistoryContext(beforeTrigger);
+  const quietMarkerPattern = new RegExp(`\\bWHATSAPP_QA_PENDING_HISTORY_QUIET_${suffix}\\b`, "u");
+  const contextSentinelPattern = new RegExp(
+    `\\bWHATSAPP_QA_PENDING_HISTORY_CONTEXT_ONLY_${suffix}\\b`,
+    "u",
+  );
+  if (
+    !quietMarkerPattern.test(priorGroupContext) ||
+    !contextSentinelPattern.test(priorGroupContext)
+  ) {
+    return "WHATSAPP_QA_PENDING_HISTORY_MISSING_CONTEXT";
+  }
+  return `WHATSAPP_QA_PENDING_HISTORY_OK_${suffix}`;
+}
+
+function extractStructuredWhatsAppPendingHistoryContext(beforeTrigger: string) {
+  const blockRe = new RegExp(
+    `${escapeRegExp(QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL)}\\n((?:(?!\\n\\n)[\\s\\S])+)\\n\\n`,
+    "gu",
+  );
+  return Array.from(beforeTrigger.matchAll(blockRe), (match) => match[1]?.trim())
+    .filter((block): block is string => Boolean(block))
+    .join("\n");
+}
+
+function buildWhatsAppBroadcastReply(allInputText: string) {
+  const promptMatch = QA_WHATSAPP_BROADCAST_PROMPT_RE.exec(allInputText);
+  const token = promptMatch?.[1];
+  if (!token) {
+    return undefined;
+  }
+  const agentId = QA_WHATSAPP_RUNTIME_AGENT_RE.exec(allInputText)?.[1];
+  if (agentId === "main") {
+    return `${token}_MAIN`;
+  }
+  if (agentId === "qa-second") {
+    return `${token}_SECOND`;
+  }
+  return "WHATSAPP_QA_BROADCAST_AGENT_CONTEXT_MISSING";
+}
+
+function buildWhatsAppGroupDispatchReply(allInputText: string) {
+  const activationMatch = QA_WHATSAPP_ACTIVATION_ALWAYS_MARKER_RE.exec(allInputText);
+  if (activationMatch?.[1]) {
+    return `WHATSAPP_QA_ACTIVATION_ALWAYS_${activationMatch[1]}`;
+  }
+  const triggerMatch = QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE.exec(allInputText);
+  if (triggerMatch?.[0]) {
+    return triggerMatch[0];
+  }
+  return QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE.exec(allInputText)?.[0];
+}
+
+function buildWhatsAppBatchedReply(allInputText: string) {
+  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(allInputText);
+  const suffix = finalMatch?.[1];
+  if (!suffix) {
+    return undefined;
+  }
+  const firstMarker = `WHATSAPP_QA_BATCHED_FIRST_${suffix}`;
+  if (!allInputText.includes(firstMarker)) {
+    return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
+  }
+  return finalMatch[0];
 }
 
 function countImageInputs(value: unknown): number {
@@ -1498,6 +1612,16 @@ function buildAssistantText(
   }
   if (
     toolOutput &&
+    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
+      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+  ) {
+    const targetTool = extractToolSearchTarget(allInputText);
+    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
+      return `FAKE_PLUGIN_OK ${targetTool}`;
+    }
+  }
+  if (
+    toolOutput &&
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(allInputText)
   ) {
     return [
@@ -1511,16 +1635,6 @@ function buildAssistantText(
       "Follow-up:",
       "- Re-run with a real model for qualitative coverage.",
     ].join("\n");
-  }
-  if (
-    toolOutput &&
-    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
-      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
-  ) {
-    const targetTool = extractToolSearchTarget(allInputText);
-    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
-      return `FAKE_PLUGIN_OK ${targetTool}`;
-    }
   }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
@@ -2243,6 +2357,48 @@ async function buildResponsesPayload(
       },
     ]);
   }
+  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(allInputText);
+  if (whatsAppPendingHistoryReply) {
+    return buildAssistantEvents(whatsAppPendingHistoryReply);
+  }
+  const whatsAppBroadcastReply = buildWhatsAppBroadcastReply(allInputText);
+  if (whatsAppBroadcastReply) {
+    return buildAssistantEvents(whatsAppBroadcastReply);
+  }
+  const whatsAppGroupDispatchReply = buildWhatsAppGroupDispatchReply(allInputText);
+  if (whatsAppGroupDispatchReply) {
+    return buildAssistantEvents(whatsAppGroupDispatchReply);
+  }
+  const whatsAppBatchedReply = buildWhatsAppBatchedReply(allInputText);
+  if (whatsAppBatchedReply) {
+    return buildAssistantEvents(whatsAppBatchedReply);
+  }
+  if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "react",
+        emoji: "👍",
+      });
+    }
+    if (toolOutput) {
+      return buildAssistantEvents("");
+    }
+  }
+  const whatsAppUploadMatch = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(allInputText);
+  if (whatsAppUploadMatch?.[1]) {
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "upload-file",
+        buffer: TINY_PNG_BASE64,
+        caption: whatsAppUploadMatch[1],
+        contentType: "image/png",
+        filename: "whatsapp-qa-agent-upload.png",
+      });
+    }
+    if (toolOutput) {
+      return buildAssistantEvents("");
+    }
+  }
   if (
     QA_STREAMING_PROMPT_RE.test(allInputText) &&
     allInputText.includes(QA_TELEGRAM_STREAM_SINGLE_MARKER)
@@ -2253,6 +2409,16 @@ async function buildResponsesPayload(
         phase: "final_answer",
         streamDeltas: splitMockStreamingText(QA_TELEGRAM_STREAM_SINGLE_MARKER),
         text: QA_TELEGRAM_STREAM_SINGLE_MARKER,
+      },
+    ]);
+  }
+  if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_final_only_marker_stream",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText("QA streaming preview in progress"),
+        text: exactReplyDirective,
       },
     ]);
   }
@@ -2615,7 +2781,7 @@ async function buildResponsesPayload(
   if (/memory tools check/i.test(allInputText)) {
     if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
-        query: "project codename ORBIT-9",
+        query: "hidden project codename",
         maxResults: 3,
       });
     }
@@ -3441,8 +3607,13 @@ async function buildMessagesPayload(
   return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
 }
 
-export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
+export async function startQaMockOpenAiServer(params?: {
+  host?: string;
+  port?: number;
+  finalOnlyMarkerPauseMs?: number;
+}) {
   const host = params?.host ?? "127.0.0.1";
+  const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const scenarioState: MockScenarioState = {
     anthropicThinkingErrorPhase: 0,
     subagentFanoutPhase: 0,
@@ -3450,6 +3621,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
+  const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
+  let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
   const server = createServer((req, res) => {
     void (async () => {
@@ -3478,6 +3651,10 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "GET" && url.pathname === "/debug/requests") {
         writeJson(res, 200, requests);
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/debug/inflight-requests") {
+        writeJson(res, 200, [...inflightRequests.values()]);
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/image-generations") {
@@ -3546,13 +3723,22 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           return;
         }
         const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
-        const events = await buildResponsesPayload(body, scenarioState);
+        const prompt = extractLastUserText(input);
+        const allInputText = extractAllRequestTexts(input, body);
+        const inflightRequestId = nextInflightRequestId++;
+        inflightRequests.set(inflightRequestId, { prompt, allInputText });
+        let events: StreamEvent[];
+        try {
+          events = await buildResponsesPayload(body, scenarioState);
+        } finally {
+          inflightRequests.delete(inflightRequestId);
+        }
         const resolvedModel = typeof body.model === "string" ? body.model : "";
         lastRequest = {
           raw,
           body,
-          prompt: extractLastUserText(input),
-          allInputText: extractAllRequestTexts(input, body),
+          prompt,
+          allInputText,
           instructions: extractInstructionsText(body) || undefined,
           toolOutput: extractToolOutput(input),
           model: resolvedModel,
@@ -3577,7 +3763,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           writeJson(res, 200, completion.response);
           return;
         }
-        writeSse(res, events);
+        if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)) {
+          await writeSseWithPreviewPause(res, events, finalOnlyMarkerPauseMs);
+        } else {
+          writeSse(res, events);
+        }
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {

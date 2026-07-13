@@ -220,6 +220,10 @@ describe("discord native /think autocomplete", () => {
     });
     ({ findCommandByNativeName, resolveCommandArgChoices, resolveDiscordNativeChoiceContext } =
       await loadDiscordThinkAutocompleteModulesForTest());
+
+    // Compile the provider-backed default choice context outside per-case timing.
+    const { command, levelArg } = requireThinkLevelCommand();
+    resolveCommandArgChoices({ command, arg: levelArg, cfg: createConfig(), catalog: [] });
   });
 
   beforeEach(async () => {

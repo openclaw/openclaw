@@ -47,8 +47,8 @@ const CORE_TEST_REQUIRED_PATHS = [
   "ui/config/control-ui-chunking.ts",
   "ui/src/i18n/lib/registry.ts",
   "ui/src/i18n/lib/types.ts",
-  "ui/src/ui/app-settings.ts",
-  "ui/src/ui/gateway.ts",
+  "ui/src/app/settings.ts",
+  "ui/src/api/gateway.ts",
 ];
 
 /**

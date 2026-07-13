@@ -29,6 +29,15 @@ type TaxonomyFeatureFixture = {
   coverageIds?: string[];
 };
 
+type MaturityScoresFixture = {
+  rollups?: {
+    surface_average?: {
+      quality?: { score?: number };
+      completeness?: { score?: number };
+    };
+  };
+};
+
 afterEach(() => {
   tempDirs.cleanup();
 });
@@ -170,6 +179,23 @@ function allProfileScorecardFixture() {
   };
 }
 
+function expectedMaturityScorePercent(): number {
+  const scores = parseYaml(
+    fs.readFileSync(path.join(repoRoot, "qa/maturity-scores.yaml"), "utf8"),
+  ) as MaturityScoresFixture;
+  const quality = scores.rollups?.surface_average?.quality?.score;
+  const completeness = scores.rollups?.surface_average?.completeness?.score;
+  if (
+    typeof quality !== "number" ||
+    !Number.isFinite(quality) ||
+    typeof completeness !== "number" ||
+    !Number.isFinite(completeness)
+  ) {
+    throw new Error("maturity score fixture is missing surface rollup scores");
+  }
+  return Math.round((quality + completeness) / 2);
+}
+
 describe("maturity docs renderer CLI", () => {
   it("checks maturity inputs without requiring QA evidence artifacts", () => {
     const result = runCli("--check");
@@ -246,7 +272,9 @@ describe("maturity docs renderer CLI", () => {
     expect(result.status).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
     expect(scorecard).toContain("<span>Maturity score</span>");
-    expect(scorecard).toContain('<span className="maturity-summary-value">67%</span>');
+    expect(scorecard).toContain(
+      `<span className="maturity-summary-value">${expectedMaturityScorePercent()}%</span>`,
+    );
     expect(scorecard).toContain("Coverage Experimental - 0%");
     expect(scorecard).toContain("end-to-end coverage above 90%");
   });

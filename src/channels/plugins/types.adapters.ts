@@ -636,6 +636,11 @@ export type ChannelApprovalAdapter = {
     channelLabel: string;
     accountId?: string;
   }) => string | null | undefined;
+  describePluginApprovalSetup?: (params: {
+    channel: string;
+    channelLabel: string;
+    accountId?: string;
+  }) => string | null | undefined;
 };
 
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {

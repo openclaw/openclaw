@@ -243,6 +243,7 @@ export interface CronJobs {
   consecutive_errors: number | null;
   consecutive_skipped: number | null;
   created_at_ms: number;
+  declaration_key: string | null;
   delete_after_run: number | null;
   delivery_account_id: string | null;
   delivery_best_effort: number | null;
@@ -251,8 +252,10 @@ export interface CronJobs {
   delivery_completion_to: string | null;
   delivery_mode: string | null;
   delivery_thread_id: string | null;
+  delivery_thread_id_type: string | null;
   delivery_to: string | null;
   description: string | null;
+  display_name: string | null;
   enabled: number;
   every_ms: number | null;
   failure_alert_account_id: string | null;
@@ -279,6 +282,8 @@ export interface CronJobs {
   last_run_status: string | null;
   name: string;
   next_run_at_ms: number | null;
+  owner_agent_id: string | null;
+  owner_session_key: string | null;
   payload_allow_unsafe_external_content: number | null;
   payload_external_content_source_json: string | null;
   payload_fallbacks_json: string | null;
@@ -698,6 +703,17 @@ export interface NodePairingPending {
   version: string | null;
 }
 
+export interface OfficialExternalPluginCatalogSnapshots {
+  body: string;
+  checksum: string;
+  etag: string | null;
+  feed_url: string;
+  last_modified: string | null;
+  saved_at: string;
+  status: number;
+  updated_at_ms: number;
+}
+
 export interface PluginBindingApprovals {
   account_id: string;
   approved_at: number;
@@ -989,6 +1005,7 @@ export interface DB {
   node_host_config: NodeHostConfig;
   node_pairing_paired: NodePairingPaired;
   node_pairing_pending: NodePairingPending;
+  official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;

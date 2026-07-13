@@ -72,6 +72,7 @@ export async function runQaMatrixCommand(opts: LiveTransportQaCommandOptions) {
     const result = await runMatrixQaLive(checkedRunOptions);
     printLiveTransportQaArtifacts("Matrix QA", {
       report: result.reportPath,
+      "route/state manifest": result.routeStateManifestPath,
       summary: result.summaryPath,
       "observed events": result.observedEventsPath,
     });

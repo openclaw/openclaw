@@ -577,6 +577,38 @@ describe("configured plugin install release step", () => {
     expect(result.completed).toBe(true);
   });
 
+  it("surfaces non-fatal repair notices without blocking release repair completion", async () => {
+    const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: ['Installed missing configured plugin "codex".'],
+      warnings: [],
+      notices: [reviewNotice],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      currentVersion: "2026.5.2-beta.1",
+      touchedVersion: "2026.5.1",
+      env: {},
+    });
+
+    expect(result).toEqual({
+      changes: ['Installed missing configured plugin "codex".'],
+      warnings: [reviewNotice],
+      completed: true,
+      touchedConfig: true,
+    });
+  });
+
   it("does not stamp config during update-time deferred install repair", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: [

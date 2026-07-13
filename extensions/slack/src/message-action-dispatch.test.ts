@@ -57,6 +57,31 @@ function elementAt(block: Record<string, unknown>, index: number) {
 }
 
 describe("handleSlackMessageAction", () => {
+  it("defaults reactions to the current inbound Slack message", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "react",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          emoji: "✅",
+        },
+        toolContext: { currentMessageId: "171234.567" },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke)).toMatchObject({
+      action: "react",
+      channelId: "C1",
+      emoji: "✅",
+      messageId: "171234.567",
+    });
+  });
+
   it("merges presentation and interactive blocks when sending", async () => {
     const invoke = createInvokeSpy();
 

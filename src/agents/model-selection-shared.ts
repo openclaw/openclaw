@@ -45,6 +45,7 @@ type ModelManifestPlugins = ModelManifestNormalizationContext["manifestPlugins"]
 
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
+  byProviderAlias?: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
 };
 
@@ -62,6 +63,10 @@ type ExactConfiguredProviderRefParts = {
   configuredProvider: string;
   modelRaw: string;
 };
+
+function providerAliasKey(provider: string, alias: string): string {
+  return `${normalizeProviderId(provider)}/${normalizeLowercaseStringOrEmpty(alias)}`;
+}
 
 function hasSlashFormModelRef(raw: string): boolean {
   const trimmed = raw.trim();
@@ -554,10 +559,11 @@ function buildModelAliasIndexWithManifestContext(
   },
 ): ModelAliasIndex {
   const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
+  const byProviderAlias = new Map<string, { alias: string; ref: ModelRef }>();
   const byKey = new Map<string, string[]>();
   const aliasCandidates = listModelAliasCandidates(params.cfg);
   if (aliasCandidates.length === 0) {
-    return { byAlias, byKey };
+    return { byAlias, byProviderAlias, byKey };
   }
   const manifestPlugins = params.manifestPluginContext.get();
 
@@ -576,14 +582,18 @@ function buildModelAliasIndexWithManifestContext(
       continue;
     }
     const aliasKey = normalizeLowercaseStringOrEmpty(alias);
-    byAlias.set(aliasKey, { alias, ref: parsed });
+    const match = { alias, ref: parsed };
+    byAlias.set(aliasKey, match);
+    // Bare aliases retain their existing last-wins behavior. Provider-qualified
+    // aliases stay scoped so duplicate display names cannot select another provider.
+    byProviderAlias.set(providerAliasKey(parsed.provider, alias), match);
     const key = modelKey(parsed.provider, parsed.model);
     const existing = byKey.get(key) ?? [];
     existing.push(alias);
     byKey.set(key, existing);
   }
 
-  return { byAlias, byKey };
+  return { byAlias, byProviderAlias, byKey };
 }
 
 /** Build lookup maps from user-facing aliases to normalized model refs. */
@@ -727,6 +737,15 @@ export function resolveModelRefFromString(
   const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
   if (aliasMatch) {
     return { ref: aliasMatch.ref, alias: aliasMatch.alias };
+  }
+  const slash = model.indexOf("/");
+  if (slash > 0) {
+    const providerAliasMatch = params.aliasIndex?.byProviderAlias?.get(
+      providerAliasKey(model.slice(0, slash), model.slice(slash + 1)),
+    );
+    if (providerAliasMatch) {
+      return { ref: providerAliasMatch.ref, alias: providerAliasMatch.alias };
+    }
   }
   const parsed = parseModelRefWithCompatAlias({
     cfg: params.cfg,

@@ -47,7 +47,8 @@ export function renderProposalMarkdown(params: {
   ]
     .filter(Boolean)
     .join("\n");
-  return `---\n${frontmatter}\n---\n\n${body}`;
+  const markdown = `---\n${frontmatter}\n---\n\n${body}`;
+  return markdown.endsWith("\n") ? markdown : `${markdown}\n`;
 }
 
 export function readProposalFrontmatter(content: string): ProposalFrontmatter | null {

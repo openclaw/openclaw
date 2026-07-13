@@ -7,12 +7,17 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 const { createMatrixQaClient } = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
 }));
-const { createMatrixQaE2eeScenarioClient, runMatrixQaE2eeBootstrap, startMatrixQaFaultProxy } =
-  vi.hoisted(() => ({
-    createMatrixQaE2eeScenarioClient: vi.fn(),
-    runMatrixQaE2eeBootstrap: vi.fn(),
-    startMatrixQaFaultProxy: vi.fn(),
-  }));
+const {
+  createMatrixQaE2eeScenarioClient,
+  loadMatrixQaE2eeRuntime,
+  runMatrixQaE2eeBootstrap,
+  startMatrixQaFaultProxy,
+} = vi.hoisted(() => ({
+  createMatrixQaE2eeScenarioClient: vi.fn(),
+  loadMatrixQaE2eeRuntime: vi.fn(),
+  runMatrixQaE2eeBootstrap: vi.fn(),
+  startMatrixQaFaultProxy: vi.fn(),
+}));
 const {
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
@@ -32,6 +37,7 @@ vi.mock("../../substrate/client.js", () => ({
 }));
 vi.mock("../../substrate/e2ee-client.js", () => ({
   createMatrixQaE2eeScenarioClient,
+  loadMatrixQaE2eeRuntime,
   runMatrixQaE2eeBootstrap,
 }));
 vi.mock("../../substrate/fault-proxy.js", () => ({
@@ -364,6 +370,13 @@ describe("matrix live qa scenarios", () => {
   beforeEach(() => {
     createMatrixQaClient.mockReset();
     createMatrixQaE2eeScenarioClient.mockReset();
+    loadMatrixQaE2eeRuntime.mockReset().mockResolvedValue({
+      openMatrixInboundDedupeStoreOptions: ({ stateDir }: { stateDir?: string }) => ({
+        namespace: "inbound-dedupe",
+        maxEntries: 20_000,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    });
     runMatrixQaE2eeBootstrap.mockReset();
     runMatrixQaOpenClawCli.mockReset();
     startMatrixQaOpenClawCli.mockReset();
@@ -2058,7 +2071,7 @@ describe("matrix live qa scenarios", () => {
             accountId: "runtime-default",
             eventId: "$first-trigger",
             roomId: staleSyncRoomId,
-            stateRoot,
+            stateRoot: accountDir,
           });
         }
         return {
@@ -3376,6 +3389,52 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.previewBodyPreview).toBe("Working\n`🔧 Exec: completed`");
     expect(artifacts.previewEventId).toBe(previewEventId);
     expect(artifacts.reply?.eventId).toBe("$tool-progress-command-clean-final");
+    expect(artifacts.reply?.tokenMatched).toBe(true);
+  });
+
+  it("accepts a final replacement as Matrix command completion", async () => {
+    const previewEventId = "$tool-progress-command-final-replacement-preview";
+    mockMatrixQaRoomClient({
+      driverEventId: "$tool-progress-command-final-replacement-trigger",
+      events: [
+        {
+          event: matrixQaMessageEvent({
+            kind: "notice",
+            eventId: previewEventId,
+            body: "Working\n`🛠️ print text → run sleep 2`",
+          }),
+          since: "driver-sync-preview",
+        },
+        {
+          event: ({ sendTextMessage }) =>
+            matrixQaMessageEvent({
+              kind: "notice",
+              eventId: "$tool-progress-command-final-replacement",
+              body: readMatrixQaReplyDirective(
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                "MATRIX_QA_TOOL_PROGRESS_COMMAND",
+              ),
+              relatesTo: {
+                relType: "m.replace",
+                eventId: previewEventId,
+              },
+            }),
+          since: "driver-sync-final",
+        },
+      ],
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-command-preview");
+
+    const result = await runMatrixQaScenario(scenario, matrixQaScenarioContext());
+    const artifacts = result.artifacts as {
+      previewBodyPreview?: unknown;
+      previewEventId?: unknown;
+      reply?: { eventId?: unknown; tokenMatched?: unknown };
+    };
+    expect(artifacts.previewBodyPreview).toMatch(/^MATRIX_QA_TOOL_PROGRESS_COMMAND_/);
+    expect(artifacts.previewEventId).toBe(previewEventId);
+    expect(artifacts.reply?.eventId).toBe("$tool-progress-command-final-replacement");
     expect(artifacts.reply?.tokenMatched).toBe(true);
   });
 

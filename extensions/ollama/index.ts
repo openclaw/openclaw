@@ -58,8 +58,14 @@ import {
 } from "./src/embedding-provider.js";
 import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import { ollamaMemoryEmbeddingProviderAdapter } from "./src/memory-embedding-adapter.js";
+import {
+  createOllamaNodeHostCommands,
+  createOllamaNodeInferenceTool,
+  createOllamaNodeInvokePolicy,
+} from "./src/node-inference.js";
 import { readProviderBaseUrl } from "./src/provider-base-url.js";
 import {
+  OLLAMA_INCOMPLETE_STREAM_ERROR,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   resolveConfiguredOllamaProviderConfig,
@@ -74,6 +80,17 @@ function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
     }),
     sanitizeToolCallIds: false,
   };
+}
+
+function matchesOllamaContextOverflowError(errorMessage: string): boolean {
+  return (
+    /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
+    /\btruncating input\b.*\btoo long\b/i.test(errorMessage)
+  );
+}
+
+function classifyOllamaFailoverReason(errorMessage: string): "server_error" | undefined {
+  return errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined;
 }
 
 const dynamicModelCache = new Map<string, ProviderRuntimeModel[]>();
@@ -435,12 +452,19 @@ export default definePluginEntry({
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
+    const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
     if (api.registrationMode === "full") {
       void checkWsl2CrashLoopRisk(api.logger);
     }
     api.registerMemoryEmbeddingProvider(ollamaMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(ollamaMediaUnderstandingProvider);
-    const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
+    if (startupPluginConfig.nodeInference?.enabled !== false) {
+      for (const command of createOllamaNodeHostCommands()) {
+        api.registerNodeHostCommand(command);
+      }
+    }
+    api.registerNodeInvokePolicy(createOllamaNodeInvokePolicy());
+    api.registerTool(createOllamaNodeInferenceTool(api));
     const resolveCurrentPluginConfig = (config?: OpenClawConfig): OllamaPluginConfig => {
       const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");
       if (runtimePluginConfig) {
@@ -541,8 +565,8 @@ export default definePluginEntry({
           resolveProviderApiKey: ctx.resolveProviderApiKey,
         }),
       matchesContextOverflowError: ({ errorMessage }) =>
-        /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
-        /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
+        matchesOllamaContextOverflowError(errorMessage),
+      classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
       buildUnknownModelHint: () =>
         "Ollama Cloud requires an API key. " +
         'Set OLLAMA_API_KEY or run "openclaw onboard --auth-choice ollama-cloud". ' +
@@ -677,8 +701,8 @@ export default definePluginEntry({
         };
       },
       matchesContextOverflowError: ({ errorMessage }) =>
-        /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
-        /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
+        matchesOllamaContextOverflowError(errorMessage),
+      classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
       resolveSyntheticAuth: ({ provider, providerConfig }) => {
         if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
           return undefined;

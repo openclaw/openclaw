@@ -1,12 +1,13 @@
 // Qa Lab tests cover suite plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { CRABLINE_SERVER_CHANNELS } from "@openclaw/crabline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
-import { qaSuiteProgressTesting, runQaFlowSuite } from "./suite.js";
+import { qaSuiteProgressTesting, runQaFlowSuite, runQaScenarioWithFlakeRetry } from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -384,10 +385,10 @@ describe("qa suite", () => {
       ) as {
         report?: { result?: { selectedChannel?: string; supportedChannels?: string[] } };
       };
-      expect(matrix.report?.result).toMatchObject({
-        selectedChannel: "telegram",
-        supportedChannels: ["telegram"],
-      });
+      expect(matrix.report?.result?.selectedChannel).toBe("telegram");
+      expect(matrix.report?.result?.supportedChannels?.toSorted()).toEqual(
+        [...CRABLINE_SERVER_CHANNELS].toSorted(),
+      );
       const smoke = JSON.parse(
         await fs.readFile(path.join(outputDir, "crabline-fake-provider-smoke.json"), "utf8"),
       ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };
@@ -578,5 +579,41 @@ describe("qa suite", () => {
         forcedRuntime: "openclaw",
       }),
     ).toBe("mock-openai/gpt-5.5");
+  });
+});
+
+describe("runQaScenarioWithFlakeRetry", () => {
+  const failResult = {
+    name: "s",
+    status: "fail" as const,
+    steps: [],
+    details: "timed out after 20000ms",
+  };
+  const passResult = { name: "s", status: "pass" as const, steps: [], details: "ok" };
+
+  it("returns a first-attempt pass without retrying", async () => {
+    const run = vi.fn(async () => passResult);
+    const onRetry = vi.fn();
+    await expect(runQaScenarioWithFlakeRetry(run, onRetry)).resolves.toEqual(passResult);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("retries one failure and annotates the retried pass", async () => {
+    const run = vi.fn(async () => (run.mock.calls.length === 1 ? failResult : passResult));
+    const onRetry = vi.fn();
+    const result = await runQaScenarioWithFlakeRetry(run, onRetry);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("pass");
+    expect(result.details).toContain("passed on retry");
+    expect(result.details).toContain("timed out after 20000ms");
+  });
+
+  it("keeps the first failure diagnostics when the retry also fails", async () => {
+    const run = vi.fn(async () => failResult);
+    const result = await runQaScenarioWithFlakeRetry(run);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(failResult);
   });
 });

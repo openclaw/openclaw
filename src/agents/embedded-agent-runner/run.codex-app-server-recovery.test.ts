@@ -1,5 +1,5 @@
 // Coverage for replay-safe Codex app-server recovery retries.
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -9,8 +9,10 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
@@ -70,14 +72,44 @@ function successAttempt(): EmbeddedRunAttemptResult {
   });
 }
 
+function ordinaryPromptFailureAttempt(): EmbeddedRunAttemptResult {
+  return makeAttemptResult({
+    assistantTexts: [],
+    promptError: new Error("codex exploded"),
+    promptErrorSource: "prompt",
+  });
+}
+
+function asAttemptParams(value: unknown): EmbeddedRunAttemptParams {
+  return value as EmbeddedRunAttemptParams;
+}
+
 describe("runEmbeddedAgent Codex app-server recovery", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
     mockedClassifyFailoverReason.mockReturnValue(null);
+  });
+
+  it("does not advertise recovery after the outer run-loop budget is exhausted", () => {
+    expect(
+      hasCodexAppServerRecoveryRetryBudget({
+        alreadyRetried: false,
+        runLoopIterations: 32,
+        maxRunLoopIterations: 32,
+      }),
+    ).toBe(false);
+    expect(
+      hasCodexAppServerRecoveryRetryBudget({
+        alreadyRetried: false,
+        runLoopIterations: 31,
+        maxRunLoopIterations: 32,
+      }),
+    ).toBe(true);
   });
 
   it("retries a replay-safe stdio client close once", async () => {
@@ -93,6 +125,132 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps shared abort ownership open through a replay-safe retry", async () => {
+    const freezeAbort = vi.fn();
+    const replyOperation = {
+      freezeAbort,
+    } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async () => {
+        expect(freezeAbort).not.toHaveBeenCalled();
+        return codexClientClosedAttempt();
+      })
+      .mockImplementationOnce(async () => {
+        expect(freezeAbort).not.toHaveBeenCalled();
+        return successAttempt();
+      });
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "codex",
+      model: "gpt-5.5",
+      runId: "run-codex-freeze-after-retry",
+      replyOperation,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(freezeAbort).not.toHaveBeenCalled();
+  });
+
+  it("does not replay after cancellation during replay-safe finalization", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      asAttemptParams(attemptParams).onAttemptAbort?.();
+      return codexClientClosedAttempt();
+    });
+
+    await expect(
+      runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "codex",
+        model: "gpt-5.5",
+        runId: "run-codex-cancel-before-retry",
+      }),
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      message: "agent run aborted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops ordinary failure handling after cancellation during finalization", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      asAttemptParams(attemptParams).onAttemptAbort?.();
+      return ordinaryPromptFailureAttempt();
+    });
+
+    await expect(
+      runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "codex",
+        model: "gpt-5.5",
+        runId: "run-codex-cancel-ordinary-failure",
+      }),
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      message: "agent run aborted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not expose a cancelled replay-safe failure to outer model fallback", async () => {
+    const abortByUser = vi.fn(() => true);
+    const replyOperation = {
+      abortByUser,
+    } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      asAttemptParams(attemptParams).onAttemptAbort?.();
+      return codexClientClosedAttempt();
+    });
+
+    await expect(
+      runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "codex",
+        model: "gpt-5.5",
+        runId: "run-codex-cancel-before-model-fallback",
+        isFinalFallbackAttempt: false,
+        replyOperation,
+      }),
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      message: "agent run aborted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(abortByUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves upstream abort ownership during replay-safe finalization", async () => {
+    const controller = new AbortController();
+    const upstreamAbort = new Error("upstream cancelled");
+    const abortByUser = vi.fn(() => true);
+    const replyOperation = {
+      abortByUser,
+    } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      controller.abort(upstreamAbort);
+      asAttemptParams(attemptParams).onAttemptAbort?.();
+      return codexClientClosedAttempt();
+    });
+
+    await expect(
+      runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "codex",
+        model: "gpt-5.5",
+        runId: "run-codex-upstream-cancel-before-model-fallback",
+        isFinalFallbackAttempt: false,
+        abortSignal: controller.signal,
+        replyOperation,
+      }),
+    ).rejects.toBe(upstreamAbort);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(abortByUser).not.toHaveBeenCalled();
   });
 
   it("suppresses duplicate Codex prompt mirroring on retry", async () => {
@@ -242,6 +400,22 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
+  it("keeps retry ownership open for an outer fallback after local recovery is exhausted", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())
+      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt());
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "codex",
+      model: "gpt-5.5",
+      runId: "run-codex-turn-completion-outer-fallback",
+      isFinalFallbackAttempt: false,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces non-stdio turn/completed idle timeouts instead of throwing", async () => {

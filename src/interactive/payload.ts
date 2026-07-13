@@ -503,6 +503,21 @@ export function interactiveReplyToPresentation(
   return blocks.length > 0 ? { blocks } : undefined;
 }
 
+/**
+ * Render presentation blocks as plain-text fallback for channels that do not
+ * support native interactive controls.
+ *
+ * Text and context blocks are rendered as-is. Buttons with a `command`-typed
+ * action render as `label: \`command\`` so the value is copyable. Buttons with
+ * a `callback` action, legacy `value`, or `select` options render as label-only
+ * to keep opaque callback values private. Disabled buttons render as label-only
+ * regardless of action type, since they are not actionable.
+ *
+ * Downstream consumers should not claim a manual command is available unless
+ * they verify one was actually rendered.
+ *
+ * Exported through the plugin SDK for channel adapters.
+ */
 export function renderMessagePresentationFallbackText(params: {
   presentation?: MessagePresentation;
   emptyFallback?: string | null;
@@ -529,7 +544,17 @@ export function renderMessagePresentationFallbackText(params: {
       const labels = block.buttons
         .map((button) => {
           const targetUrl = button.url ?? button.webApp?.url ?? button.web_app?.url;
-          return targetUrl ? `${button.label}: ${targetUrl}` : button.label;
+          if (targetUrl) {
+            return `${button.label}: ${targetUrl}`;
+          }
+          const controlValue =
+            button.action?.type === "command"
+              ? resolveMessagePresentationControlValue(button)
+              : undefined;
+          if (controlValue && !button.disabled) {
+            return `${button.label}: \`${controlValue}\``;
+          }
+          return button.label;
         })
         .filter(Boolean);
       if (labels.length > 0) {

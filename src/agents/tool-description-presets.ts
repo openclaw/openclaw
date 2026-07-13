@@ -14,7 +14,7 @@ export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
 /** Describes the sessions_list tool for model-facing instructions. */
 export function describeSessionsListTool(): string {
   return [
-    "List visible sessions; filter by kind, label, agentId, search, activity.",
+    "List visible sessions; filter by kind, label, agentId, search, activity, archive state.",
     "Use before sessions_history or sessions_send target selection.",
   ].join(" ");
 }
@@ -23,7 +23,7 @@ export function describeSessionsListTool(): string {
 export function describeSessionsHistoryTool(): string {
   return [
     "Fetch sanitized history for visible session.",
-    "Use before replying, debugging, resuming; supports limits/tool messages.",
+    "Use before replying, debugging, resuming; supports limit, offset pagination, and tool-message inclusion.",
   ].join(" ");
 }
 

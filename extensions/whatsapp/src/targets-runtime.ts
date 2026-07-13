@@ -288,6 +288,15 @@ export function markdownToWhatsApp(text: string): string {
     return `${WHATSAPP_INLINE_CODE_PLACEHOLDER}${inlineCodes.length - 1}${WHATSAPP_PLACEHOLDER_TERMINATOR}`;
   });
 
+  // Convert combined GFM strong+emphasis before plain strong so the plain
+  // rules cannot leave literal `**` around the inner emphasis.
+  result = result.replace(/\*\*\*(.+?)\*\*\*/g, "*_$1_*");
+  result = result.replace(/___(.+?)___/g, "*_$1_*");
+  result = result.replace(/\*\*_(.+?)_\*\*/g, "*_$1_*");
+  result = result.replace(/__\*(.+?)\*__/g, "*_$1_*");
+  result = result.replace(/_\*\*(.+?)\*\*_/g, "*_$1_*");
+  result = result.replace(/\*__(.+?)__\*/g, "*_$1_*");
+
   result = result.replace(/\*\*(.+?)\*\*/g, "*$1*");
   result = result.replace(/__(.+?)__/g, "*$1*");
   result = result.replace(/~~(.+?)~~/g, "~$1~");

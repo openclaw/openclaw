@@ -9,7 +9,7 @@ import type { Static } from "typebox";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
-import { renderDiffDocument } from "./render.js";
+import { DiffRenderInputError, renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
 import type {
   DiffArtifactContext,
@@ -167,6 +167,20 @@ export function createDiffsTool(params: {
       const rawRecord = rawParams as Record<string, unknown>;
       const artifactContext = buildArtifactContext(params.context);
       const input = normalizeDiffInput(toolParams);
+      if (input.kind === "before_after" && input.before === input.after) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Before and after are identical — no changes to render.",
+            },
+          ],
+          details: {
+            changed: false,
+            ...(artifactContext ? { context: artifactContext } : {}),
+          },
+        };
+      }
       const mode = normalizeMode(toolParams.mode, params.defaults.mode);
       const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
       const layout = normalizeLayout(toolParams.layout, params.defaults.layout);
@@ -204,7 +218,12 @@ export function createDiffsTool(params: {
           languagePackAvailable: params.languagePackAvailable,
         },
         renderTarget,
-      );
+      ).catch((error: unknown) => {
+        if (error instanceof DiffRenderInputError) {
+          throw new PluginToolInputError(error.message);
+        }
+        throw error;
+      });
 
       const screenshotter =
         params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
@@ -232,6 +251,7 @@ export function createDiffsTool(params: {
           ],
           details: buildArtifactDetails({
             baseDetails: {
+              changed: true,
               ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
               ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
               title: rendered.title,
@@ -262,6 +282,7 @@ export function createDiffsTool(params: {
       });
 
       const baseDetails = {
+        changed: true,
         artifactId: artifact.id,
         viewerUrl,
         viewerPath: artifact.viewerPath,

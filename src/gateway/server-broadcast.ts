@@ -48,6 +48,10 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.message": [READ_SCOPE],
   "session.operation": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
+  // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
+  // methods; also targeted to the owning connection at broadcast time.
+  "terminal.data": [ADMIN_SCOPE],
+  "terminal.exit": [ADMIN_SCOPE],
 };
 
 // Events that node-role sessions must receive even when the event's operator

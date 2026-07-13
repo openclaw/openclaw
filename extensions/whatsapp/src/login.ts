@@ -11,6 +11,9 @@ import { renderQrTerminal } from "./qr-terminal.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 import { resolveWhatsAppSocketTiming } from "./socket-timing.js";
 
+const QR_LINK_INSTRUCTION = "Open the WhatsApp app, go to Linked Devices, then scan this QR:";
+const CLEAR_TERMINAL = "\x1b[2J\x1b[H";
+
 export async function loginWeb(
   verbose: boolean,
   waitForConnection?: typeof waitForWaConnection,
@@ -21,13 +24,22 @@ export async function loginWeb(
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const socketTiming = resolveWhatsAppSocketTiming(cfg);
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
+  let qrVersion = 0;
   const onQr = (qr: string) => {
-    runtime.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
+    const currentQrVersion = ++qrVersion;
     void renderQrTerminal(qr, { small: true })
       .then((output) => {
-        runtime.log(output.endsWith("\n") ? output.slice(0, -1) : output);
+        if (currentQrVersion !== qrVersion) {
+          return;
+        }
+        const refreshPrefix = currentQrVersion > 1 && process.stdout.isTTY ? CLEAR_TERMINAL : "";
+        const renderedQr = output.endsWith("\n") ? output.slice(0, -1) : output;
+        runtime.log(`${refreshPrefix}${QR_LINK_INSTRUCTION}\n${renderedQr}`);
       })
       .catch((err: unknown) => {
+        if (currentQrVersion !== qrVersion) {
+          return;
+        }
         runtime.error(`failed rendering WhatsApp QR: ${String(err)}`);
       });
   };

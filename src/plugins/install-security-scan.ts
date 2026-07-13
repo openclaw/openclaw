@@ -86,6 +86,7 @@ export async function scanPackageInstallSource(
     manifestId?: string;
     version?: string;
     source?: InstallPolicySource;
+    trustedSourceLinkedOfficialInstall?: boolean;
   },
 ): Promise<InstallSecurityScanResult | undefined> {
   const { scanPackageInstallSourceRuntime } = await loadInstallSecurityScanRuntime();

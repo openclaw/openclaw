@@ -200,7 +200,6 @@ export const forcedUnitFastTestFiles = [
   "src/tts/provider-registry.test.ts",
   "src/tts/status-config.test.ts",
   "src/tts/tts-config.test.ts",
-  "src/ui-app-settings.agents-files-refresh.test.ts",
   "packages/terminal-core/src/restore.test.ts",
   "packages/terminal-core/src/table.test.ts",
   "src/test-helpers/state-dir-env.test.ts",

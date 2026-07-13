@@ -20,6 +20,7 @@ It gives agents one tool, `diffs`, that can:
 
 The tool can return:
 
+- `details.changed`: `false` when before/after inputs are identical and no artifact was rendered; `true` for rendered results
 - `details.viewerUrl`: a gateway URL that can be opened in the canvas
 - `details.filePath`: a local rendered artifact path when file rendering is requested
 - `details.fileFormat`: the rendered file format (`png` or `pdf`)

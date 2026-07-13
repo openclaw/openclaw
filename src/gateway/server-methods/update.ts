@@ -196,7 +196,16 @@ export const updateHandlers: GatewayRequestHandlers = {
         : false;
       const requiresManagedServiceHandoff =
         installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
-      if (!isRestartEnabled(config) && !supervisor) {
+      if (configChannel === "extended-stable" && installSurface.kind === "git") {
+        result = {
+          status: "error",
+          mode: "git",
+          root: installSurface.root,
+          reason: "unsupported_git_channel",
+          steps: [],
+          durationMs: 0,
+        };
+      } else if (!isRestartEnabled(config) && !supervisor) {
         // Package updates need a restart path to finish safely. Dev/git installs
         // can report the disabled restart directly, but global installs must not
         // mutate files if this process cannot come back.

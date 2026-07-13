@@ -81,6 +81,7 @@ const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: Mock<UpdateNpmInstalledPluginsFn> = vi.fn();
 export const updateNpmInstalledHookPacks: Mock<UpdateNpmInstalledHookPacksFn> = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();
+export const promptText: AsyncUnknownMock = vi.fn();
 export class PromptInputClosedError extends Error {
   constructor() {
     super("Prompt input closed before an answer was received.");
@@ -528,6 +529,11 @@ vi.mock("../hooks/update.js", () => ({
 
 vi.mock("./prompt.js", () => ({
   PromptInputClosedError,
+  promptText: ((...args: Parameters<(typeof import("./prompt.js"))["promptText"]>) =>
+    invokeMock<
+      Parameters<(typeof import("./prompt.js"))["promptText"]>,
+      ReturnType<(typeof import("./prompt.js"))["promptText"]>
+    >(promptText, ...args)) as (typeof import("./prompt.js"))["promptText"],
   promptYesNo: ((...args: Parameters<(typeof import("./prompt.js"))["promptYesNo"]>) =>
     invokeMock<
       Parameters<(typeof import("./prompt.js"))["promptYesNo"]>,
@@ -725,6 +731,7 @@ export function resetPluginsCliTestState() {
   uninstallPlugin.mockReset();
   updateNpmInstalledPlugins.mockReset();
   updateNpmInstalledHookPacks.mockReset();
+  promptText.mockReset();
   promptYesNo.mockReset();
   installPluginFromGitSpec.mockReset();
   parseGitPluginSpec.mockReset();
@@ -866,6 +873,7 @@ export function resetPluginsCliTestState() {
     config: {} as OpenClawConfig,
   });
   promptYesNo.mockResolvedValue(true);
+  promptText.mockResolvedValue("demo");
   installPluginFromPath.mockResolvedValue({ ok: false, error: "path install disabled in test" });
   installPluginFromGitSpec.mockResolvedValue({
     ok: false,

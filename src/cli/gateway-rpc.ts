@@ -37,6 +37,7 @@ export async function callGatewayFromCli(
     clientName?: GatewayClientName;
     mode?: GatewayClientMode;
     deviceIdentity?: DeviceIdentity | null;
+    signal?: AbortSignal;
     expectFinal?: boolean;
     progress?: boolean;
     scopes?: OperatorScope[];

@@ -42,6 +42,17 @@ describe("markdownToWhatsApp", () => {
     ["returns empty string for empty input", "", ""],
     ["returns plain text unchanged", "no formatting here", "no formatting here"],
     ["handles bold inside a sentence", "This is **very** important", "This is *very* important"],
+    ["converts GFM ***bold italic*** to WhatsApp bold+italic", "***bi***", "*_bi_*"],
+    ["converts GFM __*bold italic*__ to WhatsApp bold+italic", "__*y*__", "*_y_*"],
+    ["converts GFM **_bold italic_** to WhatsApp bold+italic", "**_x_**", "*_x_*"],
+    ["converts GFM ___bold italic___ to WhatsApp bold+italic", "___z___", "*_z_*"],
+    ["converts GFM *__bold italic__* to WhatsApp bold+italic", "*__q__*", "*_q_*"],
+    ["converts GFM _**bold italic**_ to WhatsApp bold+italic", "_**r**_", "*_r_*"],
+    [
+      "preserves inline code containing bold-italic markers",
+      "Use `***not bold italic***` here",
+      "Use `***not bold italic***` here",
+    ],
     // Regression: a digit immediately after an inline-code span must not be
     // absorbed into the placeholder index (which previously dropped both).
     ["preserves inline code immediately followed by a digit", "`a`5", "`a`5"],

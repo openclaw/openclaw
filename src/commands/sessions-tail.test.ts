@@ -188,6 +188,18 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("tool.result");
   });
 
+  it("rejects tail counts that exceed JavaScript safe integer precision", async () => {
+    const runtime = makeRuntime();
+
+    await sessionsTailCommand({ store: storePath, sessionKey, tail: "9007199254740992" }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--tail must be a non-negative integer, for example --tail 25.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("uses a session trajectory pointer for relocated runtime files", async () => {
     const runtime = makeRuntime();
     const relocatedDir = path.join(tmpDir, "relocated-trajectories");

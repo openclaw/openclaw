@@ -551,14 +551,15 @@ async function shutdownActiveCommands(signal) {
     return commandShutdownPromise;
   }
   const children = [...activeCommandChildren];
+  const killGraceMs = resolveCommandParentSignalKillGraceMs(process.env);
   for (const child of children) {
     signalProcessGroup(child, signal);
   }
   commandShutdownPromise = Promise.all(
     children.map((child) =>
       finishTimedOutCommandProcessTree(child, {
-        forceKillAt: Date.now() + COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
-        timeoutKillGraceMs: COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+        forceKillAt: Date.now() + killGraceMs,
+        timeoutKillGraceMs: killGraceMs,
       }),
     ),
   ).finally(() => {
@@ -566,6 +567,15 @@ async function shutdownActiveCommands(signal) {
     process.kill(process.pid, signal);
   });
   return commandShutdownPromise;
+}
+
+function resolveCommandParentSignalKillGraceMs(env) {
+  const raw = env.VITEST && env.OPENCLAW_TEST_KITCHEN_SINK_PARENT_SIGNAL_KILL_GRACE_MS;
+  if (!raw) {
+    return COMMAND_PARENT_SIGNAL_KILL_GRACE_MS;
+  }
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value >= 0 ? value : COMMAND_PARENT_SIGNAL_KILL_GRACE_MS;
 }
 
 async function waitForCommandProcessTreeExit(child, timeoutMs) {

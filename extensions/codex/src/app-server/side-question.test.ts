@@ -585,6 +585,110 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });
 
+  it("replays app-scoped reviewer policy into side-thread forks", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    readCodexAppServerBindingMock.mockResolvedValue({
+      schemaVersion: 2,
+      threadId: "parent-thread",
+      sessionFile: "/tmp/session-1.jsonl",
+      cwd: "/tmp/workspace",
+      authProfileId: "openai:work",
+      model: "gpt-5.5",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      pluginAppPolicyContext: {
+        fingerprint: "mixed-plugin-policy",
+        apps: {
+          "ask-app": {
+            configKey: "ask",
+            marketplaceName: "openai",
+            pluginName: "ask",
+            allowDestructiveActions: true,
+            destructiveApprovalMode: "ask",
+            mcpServerNames: ["ask"],
+          },
+          "true-app": {
+            configKey: "true",
+            marketplaceName: "openai",
+            pluginName: "true",
+            allowDestructiveActions: true,
+            destructiveApprovalMode: "allow",
+            mcpServerNames: ["true"],
+          },
+          "false-app": {
+            configKey: "false",
+            marketplaceName: "openai",
+            pluginName: "false",
+            allowDestructiveActions: false,
+            destructiveApprovalMode: "deny",
+            mcpServerNames: ["false"],
+          },
+          "auto-app": {
+            configKey: "auto",
+            marketplaceName: "openai",
+            pluginName: "auto",
+            allowDestructiveActions: true,
+            destructiveApprovalMode: "auto",
+            mcpServerNames: ["auto"],
+          },
+        },
+        pluginAppIds: {
+          ask: ["ask-app"],
+          true: ["true-app"],
+          false: ["false-app"],
+          auto: ["auto-app"],
+        },
+      },
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        pluginConfig: { appServer: { mode: "guardian" } },
+      }),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    expect(forkParams?.approvalsReviewer).toBe("auto_review");
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(config).not.toHaveProperty("approvals_reviewer");
+    expect(config?.["features.code_mode"]).toBe(true);
+    expect(config?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+      "ask-app": {
+        enabled: true,
+        approvals_reviewer: "user",
+        destructive_enabled: true,
+        open_world_enabled: true,
+        default_tools_approval_mode: "auto",
+      },
+      "auto-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: true,
+        default_tools_approval_mode: "auto",
+      },
+      "false-app": {
+        enabled: true,
+        destructive_enabled: false,
+        open_world_enabled: true,
+        default_tools_approval_mode: "auto",
+      },
+      "true-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: true,
+        default_tools_approval_mode: "auto",
+      },
+    });
+  });
+
   it("disables hosted search when side-question sender policy removes managed web_search", async () => {
     createOpenClawCodingToolsMock.mockImplementation((options: { senderId?: string }) =>
       options.senderId === "restricted-sender"

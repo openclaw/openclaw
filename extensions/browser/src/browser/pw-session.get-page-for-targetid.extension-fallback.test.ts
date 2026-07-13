@@ -146,13 +146,15 @@ describe("pw-session getPageForTargetId", () => {
       urls: ["https://alpha.example", "https://beta.example"],
     }).pages;
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => [
-        { id: "TARGET_A", url: "https://alpha.example" },
-        { id: "TARGET_B", url: "https://beta.example" },
-      ],
-    } as Response);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          { id: "TARGET_A", url: "https://alpha.example" },
+          { id: "TARGET_B", url: "https://beta.example" },
+        ]),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
 
     try {
       const resolved = await getPageForTargetId({
@@ -180,13 +182,15 @@ describe("pw-session getPageForTargetId", () => {
     });
     const [, pageB] = pages;
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => [
-        { id: "TARGET_A", url: "https://alpha.example" },
-        { id: "TARGET_B", url: "https://beta.example" },
-      ],
-    } as Response);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          { id: "TARGET_A", url: "https://alpha.example" },
+          { id: "TARGET_B", url: "https://beta.example" },
+        ]),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
 
     try {
       const resolved = await getPageForTargetId({

@@ -7,8 +7,8 @@
  */
 
 import type { WriteStream } from "node:fs";
+import { stripAnsiSequences } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeBinaryOutput } from "../shell-utils.js";
-import { stripAnsi } from "../utils/ansi.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { createPrivateTempWriteStream } from "./tools/private-temp-file.js";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.js";
@@ -98,10 +98,9 @@ export async function executeBashWithOperations(
     totalBytes += data.length;
 
     // Sanitize: strip ANSI, replace binary garbage, normalize newlines
-    const text = sanitizeBinaryOutput(stripAnsi(decoder.decode(data, { stream: true }))).replace(
-      /\r/g,
-      "",
-    );
+    const text = sanitizeBinaryOutput(
+      stripAnsiSequences(decoder.decode(data, { stream: true })),
+    ).replace(/\r/g, "");
 
     // Start writing to temp file if exceeds threshold
     if (totalBytes > DEFAULT_MAX_BYTES) {

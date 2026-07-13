@@ -4,6 +4,7 @@ import {
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  getReplyPayloadTtsSupplement,
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
@@ -22,6 +23,14 @@ type DiscordOutboundPayloadContext = Parameters<
   NonNullable<ChannelOutboundAdapter["sendPayload"]>
 >[0];
 type DiscordPayloadSendContext = Awaited<ReturnType<typeof createDiscordPayloadSendContext>>;
+
+function resolveDiscordDeliveryProgress(ctx: DiscordOutboundPayloadContext) {
+  return ctx.onDeliveryResult
+    ? async (result: Awaited<ReturnType<DiscordPayloadSendContext["send"]>>) => {
+        await ctx.onDeliveryResult?.(attachChannelToResult("discord", result));
+      }
+    : undefined;
+}
 
 function createDiscordUnknownPayloadResult(target: string) {
   return {
@@ -87,20 +96,53 @@ export async function sendDiscordOutboundPayload(params: {
     // audioAsVoice emits one logical Discord reply across voice/text/media sends.
     // Capture before helper calls consume implicit single-use reply targets.
     const voiceReplyTo = sendContext.resolveReplyTo();
-    let lastResult = await sendContext.withRetry(
-      async () =>
-        await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
-          ...resolveDiscordDeliveryOptions(ctx, sendContext),
-          replyTo: voiceReplyTo,
-        }),
-    );
-    if (payload.text?.trim()) {
+    let deliveredVoice = false;
+    let lastResult: Awaited<ReturnType<DiscordPayloadSendContext["send"]>>;
+    try {
+      lastResult = await sendContext.withRetry(
+        async () =>
+          await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
+            ...resolveDiscordDeliveryOptions(ctx, sendContext),
+            replyTo: voiceReplyTo,
+          }),
+      );
+      deliveredVoice = true;
+    } catch (err) {
+      const supplement = getReplyPayloadTtsSupplement(payload);
+      const visibleFallbackText = payload.text?.trim() ? payload.text : undefined;
+      const hiddenFallbackText = supplement?.visibleTextAlreadyDelivered
+        ? undefined
+        : supplement?.spokenText;
+      const fallbackText = visibleFallbackText ?? hiddenFallbackText;
+      if (!fallbackText) {
+        if (supplement?.visibleTextAlreadyDelivered) {
+          lastResult = createDiscordUnknownPayloadResult(sendContext.target);
+        } else {
+          throw err;
+        }
+      } else {
+        lastResult = await sendContext.withRetry(
+          async () =>
+            await sendContext.send(sendContext.target, fallbackText, {
+              verbose: false,
+              ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+              replyTo: voiceReplyTo,
+              onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+            }),
+        );
+      }
+    }
+    if (deliveredVoice) {
+      await ctx.onDeliveryResult?.(attachChannelToResult("discord", lastResult));
+    }
+    if (deliveredVoice && payload.text?.trim()) {
       lastResult = await sendContext.withRetry(
         async () =>
           await sendContext.send(sendContext.target, payload.text, {
             verbose: false,
             ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
             replyTo: voiceReplyTo,
+            onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
           }),
       );
     }
@@ -111,6 +153,7 @@ export async function sendDiscordOutboundPayload(params: {
             verbose: false,
             ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
             replyTo: voiceReplyTo,
+            onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
           }),
       );
     }
@@ -146,6 +189,7 @@ export async function sendDiscordOutboundPayload(params: {
                 embeds,
                 filename,
                 ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+                onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
               }),
           ),
         send: async ({ text, mediaUrl, isFirst }) =>
@@ -157,6 +201,7 @@ export async function sendDiscordOutboundPayload(params: {
                 components: isFirst ? nativeComponents : undefined,
                 embeds: isFirst ? embeds : undefined,
                 filename: isFirst ? filename : undefined,
+                onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
               }),
           ),
       });
@@ -176,19 +221,22 @@ export async function sendDiscordOutboundPayload(params: {
     text: payload.text ?? "",
     mediaUrls,
     fallbackResult: createDiscordUnknownPayloadResult(sendContext.target),
-    sendNoMedia: async () =>
-      await sendContext.withRetry(
+    sendNoMedia: async () => {
+      return await sendContext.withRetry(
         async () =>
           await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
             ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+            onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
           }),
-      ),
+      );
+    },
     send: async ({ text, mediaUrl, isFirst }) => {
       if (isFirst) {
         return await sendContext.withRetry(
           async () =>
             await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
               ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+              onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
             }),
         );
       }
@@ -197,6 +245,7 @@ export async function sendDiscordOutboundPayload(params: {
           await sendContext.send(sendContext.target, text, {
             verbose: false,
             ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+            onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
           }),
       );
     },

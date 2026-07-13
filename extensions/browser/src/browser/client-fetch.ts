@@ -6,6 +6,7 @@
  */
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -103,6 +104,8 @@ function withLoopbackBrowserAuth(
 const BROWSER_TOOL_MODEL_HINT =
   "Do NOT retry the browser tool — it will keep failing. " +
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
+
+const BROWSER_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
@@ -267,7 +270,11 @@ async function fetchHttpJson<T>(
           `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
         );
       }
-      const text = await res.text().catch(() => "");
+      // Overflow cancels the stream and releases its reader lock before the guarded fetch below.
+      const body = await readResponseWithLimit(res, BROWSER_ERROR_BODY_LIMIT_BYTES).catch(
+        () => undefined,
+      );
+      const text = body ? new TextDecoder().decode(body) : "";
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
     return (await res.json()) as T;

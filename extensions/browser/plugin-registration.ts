@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 /**
  * Browser plugin registration helpers. This file keeps registration lazy while
  * advertising Browser tools, services, node-host commands, and audits.
@@ -19,14 +20,9 @@ import { BrowserToolSchema } from "./src/browser-tool.schema.js";
 
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 
-let browserRegistrationRuntimeModulePromise: Promise<
-  typeof import("./register.runtime.js")
-> | null = null;
-
-const loadBrowserRegistrationRuntimeModule = async () => {
-  browserRegistrationRuntimeModulePromise ??= import("./register.runtime.js");
-  return await browserRegistrationRuntimeModulePromise;
-};
+const loadBrowserRegistrationRuntimeModule = createLazyRuntimeModule(
+  () => import("./register.runtime.js"),
+);
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");

@@ -1039,7 +1039,7 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultUiConfig);
     expect(testConfig.dir).toBe(process.cwd());
     expect(testConfig.include).toEqual(["ui/src/**/*.test.ts"]);
-    expect(testConfig.exclude).toContain("ui/src/ui/app-chat.test.ts");
+    expect(testConfig.exclude).toContain("ui/src/**/*.e2e.test.ts");
   });
 
   it("normalizes utils include patterns relative to the scoped dir", () => {

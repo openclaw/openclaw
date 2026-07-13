@@ -17,7 +17,12 @@ const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
 function decodeHtmlEntities(value: string): string {
   const decodeNumericEntity = (raw: string, radix: 10 | 16): string => {
     const codePoint = Number.parseInt(raw, radix);
-    return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+    const isValidCodePoint =
+      Number.isInteger(codePoint) &&
+      codePoint >= 0 &&
+      codePoint <= 0x10ffff &&
+      (codePoint < 0xd800 || codePoint > 0xdfff);
+    return isValidCodePoint
       ? String.fromCodePoint(codePoint)
       : `&#${radix === 16 ? "x" : ""}${raw};`;
   };

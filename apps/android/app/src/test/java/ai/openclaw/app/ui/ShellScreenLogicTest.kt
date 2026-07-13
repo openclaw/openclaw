@@ -4,6 +4,8 @@ import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
+import ai.openclaw.app.GatewayConnectionDisplay
+import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
@@ -11,6 +13,7 @@ import ai.openclaw.app.GatewayPendingDeviceSummary
 import ai.openclaw.app.ui.design.ClawStatus
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.runtime.saveable.SaverScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -44,6 +47,98 @@ class ShellScreenLogicTest {
     assertTrue(AppearanceThemeMode.System.isDark(systemDark = true))
     assertTrue(AppearanceThemeMode.Dark.isDark(systemDark = false))
     assertFalse(AppearanceThemeMode.Light.isDark(systemDark = true))
+  }
+
+  @Test
+  fun settingsRouteOpenedCrossTabReturnsToOriginTab() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Voice)
+    nav.openSettingsRoute(SettingsRoute.Gateway)
+    assertEquals(Tab.Settings, nav.activeTab)
+    assertEquals(SettingsRoute.Gateway, nav.settingsRoute)
+
+    nav.back()
+    assertEquals(Tab.Voice, nav.activeTab)
+    assertEquals(SettingsRoute.Home, nav.settingsRoute)
+
+    nav.back()
+    assertEquals(Tab.Overview, nav.activeTab)
+  }
+
+  @Test
+  fun settingsRouteOpenedFromOverviewReturnsToOverview() {
+    val nav = ShellNavigation()
+    nav.openSettingsRoute(SettingsRoute.Approvals)
+    nav.back()
+    assertEquals(Tab.Overview, nav.activeTab)
+    assertEquals(SettingsRoute.Home, nav.settingsRoute)
+  }
+
+  @Test
+  fun tabBarSettingsSelectionOpensHomeAndBacksToOverview() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Voice)
+    nav.openSettingsRoute(SettingsRoute.Voice)
+    nav.selectTab(Tab.Settings)
+    assertEquals(SettingsRoute.Home, nav.settingsRoute)
+
+    nav.back()
+    assertEquals(Tab.Overview, nav.activeTab)
+  }
+
+  @Test
+  fun settingsDetailOpenedFromHomeUnwindsToHomeBeforeLeavingSettings() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Voice)
+    nav.openSettingsRoute(SettingsRoute.Home)
+    nav.openSettingsRouteFromHome(SettingsRoute.Gateway)
+
+    nav.back()
+    assertEquals(Tab.Settings, nav.activeTab)
+    assertEquals(SettingsRoute.Home, nav.settingsRoute)
+
+    nav.back()
+    assertEquals(Tab.Voice, nav.activeTab)
+  }
+
+  @Test
+  fun detailTabsReturnToTheTabThatOpenedThem() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Chat)
+    nav.openDetailTab(Tab.Sessions)
+    nav.back()
+    assertEquals(Tab.Chat, nav.activeTab)
+
+    nav.selectTab(Tab.Voice)
+    nav.openDetailTab(Tab.ProvidersModels)
+    nav.back()
+    assertEquals(Tab.Voice, nav.activeTab)
+  }
+
+  @Test
+  fun tabBarSelectionClearsCrossTabReturnOrigin() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Chat)
+    nav.openDetailTab(Tab.Sessions)
+    nav.selectTab(Tab.Voice)
+    nav.back()
+    assertEquals(Tab.Overview, nav.activeTab)
+  }
+
+  @Test
+  fun shellNavigationSaverRoundTripsCrossTabState() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Voice)
+    nav.openSettingsRoute(SettingsRoute.Gateway)
+
+    val saveAnything = SaverScope { true }
+    val saved = with(ShellNavigation.Saver) { saveAnything.save(nav) }!!
+    val restored = ShellNavigation.Saver.restore(saved)!!
+
+    assertEquals(Tab.Settings, restored.activeTab)
+    assertEquals(SettingsRoute.Gateway, restored.settingsRoute)
+    restored.back()
+    assertEquals(Tab.Voice, restored.activeTab)
   }
 
   @Test
@@ -392,9 +487,67 @@ class ShellScreenLogicTest {
     )
   }
 
+  @Test
+  fun gatewaySummaryUsesStructuredProblemForCurrentAuthFailure() {
+    assertEquals(
+      "Gateway token needed",
+      gatewaySummary(
+        "Gateway error: unauthorized: gateway token missing",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING"),
+      ),
+    )
+    assertEquals(
+      "Device identity required",
+      gatewaySummary(
+        "Gateway error: device identity required",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("DEVICE_IDENTITY_REQUIRED"),
+      ),
+    )
+  }
+
+  @Test
+  fun gatewaySummaryFallsBackToGenericAuthLabelWithoutAKnownReason() {
+    assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = null))
+    assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("SOME_UNMAPPED_CODE")))
+  }
+
+  @Test
+  fun gatewaySummaryLeavesUnrelatedStatesUnaffectedByConnectionProblem() {
+    val problem = authProblem("AUTH_TOKEN_MISSING")
+    assertEquals("Online and ready", gatewaySummary("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
+    assertEquals("Connecting...", gatewaySummary("Reconnecting", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Waiting for pairing", gatewaySummary("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Certificate review needed", gatewaySummary("TLS handshake failed", isConnected = false, gatewayConnectionProblem = problem))
+  }
+
+  @Test
+  fun gatewaySummaryUsesAtomicRetryDisplayAfterAuthFailure() {
+    val retrying =
+      GatewayConnectionDisplay(
+        isConnected = false,
+        statusText = "Reconnecting…",
+        problem = null,
+      )
+
+    assertEquals("Connecting...", gatewaySummary(retrying))
+  }
+
   private fun emptyChannels(): GatewayChannelsSummary = GatewayChannelsSummary(channels = emptyList())
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
 
   private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(route.name, "Value", Icons.Default.Settings, route = route)
+
+  private fun authProblem(code: String): GatewayConnectionProblem =
+    GatewayConnectionProblem(
+      code = code,
+      message = "Authentication failed.",
+      reason = null,
+      requestId = null,
+      recommendedNextStep = null,
+      pauseReconnect = false,
+      retryable = false,
+    )
 }

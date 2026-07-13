@@ -1,4 +1,3 @@
-// Builds reply payloads for exec approval prompts and outcomes.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -11,6 +10,8 @@ import type {
   MessagePresentationButton,
 } from "../interactive/payload.js";
 import { formatHumanList } from "../shared/human-list.js";
+// Builds reply payloads for exec approval prompts and outcomes.
+import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 import {
   describeNativeExecApprovalClientSetup,
@@ -101,7 +102,10 @@ function buildApprovalCommandFence(
   if (descriptors.length === 0) {
     return null;
   }
-  return buildFence(descriptors.map((descriptor) => descriptor.command).join("\n"), "txt");
+  return formatFencedCodeBlock(
+    descriptors.map((descriptor) => descriptor.command).join("\n"),
+    "txt",
+  );
 }
 
 export function buildExecApprovalCommandText(params: {
@@ -302,15 +306,6 @@ export function formatExecApprovalExpiresIn(expiresAtMs: number, nowMs: number):
   return parts.join(" ");
 }
 
-function buildFence(text: string, language?: string): string {
-  let fence = "```";
-  while (text.includes(fence)) {
-    fence += "`";
-  }
-  const languagePrefix = language ? language : "";
-  return `${fence}${languagePrefix}\n${text}\n${fence}`;
-}
-
 export function getExecApprovalReplyMetadata(
   payload: ReplyPayload,
 ): ExecApprovalReplyMetadata | null {
@@ -366,10 +361,10 @@ export function buildExecApprovalPendingReplyPayload(
   lines.push("Approval required.");
   if (primaryAction) {
     lines.push("Run:");
-    lines.push(buildFence(primaryAction.command, "txt"));
+    lines.push(formatFencedCodeBlock(primaryAction.command, "txt"));
   }
   lines.push("Pending command:");
-  lines.push(buildFence(params.command, "sh"));
+  lines.push(formatFencedCodeBlock(params.command, "sh"));
   const secondaryFence = buildApprovalCommandFence(secondaryActions);
   if (secondaryFence) {
     lines.push("Other options:");

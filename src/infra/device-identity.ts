@@ -264,6 +264,23 @@ export function loadOrCreateDeviceIdentity(
   return identity;
 }
 
+let processDeviceIdentity: { filePath: string; identity: DeviceIdentity } | undefined;
+
+/**
+ * Keep one identity stable for the lifetime of the active state-dir process.
+ * Recognizable invalid stores yield transient keys, so independent reloads would split gateway ownership.
+ */
+export function loadOrCreateProcessDeviceIdentity(
+  filePath: string = resolveDefaultIdentityPath(),
+): DeviceIdentity {
+  if (processDeviceIdentity?.filePath === filePath) {
+    return processDeviceIdentity.identity;
+  }
+  const identity = loadOrCreateDeviceIdentity(filePath);
+  processDeviceIdentity = { filePath, identity };
+  return identity;
+}
+
 /** Load a valid persisted device identity without creating, repairing, or migrating files. */
 export function loadDeviceIdentityIfPresent(
   filePath: string = resolveDefaultIdentityPath(),

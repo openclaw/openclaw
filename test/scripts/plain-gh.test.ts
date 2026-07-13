@@ -4,7 +4,12 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { execPlainGh, plainGhEnv, resolvePlainGhBin } from "../../scripts/lib/plain-gh.mjs";
+import {
+  execPlainGh,
+  plainGhEnv,
+  PLAIN_GH_SYSTEM_CANDIDATES,
+  resolvePlainGhBin,
+} from "../../scripts/lib/plain-gh.mjs";
 
 const tempDirs: string[] = [];
 
@@ -62,6 +67,16 @@ describe("plain gh helpers", () => {
         PATH: "",
       }),
     ).toBe(ghPath);
+  });
+
+  it("prefers package-manager gh paths over bin shims", () => {
+    const realGh = makeFakeGh();
+    const shimGh = makeFakeGh();
+
+    expect(resolvePlainGhBin({ PATH: shimGh }, [realGh, shimGh])).toBe(realGh);
+    expect(PLAIN_GH_SYSTEM_CANDIDATES.indexOf("/opt/homebrew/opt/gh/bin/gh")).toBeLessThan(
+      PLAIN_GH_SYSTEM_CANDIDATES.indexOf("/opt/homebrew/bin/gh"),
+    );
   });
 
   it("normalizes color environment for JSON-safe gh output", () => {
@@ -135,5 +150,8 @@ describe("plain gh helpers", () => {
 
     expect(helper).toContain("type -P gh");
     expect(helper).not.toContain("command -v gh");
+    expect(helper.indexOf("/opt/homebrew/opt/gh/bin/gh")).toBeLessThan(
+      helper.indexOf("/opt/homebrew/bin/gh"),
+    );
   });
 });

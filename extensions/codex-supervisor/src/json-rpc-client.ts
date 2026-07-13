@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import WebSocket from "ws";
 import type { CodexJsonRpcConnection, CodexSupervisorEndpoint } from "./types.js";
 
@@ -15,10 +16,6 @@ type PendingRequest = {
   resolve: (value: unknown) => void;
   timeout: NodeJS.Timeout;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function formatJsonRpcError(message: Record<string, unknown>): Error {
   const error = isRecord(message.error) ? message.error : {};

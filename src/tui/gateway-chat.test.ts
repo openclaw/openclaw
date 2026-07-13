@@ -141,7 +141,7 @@ describe("resolveGatewayConnection", () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
     await expect(resolveGatewayConnection({ url: "wss://override.example/ws" })).rejects.toThrow(
-      "explicit credentials",
+      /remove --url to use the configured target/i,
     );
   });
 
@@ -655,6 +655,52 @@ describe("GatewayChatClient", () => {
     });
   });
 
+  it("preserves side runs for session-scoped TUI aborts", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await client.abortChat({ sessionKey: "main" });
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+      preserveSideRuns: true,
+    });
+  });
+
+  it("retries session aborts without side-run preservation on older Gateways", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid chat.abort params: at root: unexpected property 'preserveSideRuns'",
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["run-main"] });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(client.abortChat({ sessionKey: "main" })).resolves.toEqual({
+      ok: true,
+      aborted: true,
+      runIds: ["run-main"],
+    });
+    expect(request).toHaveBeenNthCalledWith(1, "chat.abort", {
+      sessionKey: "main",
+      preserveSideRuns: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", { sessionKey: "main" });
+  });
+
   it("returns the actual chat send ack status from the gateway", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
@@ -697,6 +743,28 @@ describe("GatewayChatClient", () => {
       agentId: "main",
       provider: "discord",
       scope: "text",
+    });
+  });
+
+  it("lists and resolves plugin approvals through the gateway", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const pending = [{ id: "plugin:skill-1" }];
+    const request = vi.fn().mockResolvedValueOnce(pending).mockResolvedValueOnce({ ok: true });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(client.listPluginApprovals()).resolves.toEqual(pending);
+    await expect(client.resolvePluginApproval("plugin:skill-1", "allow-once")).resolves.toEqual({
+      ok: true,
+    });
+
+    expect(request).toHaveBeenNthCalledWith(1, "plugin.approval.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
+      id: "plugin:skill-1",
+      decision: "allow-once",
     });
   });
 });

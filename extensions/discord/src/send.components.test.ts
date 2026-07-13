@@ -130,6 +130,27 @@ describe("sendDiscordComponentMessage", () => {
     );
   });
 
+  it("reports the platform send before component registry bookkeeping", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText, id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "msg-progress", channel_id: "chan-1" });
+    registerMock.mockImplementationOnce(() => {
+      throw new Error("registry write failed");
+    });
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendDiscordComponentMessage(
+        "channel:chan-1",
+        { blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }] },
+        { cfg: DISCORD_TEST_CFG, rest, token: "t", onDeliveryResult },
+      ),
+    ).rejects.toThrow("registry write failed");
+
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.messageId).toBe("msg-progress");
+  });
+
   it("edits component messages and refreshes component registry entries", async () => {
     const { rest, patchMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({
@@ -263,6 +284,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
   it("forwards mediaReadFile and mediaAccess to sendMessageDiscord", async () => {
     const readFileMock = vi.fn().mockResolvedValue(Buffer.from("pdf"));
     const mediaAccess = { localRoots: ["/tmp"], readFile: readFileMock };
+    const onDeliveryResult = vi.fn();
 
     await sendDiscordComponentMessage(
       "channel:chan-1",
@@ -273,6 +295,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
         mediaUrl: "https://example.com/report.pdf",
         mediaReadFile: readFileMock,
         mediaAccess,
+        onDeliveryResult,
       },
     );
 
@@ -296,6 +319,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
         maxLinesPerMessage: undefined,
         tableMode: undefined,
         chunkMode: undefined,
+        onDeliveryResult,
       },
     ]);
   });

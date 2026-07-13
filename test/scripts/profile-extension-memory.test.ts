@@ -312,7 +312,8 @@ describe("scripts/profile-extension-memory", () => {
           hookPath,
           name: "timeout-descendant",
           repoRoot: root,
-          timeoutMs: 1_000,
+          shutdownGraceMs: 100,
+          timeoutMs: 250,
         });
 
         await waitForCondition(() => existsSync(descendantPidPath));
@@ -371,6 +372,7 @@ describe("scripts/profile-extension-memory", () => {
             `  hookPath: ${JSON.stringify(hookPath)},`,
             "  name: 'parent-signal-descendant',",
             `  repoRoot: ${JSON.stringify(root)},`,
+            "  shutdownGraceMs: 100,",
             "  timeoutMs: 30000,",
             "});",
           ].join("\n"),

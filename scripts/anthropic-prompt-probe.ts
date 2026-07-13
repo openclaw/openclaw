@@ -14,13 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { resolveDefaultAgentDir } from "../src/agents/agent-scope.js";
-import { ensureAuthProfileStore, type AuthProfileCredential } from "../src/agents/auth-profiles.js";
-import { normalizeProviderId } from "../src/agents/model-selection.js";
-import { validateAnthropicSetupToken } from "../src/commands/auth-token.js";
-import { callGateway } from "../src/gateway/call.js";
-import { extractPayloadText } from "../src/gateway/test-helpers.agent-results.js";
-import { getFreePortBlockWithPermissionFallback } from "../src/test-utils/ports.js";
+import type { AuthProfileCredential } from "../src/agents/auth-profiles.js";
 import {
   parseBooleanEnv,
   parseStrictIntegerOption,
@@ -214,9 +208,10 @@ function isSetupToken(value: string): boolean {
   return value.startsWith("sk-ant-oat01-");
 }
 
-function listSetupTokenProfiles(store: {
-  profiles: Record<string, AuthProfileCredential>;
-}): Array<{ id: string; token: string }> {
+function listSetupTokenProfiles(
+  store: { profiles: Record<string, AuthProfileCredential> },
+  normalizeProviderId: (provider: string) => string,
+): Array<{ id: string; token: string }> {
   return Object.entries(store.profiles)
     .filter(([, cred]) => {
       if (cred.type !== "token") {
@@ -244,15 +239,25 @@ function pickSetupTokenProfile(candidates: Array<{ id: string; token: string }>)
   return candidates[0] ?? null;
 }
 
-function validateSetupToken(value: string): string {
-  const error = validateAnthropicSetupToken(value);
-  if (error) {
-    throw new Error(`invalid setup-token: ${error}`);
-  }
-  return value;
-}
-
-function resolveSetupTokenSource(): TokenSource {
+async function resolveSetupTokenSource(): Promise<TokenSource> {
+  const [
+    { resolveDefaultAgentDir },
+    { ensureAuthProfileStore },
+    { normalizeProviderId },
+    tokenApi,
+  ] = await Promise.all([
+    import("../src/agents/agent-scope.js"),
+    import("../src/agents/auth-profiles.js"),
+    import("../src/agents/model-selection.js"),
+    import("../src/commands/auth-token.js"),
+  ]);
+  const validateSetupToken = (value: string): string => {
+    const error = tokenApi.validateAnthropicSetupToken(value);
+    if (error) {
+      throw new Error(`invalid setup-token: ${error}`);
+    }
+    return value;
+  };
   const explicitToken =
     (SETUP_TOKEN_RAW && isSetupToken(SETUP_TOKEN_RAW) ? SETUP_TOKEN_RAW : "") || SETUP_TOKEN_VALUE;
   if (explicitToken) {
@@ -266,7 +271,7 @@ function resolveSetupTokenSource(): TokenSource {
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
-  const candidates = listSetupTokenProfiles(store);
+  const candidates = listSetupTokenProfiles(store, normalizeProviderId);
   if (SETUP_TOKEN_PROFILE) {
     const match = candidates.find((entry) => entry.id === SETUP_TOKEN_PROFILE);
     if (!match) {
@@ -449,13 +454,21 @@ async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: stri
 }
 
 async function getFreePort(): Promise<number> {
+  const { getFreePortBlockWithPermissionFallback } = await import("../src/test-utils/ports.js");
   return await getFreePortBlockWithPermissionFallback({
     offsets: [0, 1, 2, 4],
     fallbackBase: 44_000,
   });
 }
 
-async function runDirectPrompt(prompt: string): Promise<PromptResult> {
+async function runDirectPrompt(
+  prompt: string,
+  options: {
+    claudeBin?: string;
+    shutdownWaitMs?: number;
+    timeoutMs?: number;
+  } = {},
+): Promise<PromptResult> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-probe-"));
   const proxyPort = ENABLE_CAPTURE ? await getFreePort() : undefined;
   const proxy =
@@ -466,17 +479,21 @@ async function runDirectPrompt(prompt: string): Promise<PromptResult> {
   try {
     const stdout: string[] = [];
     const stderr: string[] = [];
-    const child = spawn(CLAUDE_BIN, [...DIRECT_CLAUDE_ARGS, prompt, USER_PROMPT], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        ...(proxyPort ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxyPort}` } : {}),
-        ANTHROPIC_API_KEY: "",
-        ANTHROPIC_API_KEY_OLD: "",
+    const child = spawn(
+      options.claudeBin ?? CLAUDE_BIN,
+      [...DIRECT_CLAUDE_ARGS, prompt, USER_PROMPT],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          ...(proxyPort ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxyPort}` } : {}),
+          ANTHROPIC_API_KEY: "",
+          ANTHROPIC_API_KEY_OLD: "",
+        },
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
       },
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    );
     child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
     child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
     const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -490,7 +507,7 @@ async function runDirectPrompt(prompt: string): Promise<PromptResult> {
       await waitForGatewayPromptChildTreeExit(
         child,
         exitPromise.then(() => undefined),
-        1_500,
+        options.shutdownWaitMs ?? 1_500,
       );
     };
     const removeParentSignalHandlers = installGatewayPromptParentSignalHandlers(
@@ -505,7 +522,7 @@ async function runDirectPrompt(prompt: string): Promise<PromptResult> {
           void stopDirectChild("SIGKILL").finally(() => {
             resolve({ code: null, signal: "SIGKILL" });
           });
-        }, TIMEOUT_MS);
+        }, options.timeoutMs ?? TIMEOUT_MS);
       }),
     ]).finally(() => {
       if (timeoutTimer) {
@@ -736,6 +753,7 @@ function isMissingProcessError(error: unknown): boolean {
 }
 
 async function waitForGatewayReady(url: string, token: string): Promise<void> {
+  const { callGateway } = await import("../src/gateway/call.js");
   const deadline = Date.now() + 45_000;
   let lastError = "gateway start timeout";
   while (Date.now() < deadline) {
@@ -776,7 +794,11 @@ async function readLogTail(logPath: string, maxBytes = GATEWAY_LOG_TAIL_BYTES): 
 }
 
 async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
-  const tokenSource = resolveSetupTokenSource();
+  const tokenSource = await resolveSetupTokenSource();
+  const [{ callGateway }, { extractPayloadText }] = await Promise.all([
+    import("../src/gateway/call.js"),
+    import("../src/gateway/test-helpers.agent-results.js"),
+  ]);
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-prompt-probe-"));
   const stateDir = path.join(tmpDir, "state");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -963,6 +985,7 @@ export const testing = {
   readLogTail,
   readRequestBody,
   resolveAnthropicUpstreamUrl,
+  runDirectPrompt,
   stopGatewayPromptChild,
   summarizeCapture,
   summarizeText,

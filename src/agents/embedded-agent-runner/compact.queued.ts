@@ -44,7 +44,6 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import {
-  compactWithSafetyTimeout,
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
@@ -554,22 +553,19 @@ export async function compactEmbeddedAgentSession(
           attemptNativeHarnessCompaction
         ) {
           try {
-            secondaryNativeHarnessCompaction = await compactWithSafetyTimeout(
-              (compactAbortSignal) =>
-                maybeCompactAgentHarnessSession(
-                  {
-                    ...params,
-                    sessionId: postCompactionSessionId,
-                    sessionFile: postCompactionSessionFile,
-                    contextEngine,
-                    contextTokenBudget,
-                    contextEngineRuntimeContext,
-                    abortSignal: compactAbortSignal,
-                  },
-                  { nativeCompactionRequest: "after_context_engine" },
-                ),
-              resolveCompactionTimeoutMs(params.config),
-              params.abortSignal ? { abortSignal: params.abortSignal } : undefined,
+            // The native bridge owns its terminal-event watchdog. Keep this lane held until
+            // that bridge settles; an outer timeout would release transcript ownership while
+            // the harness could still be compacting the same session.
+            secondaryNativeHarnessCompaction = await maybeCompactAgentHarnessSession(
+              {
+                ...params,
+                sessionId: postCompactionSessionId,
+                sessionFile: postCompactionSessionFile,
+                contextEngine,
+                contextTokenBudget,
+                contextEngineRuntimeContext,
+              },
+              { nativeCompactionRequest: "after_context_engine" },
             );
             if (secondaryNativeHarnessCompaction && !secondaryNativeHarnessCompaction.ok) {
               log.warn(

@@ -1,17 +1,15 @@
 // Parallels Package Log Progress Extract tests cover parallels package log progress extract script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/lib/parallels-package/log-progress-extract.mjs";
-const tempRoots: string[] = [];
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function makeTempRoot(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-parallels-progress-"));
-  tempRoots.push(root);
-  return root;
+  return tempRoots.make("openclaw-parallels-progress-");
 }
 
 function runExtract(logPath?: string) {
@@ -19,12 +17,6 @@ function runExtract(logPath?: string) {
     encoding: "utf8",
   });
 }
-
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
 
 describe("parallels package log progress extractor", () => {
   it("prints a blank status when the log is absent", () => {

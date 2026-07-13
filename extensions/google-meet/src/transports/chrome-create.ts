@@ -5,6 +5,7 @@ import type { GoogleMeetConfig } from "../config.js";
 import {
   asBrowserTabs,
   callBrowserProxyOnNode,
+  forceMeetEnglishUi,
   readBrowserTab,
   resolveChromeNode,
   type BrowserTab,
@@ -199,7 +200,9 @@ export const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   }
   const href = current();
   if (meetUrlPattern.test(href)) {
-    return { meetingUri: href, browserUrl: href, browserTitle: document.title, notes };
+    // The /new redirect keeps the hl=en param we open with; strip query/hash so the
+    // meeting link handed to users stays canonical instead of forcing English on them.
+    return { meetingUri: href.split(/[?#]/)[0], browserUrl: href, browserTitle: document.title, notes };
   }
   const pageText = text(document.body);
   if (clickButton(/\\buse microphone\\b/i, "Accepted Meet microphone prompt with browser automation.")) {
@@ -288,7 +291,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
         nodeId,
         method: "POST",
         path: "/tabs/open",
-        body: { url: GOOGLE_MEET_NEW_URL },
+        body: { url: forceMeetEnglishUi(GOOGLE_MEET_NEW_URL) },
         timeoutMs: stepTimeoutMs,
       }),
     );

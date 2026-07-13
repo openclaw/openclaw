@@ -446,6 +446,7 @@ jobs:
           gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '
             .[]
             | select(.filename | test("^(src/cli/gateway-cli/run-loop\\.ts|src/infra/(gateway-lock|jsonl-socket|push-apns-http2|ssh-tunnel)\\.ts|src/infra/net/|src/proxy-capture/|extensions/codex-supervisor/src/json-rpc-client\\.ts|extensions/irc/src/|extensions/qa-lab/src/|packages/net-policy/src/)"))
+            | select(.filename | test("(^|/)[^/]+\\.(?:e2e\\.)?test\\.tsx?$") | not)
             | .filename as $file
             | (.patch // "")
             | split("\n")[]

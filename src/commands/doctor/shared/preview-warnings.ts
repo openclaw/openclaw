@@ -675,7 +675,7 @@ export type DoctorPreviewNotes = {
   warningNotes: string[];
 };
 
-async function resolveDoctorChannelPreviewConfig(params: {
+export async function resolveDoctorChannelPreviewConfig(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   allowExec?: boolean;

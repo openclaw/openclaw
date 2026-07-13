@@ -173,10 +173,16 @@ describe("pw-tools-core", () => {
       const harness = createDownloadEventHarness();
       const targetPath = path.join(tempDir, "file.bin");
 
-      const saveAs = vi.fn(async (outPath: string) => {
+      type DownloadFixture = {
+        url: () => string;
+        suggestedFilename: () => string;
+        saveAs: (outPath: string) => Promise<void>;
+      };
+      const saveAs = vi.fn(async function (this: DownloadFixture, outPath: string) {
+        expect(this).toBe(download);
         await fs.writeFile(outPath, "file-content", "utf8");
       });
-      const download = {
+      const download: DownloadFixture = {
         url: () => "https://example.com/file.bin",
         suggestedFilename: () => "file.bin",
         saveAs,
@@ -309,6 +315,41 @@ describe("pw-tools-core", () => {
     expect(state.downloadWaiterDepth).toBe(0);
     expect(harness.activeHandlerCount()).toBe(0);
   });
+
+  it("lets only the latest overlapping explicit waiter save the download", async () => {
+    const harness = createDownloadEventHarness();
+    const state = sessionMocks.ensurePageState();
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "latest-content", "utf8");
+    });
+
+    const first = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+    });
+    void first.catch(() => {});
+    const latest = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    expect(state.downloadWaiterDepth).toBe(2);
+    harness.trigger({
+      url: () => "https://example.com/latest.bin",
+      suggestedFilename: () => "latest.bin",
+      saveAs,
+    });
+
+    await expect(first).rejects.toThrow("superseded by another waiter");
+    await expect(latest).resolves.toMatchObject({ suggestedFilename: "latest.bin" });
+    expect(saveAs).toHaveBeenCalledOnce();
+    expect(state.downloadWaiterDepth).toBe(0);
+    expect(harness.activeHandlerCount()).toBe(0);
+  });
+
   it("clicks a ref and atomically finalizes explicit download paths", async () => {
     await withTempDir(async (tempDir) => {
       const harness = createDownloadEventHarness();

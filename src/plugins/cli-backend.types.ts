@@ -33,6 +33,11 @@ export type CliBackendPrepareExecutionContext = {
 export type CliBackendPreparedExecution = {
   env?: Record<string, string>;
   clearEnv?: string[];
+  /**
+   * Backend-owned staging that must run after the core CLI queue admits the turn.
+   * Use this for mutable per-profile CLI homes that the launched process also owns.
+   */
+  beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
 };
 

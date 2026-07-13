@@ -3,6 +3,21 @@ import Foundation
 import SwiftUI
 
 extension RootTabs {
+    struct PhoneChatReturn: Equatable {
+        let destination: SidebarDestination
+        let openChatRequestID: Int
+    }
+
+    struct PhoneControlNavigationRequest: Equatable {
+        enum Target: Equatable {
+            case root
+            case detail(SidebarDestination)
+        }
+
+        let id: Int
+        let target: Target
+    }
+
     private static var sidebarPersistentWidthThreshold: CGFloat {
         980
     }
@@ -34,6 +49,7 @@ extension RootTabs {
         case dreaming
         case usage
         case cron
+        case terminal
         case docs
         case settings
         case gateway
@@ -56,6 +72,7 @@ extension RootTabs {
             case .dreaming: "Dreaming"
             case .usage: "Usage"
             case .cron: "Cron Jobs"
+            case .terminal: "Terminal"
             case .docs: "Docs"
             case .settings: "Settings"
             case .gateway: "Settings / Gateway"
@@ -66,26 +83,6 @@ extension RootTabs {
             switch self {
             case .gateway: "Connection"
             default: self.title
-            }
-        }
-
-        var subtitle: String {
-            switch self {
-            case .chat: "Agent chat and recent work."
-            case .talk: "Realtime voice and fallback controls."
-            case .overview: "Status, entry points, health."
-            case .activity: "Gateway, session, and device activity."
-            case .agents: "Agent roster and readiness."
-            case .workboard: "Agent work queue and session handoff."
-            case .skillWorkshop: "Review and apply proposed skills."
-            case .instances: "Latest presence from OpenClaw nodes."
-            case .sessions: "Active sessions and defaults."
-            case .dreaming: "Memory signals and background synthesis."
-            case .usage: "API usage and costs."
-            case .cron: "Wakeups and recurring runs."
-            case .docs: "Reference docs and setup guides."
-            case .settings: "Connection, permissions, channels, and app options."
-            case .gateway: "Pairing, diagnostics, permissions, and device controls."
             }
         }
 
@@ -103,6 +100,7 @@ extension RootTabs {
             case .dreaming: "moon.stars"
             case .usage: "chart.bar.xaxis"
             case .cron: "timer"
+            case .terminal: "terminal"
             case .docs: "book"
             case .settings: "gearshape"
             case .gateway: "gearshape"
@@ -121,7 +119,7 @@ extension RootTabs {
                 .settings
             case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
                  .usage,
-                 .cron, .docs:
+                 .cron, .terminal, .docs:
                 .control
             }
         }
@@ -132,7 +130,7 @@ extension RootTabs {
                 .gateway
             case .chat, .talk, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
                  .dreaming,
-                 .usage, .cron, .settings, .docs:
+                 .usage, .cron, .terminal, .settings, .docs:
                 nil
             }
         }
@@ -203,7 +201,7 @@ extension RootTabs {
             true
         case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
              .usage,
-             .cron, .docs:
+             .cron, .terminal, .docs:
             false
         }
     }
@@ -288,6 +286,7 @@ extension RootTabs {
                 .dreaming,
                 .usage,
                 .cron,
+                .terminal,
             ]),
         SidebarGroup(
             title: "SETTINGS",
@@ -296,11 +295,14 @@ extension RootTabs {
     ]
 
     static var phoneControlGroups: [SidebarGroup] {
-        self.sidebarGroups
+        // Agents owns a bottom tab and its hub entry duplicated the same destination;
+        // Chat and Talk stay per the tested Control-hub IA contract.
+        let tabOwned: Set<SidebarDestination> = [.agents]
+        return self.sidebarGroups
             .map { group in
                 SidebarGroup(
                     title: group.title,
-                    destinations: group.destinations.filter { $0 != .agents })
+                    destinations: group.destinations.filter { !tabOwned.contains($0) })
             }
             .filter { !$0.destinations.isEmpty }
     }

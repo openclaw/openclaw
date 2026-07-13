@@ -89,7 +89,7 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
     authEpochVersion: 0,
     backendResolved: {},
     preparedBackend: {},
-    reusableCliSession: {},
+    reusableCliSession: { mode: "none" },
   } as unknown;
 }
 

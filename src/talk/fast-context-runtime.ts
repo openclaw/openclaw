@@ -9,6 +9,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
+import { withTimeout } from "../utils/with-timeout.js";
 import type { RealtimeVoiceAgentConsultResult } from "./agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "./agent-consult-tool.js";
 
@@ -112,28 +113,6 @@ function buildMissText(query: string, labels: RealtimeVoiceFastContextLabels): s
   ].join("\n\n");
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_resolve, reject) => {
-        // resolveTimerTimeoutMs caps huge configured deadlines before they
-        // reach Node's timer APIs.
-        timer = setTimeout(
-          () => reject(new RealtimeFastContextTimeoutError(resolvedTimeoutMs)),
-          resolvedTimeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 async function lookupFastContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -178,6 +157,7 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
   const labels = resolveLabels(params.labels);
   const query = buildSearchQuery(params.args);
   try {
+    const timeoutMs = resolveTimerTimeoutMs(params.config.timeoutMs, 1);
     const lookup = await withTimeout(
       lookupFastContext({
         cfg: params.cfg,
@@ -186,7 +166,8 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
         config: params.config,
         query,
       }),
-      params.config.timeoutMs,
+      timeoutMs,
+      { createError: () => new RealtimeFastContextTimeoutError(timeoutMs) },
     );
     if (lookup.status === "unavailable") {
       params.logger.debug?.(`[talk] fast context unavailable: ${lookup.error}`);

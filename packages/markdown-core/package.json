@@ -56,7 +56,7 @@
     }
   },
   "dependencies": {
-    "markdown-it": "14.2.0",
+    "markdown-it": "14.3.0",
     "yaml": "2.9.0"
   }
 }

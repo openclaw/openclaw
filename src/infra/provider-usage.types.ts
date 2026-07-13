@@ -21,6 +21,7 @@ export type UsageSummary = {
 
 export type UsageProviderId =
   | "anthropic"
+  | "clawrouter"
   | "deepseek"
   | "github-copilot"
   | "google-gemini-cli"

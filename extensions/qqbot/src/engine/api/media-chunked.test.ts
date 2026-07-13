@@ -12,10 +12,7 @@ import {
   type UploadPrepareResponse,
 } from "../types.js";
 import type { ApiClient } from "./api-client.js";
-import {
-  ChunkedMediaApi,
-  UploadDailyLimitExceededError,
-} from "./media-chunked.js";
+import { ChunkedMediaApi, UploadDailyLimitExceededError } from "./media-chunked.js";
 import type { UploadCacheAdapter } from "./media.js";
 import { UPLOAD_PREPARE_FALLBACK_CODE } from "./retry.js";
 import type { TokenManager } from "./token.js";
@@ -142,6 +139,7 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     globalThis.fetch = originalFetch;
     fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
@@ -282,6 +280,7 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
   });
 
   it("bounds COS PUT error bodies without using response.text()", async () => {
+    vi.useFakeTimers();
     const client = mockApiClient();
     const tm = mockTokenManager();
     const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
@@ -324,18 +323,17 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     });
 
     const api = new ChunkedMediaApi(client, tm, { logger });
-    let error: unknown;
-    try {
-      await api.uploadChunked({
+    const upload = api
+      .uploadChunked({
         scope: "group",
         targetId: "g1",
         fileType: MediaFileType.FILE,
         source: { kind: "buffer", buffer: Buffer.from("01234567"), fileName: "blob.bin" },
         creds: { appId: "a", clientSecret: "s" },
-      });
-    } catch (caught) {
-      error = caught;
-    }
+      })
+      .catch((error: unknown) => error);
+    await vi.runAllTimersAsync();
+    const error = await upload;
 
     expect(String(error)).toContain("COS PUT failed: 503 Service Unavailable");
     expect(String(error)).toContain("cos gateway unavailable");

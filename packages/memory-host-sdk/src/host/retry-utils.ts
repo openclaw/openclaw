@@ -160,7 +160,7 @@ export async function retryAsync<T>(
   throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+export function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
   }

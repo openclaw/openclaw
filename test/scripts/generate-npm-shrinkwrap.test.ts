@@ -12,6 +12,7 @@ import {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
+  packageJsonForShrinkwrap,
   packageDependencyInputsChanged,
   pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
@@ -26,6 +27,21 @@ describe("generate-npm-shrinkwrap", () => {
   function repoRelativePath(value: string): string {
     return path.relative(process.cwd(), value).replaceAll("\\", "/");
   }
+
+  it("omits workspace packages that are published beside the package", () => {
+    const normalized = packageJsonForShrinkwrap(
+      {
+        dependencies: { "@openclaw/ai": "workspace:2026.6.11", chalk: "5.6.2" },
+        devDependencies: { local: "workspace:*" },
+        peerDependencies: { host: "workspace:^1.2.3" },
+      },
+      {},
+    );
+
+    expect(normalized).not.toHaveProperty("devDependencies");
+    expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
+    expect(normalized.peerDependencies).toEqual({});
+  });
 
   it("runs npm shrinkwrap through cmd.exe for Windows npm shims", () => {
     const execPath = "C:\\nodejs\\node.exe";

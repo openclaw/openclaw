@@ -102,6 +102,7 @@ jobs:
           set -euo pipefail
           ./scripts/ios-configure-signing.sh
           ./scripts/ios-write-version-xcconfig.sh
+          node scripts/ios-write-swift-filelist.mjs
           cd apps/ios
           xcodegen generate
 

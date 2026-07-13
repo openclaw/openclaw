@@ -174,4 +174,37 @@ describe("createFailoverDecisionLogger", () => {
     expect(observation.consoleMessage).not.toContain("rawError=");
     expect(observation.consoleMessage).not.toContain("<html>");
   });
+
+  it("omits raw HTML Cloudflare challenge bodies from consoleMessage for upstream_html 403", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const cfChallengeHtml = "403 <!DOCTYPE html><html><head><title>403 Forbidden</title></head>" +
+      "<body>Enable JavaScript and cookies to continue." +
+      "<p>Please stand by, while we are checking your browser...</p></body></html>";
+    const logDecision = createFailoverDecisionLogger({
+      stage: "assistant",
+      runId: "run:cf-challenge",
+      rawError: cfChallengeHtml,
+      failoverReason: "auth",
+      profileFailureReason: "auth",
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceProvider: "openai",
+      sourceModel: "gpt-5.4",
+      profileId: "openai:p1",
+      fallbackConfigured: true,
+      timedOut: false,
+      aborted: false,
+    });
+
+    logDecision("rotate_profile");
+
+    const observation = firstWarnDetails(warnSpy);
+    // Cloudflare challenge 403 pages classified as upstream_html are CDN
+    // blocks, not auth failures. Their raw HTML must stay out of console
+    // failover diagnostics just like auth_html bodies.
+    expect(observation.providerRuntimeFailureKind).toBe("upstream_html");
+    expect(observation.rawErrorPreview).toBe(cfChallengeHtml);
+    expect(observation.consoleMessage).not.toContain("rawError=");
+    expect(observation.consoleMessage).not.toContain("<html>");
+  });
 });

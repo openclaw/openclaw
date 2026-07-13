@@ -56,6 +56,11 @@ const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
+  // gateway.terminal.* deliberately has no rule here: it falls through to the
+  // `gateway` restart rule below. The terminal drives the Control UI CSP (WASM
+  // permissions) and the bootstrap availability flag, both fixed at document
+  // load, plus live PTYs — none can hot-update a connected client, so a change
+  // must restart the gateway (clients reconnect with a fresh page and CSP).
   {
     prefix: "gateway.channelHealthCheckMinutes",
     kind: "hot",

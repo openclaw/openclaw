@@ -14,6 +14,10 @@
 .content--skill-workshop {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
   padding-bottom: 16px;
 }

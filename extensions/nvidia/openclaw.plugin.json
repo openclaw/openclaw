@@ -46,7 +46,7 @@
             "id": "nvidia/nemotron-3-super-120b-a12b",
             "name": "NVIDIA Nemotron 3 Super 120B",
             "input": ["text"],
-            "contextWindow": 262144,
+            "contextWindow": 1048576,
             "maxTokens": 8192,
             "cost": {
               "input": 0,

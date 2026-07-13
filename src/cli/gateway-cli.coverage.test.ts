@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { registerGatewayCli } from "./gateway-cli.js";
@@ -147,6 +147,13 @@ function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown
 }
 
 describe("gateway-cli coverage", () => {
+  beforeAll(async () => {
+    // Gateway startup intentionally primes this large graph before installing
+    // signal handlers. Load it as suite setup so failure-path timings measure
+    // the lifecycle behavior rather than the one-time module parse.
+    await import("./gateway-cli/lifecycle.runtime.js");
+  });
+
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
     runtimeLogs.length = 0;

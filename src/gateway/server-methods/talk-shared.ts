@@ -13,6 +13,7 @@ import {
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../../packages/speech-core/voice-models.js";
+import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { listRealtimeTranscriptionProviders } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
@@ -72,6 +73,16 @@ function getRecord(value: unknown): Record<string, unknown> | undefined {
 function singleRecordKey(record: Record<string, unknown> | undefined): string | undefined {
   const keys = record ? Object.keys(record) : [];
   return keys.length === 1 ? keys[0] : undefined;
+}
+
+function normalizeRealtimeTransport(value: unknown): TalkRealtimeConfig["transport"] {
+  const transport = normalizeOptionalLowercaseString(value);
+  return transport === "webrtc" ||
+    transport === "provider-websocket" ||
+    transport === "gateway-relay" ||
+    transport === "managed-room"
+    ? transport
+    : undefined;
 }
 
 function getVoiceCallProviderConfig<TConfig extends Record<string, unknown>>(
@@ -197,7 +208,22 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
       normalizeOptionalString(talkRealtime?.voice),
     instructions: normalizeOptionalString(talkRealtime?.instructions),
     mode: normalizeOptionalLowercaseString(talkRealtime?.mode),
-    transport: normalizeOptionalLowercaseString(talkRealtime?.transport),
+    transport: normalizeRealtimeTransport(talkRealtime?.transport),
+    vadThreshold:
+      typeof talkRealtime?.vadThreshold === "number" && Number.isFinite(talkRealtime.vadThreshold)
+        ? talkRealtime.vadThreshold
+        : undefined,
+    silenceDurationMs:
+      typeof talkRealtime?.silenceDurationMs === "number" &&
+      Number.isFinite(talkRealtime.silenceDurationMs)
+        ? talkRealtime.silenceDurationMs
+        : undefined,
+    prefixPaddingMs:
+      typeof talkRealtime?.prefixPaddingMs === "number" &&
+      Number.isFinite(talkRealtime.prefixPaddingMs)
+        ? talkRealtime.prefixPaddingMs
+        : undefined,
+    reasoningEffort: normalizeOptionalString(talkRealtime?.reasoningEffort),
     brain: normalizeOptionalLowercaseString(talkRealtime?.brain),
     consultRouting: normalizeOptionalLowercaseString(talkRealtime?.consultRouting),
   };

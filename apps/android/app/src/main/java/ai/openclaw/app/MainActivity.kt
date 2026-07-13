@@ -27,6 +27,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -87,9 +89,19 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun enterScreenshotMode(scene: AndroidScreenshotScene) {
+    hideScreenshotModeStatusBar()
     setContent {
       AndroidScreenshotModeScreen(scene = scene)
     }
+  }
+
+  private fun hideScreenshotModeStatusBar() {
+    WindowCompat
+      .getInsetsController(window, window.decorView)
+      .apply {
+        systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        hide(WindowInsetsCompat.Type.statusBars())
+      }
   }
 
   override fun onStart() {

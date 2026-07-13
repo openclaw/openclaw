@@ -4,9 +4,9 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-write-version-xcconfig.sh [--build-number 7]
+  scripts/ios-write-version-xcconfig.sh [--version 2026.6.11] [--build-number 7]
 
-Writes apps/ios/build/Version.xcconfig from apps/ios/version.json:
+Writes apps/ios/build/Version.xcconfig from package.json or explicit --version:
 - OPENCLAW_IOS_VERSION = exact canonical iOS version
 - OPENCLAW_MARKETING_VERSION = short iOS/App Store version
 - OPENCLAW_BUILD_VERSION = explicit build number or local numeric fallback
@@ -21,6 +21,18 @@ VERSION_HELPER="${ROOT_DIR}/scripts/ios-version.ts"
 IOS_VERSION=""
 MARKETING_VERSION=""
 BUILD_NUMBER=""
+RELEASE_VERSION=""
+
+require_option_value() {
+  local option="$1"
+  local value="${2-}"
+
+  if [[ -z "${value}" || "${value}" == --* ]]; then
+    echo "Missing value for ${option}." >&2
+    usage >&2
+    exit 1
+  fi
+}
 
 prepare_build_dir() {
   if [[ -L "${BUILD_DIR}" ]]; then
@@ -51,7 +63,13 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --build-number)
+      require_option_value "$1" "${2-}"
       BUILD_NUMBER="${2:-}"
+      shift 2
+      ;;
+    --version)
+      require_option_value "$1" "${2-}"
+      RELEASE_VERSION="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -66,6 +84,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+VERSION_HELPER_ARGS=(--shell)
+if [[ -n "${RELEASE_VERSION}" ]]; then
+  VERSION_HELPER_ARGS+=(--version "${RELEASE_VERSION}")
+fi
+
 while IFS='=' read -r key value; do
   case "${key}" in
     OPENCLAW_IOS_VERSION)
@@ -75,10 +98,10 @@ while IFS='=' read -r key value; do
       MARKETING_VERSION="${value}"
       ;;
   esac
-done < <(cd "${ROOT_DIR}" && node --import tsx "${VERSION_HELPER}" --shell)
+done < <(cd "${ROOT_DIR}" && node --import tsx "${VERSION_HELPER}" "${VERSION_HELPER_ARGS[@]}")
 
 if [[ -z "${IOS_VERSION}" || -z "${MARKETING_VERSION}" ]]; then
-  echo "Unable to resolve iOS version metadata from ${ROOT_DIR}/apps/ios/version.json." >&2
+  echo "Unable to resolve iOS version metadata." >&2
   exit 1
 fi
 

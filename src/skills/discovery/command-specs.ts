@@ -19,7 +19,6 @@ const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
 const SKILL_COMMAND_MAX_LENGTH = 32;
 const SKILL_COMMAND_FALLBACK = "skill";
-const SKILL_COMMAND_DESCRIPTION_MAX_LENGTH = 100;
 
 // De-duplicate noisy skill command diagnostics across large workspace scans.
 function debugSkillCommandOnce(
@@ -128,11 +127,7 @@ export function buildWorkspaceSkillCommandSpecs(
       );
     }
     used.add(normalizeLowercaseStringOrEmpty(unique));
-    const rawDescription = entry.skill.description?.trim() || rawName;
-    const description =
-      rawDescription.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
-        ? rawDescription.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
-        : rawDescription;
+    const description = entry.skill.description?.trim() || rawName;
     const dispatch = (() => {
       const kindRaw = normalizeLowercaseStringOrEmpty(
         entry.frontmatter?.["command-dispatch"] ?? entry.frontmatter?.["command_dispatch"] ?? "",
@@ -201,14 +196,10 @@ export function buildWorkspaceSkillCommandSpecs(
       );
     }
     used.add(normalizeLowercaseStringOrEmpty(unique));
-    const description =
-      entry.description.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
-        ? entry.description.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
-        : entry.description;
     specs.push({
       name: unique,
       skillName: entry.rawName,
-      description,
+      description: entry.description,
       promptTemplate: entry.promptTemplate,
       sourceFilePath: entry.sourceFilePath,
     });

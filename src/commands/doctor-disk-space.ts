@@ -3,9 +3,12 @@ import os from "node:os";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { tryReadDiskSpace } from "../infra/disk-space.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { shortenHomePath } from "../utils.js";
+
+const DISK_SPACE_CHECK_ID = "core/doctor/disk-space";
 
 // 100 MB — below this, config writes and session transcripts are likely to
 // fail silently, causing data loss.
@@ -65,6 +68,67 @@ export function buildDiskSpaceWarnings(params: {
   return warnings;
 }
 
+function collectDiskSpaceWarnings(params: {
+  env?: NodeJS.ProcessEnv;
+  readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
+}): { availableBytes: number; stateDir: string; warnings: readonly string[] } | null {
+  const env = params.env ?? process.env;
+  const homedir = () => resolveRequiredHomeDir(env, os.homedir);
+  const stateDir = resolveStateDir(env, homedir);
+
+  const readDiskSpace = params.readDiskSpace ?? tryReadDiskSpace;
+  const snapshot = readDiskSpace(stateDir);
+  // If we cannot determine free space (no existing ancestor, unsupported FS,
+  // or permission error), skip silently — other contributions already
+  // handle missing directories.
+  if (!snapshot) {
+    return null;
+  }
+
+  const displayStateDir = shortenHomePath(stateDir);
+  const warnings = buildDiskSpaceWarnings({
+    availableBytes: snapshot.availableBytes,
+    displayStateDir,
+  });
+
+  return {
+    availableBytes: snapshot.availableBytes,
+    stateDir,
+    warnings,
+  };
+}
+
+/** Collects read-only structured findings for low disk space around the state directory. */
+export function collectDiskSpaceHealthFindings(
+  _cfg: OpenClawConfig, // reserved for API consistency with other Doctor contributions
+  deps?: {
+    env?: NodeJS.ProcessEnv;
+    readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
+  },
+): readonly HealthFinding[] {
+  const result = collectDiskSpaceWarnings({
+    env: deps?.env,
+    readDiskSpace: deps?.readDiskSpace,
+  });
+  if (!result || result.warnings.length === 0) {
+    return [];
+  }
+
+  const [message, ...details] = result.warnings;
+  return [
+    {
+      checkId: DISK_SPACE_CHECK_ID,
+      severity: "warning",
+      message: message.replace(/^- /, ""),
+      path: result.stateDir,
+      target: formatBytes(result.availableBytes),
+      requirement:
+        result.availableBytes < CRITICAL_BYTES ? "critical-free-space" : "low-free-space",
+      fixHint: details.map((line) => line.replace(/^- /, "")).join(" "),
+    },
+  ];
+}
+
 /**
  * Doctor health contribution: check free disk space on the partition that
  * holds the state directory and warn when it drops below safe thresholds.
@@ -85,26 +149,13 @@ export function noteDiskSpace(
     readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
   },
 ): void {
-  const env = deps?.env ?? process.env;
-  const homedir = () => resolveRequiredHomeDir(env, os.homedir);
-  const stateDir = resolveStateDir(env, homedir);
-
-  const readDiskSpace = deps?.readDiskSpace ?? tryReadDiskSpace;
-  const snapshot = readDiskSpace(stateDir);
-  // If we cannot determine free space (no existing ancestor, unsupported FS,
-  // or permission error), skip silently — other contributions already
-  // handle missing directories.
-  if (!snapshot) {
+  const result = collectDiskSpaceWarnings({
+    env: deps?.env,
+    readDiskSpace: deps?.readDiskSpace,
+  });
+  if (!result || result.warnings.length === 0) {
     return;
   }
 
-  const displayStateDir = shortenHomePath(stateDir);
-  const warnings = buildDiskSpaceWarnings({
-    availableBytes: snapshot.availableBytes,
-    displayStateDir,
-  });
-
-  if (warnings.length > 0) {
-    note(warnings.join("\n"), "Disk space");
-  }
+  note(result.warnings.join("\n"), "Disk space");
 }

@@ -244,7 +244,6 @@ describe("FS tools with workspaceOnly=false", () => {
     await fs.writeFile(allowedAbsolutePath, "seed");
 
     const tools = [
-      createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool),
       wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
         root: workspaceDir,
         relativePath: allowedRelativePath,
@@ -252,7 +251,7 @@ describe("FS tools with workspaceOnly=false", () => {
     ];
 
     const writeTool = requireTool(tools, "write");
-    expect(tools.map((tool) => tool.name).toSorted()).toEqual(["read", "write"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["write"]);
 
     await expect(
       writeTool.execute("test-call-memory-deny", {

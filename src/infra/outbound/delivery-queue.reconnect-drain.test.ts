@@ -293,9 +293,10 @@ describe("drainPendingDeliveries for reconnect", () => {
     });
 
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    expectLogMessageWith(log.info, `entry ${id} is already being recovered`);
+    expect(log.info).not.toHaveBeenCalled();
 
     resolveDeliver!();
     await startupRecovery;
@@ -479,8 +480,9 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     const claimResult = await withActiveDeliveryClaim(id, async () => {
       await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+      await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
       expect(deliver).not.toHaveBeenCalled();
-      expectLogMessageWith(log.info, `entry ${id} is already being recovered`);
+      expect(log.info).not.toHaveBeenCalled();
     });
     expect(claimResult.status).toBe("claimed");
 

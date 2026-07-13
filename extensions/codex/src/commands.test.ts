@@ -2100,6 +2100,68 @@ describe("codex command", () => {
     });
   });
 
+  it("rejects Computer Use installation from non-owner non-admin callers", async () => {
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+    const ctx = createContext(
+      "computer-use install --source attacker/marketplace --plugin untrusted",
+      undefined,
+      { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+    );
+
+    const result = await handleCodexCommand(ctx, {
+      deps: createDeps({ installCodexComputerUse }),
+    });
+
+    expectResultTextContains(result, "Only an owner or operator.admin");
+    expect(installCodexComputerUse).not.toHaveBeenCalled();
+  });
+
+  it("keeps Computer Use status overrides read-only for non-owner callers", async () => {
+    const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+    const ctx = createContext(
+      "computer-use status --source existing/source --marketplace-path /existing/marketplace --marketplace existing --plugin existing-plugin --mcp-server existing-server",
+      undefined,
+      {
+        senderIsOwner: false,
+        gatewayClientScopes: ["operator.write"],
+      },
+    );
+
+    const result = await handleCodexCommand(ctx, {
+      deps: createDeps({ readCodexComputerUseStatus, installCodexComputerUse }),
+    });
+
+    expectResultTextContains(result, "Computer Use: ready");
+    expect(readCodexComputerUseStatus).toHaveBeenCalledWith({
+      pluginConfig: undefined,
+      forceEnable: true,
+      overrides: {
+        marketplaceSource: "existing/source",
+        marketplacePath: "/existing/marketplace",
+        marketplaceName: "existing",
+        pluginName: "existing-plugin",
+        mcpServerName: "existing-server",
+      },
+    });
+    expect(installCodexComputerUse).not.toHaveBeenCalled();
+  });
+
+  it("allows operator.admin gateway callers to install Codex Computer Use", async () => {
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+    const ctx = createContext("computer-use install", undefined, {
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.admin"],
+    });
+
+    const result = await handleCodexCommand(ctx, {
+      deps: createDeps({ installCodexComputerUse }),
+    });
+
+    expectResultTextContains(result, "Computer Use: ready");
+    expect(installCodexComputerUse).toHaveBeenCalledOnce();
+  });
+
   it("shows help when Computer Use option values are missing", async () => {
     const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
 
@@ -3814,6 +3876,106 @@ describe("codex command", () => {
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       config: {},
     });
+  });
+
+  it("requires an owner or operator.admin for Codex binding and permission changes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const startCodexConversationThread = vi.fn();
+    const codexControlRequest = vi.fn();
+    const resolveCodexCliSessionForBindingOnNode = vi.fn();
+    const stopCodexConversationTurn = vi.fn();
+    const steerCodexConversationTurn = vi.fn();
+    const setCodexConversationModel = vi.fn();
+    const setCodexConversationFastMode = vi.fn();
+    const setCodexConversationPermissions = vi.fn(
+      async () => "Codex permissions set to full access.",
+    );
+    const cases = [
+      ["bind", createDeps({ startCodexConversationThread }), startCodexConversationThread],
+      ["resume thread-123", createDeps({ codexControlRequest }), codexControlRequest],
+      [
+        "resume cli-session --host worker-1 --bind here",
+        createDeps({ resolveCodexCliSessionForBindingOnNode }),
+        resolveCodexCliSessionForBindingOnNode,
+      ],
+      ["stop", createDeps({ stopCodexConversationTurn }), stopCodexConversationTurn],
+      [
+        "permissions yolo",
+        createDeps({ setCodexConversationPermissions }),
+        setCodexConversationPermissions,
+      ],
+      ["steer continue", createDeps({ steerCodexConversationTurn }), steerCodexConversationTurn],
+      ["model gpt-5.5", createDeps({ setCodexConversationModel }), setCodexConversationModel],
+      ["fast on", createDeps({ setCodexConversationFastMode }), setCodexConversationFastMode],
+      ["compact", createDeps({ codexControlRequest }), codexControlRequest],
+      ["review", createDeps({ codexControlRequest }), codexControlRequest],
+    ] as const;
+
+    for (const [args, deps, sideEffect] of cases) {
+      await expect(
+        handleCodexCommand(
+          createContext(args, sessionFile, {
+            senderIsOwner: false,
+            gatewayClientScopes: ["operator.write"],
+          }),
+          { deps },
+        ),
+      ).resolves.toEqual({
+        text: "Only an owner or operator.admin can control Codex native execution.",
+      });
+      expect(sideEffect).not.toHaveBeenCalled();
+    }
+
+    const detachConversationBinding = vi.fn();
+    for (const args of ["detach", "unbind"]) {
+      await expect(
+        handleCodexCommand(
+          createContext(args, sessionFile, {
+            senderIsOwner: false,
+            gatewayClientScopes: ["operator.write"],
+            detachConversationBinding,
+          }),
+          { deps: createDeps() },
+        ),
+      ).resolves.toEqual({
+        text: "Only an owner or operator.admin can control Codex native execution.",
+      });
+    }
+    expect(detachConversationBinding).not.toHaveBeenCalled();
+
+    const readCodexPermissions = vi.fn(async () => "Codex permissions: full access.");
+    await expect(
+      handleCodexCommand(
+        createContext("permissions status", sessionFile, {
+          senderIsOwner: false,
+          gatewayClientScopes: ["operator.write"],
+        }),
+        { deps: createDeps({ setCodexConversationPermissions: readCodexPermissions }) },
+      ),
+    ).resolves.toEqual({ text: "Codex permissions: full access." });
+    expect(readCodexPermissions).toHaveBeenCalledTimes(1);
+
+    await expect(
+      handleCodexCommand(
+        createContext("permissions yolo", sessionFile, {
+          senderIsOwner: true,
+          gatewayClientScopes: ["operator.write"],
+        }),
+        { deps: createDeps({ setCodexConversationPermissions }) },
+      ),
+    ).resolves.toEqual({ text: "Codex permissions set to full access." });
+    expect(setCodexConversationPermissions).toHaveBeenCalledTimes(1);
+
+    await expect(
+      handleCodexCommand(
+        createContext("permissions yolo", sessionFile, {
+          senderIsOwner: false,
+          gatewayClientScopes: ["operator.admin"],
+        }),
+        { deps: createDeps({ setCodexConversationPermissions }) },
+      ),
+    ).resolves.toEqual({ text: "Codex permissions set to full access." });
+    expect(setCodexConversationPermissions).toHaveBeenCalledTimes(2);
   });
 
   it("escapes current bound model status before chat display", async () => {

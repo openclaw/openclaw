@@ -1,15 +1,20 @@
 // Voice Call helper module supports config behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   buildSecretInputSchema,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   type SecretInput,
 } from "openclaw/plugin-sdk/secret-input";
+import {
+  canonicalizeMainSessionAlias,
+  type SessionScope,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
-import { normalizePath } from "./path-utils.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
@@ -523,7 +528,7 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
 }
 
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
-  const normalized = normalizePath(servePath);
+  const normalized = normalizeWebhookPath(servePath);
   if (normalized.endsWith("/webhook")) {
     return `${normalized.slice(0, -"/webhook".length)}/stream/realtime`;
   }
@@ -567,6 +572,22 @@ export function resolveVoiceCallNumberRouteKey(
   return Object.keys(routes).find(
     (routeKey) => normalizePhoneRouteKey(routeKey) === normalizedPhone,
   );
+}
+
+/** Resolve inbound-only number routing from a persisted call record. */
+export function resolveVoiceCallNumberRouteKeyForCall(call: {
+  direction?: "inbound" | "outbound";
+  to?: string;
+  metadata?: { numberRouteKey?: unknown };
+}): string | undefined {
+  if (call.direction !== "inbound") {
+    return undefined;
+  }
+  const storedRouteKey = call.metadata?.numberRouteKey;
+  if (typeof storedRouteKey === "string") {
+    return storedRouteKey;
+  }
+  return call.to;
 }
 
 export function resolveVoiceCallEffectiveConfig(
@@ -695,21 +716,73 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
   };
 }
 
+export type VoiceCallCoreSessionConfig = { mainKey?: string; scope?: SessionScope };
+
 export function resolveVoiceCallSessionKey(params: {
-  config: Pick<VoiceCallConfig, "sessionScope">;
+  config: Pick<VoiceCallConfig, "agentId" | "sessionScope">;
   callId: string;
   phone?: string;
   explicitSessionKey?: string;
+  coreSession?: VoiceCallCoreSessionConfig;
 }): string {
   const explicit = params.explicitSessionKey?.trim();
   if (explicit) {
-    return explicit;
+    return resolveVoiceCallAgentSessionKey({
+      config: params.config,
+      sessionKey: explicit,
+      coreSession: params.coreSession,
+    });
   }
+  // Startup migration promotes unambiguous shipped `voice:*` rows;
+  // generate only canonical keys here so new history never needs repair.
+  const prefix = `agent:${normalizeAgentId(params.config.agentId)}:voice`;
   if (params.config.sessionScope === "per-call") {
-    return `voice:call:${params.callId}`;
+    return `${prefix}:call:${params.callId}`.toLowerCase();
   }
   const normalizedPhone = params.phone?.replace(/\D/g, "");
-  return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+  return (
+    normalizedPhone ? `${prefix}:${normalizedPhone}` : `${prefix}:${params.callId}`
+  ).toLowerCase();
+}
+
+/** Resolve persisted or integration-provided keys into the configured agent namespace. */
+export function resolveVoiceCallAgentSessionKey(params: {
+  config: Pick<VoiceCallConfig, "agentId">;
+  sessionKey: string;
+  coreSession?: VoiceCallCoreSessionConfig;
+}): string {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    throw new Error("Voice Call session key cannot be empty");
+  }
+  const lower = sessionKey.toLowerCase();
+  const agentId = normalizeAgentId(params.config.agentId);
+  if (lower === "global" || lower === "unknown") {
+    return lower;
+  }
+  const parsedInput = parseAgentSessionKey(sessionKey);
+  let normalizedScopedKey: string;
+  if (
+    parsedInput &&
+    normalizeAgentId(parsedInput.agentId) === parsedInput.agentId &&
+    parsedInput.agentId === agentId
+  ) {
+    normalizedScopedKey = `agent:${parsedInput.agentId}:${parsedInput.rest}`;
+  } else {
+    // Voice Call's configured agent owns both the store and runtime. Foreign or
+    // malformed agent-shaped input is an opaque integration key, not a route.
+    const wrappedInput = parseAgentSessionKey(`agent:${agentId}:${sessionKey}`);
+    if (!wrappedInput) {
+      throw new Error("Voice Call session key could not be normalized");
+    }
+    normalizedScopedKey = `agent:${agentId}:${wrappedInput.rest}`;
+  }
+  const canonicalMain = canonicalizeMainSessionAlias({
+    cfg: { session: params.coreSession },
+    agentId,
+    sessionKey: normalizedScopedKey,
+  });
+  return canonicalMain === normalizedScopedKey ? normalizedScopedKey : canonicalMain;
 }
 
 /**

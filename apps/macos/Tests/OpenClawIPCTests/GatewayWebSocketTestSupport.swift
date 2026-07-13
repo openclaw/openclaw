@@ -175,6 +175,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
         self.lock.withLock { self.connectRequestID }
     }
 
+    func snapshotSendCount() -> Int {
+        self.lock.withLock { self.sendCount }
+    }
+
     func resume() {
         self.state = .running
     }

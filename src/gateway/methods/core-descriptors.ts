@@ -66,6 +66,9 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugin.approval.resolve", scope: "operator.approvals" },
   { name: "plugins.uiDescriptors", scope: "operator.read" },
   { name: "plugins.sessionAction", scope: "dynamic" },
+  { name: "crestodian.chat", scope: "operator.admin" },
+  { name: "crestodian.setup.detect", scope: "operator.admin" },
+  { name: "crestodian.setup.activate", scope: "operator.admin" },
   { name: "wizard.start", scope: "operator.admin" },
   { name: "wizard.next", scope: "operator.admin" },
   { name: "wizard.cancel", scope: "operator.admin" },
@@ -174,6 +177,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "device.pair.remove", scope: "operator.pairing" },
   { name: "device.token.rotate", scope: "operator.pairing" },
   { name: "device.token.revoke", scope: "operator.pairing" },
+  { name: "device.pair.setupCode", scope: "operator.admin", advertise: false },
   { name: "node.rename", scope: "operator.pairing" },
   { name: "node.list", scope: "operator.read" },
   { name: "node.describe", scope: "operator.read" },
@@ -209,6 +213,12 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "chat.message.get", scope: "operator.read", startup: true },
   { name: "chat.abort", scope: "operator.write" },
   { name: "chat.send", scope: "operator.write" },
+  // Operator terminal: admin-only PTY surface. Appended to the advertised block
+  // so existing advertised method indices stay stable for older clients.
+  { name: "terminal.open", scope: "operator.admin" },
+  { name: "terminal.input", scope: "operator.admin" },
+  { name: "terminal.resize", scope: "operator.admin" },
+  { name: "terminal.close", scope: "operator.admin" },
   { name: "assistant.media.get", scope: "operator.read", advertise: false },
   { name: "sessions.get", scope: "operator.read", advertise: false },
   { name: "sessions.resolve", scope: "operator.read", advertise: false },
@@ -218,6 +228,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "poll", scope: "operator.write", advertise: false },
   { name: "sessions.steer", scope: "operator.write", advertise: false },
   { name: "push.test", scope: "operator.write", advertise: false },
+  { name: "attach.grant", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "attach.revoke", scope: "operator.admin" },
   { name: "push.web.vapidPublicKey", scope: "operator.write", advertise: false },
   { name: "push.web.subscribe", scope: "operator.write", advertise: false },
   { name: "push.web.unsubscribe", scope: "operator.write", advertise: false },
@@ -228,6 +240,14 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "nativeHook.invoke", scope: "operator.admin", advertise: false },
   { name: "web.login.start", scope: "operator.admin", advertise: false },
   { name: "web.login.wait", scope: "operator.admin", advertise: false },
+  // Terminal detach/reattach surface. Kept together near the end so previously
+  // advertised method indices stay stable for older clients; new methods append.
+  { name: "terminal.attach", scope: "operator.admin" },
+  { name: "terminal.list", scope: "operator.admin" },
+  { name: "terminal.text", scope: "operator.admin" },
+  { name: "controlUi.githubPreview", scope: "operator.read" },
+  // Additive discovery methods append here so older clients keep stable indices.
+  { name: "system.info", scope: "operator.read" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

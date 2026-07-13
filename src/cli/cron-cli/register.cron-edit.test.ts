@@ -222,11 +222,50 @@ describe("cron edit command", () => {
     );
   });
 
+  it("clears the thinking override with --clear-thinking (CLI parity with cron.update thinking:null)", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-thinking"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ clearThinking: true }),
+      {
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            thinking: null,
+          },
+        },
+      },
+    );
+  });
+
+  it("rejects combining --thinking with --clear-thinking", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--thinking", "high", "--clear-thinking"], {
+      from: "user",
+    });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Use --thinking or --clear-thinking, not both"),
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
   it("documents the --clear-model flag alongside the sibling --clear-tools", () => {
     const editCommand = createCronProgram().commands.find((command) => command.name() === "edit");
     const help = editCommand?.helpInformation() ?? "";
 
     expect(help).toContain("--clear-model");
+    expect(help).toContain("--clear-thinking");
     expect(help).toContain("--clear-tools");
   });
 

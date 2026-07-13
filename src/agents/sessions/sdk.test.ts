@@ -298,6 +298,37 @@ describe("createAgentSession tool defaults", () => {
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
   });
 
+  it("preserves channel-progress visibility for custom tools", async () => {
+    const hiddenTool: ToolDefinition = {
+      name: "internal_wait",
+      label: "Internal Wait",
+      hideFromChannelProgress: true,
+      description: "Waits for internal work.",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        details: {},
+      }),
+    };
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      noTools: "builtin",
+      customTools: [hiddenTool],
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.agent.state.tools).toEqual([
+      expect.objectContaining({
+        name: "internal_wait",
+        hideFromChannelProgress: true,
+      }),
+    ]);
+  });
+
   it("preserves an exact base system prompt when active tools change", async () => {
     const customTool: ToolDefinition = {
       name: "custom_lookup",

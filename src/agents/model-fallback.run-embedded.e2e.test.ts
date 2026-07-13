@@ -245,6 +245,7 @@ async function runEmbeddedFallback(params: {
     sessionId: params.sessionId,
     lane: params.lane,
     agentDir: params.agentDir,
+    abortSignal: params.abortSignal,
     run: (provider, model, options) =>
       runEmbeddedAgent({
         sessionId,
@@ -259,6 +260,7 @@ async function runEmbeddedFallback(params: {
         lane: params.lane,
         authProfileIdSource: "auto",
         allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+        isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
         timeoutMs: 5_000,
         runId: params.runId,
         abortSignal: params.abortSignal,

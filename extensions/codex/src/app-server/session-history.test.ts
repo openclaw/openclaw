@@ -32,6 +32,9 @@ async function writeSession(records: unknown[]): Promise<string> {
   return sessionFile;
 }
 
+// Fixtures keep legacy string content on purpose: session ingest normalizes
+// assistant strings into [{ type: "text" }] blocks, so expectations below
+// assert the canonical block-array shape for assistant rows.
 function messageEntry(params: {
   id: string;
   parentId: string | null;
@@ -60,6 +63,27 @@ function mirroredTarget(sessionFile: string) {
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
+  it("treats a missing mirrored session file as empty history", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "session.jsonl");
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toEqual([]);
+  });
+
+  it("returns undefined for malformed non-empty mirrored session files", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "session.jsonl");
+    await fs.writeFile(sessionFile, JSON.stringify({ type: "message", id: "orphan" }) + "\n");
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toBeUndefined();
+  });
+
   it("replays only the branch selected by a leaf control", async () => {
     const sessionFile = await writeSession([
       messageEntry({ id: "root", parentId: null, role: "user", content: "root prompt" }),
@@ -87,7 +111,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toMatchObject([
       { role: "user", content: "root prompt" },
-      { role: "assistant", content: "active answer" },
+      { role: "assistant", content: [{ type: "text", text: "active answer" }] },
     ]);
   });
 
@@ -141,7 +165,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toMatchObject([
       { role: "user", content: "visible prompt" },
-      { role: "assistant", content: "continued answer" },
+      { role: "assistant", content: [{ type: "text", text: "continued answer" }] },
     ]);
   });
 
@@ -172,7 +196,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toMatchObject([
       { role: "user", content: "visible prompt" },
-      { role: "assistant", content: "continued answer" },
+      { role: "assistant", content: [{ type: "text", text: "continued answer" }] },
     ]);
   });
 });

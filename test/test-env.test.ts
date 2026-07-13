@@ -233,6 +233,45 @@ describe("installTestEnv", () => {
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
   });
 
+  it("keeps hermetic mode isolated when live flags request the real HOME", () => {
+    const realHome = createTempHome();
+    writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
+    writeFile(path.join(realHome, ".openclaw", "openclaw.json"), '{"live":true}\n');
+    writeFile(path.join(realHome, ".openclaw", "credentials", "token.txt"), "secret\n");
+
+    setTestEnvValue("HOME", realHome);
+    setTestEnvValue("USERPROFILE", realHome);
+    setTestEnvValue("LIVE", "1");
+    setTestEnvValue("OPENCLAW_LIVE_TEST", "1");
+    setTestEnvValue("OPENCLAW_LIVE_GATEWAY", "1");
+    setTestEnvValue("OPENCLAW_LIVE_USE_REAL_HOME", "1");
+    const callerPluginDir = path.join(realHome, "caller-plugins");
+    setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", callerPluginDir);
+    setTestEnvValue("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    setTestEnvValue("OPENCLAW_HOME", realHome);
+
+    const testEnv = installTestEnv({ mode: "hermetic" });
+    cleanupFns.push(testEnv.cleanup);
+
+    expect(testEnv.tempHome).not.toBe(realHome);
+    expect(process.env.HOME).toBe(testEnv.tempHome);
+    expect(process.env.TEST_PROFILE_ONLY).toBeUndefined();
+    expect(process.env.LIVE).toBeUndefined();
+    expect(process.env.OPENCLAW_LIVE_TEST).toBeUndefined();
+    expect(process.env.OPENCLAW_LIVE_GATEWAY).toBeUndefined();
+    expect(process.env.OPENCLAW_LIVE_USE_REAL_HOME).toBeUndefined();
+    expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).not.toBe(callerPluginDir);
+    expect(path.basename(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "")).toBe("extensions");
+    expect(process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR).toBe("1");
+    expect(process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBeUndefined();
+    expect(process.env.OPENCLAW_HOME).toBeUndefined();
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "openclaw.json"))).toBe(false);
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "credentials", "token.txt")),
+    ).toBe(false);
+  });
+
   it("does not load ~/.profile for normal isolated test runs", () => {
     const realHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");

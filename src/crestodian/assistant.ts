@@ -18,6 +18,7 @@ import {
   buildCrestodianAssistantUserPrompt,
   parseCrestodianAssistantPlanText,
   type CrestodianAssistantPlan,
+  type CrestodianAssistantTurn,
 } from "./assistant-prompts.js";
 import type { CrestodianOverview } from "./overview.js";
 
@@ -25,11 +26,14 @@ export {
   buildCrestodianAssistantUserPrompt,
   parseCrestodianAssistantPlanText,
   type CrestodianAssistantPlan,
+  type CrestodianAssistantTurn,
 } from "./assistant-prompts.js";
 
 export type CrestodianAssistantPlanner = (params: {
   input: string;
   overview: CrestodianOverview;
+  history?: CrestodianAssistantTurn[];
+  pendingOperation?: string;
 }) => Promise<CrestodianAssistantPlan | null>;
 
 type RunCliAgentFn = typeof import("../agents/cli-runner.js").runCliAgent;
@@ -57,6 +61,8 @@ export type CrestodianPlannerDeps = CrestodianConfiguredModelPlannerDeps &
 export async function planCrestodianCommand(params: {
   input: string;
   overview: CrestodianOverview;
+  history?: CrestodianAssistantTurn[];
+  pendingOperation?: string;
   deps?: CrestodianPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
   // Prefer the user's configured model; local runtime planners are only a fallback.
@@ -70,6 +76,8 @@ export async function planCrestodianCommand(params: {
 export async function planCrestodianCommandWithConfiguredModel(params: {
   input: string;
   overview: CrestodianOverview;
+  history?: CrestodianAssistantTurn[];
+  pendingOperation?: string;
   deps?: CrestodianConfiguredModelPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
   const input = params.input.trim();
@@ -110,6 +118,8 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
             content: buildCrestodianAssistantUserPrompt({
               input,
               overview: params.overview,
+              ...(params.history ? { history: params.history } : {}),
+              ...(params.pendingOperation ? { pendingOperation: params.pendingOperation } : {}),
             }),
             timestamp: Date.now(),
           },
@@ -138,6 +148,8 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
 export async function planCrestodianCommandWithLocalRuntime(params: {
   input: string;
   overview: CrestodianOverview;
+  history?: CrestodianAssistantTurn[];
+  pendingOperation?: string;
   deps?: CrestodianLocalRuntimePlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
   const input = params.input.trim();
@@ -151,6 +163,8 @@ export async function planCrestodianCommandWithLocalRuntime(params: {
   const prompt = buildCrestodianAssistantUserPrompt({
     input,
     overview: params.overview,
+    ...(params.history ? { history: params.history } : {}),
+    ...(params.pendingOperation ? { pendingOperation: params.pendingOperation } : {}),
   });
 
   for (const backend of backends) {

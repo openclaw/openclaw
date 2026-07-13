@@ -440,7 +440,7 @@ function renderSupportExportResult(
 
 function resolveSupportExportRpcOptions(
   rpc?: Pick<GatewayRpcOpts, "url" | "token" | "password" | "timeout">,
-): GatewayRpcOpts {
+): GatewayRpcOpts & { timeout: string } {
   return {
     url: rpc?.url,
     token: rpc?.token,

@@ -229,13 +229,35 @@ export const twitchMessageAdapter = defineChannelMessageAdapter({
       if (!twitchOutbound.sendText) {
         throw new Error("Twitch text sending is not available.");
       }
-      return toTwitchMessageSendResult(await twitchOutbound.sendText(ctx), "text");
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await twitchOutbound.sendText({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toTwitchMessageSendResult(progress, "text"));
+              },
+            }
+          : {}),
+      });
+      return toTwitchMessageSendResult(result, "text");
     },
     media: async (ctx) => {
       if (!twitchOutbound.sendMedia) {
         throw new Error("Twitch media sending is not available.");
       }
-      return toTwitchMessageSendResult(await twitchOutbound.sendMedia(ctx), "media");
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await twitchOutbound.sendMedia({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toTwitchMessageSendResult(progress, "media"));
+              },
+            }
+          : {}),
+      });
+      return toTwitchMessageSendResult(result, "media");
     },
   },
 });

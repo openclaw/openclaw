@@ -115,6 +115,8 @@ export function startGatewayConfigReloader(opts: {
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash?: string | null;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
+  onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
@@ -279,25 +281,27 @@ export function startGatewayConfigReloader(opts: {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
     });
-    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
-      return;
-    }
     if (settings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       return;
     }
+    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
+      await opts.onConfigChange?.(plan, nextConfig);
+      await opts.onConfigApplied?.(plan, nextConfig);
+      return;
+    }
     if (followUp.requiresRestart) {
-      queueRestart(
-        {
-          ...plan,
-          restartGateway: true,
-          restartReasons: [...plan.restartReasons, followUp.reason],
-        },
-        nextConfig,
-      );
+      const restartPlan = {
+        ...plan,
+        restartGateway: true,
+        restartReasons: [...plan.restartReasons, followUp.reason],
+      };
+      await opts.onConfigChange?.(restartPlan, nextConfig);
+      queueRestart(restartPlan, nextConfig);
       return;
     }
     if (settings.mode === "restart") {
+      await opts.onConfigChange?.({ ...plan, restartGateway: true }, nextConfig);
       queueRestart(plan, nextConfig);
       return;
     }
@@ -310,11 +314,14 @@ export function startGatewayConfigReloader(opts: {
         );
         return;
       }
+      await opts.onConfigChange?.(plan, nextConfig);
       queueRestart(plan, nextConfig);
       return;
     }
 
+    await opts.onConfigChange?.(plan, nextConfig);
     await opts.onHotReload(plan, nextConfig);
+    await opts.onConfigApplied?.(plan, nextConfig);
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {

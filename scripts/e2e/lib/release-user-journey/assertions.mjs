@@ -309,7 +309,11 @@ async function waitClickClackSocket() {
     30,
     "ClickClack websocket timeout seconds",
   );
-  const deadline = Date.now() + timeoutSeconds * 1000;
+  await waitForClickClackSocket({ baseUrl, timeoutMs: timeoutSeconds * 1000 });
+}
+
+export async function waitForClickClackSocket({ baseUrl, timeoutMs, pollIntervalMs = 250 }) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1, deadline - Date.now());
     const state = await withClickClackFixtureResponse(
@@ -329,7 +333,7 @@ async function waitClickClackSocket() {
       }
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 250);
+      setTimeout(resolve, Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
     });
   }
   throw new Error(`Timed out waiting for ClickClack websocket connection at ${baseUrl}`);

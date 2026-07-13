@@ -173,6 +173,42 @@ export const resolveSandboxContextMock = vi.fn(async () => null);
 export const maybeCompactAgentHarnessSessionMock: Mock<
   (params?: unknown, options?: unknown) => Promise<unknown>
 > = vi.fn(async () => undefined);
+async function runCompactWithSafetyTimeoutMock(
+  compact: () => Promise<unknown>,
+  _timeoutMs?: number,
+  opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
+): Promise<unknown> {
+  const abortSignal = opts?.abortSignal;
+  if (!abortSignal) {
+    return await compact();
+  }
+  const cancelAndCreateError = () => {
+    opts?.onCancel?.();
+    const reason = "reason" in abortSignal ? abortSignal.reason : undefined;
+    if (reason instanceof Error) {
+      return reason;
+    }
+    const err = new Error("aborted");
+    err.name = "AbortError";
+    return err;
+  };
+  if (abortSignal.aborted) {
+    throw cancelAndCreateError();
+  }
+  return await Promise.race([
+    compact(),
+    new Promise<never>((_, reject) => {
+      abortSignal.addEventListener(
+        "abort",
+        () => {
+          reject(cancelAndCreateError());
+        },
+        { once: true },
+      );
+    }),
+  ]);
+}
+export const compactWithSafetyTimeoutMock = vi.fn(runCompactWithSafetyTimeoutMock);
 export const rotateTranscriptAfterCompactionMock: Mock<
   (_params?: unknown) => Promise<CompactionTranscriptRotation>
 > = vi.fn(async () => ({
@@ -376,6 +412,8 @@ export function resetCompactHooksHarnessMocks(): void {
     reason: undefined,
     result: { summary: "engine-summary", tokensAfter: 50 },
   });
+  compactWithSafetyTimeoutMock.mockReset();
+  compactWithSafetyTimeoutMock.mockImplementation(runCompactWithSafetyTimeoutMock);
 
   resolveModelMock.mockReset();
   resolveModelMock.mockReturnValue({
@@ -672,45 +710,8 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./compaction-safety-timeout.js", () => {
-    const compactWithSafetyTimeout = vi.fn(
-      async (
-        compact: () => Promise<unknown>,
-        _timeoutMs?: number,
-        opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
-      ) => {
-        const abortSignal = opts?.abortSignal;
-        if (!abortSignal) {
-          return await compact();
-        }
-        const cancelAndCreateError = () => {
-          opts?.onCancel?.();
-          const reason = "reason" in abortSignal ? abortSignal.reason : undefined;
-          if (reason instanceof Error) {
-            return reason;
-          }
-          const err = new Error("aborted");
-          err.name = "AbortError";
-          return err;
-        };
-        if (abortSignal.aborted) {
-          throw cancelAndCreateError();
-        }
-        return await Promise.race([
-          compact(),
-          new Promise<never>((_, reject) => {
-            abortSignal.addEventListener(
-              "abort",
-              () => {
-                reject(cancelAndCreateError());
-              },
-              { once: true },
-            );
-          }),
-        ]);
-      },
-    );
     return {
-      compactWithSafetyTimeout,
+      compactWithSafetyTimeout: compactWithSafetyTimeoutMock,
       resolveCompactionTimeoutMs: vi.fn(() => 30_000),
       // Mirror the real wrapper: bound the engine's compact() with the
       // (mocked) safety timeout and thread the abort signal into its params.
@@ -721,7 +722,7 @@ export async function loadCompactHooksHarness(): Promise<{
           timeoutMs?: number,
           abortSignal?: AbortSignal,
         ) =>
-          compactWithSafetyTimeout(
+          compactWithSafetyTimeoutMock(
             () => contextEngine.compact(abortSignal ? { ...params, abortSignal } : params),
             timeoutMs,
             abortSignal ? { abortSignal } : undefined,
@@ -777,6 +778,9 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
     resolveDefaultAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
     resolveDefaultAgentId: vi.fn(() => "main"),
+    resolveAgentIdFromSessionKey: vi.fn(
+      (sessionKey: string) => sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
+    ),
     resolveRunModelFallbacksOverride: vi.fn(() => undefined),
     resolveSessionAgentId: resolveSessionAgentIdMock,
     resolveSessionAgentIds: resolveSessionAgentIdsMock,

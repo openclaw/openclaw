@@ -58,6 +58,10 @@ describe("SessionManager.open", () => {
       timestamp: "2026-05-27T00:00:02.000Z",
       message: { role: "assistant", content: "important answer" },
     };
+    const normalizedAssistantEntry = {
+      ...assistantEntry,
+      message: { role: "assistant", content: [{ type: "text", text: "important answer" }] },
+    };
     const originalTranscript =
       [
         JSON.stringify(originalHeader).slice(0, 30),
@@ -71,8 +75,8 @@ describe("SessionManager.open", () => {
 
     const sessionManager = SessionManager.open(sessionFile, dir, "/tmp/task-repo");
 
-    expect(sessionManager.getEntries()).toEqual([userEntry, assistantEntry]);
-    expect(sessionManager.getChildren(userEntry.id)).toEqual([assistantEntry]);
+    expect(sessionManager.getEntries()).toEqual([userEntry, normalizedAssistantEntry]);
+    expect(sessionManager.getChildren(userEntry.id)).toEqual([normalizedAssistantEntry]);
     expect(await fs.readFile(sessionFile, "utf8")).toContain("important question");
     expect(await fs.readFile(sessionFile, "utf8")).toContain("important answer");
     await expect(fs.readFile(sessionFile, "utf8")).resolves.not.toBe(originalTranscript);
@@ -151,6 +155,36 @@ describe("SessionManager.open", () => {
     expect(loadEntriesFromFile(sessionFile)).toHaveLength(2);
     expect(findMostRecentSession(dir)).toBe(sessionFile);
     expect(SessionManager.continueRecent(longCwd, dir).getSessionFile()).toBe(sessionFile);
+  });
+
+  it("does not continue a different cwd from a colliding session directory", async () => {
+    const dir = await makeTempDir();
+    const cwdA = "/home/alice/dev/client/app";
+    const cwdB = "/home/alice/dev/client-app";
+    const sessionA = path.join(dir, "session-a.jsonl");
+    const sessionB = path.join(dir, "session-b.jsonl");
+    const headerA = buildSessionHeader(cwdA, "session-a");
+    const headerB = buildSessionHeader(cwdB, "session-b");
+
+    await fs.writeFile(sessionA, `${JSON.stringify(headerA)}\n`, "utf8");
+    await fs.writeFile(sessionB, `${JSON.stringify(headerB)}\n`, "utf8");
+    await fs.utimes(
+      sessionA,
+      new Date("2026-06-18T00:00:00.000Z"),
+      new Date("2026-06-18T00:00:00.000Z"),
+    );
+    await fs.utimes(
+      sessionB,
+      new Date("2026-06-18T00:00:01.000Z"),
+      new Date("2026-06-18T00:00:01.000Z"),
+    );
+
+    expect(findMostRecentSession(dir)).toBe(sessionB);
+    expect(findMostRecentSession(dir, cwdA)).toBe(sessionA);
+    expect(SessionManager.continueRecent(cwdA, dir).getSessionFile()).toBe(sessionA);
+    await expect(SessionManager.list(cwdA, dir)).resolves.toEqual([
+      expect.objectContaining({ path: sessionA, cwd: cwdA }),
+    ]);
   });
 
   it("skips oversized recent session headers instead of hiding valid sessions", async () => {
@@ -1402,6 +1436,10 @@ describe("SessionManager.open", () => {
       timestamp: "2026-06-04T00:00:01.000Z",
       message: { role: "assistant", content: "carried context" },
     };
+    const normalizedAssistantEntry = {
+      ...assistantEntry,
+      message: { role: "assistant", content: [{ type: "text", text: "carried context" }] },
+    };
     await fs.writeFile(
       sessionFile,
       [
@@ -1426,7 +1464,7 @@ describe("SessionManager.open", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as unknown);
     expect(records).toContainEqual(metadata);
-    expect(sessionManager.getEntries()).toEqual([assistantEntry]);
+    expect(sessionManager.getEntries()).toEqual([normalizedAssistantEntry]);
   });
 
   it("bridges parent-linked opaque rows without exposing them as session entries", async () => {
@@ -1928,6 +1966,157 @@ describe("SessionManager.open", () => {
         .slice(-2),
     ).toEqual([baseAnswerId, nextUserId]);
     expect(JSON.stringify(reopened.buildSessionContext())).not.toContain("side delivery");
+  });
+
+  it("accepts an unowned side leaf only when it preserves the active branch", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const sideEntry = {
+      type: "message" as const,
+      id: "unowned-side-delivery",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+
+    sessionManager.mergePromptReleasedSessionEntries([
+      sideEntry,
+      {
+        type: "prompt_released_opaque",
+        preserveActiveLeaf: true,
+        record: {
+          type: "leaf",
+          id: "unowned-side-leaf",
+          parentId: sideEntry.id,
+          timestamp: "2026-07-05T00:00:02.000Z",
+          targetId: activeLeafId,
+          appendParentId: sideEntry.id,
+          appendMode: "side",
+        },
+      },
+    ]);
+
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(JSON.stringify(sessionManager.buildSessionContext())).not.toContain("side delivery");
+  });
+
+  it("rejects an unowned side leaf that moves the active branch before mutating state", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    const olderLeafId = sessionManager.appendMessage({
+      role: "user",
+      content: "question",
+      timestamp: 1,
+    });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const entryCount = sessionManager.getEntries().length;
+    const sideEntry = {
+      type: "message" as const,
+      id: "hostile-side-delivery",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("hostile side delivery"),
+    };
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        sideEntry,
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "hostile-side-leaf",
+            parentId: sideEntry.id,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: olderLeafId,
+            appendParentId: sideEntry.id,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).toThrow("prompt-released side leaf changed the active branch");
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(sessionManager.getEntries()).toHaveLength(entryCount);
+  });
+
+  it("rejects an unowned side leaf that resets a non-root side cursor", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const entryCount = sessionManager.getEntries().length;
+    const sideEntry = {
+      type: "message" as const,
+      id: "side-delivery-before-root-reset",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        sideEntry,
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "unowned-root-reset-leaf",
+            parentId: sideEntry.id,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: activeLeafId,
+            appendParentId: null,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).toThrow("prompt-released side leaf changed the active branch");
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(sessionManager.getEntries()).toHaveLength(entryCount);
+  });
+
+  it("accepts an explicit root side cursor when it matches the current side branch", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+
+    sessionManager.mergePromptReleasedSessionEntries([
+      {
+        type: "prompt_released_opaque",
+        record: {
+          type: "leaf",
+          id: "owned-root-side-leaf",
+          parentId: activeLeafId,
+          timestamp: "2026-07-05T00:00:01.000Z",
+          targetId: activeLeafId,
+          appendParentId: null,
+          appendMode: "side",
+        },
+      },
+    ]);
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "unowned-root-side-leaf",
+            parentId: null,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: activeLeafId,
+            appendParentId: null,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).not.toThrow();
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
   });
 
   it("applies merged leaf controls across separate callbacks", async () => {

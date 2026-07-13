@@ -167,6 +167,16 @@ describe("anthropic provider policy public artifact", () => {
     });
   });
 
+  it("does not return fable-5 off-thinking profile for claude-fable-50 (prefix boundary check)", () => {
+    const profile = resolveThinkingProfile({
+      provider: "claude-cli",
+      modelId: "claude-fable-50",
+    });
+
+    expect(profile).not.toBeNull();
+    expect(profile?.defaultLevel).not.toBe("off");
+  });
+
   it("exposes native max without xhigh for direct Claude 4.6 routes", () => {
     for (const provider of ["anthropic", "claude-cli"]) {
       const profile = resolveThinkingProfile({

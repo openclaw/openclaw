@@ -680,6 +680,17 @@ describe("loginGeminiCliOAuth", () => {
     });
   }
 
+  function responseTextBodyWithTextTrap(body: string, status = 500) {
+    const response = new Response(body, {
+      status,
+      headers: { "Content-Type": "text/plain" },
+    });
+    const text = vi
+      .spyOn(response, "text")
+      .mockRejectedValue(new Error("unexpected response.text() call"));
+    return { response, text };
+  }
+
   function tokenResponse(): Response {
     return responseJson({
       access_token: "access-token",
@@ -925,6 +936,30 @@ describe("loginGeminiCliOAuth", () => {
       /loadCodeAssist failed/i,
     );
     expect(requests.filter(({ url }) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
+  });
+
+  it.each([
+    [
+      "exchange",
+      "x",
+      async () =>
+        (await import("./oauth.token.js")).exchangeCodeForTokens("oauth-code", "pkce-verifier"),
+    ],
+    [
+      "refresh",
+      "y",
+      async () =>
+        (await import("./oauth.token.js")).refreshTokensForGeminiCli({ refresh: "refresh-token" }),
+    ],
+  ])("bounds token %s error bodies without using response.text()", async (_flow, fill, request) => {
+    const { response, text } = responseTextBodyWithTextTrap(fill.repeat(32 * 1024), 500);
+    installGeminiOAuthFetchMock(() => undefined, { tokenResponse: () => response });
+
+    const error = await request().catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(`Token exchange failed: ${fill.repeat(8 * 1024)}`);
+    expect(text).not.toHaveBeenCalled();
   });
 
   it("falls back to GOOGLE_CLOUD_PROJECT when all loadCodeAssist endpoints fail", async () => {

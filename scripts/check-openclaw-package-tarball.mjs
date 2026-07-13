@@ -15,7 +15,7 @@ import {
 } from "./lib/package-dist-imports.mjs";
 
 function usage() {
-  return "Usage: node scripts/check-openclaw-package-tarball.mjs <openclaw.tgz>";
+  return "Usage: node scripts/check-openclaw-package-tarball.mjs [--require-bundled-workspace-deps] <openclaw.tgz>";
 }
 
 function fail(message) {
@@ -25,21 +25,29 @@ function fail(message) {
 
 function parseArgs(argv) {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
-  const tarball = args[0]?.trim() ?? "";
-  if (tarball === "--help" || tarball === "-h") {
-    return { help: true, tarball: "" };
+  let requireBundledWorkspaceDeps = false;
+  let tarball = "";
+  for (const rawArg of args) {
+    const arg = rawArg?.trim() ?? "";
+    if (arg === "--help" || arg === "-h") {
+      return { help: true, requireBundledWorkspaceDeps: false, tarball: "" };
+    }
+    if (arg === "--require-bundled-workspace-deps") {
+      requireBundledWorkspaceDeps = true;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown OpenClaw package tarball check option: ${arg}`);
+    }
+    if (tarball) {
+      throw new Error(`Unexpected OpenClaw package tarball check argument: ${arg}`);
+    }
+    tarball = arg;
   }
   if (!tarball) {
     throw new Error(usage());
   }
-  if (tarball.startsWith("-")) {
-    throw new Error(`Unknown OpenClaw package tarball check option: ${tarball}`);
-  }
-  const extraArg = args[1]?.trim();
-  if (extraArg) {
-    throw new Error(`Unexpected OpenClaw package tarball check argument: ${extraArg}`);
-  }
-  return { help: false, tarball };
+  return { help: false, requireBundledWorkspaceDeps, tarball };
 }
 
 let cliArgs;
@@ -56,6 +64,80 @@ if (cliArgs.help) {
 const { tarball } = cliArgs;
 if (!fs.existsSync(tarball)) {
   fail(`OpenClaw package tarball does not exist: ${tarball}`);
+}
+
+const PACKAGE_DEPENDENCY_SECTIONS = [
+  "dependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "devDependencies",
+];
+const REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES = ["@openclaw/ai"];
+
+function collectWorkspaceProtocolDependencyErrors(packageJson, label) {
+  const errors = [];
+  if (!packageJson || typeof packageJson !== "object") {
+    return errors;
+  }
+
+  for (const section of PACKAGE_DEPENDENCY_SECTIONS) {
+    const dependencies = packageJson[section];
+    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+      continue;
+    }
+
+    for (const [name, spec] of Object.entries(dependencies)) {
+      if (typeof spec === "string" && spec.startsWith("workspace:")) {
+        errors.push(`${label} ${section}.${name} must not use workspace protocol ${spec}`);
+      }
+    }
+  }
+
+  return errors;
+}
+
+function listBundleDependencies(packageJson) {
+  if (!packageJson || typeof packageJson !== "object") {
+    return [];
+  }
+  if (packageJson.bundleDependencies === true) {
+    return Object.keys(packageJson.dependencies ?? {});
+  }
+  const bundleDependencies = Array.isArray(packageJson.bundleDependencies)
+    ? packageJson.bundleDependencies
+    : packageJson.bundledDependencies;
+  return Array.isArray(bundleDependencies)
+    ? bundleDependencies.filter((name) => typeof name === "string")
+    : [];
+}
+
+function collectRequiredBundledWorkspaceDependencyErrors(packageJson, entrySet) {
+  const errors = [];
+  if (!packageJson || typeof packageJson !== "object") {
+    return errors;
+  }
+
+  const dependencies = packageJson.dependencies;
+  if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+    return errors;
+  }
+
+  const bundledDependencies = new Set(listBundleDependencies(packageJson));
+  for (const name of REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES) {
+    if (typeof dependencies[name] !== "string") {
+      continue;
+    }
+    if (!bundledDependencies.has(name)) {
+      errors.push(
+        `package.json dependencies.${name} must be listed in bundleDependencies because it is private to the OpenClaw workspace`,
+      );
+    }
+    if (!entrySet.has(`node_modules/${name}/package.json`)) {
+      errors.push(`package.json dependencies.${name} must be bundled in node_modules/${name}`);
+    }
+  }
+
+  return errors;
 }
 
 const phaseTimingsEnabled = process.env.OPENCLAW_PACKAGE_TARBALL_CHECK_TIMINGS !== "0";
@@ -218,6 +300,10 @@ if (entrySet.has("package.json")) {
   try {
     const packageJson = JSON.parse(readTarEntry("package.json"));
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
+    errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
+    if (cliArgs.requireBundledWorkspaceDeps) {
+      errors.push(...collectRequiredBundledWorkspaceDependencyErrors(packageJson, entrySet));
+    }
   } catch {
     packageVersion = "";
   }
@@ -254,6 +340,9 @@ if (!entrySet.has("npm-shrinkwrap.json")) {
     if (rootPackage?.devDependencies) {
       errors.push("npm-shrinkwrap.json must not lock root devDependencies");
     }
+    errors.push(
+      ...collectWorkspaceProtocolDependencyErrors(rootPackage, "npm-shrinkwrap.json packages root"),
+    );
     const devLockedPackages = Object.entries(shrinkwrap.packages ?? {})
       .filter(([, packageMetadata]) => packageMetadata?.dev === true)
       .map(([packagePath]) => packagePath);

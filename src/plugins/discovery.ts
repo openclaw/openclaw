@@ -608,10 +608,13 @@ function readCandidatePackageManifest(params: {
     return cached;
   }
   const canUseProcessCache = params.origin === "bundled" || !params.rejectHardlinks;
-  const stat = readPackageManifestStat(params.dir);
-  if (canUseProcessCache && stat) {
+  const manifestStat = readPackageManifestStat(params.dir);
+  if (canUseProcessCache && manifestStat !== null) {
     const processCached = packageManifestProcessCache.get(cacheKey);
-    if (processCached?.mtimeMs === stat.mtimeMs && processCached.size === stat.size) {
+    if (
+      processCached?.mtimeMs === manifestStat.mtimeMs &&
+      processCached.size === manifestStat.size
+    ) {
       params.packageManifestCache?.set(cacheKey, processCached.manifest);
       return processCached.manifest;
     }
@@ -621,8 +624,8 @@ function readCandidatePackageManifest(params: {
       ? readTrustedPackageManifest(params.dir)
       : readPackageManifest(params.dir, params.rejectHardlinks, params.rootRealPath);
   params.packageManifestCache?.set(cacheKey, manifest);
-  if (canUseProcessCache && stat) {
-    packageManifestProcessCache.set(cacheKey, { ...stat, manifest });
+  if (canUseProcessCache && manifestStat !== null) {
+    packageManifestProcessCache.set(cacheKey, { ...manifestStat, manifest });
     prunePackageManifestProcessCache();
   }
   return manifest;

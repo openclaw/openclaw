@@ -166,7 +166,7 @@ describe("memory-wiki doctor source sync migration", () => {
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
       changes: [
         "Migrated Memory Wiki import runs -> plugin state (1 imported, 0 existing)",
-        expect.stringContaining("Archived Memory Wiki import-run legacy record ->"),
+        expect.stringContaining("Archived Memory Wiki import-run legacy source ->"),
       ],
       warnings: [],
     });

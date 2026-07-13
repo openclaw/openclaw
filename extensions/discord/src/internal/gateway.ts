@@ -28,7 +28,6 @@ export type Activity = NonNullable<GatewayPresenceUpdateData["activities"]>[numb
 export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
   status: "online" | "idle" | "dnd" | "invisible" | "offline";
 };
-type UpdateVoiceStateData = GatewayVoiceStateUpdateData;
 type RequestGuildMembersData = {
   guild_id: string;
   query?: string;
@@ -441,7 +440,7 @@ export class GatewayPlugin extends Plugin {
     this.send({ op: GatewayOpcodes.PresenceUpdate, d: data } as GatewaySendPayload);
   }
 
-  updateVoiceState(data: UpdateVoiceStateData): void {
+  updateVoiceState(data: GatewayVoiceStateUpdateData): void {
     this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data } as GatewaySendPayload, true);
   }
 

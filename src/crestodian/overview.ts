@@ -330,6 +330,22 @@ function formatStartupAction(overview: CrestodianOverview): string {
   return "Everything basic is reachable. Use `talk to agent` when you want the normal agent.";
 }
 
+/**
+ * Welcome shown right after bootstrap onboarding: setup is done, so the
+ * conversation focuses on channels and the agent handoff instead of repair.
+ */
+export function formatCrestodianOnboardingWelcome(overview: CrestodianOverview): string {
+  return [
+    "## Your agent is ready.",
+    "",
+    `- Model: ${overview.defaultModel ?? "not configured (say `setup` to pick one)"}.`,
+    `- ${overview.gateway.reachable ? `Gateway: running at ${overview.gateway.url}.` : "Gateway: not reachable yet — say `gateway status` if it stays down."}`,
+    "- Connect how you want to talk: say `connect whatsapp`, `connect telegram`, `connect slack`, `connect discord` — or `channels` for the full list.",
+    "",
+    "Say `talk to agent` to meet your agent right here, or `help` for everything I can do.",
+  ].join("\n");
+}
+
 export function formatCrestodianStartupMessage(overview: CrestodianOverview): string {
   const agent = overview.agents.find((entry) => entry.id === overview.defaultAgentId);
   const agentLabel = agent?.name

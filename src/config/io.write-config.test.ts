@@ -183,6 +183,13 @@ describe("config io write", () => {
     expect(persistedHash).not.toBe("");
   };
 
+  const warnMessages = (warn: ReturnType<typeof vi.fn>): string[] =>
+    warn.mock.calls.map(([message]) => String(message));
+
+  const expectWarnContaining = (warn: ReturnType<typeof vi.fn>, expected: string) => {
+    expect(warnMessages(warn).join("\n")).toContain(expected);
+  };
+
   const createFastConfigIO = (home: string) =>
     createConfigIO({
       env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
@@ -935,6 +942,49 @@ describe("config io write", () => {
           )})`,
         ],
       ]);
+    });
+  });
+
+  it("warns when prefix recovery cannot tighten config permissions", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const cleanConfig = {
+        gateway: { mode: "local" },
+        agents: { list: [{ id: "main", default: true }, { id: "discord-dm" }] },
+      } satisfies ConfigFileSnapshot["config"];
+      const cleanRaw = `${JSON.stringify(cleanConfig, null, 2)}\n`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `Found and updated: False\n${cleanRaw}`, "utf-8");
+      const chmodError = Object.assign(new Error("EPERM: chmod denied"), { code: "EPERM" });
+      const warn = vi.fn();
+      const chmod = fsNode.promises.chmod.bind(fsNode.promises);
+      const io = createConfigIO({
+        fs: {
+          ...fsNode,
+          promises: {
+            ...fsNode.promises,
+            chmod: async (target, mode) => {
+              if (target === configPath) {
+                throw chmodError;
+              }
+              return await chmod(target, mode);
+            },
+          },
+        },
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      const initialSnapshot = await io.readConfigFileSnapshot();
+      expect(initialSnapshot.valid).toBe(false);
+
+      await expect(io.recoverConfigFromJsonRootSuffix(initialSnapshot)).resolves.toBe(true);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(cleanRaw);
+      expect(warnMessages(warn)).toContain(
+        `Config permission hardening failed (prefix recovery): ${configPath}: EPERM: chmod denied`,
+      );
+      expectWarnContaining(warn, `Config auto-stripped non-JSON prefix: ${configPath}`);
     });
   });
 

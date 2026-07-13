@@ -4,6 +4,8 @@
   gap: 12px;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+  padding-bottom: 16px;
   --workboard-control-height: 34px;
   --workboard-control-radius: 7px;
   --workboard-control-bg: color-mix(in srgb, var(--bg-elevated) 72%, var(--bg) 28%);

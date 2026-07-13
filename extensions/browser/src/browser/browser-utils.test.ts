@@ -199,6 +199,13 @@ describe("cdp.helpers", () => {
     expect(headers.Authorization).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
   });
 
+  it("decodes percent-encoded basic auth credentials from URLs", () => {
+    const headers = getHeadersWithAuth("https://alice:p%40ss%20word@example.com");
+    expect(headers.Authorization).toBe(
+      `Basic ${Buffer.from("alice:p@ss word").toString("base64")}`,
+    );
+  });
+
   it("keeps preexisting authorization headers", () => {
     const headers = getHeadersWithAuth("https://user:pass@example.com", {
       Authorization: "Bearer token",

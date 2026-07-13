@@ -116,6 +116,8 @@ describe("tsdown config", () => {
       "plugins/runtime/index",
       "plugins/synthetic-auth.runtime",
       "web-fetch/runtime",
+      "mcp/openclaw-tools-serve",
+      "mcp/plugin-tools-serve",
       "plugin-sdk/compat",
       "plugin-sdk/index",
       bundledEntry("active-memory"),

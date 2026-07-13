@@ -96,10 +96,6 @@ function shouldSkipCapabilityResolution(params: {
   );
 }
 
-function uniqueSorted(values: Iterable<string>): string[] {
-  return sortUniqueStrings(values);
-}
-
 /** Loads the manifest snapshot used to resolve capability-provider ownership. */
 export function loadCapabilityManifestSnapshot(params: {
   cfg?: OpenClawConfig;
@@ -127,7 +123,7 @@ function resolveCapabilityPluginIds(params: {
     }),
   );
   return {
-    runtimePluginIds: uniqueSorted(
+    runtimePluginIds: sortUniqueStrings(
       contractPlugins
         .filter((plugin) =>
           isManifestPluginAvailableForControlPlane({
@@ -138,7 +134,7 @@ function resolveCapabilityPluginIds(params: {
         )
         .map((plugin) => plugin.id),
     ),
-    bundledCompatPluginIds: uniqueSorted(
+    bundledCompatPluginIds: sortUniqueStrings(
       contractPlugins.filter((plugin) => plugin.origin === "bundled").map((plugin) => plugin.id),
     ),
   };
@@ -173,7 +169,7 @@ export function resolveBundledCapabilityProviderIds(params: {
 }): string[] {
   const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
   const snapshot = loadCapabilityManifestSnapshot(params);
-  return uniqueSorted(
+  return sortUniqueStrings(
     snapshot.plugins.flatMap((plugin) =>
       plugin.origin === "bundled" ? (plugin.contracts?.[contractKey] ?? []) : [],
     ),
@@ -464,8 +460,8 @@ function resolveRequestedCapabilityPluginIds(params: {
   }
   return runtimePluginIds.size > 0
     ? {
-        runtimePluginIds: uniqueSorted(runtimePluginIds),
-        bundledCompatPluginIds: uniqueSorted(bundledCompatPluginIds),
+        runtimePluginIds: sortUniqueStrings(runtimePluginIds),
+        bundledCompatPluginIds: sortUniqueStrings(bundledCompatPluginIds),
       }
     : undefined;
 }

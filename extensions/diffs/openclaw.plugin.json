@@ -145,8 +145,7 @@
           },
           "fileFormat": {
             "type": "string",
-            "enum": ["png", "pdf"],
-            "default": "png"
+            "enum": ["png", "pdf"]
           },
           "format": {
             "type": "string",
@@ -155,8 +154,7 @@
           },
           "fileQuality": {
             "type": "string",
-            "enum": ["standard", "hq", "print"],
-            "default": "standard"
+            "enum": ["standard", "hq", "print"]
           },
           "fileScale": {
             "type": "number",

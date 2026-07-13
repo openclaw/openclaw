@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -23,6 +24,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
@@ -1042,6 +1044,26 @@ describe("before_tool_call requireApproval handling", () => {
     }
   }
 
+  function registerTelegramPluginApprovalSetup(): void {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+            approvalCapability: {
+              native: {},
+              getActionAvailabilityState: () => ({ kind: "enabled" as const }),
+              getExecInitiatingSurfaceState: () => ({ kind: "disabled" as const }),
+              describePluginApprovalSetup: () => "Configure Telegram native approval setup.",
+            },
+          },
+        },
+      ]),
+    );
+  }
+
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
@@ -1492,7 +1514,8 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", "Denied by user");
   });
 
-  it("blocks on timeout with default deny behavior", async () => {
+  it("blocks turn-source plugin approval timeouts with setup guidance", async () => {
+    registerTelegramPluginApprovalSetup();
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Timeout test",
@@ -1500,17 +1523,30 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-3", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-3",
+      status: "accepted",
+      deliveryRoute: "turn-source",
+    });
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-3", decision: null });
 
     const result = await runBeforeToolCallHook({
       toolName: "bash",
       params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-100123456789",
+        turnSourceAccountId: "default",
+      },
     });
 
     expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Approval timed out");
+    expect(result).toHaveProperty(
+      "reason",
+      "Approval timed out\n\nConfigure Telegram native approval setup.",
+    );
   });
 
   it("allows on timeout when timeoutBehavior is allow and preserves hook params", async () => {
@@ -1556,6 +1592,68 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
+  });
+
+  it.each([
+    [
+      "surfaces validation rejections",
+      new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message:
+          "invalid plugin.approval.request params: at /title: must not have more than 80 characters",
+      }),
+      "Plugin approval request rejected: invalid plugin.approval.request params: at /title: must not have more than 80 characters",
+    ],
+    [
+      "keeps structured service failures on the unavailable fallback",
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "approval service unavailable",
+      }),
+      "Plugin approval required (gateway unavailable)",
+    ],
+  ])("%s", async (_label, error, expectedReason) => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "x".repeat(81),
+        description: "Gateway classification test",
+      },
+    });
+    mockCallGateway.mockRejectedValueOnce(error);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", expectedReason);
+  });
+
+  it("reports an expired accepted approval without calling it a request rejection", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: { title: "Approval", description: "Wait phase classification" },
+    });
+    mockCallGateway
+      .mockResolvedValueOnce({ id: "plugin:accepted", status: "accepted" })
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "approval expired or not found",
+        }),
+      );
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toHaveProperty(
+      "reason",
+      "Plugin approval no longer available: approval expired or not found",
+    );
   });
 
   it("blocks when gateway returns no id", async () => {
@@ -1906,6 +2004,7 @@ describe("before_tool_call requireApproval handling", () => {
       currentMessagingTarget: "channel:deliverable-1",
       agentAccountId: "acct-1",
       currentThreadTs: "thread-1",
+      approvalReviewerDeviceId: "device-tui-reviewer",
     });
     const readTool = tools.find((tool) => tool.name === "read");
     if (!readTool) {
@@ -1920,6 +2019,7 @@ describe("before_tool_call requireApproval handling", () => {
     expect(requestParams.turnSourceTo).toBe("channel:deliverable-1");
     expect(requestParams.turnSourceAccountId).toBe("acct-1");
     expect(requestParams.turnSourceThreadId).toBe("thread-1");
+    expect(requestParams.approvalReviewerDeviceIds).toEqual(["device-tui-reviewer"]);
   });
 
   it("omits turn source routing fields when ctx does not carry them", async () => {

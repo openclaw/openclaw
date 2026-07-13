@@ -309,6 +309,11 @@ function assertBaseSnapshotStillCurrent(
       retryable: false,
     });
   }
+  // Unreadable snapshots cannot be re-read for freshness; the write guard rejects
+  // them before commit unless the caller explicitly requests a destructive write.
+  if (snapshot.readError) {
+    return;
+  }
   const expectedHash = resolveConfigSnapshotHash(snapshot);
   let currentRaw: string | null = null;
   let currentExists = true;
@@ -503,6 +508,7 @@ function resolveConfigStatMetadata(
 
 function resolveConfigWriteSuspiciousReasons(params: {
   existsBefore: boolean;
+  unreadableBefore: boolean;
   previousBytes: number | null;
   nextBytes: number | null;
   hasMetaBefore: boolean;
@@ -512,6 +518,9 @@ function resolveConfigWriteSuspiciousReasons(params: {
   const reasons: string[] = [];
   if (!params.existsBefore) {
     return reasons;
+  }
+  if (params.unreadableBefore) {
+    reasons.push("unreadable-config-before-write");
   }
   if (
     typeof params.previousBytes === "number" &&
@@ -536,6 +545,7 @@ function resolveConfigWriteBlockingReasons(
 ): string[] {
   return suspicious.filter(
     (reason) =>
+      reason === "unreadable-config-before-write" ||
       (reason.startsWith("size-drop:") && options.allowConfigSizeDrop !== true) ||
       reason === "gateway-mode-removed",
   );
@@ -1054,6 +1064,18 @@ function findJsonRootSuffix(
   return null;
 }
 
+function warnOnConfigPermissionHardeningFailure(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+  context: string;
+  error: unknown;
+}): void {
+  const detail = params.error instanceof Error ? params.error.message : String(params.error);
+  params.deps.logger.warn(
+    `Config permission hardening failed (${params.context}): ${params.configPath}: ${detail}`,
+  );
+}
+
 async function persistPrefixedConfigRecovery(params: {
   deps: Required<ConfigIoDeps>;
   configPath: string;
@@ -1071,7 +1093,14 @@ async function persistPrefixedConfigRecovery(params: {
     encoding: "utf-8",
     mode: 0o600,
   });
-  await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
+  await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch((error: unknown) => {
+    warnOnConfigPermissionHardeningFailure({
+      deps: params.deps,
+      configPath: params.configPath,
+      context: "prefix recovery",
+      error,
+    });
+  });
   params.deps.logger.warn(
     `Config auto-stripped non-JSON prefix: ${params.configPath}` +
       (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
@@ -1329,6 +1358,7 @@ function createConfigFileSnapshot(params: {
   valid: boolean;
   runtimeConfig: OpenClawConfig;
   hash?: string;
+  readError?: { code: string | null };
   issues: ConfigFileSnapshot["issues"];
   warnings: ConfigFileSnapshot["warnings"];
   legacyIssues: LegacyConfigIssue[];
@@ -1346,6 +1376,7 @@ function createConfigFileSnapshot(params: {
     runtimeConfig,
     config: runtimeConfig,
     hash: params.hash,
+    ...(params.readError ? { readError: params.readError } : {}),
     issues: params.issues,
     warnings: params.warnings,
     legacyIssues: params.legacyIssues,
@@ -2121,6 +2152,7 @@ export function createConfigIO(
           valid: false,
           runtimeConfig: fallbackSourceConfig,
           hash: fallbackHash,
+          ...(fallbackRaw === null ? { readError: { code: nodeErr?.code ?? null } } : {}),
           issues: [{ path: "", message }],
           warnings: [],
           legacyIssues: [],
@@ -2456,6 +2488,7 @@ export function createConfigIO(
     const gatewayModeAfter = resolveGatewayMode(stampedOutputConfig);
     const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
       existsBefore: snapshot.exists,
+      unreadableBefore: snapshot.readError != null,
       previousBytes,
       nextBytes,
       hasMetaBefore,

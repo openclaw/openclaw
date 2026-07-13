@@ -38,15 +38,16 @@ describe("cdp helpers", () => {
 
   it("releases guarded CDP fetches after the response body is consumed", async () => {
     const release = vi.fn(async () => {});
-    const json = vi.fn(async () => {
+    const arrayBuffer = vi.fn(async () => {
       expect(release).not.toHaveBeenCalled();
-      return { ok: true };
+      return new TextEncoder().encode(JSON.stringify({ ok: true })).buffer;
     });
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: {
         ok: true,
         status: 200,
-        json,
+        body: null,
+        arrayBuffer,
       },
       release,
     });
@@ -58,7 +59,20 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toEqual({ ok: true });
 
-    expect(json).toHaveBeenCalledTimes(1);
+    expect(arrayBuffer).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects oversized CDP JSON responses before parsing", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(new Uint8Array(16 * 1024 * 1024 + 1)),
+      release,
+    });
+
+    await expect(fetchJson("http://127.0.0.1:9222/json/version")).rejects.toThrow(
+      "cdp-json: JSON response exceeds 16777216 bytes",
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -142,6 +156,28 @@ describe("cdp helpers", () => {
     expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
     expect(request?.init?.headers).toEqual({
       Authorization: "Basic b3BlbmNsYXc6cmVsYXktdG9rZW4=",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("decodes URL credentials before sending guarded CDP auth headers", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: {
+        ok: true,
+        status: 200,
+      },
+      release,
+    });
+
+    await expect(
+      fetchOk("http://alice:p%40ss%20word@127.0.0.1:9222/json/version", 250),
+    ).resolves.toBeUndefined();
+
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.init?.headers).toEqual({
+      Authorization: `Basic ${Buffer.from("alice:p@ss word").toString("base64")}`,
     });
     expect(release).toHaveBeenCalledTimes(1);
   });

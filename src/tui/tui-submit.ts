@@ -1,6 +1,22 @@
 // Handles TUI input submission and command dispatch.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+export type TuiSubmitAction = "local shell" | "command" | "message";
+
+function runSubmitAction(
+  action: TuiSubmitAction,
+  run: () => Promise<void> | void,
+  onError: (action: TuiSubmitAction, error: unknown) => void,
+): void {
+  try {
+    void Promise.resolve(run()).catch((error: unknown) => {
+      onError(action, error);
+    });
+  } catch (error) {
+    onError(action, error);
+  }
+}
+
 export function createEditorSubmitHandler(params: {
   editor: {
     setText: (value: string) => void;
@@ -9,6 +25,7 @@ export function createEditorSubmitHandler(params: {
   handleCommand: (value: string) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
+  onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
   canSubmitMessage?: (value: string) => boolean;
   onBlockedMessageSubmit?: (value: string) => void;
 }) {
@@ -28,7 +45,7 @@ export function createEditorSubmitHandler(params: {
     if (raw.startsWith("!") && raw !== "!") {
       params.editor.setText("");
       params.editor.addToHistory(raw);
-      void params.handleBangLine(raw);
+      runSubmitAction("local shell", () => params.handleBangLine(raw), params.onSubmitError);
       return;
     }
 
@@ -36,7 +53,7 @@ export function createEditorSubmitHandler(params: {
       params.editor.setText("");
       // Enable built-in editor prompt history navigation (up/down).
       params.editor.addToHistory(value);
-      void params.handleCommand(value);
+      runSubmitAction("command", () => params.handleCommand(value), params.onSubmitError);
       return;
     }
 
@@ -49,7 +66,7 @@ export function createEditorSubmitHandler(params: {
     params.editor.setText("");
     // Enable built-in editor prompt history navigation (up/down).
     params.editor.addToHistory(value);
-    void params.sendMessage(value);
+    runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);
   };
 }
 

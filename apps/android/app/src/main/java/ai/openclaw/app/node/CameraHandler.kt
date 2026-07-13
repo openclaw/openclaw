@@ -6,6 +6,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -55,6 +56,8 @@ class CameraHandler(
           )
         }.toString()
       GatewaySession.InvokeResult.ok(payload)
+    } catch (err: CancellationException) {
+      throw err
     } catch (err: Throwable) {
       val (code, message) = invokeErrorFromThrowable(err)
       GatewaySession.InvokeResult.error(code = code, message = message)
@@ -83,6 +86,8 @@ class CameraHandler(
           val r = camera.snap(paramsJson)
           camLog("success, payload size=${r.payloadJson.length}")
           r
+        } catch (err: CancellationException) {
+          throw err
         } catch (err: Throwable) {
           camLog("inner error: ${err::class.java.simpleName}: ${err.message}")
           camLog("stack: ${err.stackTraceToString().take(2000)}")
@@ -93,6 +98,8 @@ class CameraHandler(
       camLog("returning result")
       showCameraHud("Photo captured", CameraHudKind.Success, 1600)
       return GatewaySession.InvokeResult.ok(res.payloadJson)
+    } catch (err: CancellationException) {
+      throw err
     } catch (err: Throwable) {
       camLog("outer error: ${err::class.java.simpleName}: ${err.message}")
       camLog("stack: ${err.stackTraceToString().take(2000)}")
@@ -123,6 +130,8 @@ class CameraHandler(
           val r = camera.clip(paramsJson)
           clipLog("success, file size=${r.file.length()}")
           r
+        } catch (err: CancellationException) {
+          throw err
         } catch (err: Throwable) {
           clipLog("inner error: ${err::class.java.simpleName}: ${err.message}")
           clipLog("stack: ${err.stackTraceToString().take(2000)}")
@@ -157,6 +166,8 @@ class CameraHandler(
       return GatewaySession.InvokeResult.ok(
         """{"format":"mp4","base64":"$base64","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}""",
       )
+    } catch (err: CancellationException) {
+      throw err
     } catch (err: Throwable) {
       clipLog("outer error: ${err::class.java.simpleName}: ${err.message}")
       clipLog("stack: ${err.stackTraceToString().take(2000)}")

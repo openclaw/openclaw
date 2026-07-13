@@ -42,7 +42,7 @@ export async function resolveCrestodianOperation(
   const overview = await (opts.loadOverview ?? loadCrestodianOverview)();
   const planner = opts.planWithAssistant ?? (await import("./assistant.js")).planCrestodianCommand;
   const plan = await planner({ input, overview });
-  if (!plan) {
+  if (!plan?.command) {
     return operation;
   }
   const planned = parseCrestodianOperation(plan.command);

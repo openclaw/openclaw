@@ -85,6 +85,7 @@ describe("resolveCodexProviderWebSearchSupport", () => {
 
     await expect(resolveSupport(clientFactory, "amazon-bedrock")).resolves.toBe("unsupported");
     await expect(resolveSupport(clientFactory, "custom-provider")).resolves.toBe("unsupported");
+    await expect(resolveSupport(clientFactory, "lmstudio")).resolves.toBe("unsupported");
     expect(request).not.toHaveBeenCalled();
   });
 });

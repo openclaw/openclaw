@@ -149,7 +149,7 @@ export function resolveAnthropicFixedContextWindow(
   const modelId = resolveModelFamilyId(model);
   if (
     (provider === "anthropic" || provider === "anthropic-vertex") &&
-    modelId.startsWith("claude-fable-5")
+    /^claude-fable-5(?=$|[^a-z0-9])/.test(modelId)
   ) {
     return ANTHROPIC_FABLE_CONTEXT_TOKENS;
   }

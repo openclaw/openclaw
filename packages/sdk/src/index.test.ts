@@ -1349,12 +1349,14 @@ describe("OpenClaw SDK", () => {
     const transport = new FakeTransport({
       "sessions.create": { key: "session-main", label: "Main" },
       "sessions.send": { status: "accepted", runId: "run_session" },
+      "sessions.compact": { ok: true, compacted: true },
     });
     const oc = new OpenClaw({ transport });
 
     const session = await oc.sessions.create({ key: "session-main" });
     const run = await session.send({ message: "continue", thinking: "medium", timeoutMs: 1_500 });
     const noTimeoutRun = await session.send({ message: "continue without timeout", timeoutMs: 0 });
+    await session.compact();
 
     expect(run.id).toBe("run_session");
     expect(noTimeoutRun.id).toBe("run_session");
@@ -1373,6 +1375,11 @@ describe("OpenClaw SDK", () => {
         method: "sessions.send",
         options: { expectFinal: true, timeoutMs: null },
         params: { key: "session-main", message: "continue without timeout", timeoutMs: 0 },
+      },
+      {
+        method: "sessions.compact",
+        options: { timeoutMs: null },
+        params: { key: "session-main" },
       },
     ]);
   });

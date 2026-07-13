@@ -8,21 +8,20 @@ read_when:
   - You need to understand provider auth, catalogs, and runtime hooks
 ---
 
-This guide walks through building a provider plugin that adds a model provider
-(LLM) to OpenClaw. By the end you will have a provider with a model catalog,
-API key auth, and dynamic model resolution.
+Build a provider plugin to add a model provider (LLM) to OpenClaw: a model
+catalog, API-key auth, and dynamic model resolution.
 
 <Info>
-  If you have not built any OpenClaw plugin before, read
-  [Getting Started](/plugins/building-plugins) first for the basic package
-  structure and manifest setup.
+  New to OpenClaw plugins? Read [Getting Started](/plugins/building-plugins)
+  first for package structure and manifest setup.
 </Info>
 
 <Tip>
-  Provider plugins add models to OpenClaw's normal inference loop. If the model
-  must run through a native agent daemon that owns threads, compaction, or tool
-  events, pair the provider with an [agent harness](/plugins/sdk-agent-harness)
-  instead of putting daemon protocol details in core.
+  Provider plugins add models to OpenClaw's normal inference loop. If the
+  model must run through a native agent daemon that owns threads, compaction,
+  or tool events, pair the provider with an [agent
+  harness](/plugins/sdk-agent-harness) instead of putting daemon protocol
+  details in core.
 </Tip>
 
 ## Walkthrough
@@ -93,13 +92,15 @@ API key auth, and dynamic model resolution.
     ```
     </CodeGroup>
 
-    The manifest declares `setup.providers[].envVars` so OpenClaw can detect
-    credentials without loading your plugin runtime. Add `providerAuthAliases`
-    when a provider variant should reuse another provider id's auth. `modelSupport`
-    is optional and lets OpenClaw auto-load your provider plugin from shorthand
-    model ids like `acme-large` before runtime hooks exist. If you publish the
-    provider on ClawHub, those `openclaw.compat` and `openclaw.build` fields
-    are required in `package.json`.
+    `setup.providers[].envVars` lets OpenClaw detect credentials without
+    loading your plugin runtime. Add `providerAuthAliases` when a provider
+    variant should reuse another provider id's auth. `modelSupport` is
+    optional and lets OpenClaw auto-load your provider plugin from shorthand
+    model ids like `acme-large` before runtime hooks exist. `openclaw.compat`
+    and `openclaw.build` in `package.json` are required for ClawHub
+    publishing (`openclaw.compat.pluginApi` and `openclaw.build.openclawVersion`
+    are the two required fields; `minGatewayVersion` falls back to
+    `openclaw.install.minHostVersion` when omitted).
 
   </Step>
 
@@ -196,12 +197,12 @@ API key auth, and dynamic model resolution.
     ```
 
     `registerModelCatalogProvider` is the newer control-plane catalog surface
-    for list/help/picker UI. Use it for text, image-generation,
-    video-generation, and music-generation rows. Keep vendor endpoint calls and
-    response mapping in the plugin; OpenClaw owns the shared row shape, source
-    labels, and help rendering.
+    for list/help/picker UI, covering `text`, `voice`, `image_generation`,
+    `video_generation`, and `music_generation` rows. Keep vendor endpoint
+    calls and response mapping in the plugin; OpenClaw owns the shared row
+    shape, source labels, and help rendering.
 
-    That is a working provider. Users can now
+    That is a working provider. Users can now run
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
@@ -493,7 +494,8 @@ API key auth, and dynamic model resolution.
     | Family | What it wires in | Bundled examples |
     | --- | --- | --- |
     | `openai-compatible` | Shared OpenAI-style replay policy for OpenAI-compatible transports, including tool-call-id sanitation, assistant-first ordering fixes, and generic Gemini-turn validation where the transport needs it | `moonshot`, `ollama`, `xai`, `zai` |
-    | `anthropic-by-model` | Claude-aware replay policy chosen by `modelId`, so Anthropic-message transports only get Claude-specific thinking-block cleanup when the resolved model is actually a Claude id | `amazon-bedrock`, `anthropic-vertex` |
+    | `anthropic-by-model` | Claude-aware replay policy chosen by `modelId`, so Anthropic-message transports only get Claude-specific thinking-block cleanup when the resolved model is actually a Claude id | `amazon-bedrock` |
+    | `native-anthropic-by-model` | Same Claude-by-model policy as `anthropic-by-model`, plus tool-call-id sanitation and native Anthropic tool-use id preservation for transports that must keep vendor-native ids | `anthropic-vertex`, `clawrouter` |
     | `google-gemini` | Native Gemini replay policy plus bootstrap replay sanitation. The shared family keeps the text-output Gemini CLI on tagged reasoning; the direct `google` provider overrides `resolveReasoningOutputMode` to `native` because Gemini API thinking arrives as native thought parts. | `google`, `google-gemini-cli` |
     | `passthrough-gemini` | Gemini thought-signature sanitation for Gemini models running through OpenAI-compatible proxy transports; does not enable native Gemini replay validation or bootstrap rewrites | `openrouter`, `kilocode`, `opencode`, `opencode-go` |
     | `hybrid-anthropic-openai` | Hybrid policy for providers that mix Anthropic-message and OpenAI-compatible model surfaces in one plugin; optional Claude-only thinking-block dropping stays scoped to the Anthropic side | `minimax` |
@@ -607,64 +609,68 @@ API key auth, and dynamic model resolution.
       </Tab>
     </Tabs>
 
-    <Accordion title="All available provider hooks">
-      OpenClaw calls hooks in this order. Most providers only use 2-3:
+    <Accordion title="Common provider hooks">
+      OpenClaw calls hooks in roughly this order for model/provider plugins.
+      Most providers only use 2-3. This is not the full `ProviderPlugin`
+      contract - see [Internals: Provider Runtime
+      Hooks](/plugins/architecture-internals#provider-runtime-hooks) for the
+      complete, currently-accurate hook list and fallback notes.
       Compatibility-only provider fields that OpenClaw no longer calls, such as
       `ProviderPlugin.capabilities` and `suppressBuiltInModel`, are not listed
       here.
 
-      | # | Hook | When to use |
-      | --- | --- | --- |
-      | 1 | `catalog` | Model catalog or base URL defaults |
-      | 2 | `applyConfigDefaults` | Provider-owned global defaults during config materialization |
-      | 3 | `normalizeModelId` | Legacy/preview model-id alias cleanup before lookup |
-      | 4 | `normalizeTransport` | Provider-family `api` / `baseUrl` cleanup before generic model assembly |
-      | 5 | `normalizeConfig` | Normalize `models.providers.<id>` config |
-      | 6 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
-      | 7 | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
-      | 8 | `resolveSyntheticAuth` | Local/self-hosted or config-backed synthetic auth |
-      | 9 | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
-      | 10 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
-      | 11 | `prepareDynamicModel` | Async metadata fetch before resolving |
-      | 12 | `normalizeResolvedModel` | Transport rewrites before the runner |
-      | 13 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
-      | 14 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
-      | 15 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
-      | 16 | `prepareExtraParams` | Default request params |
-      | 17 | `createStreamFn` | Fully custom StreamFn transport |
-      | 19 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
-      | 20 | `resolveTransportTurnState` | Native per-turn headers/metadata |
-      | 21 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
-      | 22 | `formatApiKey` | Custom runtime token shape |
-      | 23 | `refreshOAuth` | Custom OAuth refresh |
-      | 24 | `buildAuthDoctorHint` | Auth repair guidance |
-      | 25 | `matchesContextOverflowError` | Provider-owned overflow detection |
-      | 26 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
-      | 27 | `isCacheTtlEligible` | Prompt cache TTL gating |
-      | 28 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 29 | `augmentModelCatalog` | Synthetic forward-compat rows |
-      | 30 | `resolveThinkingProfile` | Model-specific `/think` option set |
-      | 31 | `isBinaryThinking` | Binary thinking on/off compatibility |
-      | 32 | `supportsXHighThinking` | `xhigh` reasoning support compatibility |
-      | 33 | `resolveDefaultThinkingLevel` | Default `/think` policy compatibility |
-      | 34 | `isModernModelRef` | Live/smoke model matching |
-      | 35 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 36 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 37 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 38 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
-      | 39 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
-      | 40 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 41 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
-      | 42 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | Hook | When to use |
+      | --- | --- |
+      | `catalog` | Model catalog or base URL defaults |
+      | `applyConfigDefaults` | Provider-owned global defaults during config materialization |
+      | `normalizeModelId` | Legacy/preview model-id alias cleanup before lookup |
+      | `normalizeTransport` | Provider-family `api` / `baseUrl` cleanup before generic model assembly |
+      | `normalizeConfig` | Normalize `models.providers.<id>` config |
+      | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
+      | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
+      | `resolveSyntheticAuth` | Local/self-hosted or config-backed synthetic auth |
+      | `resolveExternalAuthProfiles` | Overlay provider-owned external auth profiles for CLI/app-managed credentials |
+      | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
+      | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
+      | `prepareDynamicModel` | Async metadata fetch before resolving |
+      | `normalizeResolvedModel` | Transport rewrites before the runner |
+      | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
+      | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
+      | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
+      | `prepareExtraParams` | Default request params |
+      | `createStreamFn` | Fully custom StreamFn transport |
+      | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
+      | `resolveTransportTurnState` | Native per-turn headers/metadata |
+      | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
+      | `formatApiKey` | Custom runtime token shape |
+      | `refreshOAuth` | Custom OAuth refresh |
+      | `buildAuthDoctorHint` | Auth repair guidance |
+      | `matchesContextOverflowError` | Provider-owned overflow detection |
+      | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | `isCacheTtlEligible` | Prompt cache TTL gating |
+      | `buildMissingAuthMessage` | Custom missing-auth hint |
+      | `augmentModelCatalog` | Synthetic forward-compat rows (deprecated - prefer `registerModelCatalogProvider`) |
+      | `resolveThinkingProfile` | Model-specific `/think` option set |
+      | `isBinaryThinking` | Binary thinking on/off compatibility (deprecated - prefer `resolveThinkingProfile`) |
+      | `supportsXHighThinking` | `xhigh` reasoning support compatibility (deprecated - prefer `resolveThinkingProfile`) |
+      | `resolveDefaultThinkingLevel` | Default `/think` policy compatibility (deprecated - prefer `resolveThinkingProfile`) |
+      | `isModernModelRef` | Live/smoke model matching |
+      | `prepareRuntimeAuth` | Token exchange before inference |
+      | `resolveUsageAuth` | Custom usage credential parsing |
+      | `fetchUsageSnapshot` | Custom usage endpoint |
+      | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
+      | `buildReplayPolicy` | Custom transcript replay/compaction policy |
+      | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
       Runtime fallback notes:
 
-      - `normalizeConfig` checks the matched provider first, then other hook-capable provider plugins until one actually changes the config. If no provider hook rewrites a supported Google-family config entry, the bundled Google config normalizer still applies.
+      - `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.
       - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
       - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
-      - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over `before_prompt_build` when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
+      - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 
-      For detailed descriptions and real-world examples, see [Internals: Provider Runtime Hooks](/plugins/architecture-internals#provider-runtime-hooks).
     </Accordion>
 
   </Step>
@@ -868,18 +874,23 @@ API key auth, and dynamic model resolution.
         compatibility for existing memory-specific adapters.
       </Tab>
       <Tab title="Image and video generation">
-        Video capabilities use a **mode-aware** shape: `generate`,
-        `imageToVideo`, and `videoToVideo`. Flat aggregate fields like
-        `maxInputImages` / `maxInputVideos` / `maxDurationSeconds` are not
-        enough to advertise transform-mode support or disabled modes cleanly.
-        Music generation follows the same pattern with explicit `generate` /
-        `edit` blocks.
+        Image and video capabilities use a **mode-aware** shape. Image
+        providers declare required `generate` and `edit` capability blocks;
+        video providers declare `generate`, `imageToVideo`, and
+        `videoToVideo`. Flat aggregate fields like `maxInputImages` /
+        `maxInputVideos` / `maxDurationSeconds` are not enough to advertise
+        transform-mode support or disabled modes cleanly. Music generation
+        follows the same `generate` / `edit` pattern.
 
         ```typescript
         api.registerImageGenerationProvider({
           id: "acme-ai",
           label: "Acme Images",
-          generate: async (req) => ({ /* image result */ }),
+          capabilities: {
+            generate: { maxCount: 4, supportsSize: true },
+            edit: { enabled: false },
+          },
+          generateImage: async (req) => ({ images: [] }),
         });
 
         api.registerVideoGenerationProvider({
@@ -900,6 +911,10 @@ API key auth, and dynamic model resolution.
           generateVideo: async (req) => ({ videos: [] }),
         });
         ```
+
+        `capabilities` is required on both provider types; `edit` and the
+        video transform blocks (`imageToVideo`, `videoToVideo`) always need an
+        explicit `enabled` flag.
       </Tab>
       <Tab title="Web fetch and search">
         ```typescript
@@ -926,9 +941,28 @@ API key auth, and dynamic model resolution.
         api.registerWebSearchProvider({
           id: "acme-ai-search",
           label: "Acme Search",
-          search: async (req) => ({ content: [] }),
+          hint: "Search the web through Acme's search backend.",
+          envVars: ["ACME_SEARCH_API_KEY"],
+          placeholder: "acme-...",
+          signupUrl: "https://acme.example.com/search",
+          credentialPath: "plugins.entries.acme.config.webSearch.apiKey",
+          getCredentialValue: (searchConfig) => searchConfig?.acme?.apiKey,
+          setCredentialValue: (searchConfigTarget, value) => {
+            const acme = (searchConfigTarget.acme ??= {});
+            acme.apiKey = value;
+          },
+          createTool: () => ({
+            description: "Search the web through Acme Search.",
+            parameters: {},
+            execute: async (args) => ({ content: [] }),
+          }),
         });
         ```
+
+        Both provider types share the same credential-wiring shape:
+        `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
+        `getCredentialValue`, `setCredentialValue`, and `createTool` are all
+        required.
       </Tab>
     </Tabs>
 
@@ -979,8 +1013,8 @@ clawhub package publish your-org/your-plugin --dry-run
 clawhub package publish your-org/your-plugin
 ```
 
-Do not use the legacy skill-only publish alias here; plugin packages should use
-`clawhub package publish`.
+`clawhub skill publish <path>` is a different command for publishing a skill
+folder, not a plugin package - do not use it here.
 
 ## File structure
 

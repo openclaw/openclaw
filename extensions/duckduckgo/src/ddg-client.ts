@@ -36,6 +36,10 @@ type DuckDuckGoResult = {
   snippet: string;
 };
 
+function isDecodableCodePoint(cp: number): boolean {
+  return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff);
+}
+
 function decodeHtmlEntities(text: string): string {
   return text.replace(
     /&(?:lt|gt|quot|apos|#39|#x27|#x2F|nbsp|ndash|mdash|hellip|amp|#\d+|#x[0-9a-f]+);/gi,
@@ -72,10 +76,12 @@ function decodeHtmlEntities(text: string): string {
         return "&";
       }
       if (normalized.startsWith("&#x")) {
-        return String.fromCodePoint(Number.parseInt(normalized.slice(3, -1), 16));
+        const codePoint = Number.parseInt(normalized.slice(3, -1), 16);
+        return isDecodableCodePoint(codePoint) ? String.fromCodePoint(codePoint) : entity;
       }
       if (normalized.startsWith("&#")) {
-        return String.fromCodePoint(Number.parseInt(normalized.slice(2, -1), 10));
+        const codePoint = Number.parseInt(normalized.slice(2, -1), 10);
+        return isDecodableCodePoint(codePoint) ? String.fromCodePoint(codePoint) : entity;
       }
       return entity;
     },

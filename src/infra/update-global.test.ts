@@ -133,6 +133,28 @@ describe("update global helpers", () => {
     );
   });
 
+  it("resolves scoped package paths from the package manager global root", async () => {
+    const globalRoot = path.join("tmp", "npm-root");
+    const runCommand: CommandRunner = async () => ({
+      stdout: `${globalRoot}\n`,
+      stderr: "",
+      code: 0,
+    });
+
+    await expect(
+      resolveGlobalInstallTarget({
+        manager: "npm",
+        runCommand,
+        timeoutMs: 1000,
+        packageName: "@kevins8/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      manager: "npm",
+      globalRoot,
+      packageRoot: path.join(globalRoot, "@kevins8", "openclaw"),
+    });
+  });
+
   it("maps main and explicit install specs for global installs", () => {
     expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag: "main" })).toBe(
       OPENCLAW_MAIN_PACKAGE_SPEC,

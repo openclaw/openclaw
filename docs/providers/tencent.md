@@ -8,17 +8,16 @@ read_when:
 
 Install the official Tencent Cloud provider plugin to access Tencent Hy3 preview through the TokenHub endpoint (`tencent-tokenhub`) using an OpenAI-compatible API.
 
-| Property         | Value                                                 |
-| ---------------- | ----------------------------------------------------- |
-| Provider id      | `tencent-tokenhub`                                    |
-| Package          | `@openclaw/tencent-provider`                          |
-| Auth env var     | `TOKENHUB_API_KEY`                                    |
-| Onboarding flag  | `--auth-choice tokenhub-api-key`                      |
-| Direct CLI flag  | `--tokenhub-api-key <key>`                            |
-| API              | OpenAI-compatible (`openai-completions`)              |
-| Default base URL | `https://tokenhub.tencentmaas.com/v1`                 |
-| Global base URL  | `https://tokenhub-intl.tencentmaas.com/v1` (override) |
-| Default model    | `tencent-tokenhub/hy3-preview`                        |
+| Property        | Value                                    |
+| --------------- | ---------------------------------------- |
+| Provider id     | `tencent-tokenhub`                       |
+| Package         | `@openclaw/tencent-provider`             |
+| Auth env var    | `TOKENHUB_API_KEY`                       |
+| Onboarding flag | `--auth-choice tokenhub-api-key`         |
+| Direct CLI flag | `--tokenhub-api-key <key>`               |
+| API             | OpenAI-compatible (`openai-completions`) |
+| Base URL        | `https://tokenhub.tencentmaas.com/v1`    |
+| Default model   | `tencent-tokenhub/hy3-preview`           |
 
 ## Quick start
 
@@ -69,13 +68,17 @@ openclaw onboard --non-interactive \
   --accept-risk
 ```
 
+<Note>
+`--accept-risk` is required alongside `--non-interactive`.
+</Note>
+
 ## Built-in catalog
 
 | Model ref                      | Name                   | Input | Context | Max output | Notes                      |
 | ------------------------------ | ---------------------- | ----- | ------- | ---------- | -------------------------- |
 | `tencent-tokenhub/hy3-preview` | Hy3 preview (TokenHub) | text  | 256,000 | 64,000     | Default; reasoning-enabled |
 
-Hy3 preview is Tencent Hunyuan's large MoE language model for reasoning, long-context instruction following, code, and agent workflows. Tencent's OpenAI-compatible examples use `hy3-preview` as the model id and support standard chat-completions tool calling plus `reasoning_effort`.
+Hy3 preview is Tencent Hunyuan's large MoE language model for reasoning, long-context instruction following, code, and agent workflows. It supports standard chat-completions tool calling plus `reasoning_effort`.
 
 <Tip>
   The model id is `hy3-preview`. Do not confuse it with Tencent's `HY-3D-*` models, which are 3D generation APIs and are not the OpenClaw chat model configured by this provider.
@@ -97,13 +100,11 @@ Rates are per million tokens in USD as advertised by Tencent. Override pricing u
 
 <AccordionGroup>
   <Accordion title="Endpoint override">
-    OpenClaw defaults to Tencent Cloud's `https://tokenhub.tencentmaas.com/v1` endpoint. Tencent also documents an international TokenHub endpoint:
+    OpenClaw's built-in catalog uses Tencent Cloud's `https://tokenhub.tencentmaas.com/v1` endpoint. Override it only if your TokenHub account or region requires a different one:
 
     ```bash
-    openclaw config set models.providers.tencent-tokenhub.baseUrl "https://tokenhub-intl.tencentmaas.com/v1"
+    openclaw config set models.providers.tencent-tokenhub.baseUrl "https://your-endpoint/v1"
     ```
-
-    Only override the endpoint when your TokenHub account or region requires it.
 
   </Accordion>
 
@@ -123,7 +124,7 @@ Rates are per million tokens in USD as advertised by Tencent. Override pricing u
   <Card title="Model providers" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
   </Card>
-  <Card title="Configuration reference" href="/gateway/configuration" icon="gear">
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config schema including provider settings.
   </Card>
   <Card title="Tencent TokenHub" href="https://cloud.tencent.com/product/tokenhub" icon="arrow-up-right-from-square">

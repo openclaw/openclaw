@@ -13,6 +13,22 @@ import {
 
 const READABILITY_MAX_HTML_CHARS = 1_000_000;
 const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 3_000;
+const HTML_VOID_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
 
 type ParsedHtml = {
   document: Document;
@@ -74,28 +90,7 @@ async function loadReadabilityDeps(): Promise<{
   }
 }
 
-function normalizeLowercaseStringOrEmpty(value: string): string {
-  return value.trim().toLowerCase();
-}
-
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
-  const voidTags = new Set([
-    "area",
-    "base",
-    "br",
-    "col",
-    "embed",
-    "hr",
-    "img",
-    "input",
-    "link",
-    "meta",
-    "param",
-    "source",
-    "track",
-    "wbr",
-  ]);
-
   let depth = 0;
   const len = html.length;
   for (let i = 0; i < len; i++) {
@@ -133,16 +128,18 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
       j += 1;
     }
 
-    const tagName = normalizeLowercaseStringOrEmpty(html.slice(nameStart, j));
-    if (!tagName) {
+    if (j === nameStart) {
       continue;
     }
 
     if (closing) {
-      depth = Math.max(0, depth - 1);
+      if (depth > 0) {
+        depth -= 1;
+      }
       continue;
     }
-    if (voidTags.has(tagName)) {
+    const tagName = html.slice(nameStart, j).toLowerCase();
+    if (HTML_VOID_TAGS.has(tagName)) {
       continue;
     }
 

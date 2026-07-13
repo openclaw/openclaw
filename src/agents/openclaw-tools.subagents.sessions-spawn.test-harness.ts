@@ -395,6 +395,7 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
   completeTaskRunByRunId: vi.fn(),
   createRunningTaskRun: vi.fn(),
   failTaskRunByRunId: vi.fn(),
+  findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
   setDetachedTaskDeliveryStatusByRunId: vi.fn(),
 }));
 

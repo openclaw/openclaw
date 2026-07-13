@@ -13,6 +13,7 @@ import {
   isEmbeddedAgentRunActive,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
+  resolveActiveEmbeddedRunSessionIdBySessionFile,
 } from "./commands-steer.runtime.js";
 import type {
   CommandHandler,
@@ -57,21 +58,50 @@ function resolveStoredSessionEntry(
   return undefined;
 }
 
+function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
+  const candidates = [targetSessionKey];
+  if (targetSessionKey.includes(":slash:")) {
+    candidates.push(
+      targetSessionKey.replace(":slash:", ":direct:"),
+      targetSessionKey.replace(":slash:", ":dm:"),
+    );
+  }
+  return [...new Set(candidates)];
+}
+
 function resolveSteerSessionId(params: {
   commandParams: HandleCommandsParams;
   targetSessionKey: string;
 }): string | undefined {
-  const activeSessionId = resolveActiveEmbeddedRunSessionId(params.targetSessionKey);
-  if (activeSessionId) {
-    return activeSessionId;
+  const candidateKeys = listSteerCandidateSessionKeys(params.targetSessionKey);
+  for (const candidateKey of candidateKeys) {
+    const activeSessionId = resolveActiveEmbeddedRunSessionId(candidateKey);
+    if (activeSessionId) {
+      return activeSessionId;
+    }
   }
 
-  const entry = resolveStoredSessionEntry(params.commandParams, params.targetSessionKey);
-  const sessionId = normalizeOptionalString(entry?.sessionId);
-  if (!sessionId || !isEmbeddedAgentRunActive(sessionId)) {
-    return undefined;
+  for (const candidateKey of candidateKeys) {
+    const entry = resolveStoredSessionEntry(params.commandParams, candidateKey);
+    const sessionFile = normalizeOptionalString(entry?.sessionFile);
+    if (!sessionFile) {
+      continue;
+    }
+    const activeSessionId = resolveActiveEmbeddedRunSessionIdBySessionFile(sessionFile);
+    if (activeSessionId) {
+      return activeSessionId;
+    }
   }
-  return sessionId;
+
+  for (const candidateKey of candidateKeys) {
+    const entry = resolveStoredSessionEntry(params.commandParams, candidateKey);
+    const sessionId = normalizeOptionalString(entry?.sessionId);
+    if (sessionId && isEmbeddedAgentRunActive(sessionId)) {
+      return sessionId;
+    }
+  }
+
+  return undefined;
 }
 
 function applySteerFallbackPrompt(ctx: HandleCommandsParams["ctx"], message: string): void {
