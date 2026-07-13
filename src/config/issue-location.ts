@@ -153,7 +153,7 @@ function readKey(raw: string, c: Cursor): string | null {
   if (ch !== undefined && /[A-Za-z_$]/.test(ch)) {
     const start = c.pos;
     c.pos++;
-    while (c.pos < raw.length && /[A-Za-z0-9_$]/.test(raw[c.pos])) c.pos++;
+    while (c.pos < raw.length && /[A-Za-z0-9_$]/.test(raw[c.pos] ?? "")) c.pos++;
     return raw.slice(start, c.pos);
   }
   return null;

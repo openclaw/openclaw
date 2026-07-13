@@ -11,6 +11,7 @@ type ConfigIssueLineInput = {
 
 type ConfigIssueFormatOptions = {
   normalizeRoot?: boolean;
+  sourceFile?: string;
 };
 
 type ConfigIssueSummaryOptions = ConfigIssueFormatOptions & {
