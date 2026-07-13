@@ -12,7 +12,7 @@ import {
   type MSTeamsSsoStoredToken,
   type MSTeamsSsoTokenStore,
 } from "./sso-token-store.js";
-import { type MSTeamsSsoFetch, handleSigninTokenExchangeInvoke } from "./sso.js";
+import { handleSigninTokenExchangeInvoke, type MSTeamsSsoDeps } from "./sso.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,7 +71,7 @@ function createSsoDepsForServer(baseUrl: string) {
       tokenProvider,
       tokenStore,
       connectionName: "TestConn",
-      fetchImpl: fetch as unknown as MSTeamsSsoFetch,
+      fetchImpl: fetch as NonNullable<MSTeamsSsoDeps["fetchImpl"]>,
       userTokenBaseUrl: baseUrl,
     },
     tokenStore,

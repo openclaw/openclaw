@@ -33,7 +33,7 @@ export type MSTeamsSsoStoredToken = {
   updatedAt: string;
 };
 
-type MSTeamsSsoTokenStore = {
+export type MSTeamsSsoTokenStore = {
   get(params: { connectionName: string; userId: string }): Promise<MSTeamsSsoStoredToken | null>;
   save(value: MSTeamsSsoStoredToken): Promise<void>;
   remove(params: { connectionName: string; userId: string }): Promise<boolean>;
