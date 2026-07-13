@@ -6,9 +6,16 @@ import {
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import {
   createMessageReceiptFromOutboundResults,
+  sendDurableMessageBatch,
   verifyChannelMessageAdapterCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { describe, expect, it, vi } from "vitest";
+import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { zaloMessageAdapter, zaloPlugin } from "./channel.js";
 
 const { sendZaloTextMock } = vi.hoisted(() => ({
@@ -82,6 +89,11 @@ function createZaloHarness(params: OutboundPayloadHarnessParams) {
   };
 }
 
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
+
 describe("Zalo outbound payload contract", () => {
   installChannelOutboundPayloadContractSuite({
     channel: "zalo",
@@ -100,6 +112,40 @@ describe("Zalo outbound payload contract", () => {
       requireZaloOutboundTextSender()({ cfg: {}, to: "123456789", text: "hello" }),
     ).rejects.toThrow("Zalo rejected the message");
   });
+
+  it.each([
+    { kind: "text", payload: { text: "hello" } },
+    {
+      kind: "media",
+      payload: { text: "image", mediaUrl: "https://example.com/image.png" },
+    },
+  ] as const)(
+    "reports $kind message-adapter failures to durable delivery",
+    async ({ kind, payload }) => {
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "zalo", source: "test", plugin: zaloPlugin }]),
+      );
+      sendZaloTextMock.mockReset().mockResolvedValue({
+        ok: false,
+        error: `Zalo rejected the ${kind}`,
+        receipt: createMessageReceiptFromOutboundResults({ results: [], kind }),
+      });
+
+      const result = await sendDurableMessageBatch({
+        cfg: {},
+        channel: "zalo",
+        to: "123456789",
+        payloads: [payload],
+        skipQueue: true,
+      });
+
+      expect(result.status).toBe("failed");
+      if (result.status !== "failed") {
+        throw new Error(`Expected failed Zalo ${kind} delivery`);
+      }
+      expect(result.error).toMatchObject({ message: `Zalo rejected the ${kind}` });
+    },
+  );
 
   it("declares message adapter durable text and media with receipt proofs", async () => {
     sendZaloTextMock.mockReset().mockImplementation(async (ctx: { mediaUrl?: string }) =>
