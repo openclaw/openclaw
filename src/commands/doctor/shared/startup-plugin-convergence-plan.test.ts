@@ -73,7 +73,15 @@ describe("startup plugin convergence planning", () => {
     expect(
       configMayRequireStartupPluginConvergence({
         config: {
-          models: { providers: { openai: { api: "openai-responses", models: [] } } },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-responses",
+                models: [],
+              },
+            },
+          },
         },
         env: { OPENAI_API_KEY: "redacted" },
       }),

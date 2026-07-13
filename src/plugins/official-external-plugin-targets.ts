@@ -114,8 +114,9 @@ export function hasOfficialExternalWebSearchTarget(params: {
   return STATIC_ENTRIES.some((entry) =>
     entry.openclaw?.webSearchProviders?.some((provider) => {
       const providerId = normalizeOptionalLowercaseString(provider.id);
-      return Boolean(
-        (configuredId && providerId === configuredId) || envHasAny(params.env, provider.envVars),
+      return (
+        (configuredId !== undefined && providerId === configuredId) ||
+        envHasAny(params.env, provider.envVars)
       );
     }),
   );
