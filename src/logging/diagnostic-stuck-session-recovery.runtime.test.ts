@@ -402,6 +402,11 @@ describe("stuck session recovery", () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
     mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    // Simulate recent activity to prove this is real reply work, not phantom
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      lastProgressAgeMs: 30_000,
+      lastProgressReason: "model_call:started",
+    });
 
     await recoverStuckDiagnosticSession({
       sessionId: "queued-reply-session",
@@ -415,6 +420,41 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=skipped action=keep_lane sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run reason=active_reply_work",
+    ]);
+  });
+
+  it("reclaims phantom reply work with no activity evidence (#105712)", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("phantom-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    // Simulate phantom reply work: registered in registry but no actual activity
+    // This matches the production bug where transcript file is missing (ENOENT)
+    // and there are no model calls or tool executions
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      hasActiveEmbeddedRun: false,
+      activeToolName: undefined,
+      lastProgressAgeMs: 10 * 60_000, // 10 minutes old - exceeds 5 minute threshold
+      lastProgressReason: undefined,
+    });
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    mocks.resetCommandLane.mockReturnValue(1);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "phantom-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 0, // No queued messages - the phantom blocks all traffic
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("phantom-reply-session");
+    expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("phantom-reply-session", 15_000);
+    expect(outcome.status).toBe("aborted");
+    expect(warnLogMessages()).toEqual([
+      expect.stringContaining("stuck session recovery reclaiming phantom_reply_work"),
+      expect.stringContaining("stuck session recovery:"),
+      expect.stringContaining("stuck session recovery outcome: status=aborted action=abort_embedded_run"),
     ]);
   });
 

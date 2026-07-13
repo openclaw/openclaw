@@ -204,18 +204,34 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedAgentRunActive(activeWorkSessionId)) {
+      // Check for phantom reply work: a registered operation with no actual activity.
+      // This handles the case where the system believes reply work is active but
+      // there's no evidence of real ongoing work (no transcript, no model calls, etc.).
+      const activitySnapshot = getDiagnosticSessionActivitySnapshot({
+        sessionId: activeWorkSessionId,
+        sessionKey: params.sessionKey,
+      });
+      const hasNoActivityEvidence =
+        !activitySnapshot.hasActiveEmbeddedRun &&
+        !activitySnapshot.activeToolName &&
+        !activitySnapshot.lastProgressReason &&
+        activitySnapshot.lastProgressAgeMs !== undefined &&
+        activitySnapshot.lastProgressAgeMs >= staleActiveProgressAbortMs;
+
       const reclaimStaleReplyWork =
         params.allowActiveAbort !== true &&
-        isActiveRunProgressStale({
-          sessionId: activeWorkSessionId,
-          sessionKey: params.sessionKey,
-          queueDepth: params.queueDepth,
-          staleAbortMs: staleActiveProgressAbortMs,
-        });
+        (hasNoActivityEvidence ||
+          isActiveRunProgressStale({
+            sessionId: activeWorkSessionId,
+            sessionKey: params.sessionKey,
+            queueDepth: params.queueDepth,
+            staleAbortMs: staleActiveProgressAbortMs,
+          }));
       if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
         if (reclaimStaleReplyWork) {
+          const reason = hasNoActivityEvidence ? "phantom_reply_work" : "stale_reply_work";
           diag.warn(
-            `stuck session recovery reclaiming stale active reply work: ${formatRecoveryContext(
+            `stuck session recovery reclaiming ${reason}: ${formatRecoveryContext(
               params,
               { activeSessionId: activeWorkSessionId },
             )}`,
