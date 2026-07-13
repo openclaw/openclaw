@@ -41,6 +41,7 @@ type DraftNode = {
 type BrowserTarget = { nodeId: string; label: string };
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
 /** Last path segment for the folder trigger label; handles both separators.
     Falls back to the raw path so filesystem roots ("/", "C:\") stay visible. */
@@ -91,7 +92,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayConnected = false;
   private gatewayConnectionEpoch = 0;
-  private catalogRetryKey = "";
+  private catalogRetryScope = "";
+  private catalogRetryAttempt = 0;
   private catalogRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   // Re-render when agents/sessions hydrate so the hero identity and the
@@ -131,26 +133,43 @@ class NewSessionPage extends OpenClawLightDomElement {
       !catalog.isTarget(this.data) ||
       catalog.isResolvedTarget(this.data)
     ) {
+      globalThis.clearTimeout(this.catalogRetryTimer);
+      this.catalogRetryTimer = undefined;
+      this.catalogRetryScope = "";
+      this.catalogRetryAttempt = 0;
       return;
     }
-    const retryKey = `${this.gatewayConnectionEpoch}:${catalog.routeKey(this.data)}`;
-    if (this.catalogRetryKey === retryKey) {
+    const retryScope = `${this.gatewayConnectionEpoch}:${catalog.routeKey(this.data)}`;
+    if (this.catalogRetryScope !== retryScope) {
+      globalThis.clearTimeout(this.catalogRetryTimer);
+      this.catalogRetryTimer = undefined;
+      this.catalogRetryScope = retryScope;
+      this.catalogRetryAttempt = 0;
+    }
+    if (this.catalogRetryTimer || this.catalogRetryAttempt >= CATALOG_RETRY_DELAYS_MS.length) {
       return;
     }
-    this.catalogRetryKey = retryKey;
-    globalThis.clearTimeout(this.catalogRetryTimer);
+    const delayMs = CATALOG_RETRY_DELAYS_MS[this.catalogRetryAttempt];
+    this.catalogRetryAttempt += 1;
     this.catalogRetryTimer = globalThis.setTimeout(() => {
       this.catalogRetryTimer = undefined;
       if (
-        this.catalogRetryKey !== retryKey ||
+        this.catalogRetryScope !== retryScope ||
         !this.gatewayConnected ||
         !catalog.isTarget(this.data) ||
         catalog.isResolvedTarget(this.data)
       ) {
         return;
       }
-      void this.context?.revalidate("new-session").catch(() => undefined);
-    }, 0);
+      const revalidation = this.context?.revalidate("new-session");
+      if (!revalidation) {
+        return;
+      }
+      void revalidation
+        .catch(() => undefined)
+        .then(() => this.updateComplete)
+        .then(() => this.retryPendingCatalogTarget());
+    }, delayMs);
   }
 
   override connectedCallback() {
@@ -166,7 +185,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.gatewaySource = null;
     this.gatewayConnected = false;
     this.gatewayConnectionEpoch = 0;
-    this.catalogRetryKey = "";
+    this.catalogRetryScope = "";
+    this.catalogRetryAttempt = 0;
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     super.disconnectedCallback();
