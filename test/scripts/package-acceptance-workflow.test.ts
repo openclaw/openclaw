@@ -3951,7 +3951,10 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 
   it("validates the macOS release handoff before the GitHub release page exists", () => {
     const macosRelease = readWorkflow(".github/workflows/macos-release.yml");
-    const validateJob = workflowJob(".github/workflows/macos-release.yml", "validate_macos_release_request");
+    const validateJob = workflowJob(
+      ".github/workflows/macos-release.yml",
+      "validate_macos_release_request",
+    );
     const stepNames = validateJob.steps?.map((step) => step.name) ?? [];
 
     expect(stepNames).not.toContain("Ensure matching GitHub release exists");
