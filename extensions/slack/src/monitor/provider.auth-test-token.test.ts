@@ -27,7 +27,9 @@ describe("auth.test boot call", () => {
     // The SDK serializes every property from the call argument into the POST
     // body.  Passing { token } would leak the bot token into the request
     // payload alongside the Authorization header.
-    const firstArg = client.auth.test.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const firstArg = client.auth.test.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
     if (firstArg != null) {
       expect(firstArg).not.toHaveProperty("token");
     }
