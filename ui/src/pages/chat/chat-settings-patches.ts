@@ -100,7 +100,7 @@ export function getPendingChatPickerPatch(
   return getPendingPatch(pendingChatPickerPatches, host, sessionKey, agentId);
 }
 
-export function trackPendingChatSettingsPatch(
+function trackPendingChatSettingsPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   patchPromise: Promise<boolean>,

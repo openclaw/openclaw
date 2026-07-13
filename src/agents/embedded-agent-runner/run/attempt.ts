@@ -107,7 +107,6 @@ import {
   resolveLiveToolResultMaxChars,
   resolveLiveToolResultAggregateMaxChars,
   truncateOversizedToolResultsInMessages,
-  truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
@@ -123,6 +122,10 @@ import {
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-assembly.js";
+import {
+  handleEmbeddedAttemptMidTurnPrecheck,
+  prepareEmbeddedAttemptPromptPreflight,
+} from "./attempt-prompt-preflight.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -193,13 +196,7 @@ import {
   detachPrePersistedCurrentUserTurn,
   sessionMessagesContainIdempotencyKey,
 } from "./pre-persisted-user-turn.js";
-import {
-  PREEMPTIVE_OVERFLOW_ERROR_TEXT,
-  buildPrePromptContextBudgetStatus,
-  estimateLlmBoundaryTokenPressure,
-  formatPrePromptPrecheckLog,
-  shouldPreemptivelyCompactBeforePrompt,
-} from "./preemptive-compaction.js";
+import { PREEMPTIVE_OVERFLOW_ERROR_TEXT } from "./preemptive-compaction.js";
 import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
@@ -207,22 +204,6 @@ import {
 } from "./runtime-context-prompt.js";
 import { clearToolActivityRun, notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
-
-type PreflightRecoveryBudgetSnapshot = Pick<
-  MidTurnPrecheckRequest,
-  "estimatedPromptTokens" | "promptBudgetBeforeReserve" | "overflowTokens"
->;
-
-// Carries the measured prompt budget into the outer recovery loop. The synthetic
-// precheck error is only a routing signal, so compaction engines need these
-// fields to compact against the prompt OpenClaw actually rendered.
-function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetSnapshot) {
-  return {
-    estimatedPromptTokens: snapshot.estimatedPromptTokens,
-    promptBudgetBeforeReserve: snapshot.promptBudgetBeforeReserve,
-    overflowTokens: snapshot.overflowTokens,
-  };
-}
 
 const aggregateToolResultPressureWarnings = new Set<string>();
 
@@ -1468,72 +1449,20 @@ export async function runEmbeddedAttempt(
       let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
       let promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
       const handleMidTurnPrecheckRequest = (request: MidTurnPrecheckRequest) => {
-        const logMidTurnPrecheck = (route: string, extra?: string) => {
-          log.warn(
-            `[context-overflow-midturn-precheck] sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `provider=${params.provider}/${params.modelId} route=${route} ` +
-              `estimatedPromptTokens=${request.estimatedPromptTokens} ` +
-              `promptBudgetBeforeReserve=${request.promptBudgetBeforeReserve} ` +
-              `overflowTokens=${request.overflowTokens} ` +
-              `toolResultReducibleChars=${request.toolResultReducibleChars} ` +
-              `effectiveReserveTokens=${request.effectiveReserveTokens} ` +
-              `prePromptMessageCount=${prePromptMessageCount} ` +
-              (extra ? `${extra} ` : "") +
-              `sessionFile=${params.sessionFile}`,
-          );
-        };
-        if (request.route === "truncate_tool_results_only") {
-          const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
-          const toolResultMaxChars = resolveLiveToolResultMaxChars({
-            contextWindowTokens: contextTokenBudget,
-            cfg: params.config,
-            agentId: sessionAgentId,
-          });
-          const truncationResult = truncateOversizedToolResultsInSessionManager({
-            sessionManager: activeSessionManager,
-            contextWindowTokens: contextTokenBudget,
-            maxCharsOverride: toolResultMaxChars,
-            sessionFile: params.sessionFile,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: sessionAgentId,
-          });
-          if (truncationResult.truncated) {
-            preflightRecovery = {
-              route: "truncate_tool_results_only",
-              source: "mid-turn",
-              ...buildPreflightRecoveryBudgetSnapshot(request),
-              handled: true,
-              truncatedCount: truncationResult.truncatedCount,
-            };
-            const sessionContext = activeSessionManager.buildSessionContext();
-            activeSession.agent.state.messages = sessionContext.messages;
-            logMidTurnPrecheck(
-              request.route,
-              `handled=true truncatedCount=${truncationResult.truncatedCount}`,
-            );
-          } else {
-            preflightRecovery = {
-              route: "compact_only",
-              source: "mid-turn",
-              ...buildPreflightRecoveryBudgetSnapshot(request),
-            };
-            promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-            promptErrorSource = "precheck";
-            logMidTurnPrecheck(
-              "compact_only",
-              `truncateFallbackReason=${truncationResult.reason ?? "unknown"}`,
-            );
-          }
-        } else {
-          preflightRecovery = {
-            route: request.route,
-            source: "mid-turn",
-            ...buildPreflightRecoveryBudgetSnapshot(request),
-          };
-          promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+        const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+          attempt: params,
+          request,
+          sessionAgentId,
+          sessionManager: activeSessionManager,
+          prePromptMessageCount,
+          replaceSessionMessages: (messages) => {
+            activeSession.agent.state.messages = messages;
+          },
+        });
+        preflightRecovery = outcome.preflightRecovery;
+        if (outcome.promptError) {
+          promptError = outcome.promptError;
           promptErrorSource = "precheck";
-          logMidTurnPrecheck(request.route);
         }
       };
       let skipPromptSubmission = false;
@@ -2080,168 +2009,41 @@ export async function runEmbeddedAttempt(
               });
           }
 
-          const llmBoundaryOptionsForPrecheck =
-            boundaryTimezone || !includeBoundaryTimestamp
-              ? {
-                  ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
-                  ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-                }
-              : undefined;
-          const unwindowedLlmBoundaryMessagesForPrecheck =
-            contextEnginePromptAuthority === "preassembly_may_overflow" &&
-            unwindowedContextEngineMessagesForPrecheck
-              ? normalizeMessagesForLlmBoundary(
-                  unwindowedContextEngineMessagesForPrecheck,
-                  llmBoundaryOptionsForPrecheck,
-                )
-              : undefined;
-          const llmBoundaryTokenPressure = estimateLlmBoundaryTokenPressure({
-            messages: hookMessagesForCurrentPrompt,
+          const promptPreflight = await prepareEmbeddedAttemptPromptPreflight({
+            attempt: params,
+            ...(activeContextEngine ? { activeContextEngine } : {}),
+            contextEngineAssemblySucceeded,
+            contextEnginePromptAuthority,
+            contextTokenBudget,
+            hookMessagesForCurrentPrompt,
+            includeBoundaryTimestamp,
+            promptForPrecheck: llmBoundaryPromptForPrecheck,
+            reserveTokens,
+            sessionAgentId,
+            sessionManager: activeSessionManager,
+            sessionMessageCount: activeSession.messages.length,
+            state: {
+              contextBudgetStatus,
+              preflightRecovery,
+              promptError,
+              promptErrorSource,
+              skipPromptSubmission,
+            },
             systemPrompt: systemPromptForHook,
-            prompt: llmBoundaryPromptForPrecheck,
+            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+            toolResultMaxChars: promptToolResultMaxChars,
+            ...(unwindowedContextEngineMessagesForPrecheck
+              ? { unwindowedContextEngineMessagesForPrecheck }
+              : {}),
+            withOwnedSessionWriteLock,
           });
-          let preemptiveCompaction = null;
-          const shouldSkipPrecheck =
-            skipPromptSubmission ||
-            (contextEngineAssemblySucceeded &&
-              activeContextEngine?.info.ownsCompaction &&
-              contextEnginePromptAuthority !== "preassembly_may_overflow");
-
-          if (shouldSkipPrecheck && !skipPromptSubmission) {
-            log.info(
-              `[context-overflow-precheck] skipped: context engine "${activeContextEngine!.info.id}" owns compaction`,
-            );
-          }
-
-          if (!shouldSkipPrecheck) {
-            preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
-              messages: hookMessagesForCurrentPrompt,
-              ...(unwindowedLlmBoundaryMessagesForPrecheck
-                ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
-                : {}),
-              systemPrompt: systemPromptForHook,
-              prompt: llmBoundaryPromptForPrecheck,
-              contextTokenBudget,
-              reserveTokens,
-              toolResultMaxChars: promptToolResultMaxChars,
-              llmBoundaryTokenPressure: {
-                estimatedPromptTokens: llmBoundaryTokenPressure,
-                source: "llm_boundary_normalized_prompt",
-                renderedChars: llmBoundaryPromptForPrecheck.length,
-              },
-            });
-          }
-          if (preemptiveCompaction) {
-            contextBudgetStatus = buildPrePromptContextBudgetStatus({
-              result: preemptiveCompaction,
-              provider: params.provider,
-              modelId: params.modelId,
-              messageCount: activeSession.messages.length,
-              contextTokenBudget,
-              reserveTokens,
-              ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-              ...(contextEnginePromptAuthority === "preassembly_may_overflow" &&
-              unwindowedContextEngineMessagesForPrecheck
-                ? { unwindowedMessageCount: unwindowedContextEngineMessagesForPrecheck.length }
-                : {}),
-            });
-            log.debug(
-              formatPrePromptPrecheckLog({
-                result: preemptiveCompaction,
-                provider: params.provider,
-                modelId: params.modelId,
-                messageCount: activeSession.messages.length,
-                contextTokenBudget,
-                reserveTokens,
-                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-                ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-                ...(contextEnginePromptAuthority === "preassembly_may_overflow" &&
-                unwindowedContextEngineMessagesForPrecheck
-                  ? { unwindowedMessageCount: unwindowedContextEngineMessagesForPrecheck.length }
-                  : {}),
-                ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
-              }),
-            );
-          }
-          if (preemptiveCompaction?.route === "truncate_tool_results_only") {
-            const toolResultMaxChars = resolveLiveToolResultMaxChars({
-              contextWindowTokens: contextTokenBudget,
-              cfg: params.config,
-              agentId: sessionAgentId,
-            });
-            const truncationResult = await withOwnedSessionWriteLock(() =>
-              truncateOversizedToolResultsInSessionManager({
-                sessionManager: activeSessionManager,
-                contextWindowTokens: contextTokenBudget,
-                maxCharsOverride: toolResultMaxChars,
-                sessionFile: params.sessionFile,
-                sessionId: params.sessionId,
-                sessionKey: params.sessionKey,
-                agentId: sessionAgentId,
-              }),
-            );
-            if (truncationResult.truncated) {
-              preflightRecovery = {
-                route: "truncate_tool_results_only",
-                ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-                handled: true,
-                truncatedCount: truncationResult.truncatedCount,
-              };
-              log.info(
-                `[context-overflow-precheck] early tool-result truncation succeeded for ` +
-                  `${params.provider}/${params.modelId} route=${preemptiveCompaction.route} ` +
-                  `truncatedCount=${truncationResult.truncatedCount} ` +
-                  `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
-                  `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
-                  `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
-                  `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
-                  `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
-                  `sessionFile=${params.sessionFile}`,
-              );
-              skipPromptSubmission = true;
-            }
-            if (!skipPromptSubmission) {
-              log.warn(
-                `[context-overflow-precheck] early tool-result truncation did not help for ` +
-                  `${params.provider}/${params.modelId}; falling back to compaction ` +
-                  `reason=${truncationResult.reason ?? "unknown"} sessionFile=${params.sessionFile}`,
-              );
-              preflightRecovery = {
-                route: "compact_only",
-                ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-              };
-              promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-              promptErrorSource = "precheck";
-              skipPromptSubmission = true;
-            }
-          }
-          if (preemptiveCompaction?.shouldCompact) {
-            preflightRecovery =
-              preemptiveCompaction.route === "compact_then_truncate"
-                ? {
-                    route: "compact_then_truncate",
-                    ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-                  }
-                : {
-                    route: "compact_only",
-                    ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-                  };
-            promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-            promptErrorSource = "precheck";
-            log.warn(
-              `[context-overflow-precheck] sessionKey=${params.sessionKey ?? params.sessionId} ` +
-                `provider=${params.provider}/${params.modelId} ` +
-                `route=${preemptiveCompaction.route} ` +
-                `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
-                `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
-                `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
-                `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
-                `reserveTokens=${reserveTokens} ` +
-                `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
-                `sessionFile=${params.sessionFile}`,
-            );
-            skipPromptSubmission = true;
-          }
+          ({
+            contextBudgetStatus,
+            preflightRecovery,
+            promptError,
+            promptErrorSource,
+            skipPromptSubmission,
+          } = promptPreflight);
 
           if (!skipPromptSubmission) {
             const normalizedReplayMessages = normalizeAssistantReplayContent(
