@@ -650,6 +650,30 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         repoRoot: REFRESHED_RESEARCH_WORKSPACE,
       });
 
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [{ kind: "local", name: "beta" }],
+        defaultBranch: "beta",
+      });
+      const branchesBeforeSameWorkspaceReconnect = (await gateway.getRequests("worktrees.branches"))
+        .length;
+      await gateway.setOnline(false);
+      await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+      await gateway.setOnline(true);
+
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .toBe(branchesBeforeSameWorkspaceReconnect + 1);
+      expect((await gateway.getRequests("worktrees.branches")).at(-1)?.params).toEqual({
+        repoRoot: REFRESHED_RESEARCH_WORKSPACE,
+      });
+      const whereTrigger = page.locator('summary[title="Where"]');
+      await whereTrigger.click();
+      const worktreeItem = page.getByRole("menuitemradio", { name: "Worktree" });
+      await worktreeItem.click();
+      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("beta");
+      await worktreeItem.click();
+      await page.keyboard.press("Escape");
+
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
