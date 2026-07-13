@@ -57,6 +57,17 @@ GHSA-specific advisory work outside this skill.
   ## Approved exceptions
   ```
 
+- Under `Approved exceptions`, record one decision per PR using exactly one of
+  these forms. An optional Markdown list marker is allowed:
+
+  ```md
+  #PR: pending (https://github.com/...decision...)
+  #PR: approved by @captain (https://github.com/...decision...)
+  #PR: rejected by @captain (https://github.com/...decision...)
+  ```
+
+  Use `None.` when no exception entries exist. Unknown, negated, duplicate,
+  missing-approver, or missing-link forms are incomplete and never approved.
 - The allowed classes are exactly `release-preparation`, `release-blocker`,
   `exact-backport`, `release-infrastructure`, `changelog-only`, and `exception`.
   Pull requests targeting `release/**` use this copyable metadata block:
