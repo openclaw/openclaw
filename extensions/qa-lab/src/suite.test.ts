@@ -539,11 +539,7 @@ describe("qa suite", () => {
     await fs.mkdir(path.dirname(capabilityMatrixPath), { recursive: true });
     await fs.writeFile(capabilityMatrixPath, "authoritative capabilities\n", "utf8");
     await fs.writeFile(smokeArtifactPath, "authoritative smoke\n", "utf8");
-    await fs.writeFile(
-      providerReadinessArtifactPath,
-      "authoritative provider readiness\n",
-      "utf8",
-    );
+    await fs.writeFile(providerReadinessArtifactPath, "authoritative provider readiness\n", "utf8");
 
     const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
       outputDir,
