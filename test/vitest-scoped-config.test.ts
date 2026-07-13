@@ -416,8 +416,12 @@ describe("createScopedVitestConfig", () => {
     }
   });
 
-  it.each(["src/gateway/**/*{server,client}*.test.ts", "src/gateway/@(server|core).test.ts"])(
-    "rejects non-literal include-file target %s at an ownership boundary",
+  it.each([
+    "src/gateway/**/*{server,client}*.test.ts",
+    "src/gateway/@(server|core).test.ts",
+    "src/gateway/nested/**/*.test.ts",
+  ])(
+    "rejects ambiguous watch-mode include-file target %s at an ownership boundary",
     (candidate) => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
       try {
@@ -438,6 +442,26 @@ describe("createScopedVitestConfig", () => {
       }
     },
   );
+
+  it("intersects a watch-mode directory target with project ownership", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      fs.writeFileSync(includeFile, JSON.stringify(["src/gateway/**/*.test.ts"]), "utf8");
+
+      const config = createScopedVitestConfig(["src/gateway/**/*server*.test.ts"], {
+        dir: "src/gateway",
+        env: {
+          OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+        },
+        intersectIncludeFile: true,
+      });
+
+      expect(requireTestConfig(config).include).toEqual(["**/*server*.test.ts"]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 
   it("keeps shared gateway include files inside their actual child projects", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
