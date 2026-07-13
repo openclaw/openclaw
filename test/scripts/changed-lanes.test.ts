@@ -2132,7 +2132,10 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
-      { name: "TypeScript LOC ratchet", args: ["check:loc"] },
+      {
+        name: "TypeScript LOC ratchet",
+        args: ["check:loc", "--changed-paths-json", "[]"],
+      },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
       {
         name: "guarded extension wildcard re-exports",
@@ -2155,7 +2158,10 @@ describe("scripts/changed-lanes", () => {
     expect(result.docsOnly).toBe(true);
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
-      { name: "TypeScript LOC ratchet", args: ["check:loc"] },
+      {
+        name: "TypeScript LOC ratchet",
+        args: ["check:loc", "--changed-paths-json", '["docs/ci.md","README.md"]'],
+      },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
       {
         name: "guarded extension wildcard re-exports",
@@ -2172,6 +2178,20 @@ describe("scripts/changed-lanes", () => {
         args: ["format:check", "--no-error-on-unmatched-pattern", "--", "docs/ci.md", "README.md"],
       },
       { name: "package patch guard", args: ["deps:patches:check"] },
+    ]);
+  });
+
+  it("uses a changed-path file for the executed LOC check", () => {
+    const result = detectChangedLanes(["src/example.ts"]);
+    const plan = createChangedCheckPlan(result, {
+      locChangedPathsFile: ".tmp/loc-changed-paths.json",
+    });
+    const command = plan.commands.find((entry) => entry.name === "TypeScript LOC ratchet");
+
+    expect(command?.args).toEqual([
+      "check:loc",
+      "--changed-paths-file",
+      ".tmp/loc-changed-paths.json",
     ]);
   });
 });

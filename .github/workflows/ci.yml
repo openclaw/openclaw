@@ -1559,7 +1559,7 @@ jobs:
         env:
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
-          LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before || '') }}
+          LOC_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
@@ -1569,6 +1569,15 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
+              if [ -n "$PR_BASE_SHA" ]; then
+                # The synthetic merge can have a newer first parent than the
+                # pull-request payload after main advances. Compare its exact tree.
+                LOC_BASE_SHA="$(git cat-file -p HEAD | awk '$1 == "parent" { print $2; exit }')"
+                if [[ ! "$LOC_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "Unable to resolve the pull-request merge base from HEAD." >&2
+                  exit 1
+                fi
+              fi
               if [ -n "$LOC_BASE_SHA" ]; then
                 git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/loc-base"
                 pnpm check:loc --base-ref refs/remotes/origin/loc-base

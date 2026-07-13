@@ -44,6 +44,24 @@ describe("scripts/check-ts-max-loc", () => {
     expect(() => parseArgs(["--base-ref", "main^{tree}"])).toThrow("--base-ref requires a git ref");
   });
 
+  it("parses an explicit changed-path set without altering valid filenames", () => {
+    expect(parseArgs(["--changed-paths-json", '["src/é.ts"," src/space.ts "]'])).toMatchObject({
+      changedPaths: ["src/é.ts", " src/space.ts "],
+    });
+    expect(parseArgs(["--changed-paths-file", ".tmp/changed-paths.json"])).toMatchObject({
+      changedPathsFile: ".tmp/changed-paths.json",
+    });
+    expect(() => parseArgs(["--changed-paths-json", "{}"])).toThrow(
+      "--changed-paths-json requires a JSON string array",
+    );
+    expect(() =>
+      parseArgs(["--changed-paths-file", ".tmp/changed-paths.json", "--changed-paths-json", "[]"]),
+    ).toThrow("choose only one changed-path input");
+    expect(() =>
+      parseArgs(["--changed-paths-json", "[]", "--changed-paths-file", ".tmp/changed-paths.json"]),
+    ).toThrow("choose only one changed-path input");
+  });
+
   it("fails closed when a comparison ref does not exist", () => {
     const result = runCheckTsMaxLoc(["--base-ref", "refs/heads/__loc-ratchet-missing__"]);
 

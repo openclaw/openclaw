@@ -17,6 +17,7 @@ export type ChangedCheckPlanOptions = {
   staged?: boolean;
   base?: string;
   head?: string;
+  locChangedPathsFile?: string;
   platform?: NodeJS.Platform;
   swiftlintAvailable?: boolean;
 };

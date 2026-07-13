@@ -14,6 +14,8 @@ function writeStdoutLine(message: string): void {
 export type ParsedArgs = {
   baseRef?: string;
   baselinePath: string;
+  changedPathsFile?: string;
+  changedPaths?: string[];
   maxLines: number;
   writeBaseline: boolean;
 };
@@ -21,6 +23,8 @@ export type ParsedArgs = {
 export function parseArgs(argv: string[]): ParsedArgs {
   let baseRef: string | undefined;
   let baselinePath = DEFAULT_BASELINE_PATH;
+  let changedPathsFile: string | undefined;
+  let changedPaths: string[] | undefined;
   let maxLines = 500;
   let writeBaseline = false;
 
@@ -47,6 +51,34 @@ export function parseArgs(argv: string[]): ParsedArgs {
       index++;
       continue;
     }
+    if (arg === "--changed-paths-json") {
+      const next = argv[index + 1];
+      if (!next) {
+        throw new Error("--changed-paths-json requires a JSON string array");
+      }
+      if (changedPathsFile !== undefined) {
+        throw new Error("choose only one changed-path input");
+      }
+      try {
+        changedPaths = parseChangedPathsJson(next);
+      } catch {
+        throw new Error("--changed-paths-json requires a JSON string array");
+      }
+      index++;
+      continue;
+    }
+    if (arg === "--changed-paths-file") {
+      const next = argv[index + 1];
+      if (!next) {
+        throw new Error("--changed-paths-file requires a path");
+      }
+      if (changedPaths !== undefined) {
+        throw new Error("choose only one changed-path input");
+      }
+      changedPathsFile = next;
+      index++;
+      continue;
+    }
     if (arg === "--base-ref") {
       const next = argv[index + 1];
       if (!next || next.startsWith("-") || !/^[A-Za-z0-9_./-]+$/u.test(next)) {
@@ -63,7 +95,20 @@ export function parseArgs(argv: string[]): ParsedArgs {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { baseRef, baselinePath, maxLines, writeBaseline };
+  return { baseRef, baselinePath, changedPathsFile, changedPaths, maxLines, writeBaseline };
+}
+
+function parseChangedPathsJson(content: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error("changed paths must be a JSON string array");
+  }
+  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+    throw new Error("changed paths must be a JSON string array");
+  }
+  return parsed;
 }
 
 function gitLsFilesAll(): string[] {
@@ -298,7 +343,17 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     throw error;
   });
 
-  const { baseRef, baselinePath, maxLines, writeBaseline } = parseArgs(argv);
+  const {
+    baseRef,
+    baselinePath,
+    changedPathsFile,
+    changedPaths: parsedChangedPaths,
+    maxLines,
+    writeBaseline,
+  } = parseArgs(argv);
+  const changedPaths = changedPathsFile
+    ? parseChangedPathsJson(await readFile(changedPathsFile, "utf8"))
+    : parsedChangedPaths;
   const files = gitLsFilesAll()
     .filter((filePath) => existsSync(filePath))
     .filter(isProductionTypeScriptFile);
@@ -334,10 +389,12 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   const ratchetViolations = findLocRatchetViolations({ baseline, maxLines, results });
   // The comparison base owns pre-existing drift. Scope normal checks to this
   // change so an unrelated PR cannot inherit and report another merge's debt.
-  const scopedRatchetViolations = comparisonBaseRef
+  const scopedPaths =
+    changedPaths ?? (comparisonBaseRef ? readChangedPaths(comparisonBaseRef) : undefined);
+  const scopedRatchetViolations = scopedPaths
     ? scopeLocRatchetViolations({
         baselinePath,
-        changedPaths: readChangedPaths(comparisonBaseRef),
+        changedPaths: scopedPaths,
         violations: ratchetViolations,
       })
     : ratchetViolations;
