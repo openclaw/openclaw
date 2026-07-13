@@ -5,6 +5,7 @@ import {
   resolveSetupWizardGroupAllowlist,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
@@ -149,9 +150,12 @@ afterAll(() => {
 });
 
 function createPrompter(inputs: string[]) {
+  const text = vi.fn(async () => inputs.shift() ?? "");
+  const note = vi.fn(async () => undefined);
   return {
-    text: vi.fn(async () => inputs.shift() ?? ""),
-    note: vi.fn(async () => undefined),
+    ...createWizardPrompter(),
+    text,
+    note,
   };
 }
 
@@ -181,7 +185,6 @@ type AllowFromResolver = (params: {
   token: string;
   entries: string[];
 }) => Promise<Array<{ input: string; resolved: boolean; id?: string | null }>>;
-
 function asAllowFromResolver(resolveEntries: ReturnType<typeof vi.fn>): AllowFromResolver {
   return resolveEntries as AllowFromResolver;
 }
@@ -191,7 +194,7 @@ async function runPromptResolvedAllowFromWithToken(params: {
   resolveEntries: AllowFromResolver;
 }) {
   return await promptResolvedAllowFrom({
-    prompter: params.prompter as any,
+    prompter: params.prompter,
     existing: [],
     token: "xoxb-test",
     message: "msg",
@@ -229,11 +232,19 @@ function createSecretInputPrompter(params: {
   const selects = [...params.selects];
   const confirms = [...(params.confirms ?? [])];
   const texts = [...(params.texts ?? [])];
+  const confirm = vi.fn(async () => confirms.shift() ?? false);
+  const text = vi.fn(async () => texts.shift() ?? "");
+  const note = vi.fn(async () => undefined);
+  const prompter = createWizardPrompter(undefined, {
+    defaultSelect: "plaintext",
+    selectValues: selects,
+  });
   return {
-    select: vi.fn(async () => selects.shift() ?? "plaintext"),
-    confirm: vi.fn(async () => confirms.shift() ?? false),
-    text: vi.fn(async () => texts.shift() ?? ""),
-    note: vi.fn(async () => undefined),
+    ...prompter,
+    select: vi.mocked(prompter.select),
+    confirm,
+    text,
+    note,
   };
 }
 
@@ -248,7 +259,7 @@ async function runPromptSingleChannelSecretInput(params: {
 }) {
   return await promptSingleChannelSecretInput({
     cfg: {},
-    prompter: params.prompter as any,
+    prompter: params.prompter,
     providerHint: params.providerHint,
     credentialLabel: params.credentialLabel,
     accountConfigured: params.accountConfigured,
@@ -310,7 +321,7 @@ async function runPromptLegacyAllowFrom(params: {
   return await promptLegacyChannelAllowFrom({
     cfg: params.cfg ?? {},
     channel: params.channel,
-    prompter: params.prompter as any,
+    prompter: params.prompter,
     existing: params.existing,
     token: params.token,
     noteTitle: params.noteTitle,
@@ -329,7 +340,7 @@ describe("promptResolvedAllowFrom", () => {
     const resolveEntries = vi.fn();
 
     const result = await promptResolvedAllowFrom({
-      prompter: prompter as any,
+      prompter,
       existing: ["111"],
       token: "",
       message: "msg",
@@ -338,7 +349,9 @@ describe("promptResolvedAllowFrom", () => {
       parseInputs: parseCsvInputs,
       parseId: (value) => (/^\d+$/.test(value.trim()) ? value.trim() : null),
       invalidWithoutTokenNote: "ids only",
-      resolveEntries: resolveEntries as any,
+      resolveEntries: resolveEntries as Parameters<
+        typeof promptResolvedAllowFrom
+      >[0]["resolveEntries"],
     });
 
     expect(result).toEqual(["111", "123"]);
@@ -442,7 +455,7 @@ describe("promptLegacyChannelAllowFromForAccount", () => {
         },
       } as OpenClawConfig,
       channel: "slack",
-      prompter: prompter as any,
+      prompter,
       defaultAccountId: DEFAULT_ACCOUNT_ID,
       resolveAccount: () => ({
         botToken: "xoxb-token",
@@ -810,7 +823,7 @@ describe("createPromptParsedAllowFromForAccount", () => {
           },
         },
       },
-      prompter: prompter as any,
+      prompter,
     });
 
     expect(
@@ -839,7 +852,7 @@ describe("parsed allowFrom prompt builders", () => {
     const prompter = createPrompter(["npub1"]);
     const next = await promptAllowFrom({
       cfg: {},
-      prompter: prompter as any,
+      prompter,
     });
 
     expect(next.channels?.nostr?.allowFrom).toEqual(["npub1"]);
@@ -859,7 +872,7 @@ describe("parsed allowFrom prompt builders", () => {
 
     const next = await promptAllowFrom({
       cfg: {},
-      prompter: createPrompter(["users/123"]) as any,
+      prompter: createPrompter(["users/123"]),
     });
 
     expect(next.channels?.googlechat?.enabled).toBe(true);
@@ -2060,7 +2073,7 @@ describe("resolveAccountIdForConfigure", () => {
   it("uses normalized override without prompting", async () => {
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
-      prompter: {} as any,
+      prompter: createWizardPrompter(),
       label: "Signal",
       accountOverride: " Team Primary ",
       shouldPromptAccountIds: true,
@@ -2073,7 +2086,7 @@ describe("resolveAccountIdForConfigure", () => {
   it("uses default account when override is missing and prompting disabled", async () => {
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
-      prompter: {} as any,
+      prompter: createWizardPrompter(),
       label: "Signal",
       shouldPromptAccountIds: false,
       listAccountIds: () => ["default"],
@@ -2083,15 +2096,15 @@ describe("resolveAccountIdForConfigure", () => {
   });
 
   it("prompts for account id when prompting is enabled and no override is provided", async () => {
+    const basePrompter = createWizardPrompter(undefined, { defaultSelect: "prompted-id" });
     const prompter = {
-      select: vi.fn(async () => "prompted-id"),
-      text: vi.fn(async () => ""),
-      note: vi.fn(async () => undefined),
+      ...basePrompter,
+      select: vi.mocked(basePrompter.select),
     };
 
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
-      prompter: prompter as any,
+      prompter,
       label: "Signal",
       shouldPromptAccountIds: true,
       listAccountIds: () => ["default", "prompted-id"],

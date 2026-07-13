@@ -25,6 +25,10 @@ import {
 } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  APPEARANCE_SETTINGS_TARGET_IDS,
+  COMMUNICATION_SETTINGS_TARGET_IDS,
+} from "./settings-targets.ts";
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
@@ -864,7 +868,10 @@ function renderNotificationsSection(props: ConfigProps) {
   if (!push) {
     return html`
       <div class="settings-notifications">
-        <section class="settings-notifications__card">
+        <section
+          id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}
+          class="settings-notifications__card"
+        >
           <div class="settings-notifications__header">
             <span class="settings-notifications__icon">${getSectionIcon("__notifications__")}</span>
             <div class="settings-notifications__copy">
@@ -910,7 +917,10 @@ function renderNotificationsSection(props: ConfigProps) {
 
   return html`
     <div class="settings-notifications">
-      <section class="settings-notifications__card">
+      <section
+        id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}
+        class="settings-notifications__card"
+      >
         <div class="settings-notifications__header">
           <span class="settings-notifications__icon">${getSectionIcon("__notifications__")}</span>
           <div class="settings-notifications__copy">
@@ -1034,7 +1044,7 @@ function renderAppearanceSection(props: ConfigProps) {
   ];
   return html`
     <div class="settings-appearance">
-      <div class="settings-appearance__section">
+      <div id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-appearance__section">
         <h3 class="settings-appearance__heading">${t("configView.appearance.theme")}</h3>
         <p class="settings-appearance__hint">${t("configView.appearance.chooseTheme")}</p>
         <div class="settings-theme-grid">
@@ -1159,7 +1169,7 @@ function renderAppearanceSection(props: ConfigProps) {
             `}
       </div>
 
-      <div class="settings-appearance__section">
+      <div id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-appearance__section">
         <h3 class="settings-appearance__heading">${t("configView.appearance.textSize")}</h3>
         <div class="settings-text-scale">
           <div class="settings-text-scale__options">
@@ -1179,7 +1189,7 @@ function renderAppearanceSection(props: ConfigProps) {
         </div>
       </div>
 
-      <div class="settings-appearance__section">
+      <div id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-appearance__section">
         <h3 class="settings-appearance__heading">${t("configView.connection.title")}</h3>
         <div class="settings-info-grid">
           <div class="settings-info-row">
@@ -1456,19 +1466,16 @@ export function renderConfig(props: ConfigProps) {
       ? computeRawDiff(viewState, props.originalRaw, props.raw)
       : [];
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
+  const configBusy = props.loading || props.saving || props.applying || props.updating;
 
   // Save/apply buttons require actual changes to be enabled.
   // Note: formUnsafe warns about unsupported schema paths but shouldn't block saving.
   const canSaveForm = Boolean(props.formValue) && !props.loading && Boolean(analysis.schema);
   const canSave =
-    props.connected && !props.saving && hasChanges && (formMode === "raw" ? true : canSaveForm);
+    props.connected && !configBusy && hasChanges && (formMode === "raw" ? true : canSaveForm);
   const canApply =
-    props.connected &&
-    !props.applying &&
-    !props.updating &&
-    hasChanges &&
-    (formMode === "raw" ? true : canSaveForm);
-  const canUpdate = props.connected && !props.applying && !props.updating;
+    props.connected && !configBusy && hasChanges && (formMode === "raw" ? true : canSaveForm);
+  const canUpdate = props.connected && !configBusy;
   const renderActionButtonContent = (busy: boolean, label: string, busyLabel: string) =>
     busy
       ? html`<span class="config-action-spinner" aria-hidden="true">${icons.loader}</span
@@ -1541,10 +1548,14 @@ export function renderConfig(props: ConfigProps) {
                     </button>
                   `
                 : nothing}
-              <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
+              <button class="btn btn--sm" ?disabled=${configBusy} @click=${props.onReload}>
                 ${props.loading ? t("common.loading") : t("common.reload")}
               </button>
-              <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
+              <button
+                class="btn btn--sm"
+                ?disabled=${configBusy || !hasChanges}
+                @click=${props.onReset}
+              >
                 ${t("configView.clear")}
               </button>
               <button
@@ -1869,7 +1880,7 @@ export function renderConfig(props: ConfigProps) {
                           uiHints: props.uiHints,
                           value: props.formValue,
                           rawAvailable,
-                          disabled: props.loading || !props.formValue,
+                          disabled: configBusy || !props.formValue,
                           unsupportedPaths: analysis.unsupportedPaths,
                           onPatch: props.onFormPatch,
                           searchQuery: props.searchQuery,
@@ -1953,6 +1964,7 @@ export function renderConfig(props: ConfigProps) {
                               <textarea
                                 placeholder=${t("configView.rawConfig")}
                                 .value=${props.raw}
+                                ?disabled=${configBusy}
                                 @input=${(e: Event) => {
                                   props.onRawChange((e.target as HTMLTextAreaElement).value);
                                 }}

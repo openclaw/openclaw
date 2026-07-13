@@ -1,6 +1,7 @@
 // Signal plugin module implements monitor behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -702,7 +703,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       accountUuid: accountInfo.config.accountUuid,
       accountId: accountInfo.accountId,
-      blockStreaming: accountInfo.config.blockStreaming,
+      blockStreaming: resolveChannelStreamingBlockEnabled(accountInfo.config),
       historyLimit,
       groupHistories,
       textLimit,

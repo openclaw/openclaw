@@ -287,6 +287,7 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
           model: "openai/gpt-5.5",
         },
       });
+      expect(requireRecord(requestParams(addRequest).delivery).accountId).toBeUndefined();
     } finally {
       await context.close();
     }

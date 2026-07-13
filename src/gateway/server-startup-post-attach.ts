@@ -40,7 +40,7 @@ const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
-const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 10_000;
+const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 0;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
@@ -746,6 +746,17 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  // Agent RPC remains available when transport startup is disabled, so its model metadata must
+  // warm independently instead of leaving the first headless request on the cold path.
+  schedulePrimaryModelPrewarm(
+    {
+      cfg: params.cfg,
+      workspaceDir: params.defaultWorkspaceDir,
+      log: params.log,
+      startupTrace: params.startupTrace,
+    },
+    params.prewarmPrimaryModel,
+  );
   await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
     try {
       const { markStartupOrphanedMainSessionsForRecovery } =
@@ -760,15 +771,6 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
-        schedulePrimaryModelPrewarm(
-          {
-            cfg: params.cfg,
-            workspaceDir: params.defaultWorkspaceDir,
-            log: params.log,
-            startupTrace: params.startupTrace,
-          },
-          params.prewarmPrimaryModel,
-        );
         await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
           params.startChannels(),
         );
@@ -1452,6 +1454,7 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const testing = {
+  agentRuntimePluginPrewarmStartDelayMs: AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS,
   providerAuthPrewarmStartDelayMs: PROVIDER_AUTH_PREWARM_START_DELAY_MS,
   hasRestartSentinelFast,
   prewarmConfiguredPrimaryModel,

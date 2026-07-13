@@ -13,6 +13,7 @@ import {
   runWithGatewayRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
+  waitForActiveGatewayRootWork,
 } from "./gateway-work-admission.js";
 
 beforeEach(resetGatewayWorkAdmission);
@@ -33,6 +34,17 @@ it("counts one nested root chain once and excludes the preparing caller", async 
   });
   outer?.release();
   expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("waits for admitted roots and reports a bounded timeout", async () => {
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root).not.toBeNull();
+  const pending = waitForActiveGatewayRootWork();
+  await expect(waitForActiveGatewayRootWork(0)).resolves.toEqual({ drained: false, active: 1 });
+
+  root?.release();
+
+  await expect(pending).resolves.toEqual({ drained: true, active: 0 });
 });
 
 it("rolls back or releases a generation-bound suspension without resetting roots", () => {
