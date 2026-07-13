@@ -1688,12 +1688,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!agentId && requestedSessionKeyRaw) {
-      const parsed = parseAgentSessionKey(requestedSessionKeyRaw);
-      const inferredAgentId =
-        parsed && resolveSessionStoreKey({ cfg, sessionKey: requestedSessionKeyRaw }) === "global"
-          ? normalizeAgentId(parsed.agentId)
-          : undefined;
+    const parsedRequestedSessionKey = requestedSessionKeyRaw
+      ? parseAgentSessionKey(requestedSessionKeyRaw)
+      : null;
+    if (!agentId && parsedRequestedSessionKey) {
+      const inferredAgentId = normalizeAgentId(parsedRequestedSessionKey.agentId);
       if (inferredAgentId) {
         if (!knownAgents.includes(inferredAgentId)) {
           respond(
@@ -1701,7 +1700,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             undefined,
             errorShape(
               ErrorCodes.INVALID_REQUEST,
-              `invalid agent params: unknown agent id "${parsed?.agentId}"`,
+              `invalid agent params: unknown agent id "${parsedRequestedSessionKey.agentId}"`,
             ),
           );
           return;
@@ -1760,7 +1759,6 @@ export const agentHandlers: GatewayRequestHandlers = {
           })
         : undefined);
     if (agentId && requestedSessionKeyRaw) {
-      const parsedRequestedSessionKey = parseAgentSessionKey(requestedSessionKeyRaw);
       const requestedCanonicalKey = resolveSessionStoreKey({
         cfg,
         sessionKey: requestedSessionKeyRaw,
