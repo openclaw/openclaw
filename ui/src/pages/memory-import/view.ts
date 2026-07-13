@@ -282,7 +282,6 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
                   ),
                 )}
               </div>
-              ${renderResult(props.lastResults[provider.providerId])}
               <div class="memory-import__provider-actions">
                 <span>
                   ${selectedIds.size > 0
@@ -302,6 +301,7 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
                 </button>
               </div>
             `}
+      ${renderResult(props.lastResults[provider.providerId])}
     </article>
   `;
 }

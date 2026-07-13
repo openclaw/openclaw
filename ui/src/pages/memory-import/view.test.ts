@@ -197,10 +197,21 @@ describe("renderMemoryImport", () => {
   });
 
   it("shows partial import failures with the saved report", () => {
+    const plan = createPlan();
+    const provider = plan.providers[0];
+    if (!provider) {
+      throw new Error("expected provider fixture");
+    }
+    plan.providers[0] = {
+      ...provider,
+      found: false,
+      error: "provider rescan failed",
+    };
     const container = document.createElement("div");
     render(
       renderMemoryImport(
         createProps({
+          plan,
           lastResults: {
             codex: {
               providerId: "codex",
@@ -245,6 +256,7 @@ describe("renderMemoryImport", () => {
 
     const result = container.querySelector(".memory-import__result--incomplete");
     expect(result?.getAttribute("role")).toBe("alert");
+    expect(container.textContent).toContain("provider rescan failed");
     expect(result?.textContent).toContain("Import incomplete");
     expect(result?.textContent).toContain("1 imported · 1 failed · 0 conflicts");
     expect(result?.textContent).toContain("report saved");
