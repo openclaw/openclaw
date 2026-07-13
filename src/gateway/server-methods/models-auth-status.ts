@@ -502,11 +502,7 @@ function resolveConfiguredApiKeyProviders(cfg: OpenClawConfig): Set<string> {
     const rawKey = typeof provider?.apiKey === "string" ? provider.apiKey.trim() : "";
     // Unresolved credentials still need a missing status row. Local no-auth
     // markers do not: they intentionally represent providers without secrets.
-    if (
-      rawKey &&
-      rawKey !== NON_ENV_SECRETREF_MARKER &&
-      nonSecretMarkers.has(rawKey)
-    ) {
+    if (rawKey && rawKey !== NON_ENV_SECRETREF_MARKER && nonSecretMarkers.has(rawKey)) {
       continue;
     }
     providers.add(normalized);

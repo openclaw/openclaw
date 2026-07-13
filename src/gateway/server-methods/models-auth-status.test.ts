@@ -502,9 +502,9 @@ describe("models.authStatus", () => {
 
   it("does not report unresolved persisted markers as API keys", async () => {
     await withEnvAsync(Object.fromEntries([["ANTHROPIC_API_KEY", undefined]]), async () => {
-      const actualAuthHealth = await vi.importActual<
-        typeof import("../../agents/auth-health.js")
-      >("../../agents/auth-health.js");
+      const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
+        "../../agents/auth-health.js",
+      );
       mocks.getRuntimeConfig.mockReturnValue({
         models: {
           providers: {
