@@ -27,7 +27,49 @@ if (!customElements.get(PROVIDER_TAG)) {
 
 type MemoryImportPageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
+  requestUpdate(): void;
 };
+
+function createPlan(agentId = "research") {
+  const workspace = `/tmp/openclaw-${agentId}`;
+  return {
+    agentId,
+    workspace,
+    providers: [
+      {
+        providerId: "codex",
+        label: "Codex",
+        description: "Import Codex memory.",
+        planFingerprint: "a".repeat(64),
+        found: true,
+        source: "/tmp/codex",
+        target: workspace,
+        summary: {
+          total: 1,
+          planned: 1,
+          migrated: 0,
+          skipped: 0,
+          conflicts: 0,
+          errors: 0,
+          sensitive: 0,
+        },
+        items: [
+          {
+            id: "memory:codex:MEMORY.md",
+            status: "planned",
+            source: "/tmp/codex/MEMORY.md",
+            target: `${workspace}/memory/imports/codex/MEMORY.md`,
+            details: {
+              collectionId: "codex",
+              collectionLabel: "Codex",
+              relativePath: "MEMORY.md",
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
 
 function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
@@ -113,43 +155,7 @@ describe("MemoryImportPage", () => {
         if (planRequests > 1) {
           throw new Error("post-apply planning unavailable");
         }
-        return {
-          agentId: "research",
-          workspace: "/tmp/openclaw-research",
-          providers: [
-            {
-              providerId: "codex",
-              label: "Codex",
-              description: "Import Codex memory.",
-              planFingerprint: "a".repeat(64),
-              found: true,
-              source: "/tmp/codex",
-              target: "/tmp/openclaw-research",
-              summary: {
-                total: 1,
-                planned: 1,
-                migrated: 0,
-                skipped: 0,
-                conflicts: 0,
-                errors: 0,
-                sensitive: 0,
-              },
-              items: [
-                {
-                  id: "memory:codex:MEMORY.md",
-                  status: "planned",
-                  source: "/tmp/codex/MEMORY.md",
-                  target: "/tmp/openclaw-research/memory/imports/codex/MEMORY.md",
-                  details: {
-                    collectionId: "codex",
-                    collectionLabel: "Codex",
-                    relativePath: "MEMORY.md",
-                  },
-                },
-              ],
-            },
-          ],
-        };
+        return createPlan();
       }
       if (method === "migrations.memory.apply") {
         return {
@@ -205,5 +211,52 @@ describe("MemoryImportPage", () => {
       page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
         ?.disabled,
     ).toBe(true);
+  });
+
+  it("drops pending state and rejects confirmation when shared agent selection changes", async () => {
+    const request = vi.fn(async (method: string, params: { agentId?: string }) => {
+      if (method === "migrations.memory.plan") {
+        return createPlan(params.agentId ?? "research");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const context = createContext(request);
+    const mutableContext = context as unknown as {
+      agents: {
+        state: {
+          agentsList: {
+            defaultId: string;
+            agents: Array<{ id: string; name: string }>;
+          };
+        };
+      };
+      agentSelection: { state: { selectedId: string } };
+    };
+    mutableContext.agents.state.agentsList.agents.push({ id: "writer", name: "Writer" });
+    const page = await mountPage(context);
+
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
+      ).not.toBeNull(),
+    );
+    page
+      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
+      ?.click();
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
+      ).not.toBeNull(),
+    );
+
+    mutableContext.agentSelection.state.selectedId = "writer";
+    page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    page.requestUpdate();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await page.updateComplete;
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "writer" });
+    expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
   });
 });

@@ -79,6 +79,14 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       return;
     }
     const key = this.planKey(agentId);
+    const activeClient = this.requestedClient ?? this.loadedClient;
+    const activeKey = this.requestedKey ?? this.loadedKey;
+    if (
+      (activeClient !== null && activeClient !== snapshot.client) ||
+      (activeKey !== null && activeKey !== key)
+    ) {
+      this.resetPlanState();
+    }
     if (
       !this.loading &&
       (this.loadedClient !== snapshot.client || this.loadedKey !== key) &&
@@ -102,6 +110,22 @@ export class MemoryImportPage extends OpenClawLightDomElement {
 
   private planKey(agentId: string): string {
     return `${agentId}:${this.replaceExisting ? "replace" : "safe"}`;
+  }
+
+  private resetPlanState() {
+    this.refreshEpoch += 1;
+    this.plan = null;
+    this.loading = false;
+    this.error = null;
+    this.selectedByProvider = {};
+    this.applyingProviderId = null;
+    this.pendingProviderId = null;
+    this.applyError = null;
+    this.lastResults = {};
+    this.loadedKey = null;
+    this.requestedKey = null;
+    this.loadedClient = null;
+    this.requestedClient = null;
   }
 
   private async refresh(force = false) {
@@ -156,24 +180,12 @@ export class MemoryImportPage extends OpenClawLightDomElement {
 
   private selectAgent(agentId: string) {
     this.context.agentSelection.set(agentId);
-    this.plan = null;
-    this.loadedKey = null;
-    this.requestedKey = null;
-    this.loadedClient = null;
-    this.requestedClient = null;
-    this.applyError = null;
-    this.lastResults = {};
+    this.resetPlanState();
   }
 
   private setReplaceExisting(enabled: boolean) {
     this.replaceExisting = enabled;
-    this.plan = null;
-    this.loadedKey = null;
-    this.requestedKey = null;
-    this.loadedClient = null;
-    this.requestedClient = null;
-    this.applyError = null;
-    this.lastResults = {};
+    this.resetPlanState();
   }
 
   private toggleCollection(providerId: string, itemIds: readonly string[], selected: boolean) {
@@ -212,9 +224,17 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     const planFingerprint = this.plan?.providers.find(
       (provider) => provider.providerId === providerId,
     )?.planFingerprint;
-    if (!providerId || !snapshot.client || !agentId || !planFingerprint || itemIds.length === 0) {
+    if (
+      !providerId ||
+      !snapshot.client ||
+      !agentId ||
+      this.plan?.agentId !== agentId ||
+      !planFingerprint ||
+      itemIds.length === 0
+    ) {
       return;
     }
+    const applyEpoch = this.refreshEpoch;
     this.applyingProviderId = providerId;
     this.applyError = null;
     try {
@@ -228,6 +248,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
           overwrite: this.replaceExisting,
         },
       );
+      if (applyEpoch !== this.refreshEpoch) {
+        return;
+      }
       this.lastResults = { ...this.lastResults, [providerId]: result };
       this.pendingProviderId = null;
       this.loadedKey = null;
@@ -236,10 +259,14 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       this.requestedClient = null;
       await this.refresh(true);
     } catch (error) {
-      this.pendingProviderId = null;
-      this.applyError = toErrorMessage(error);
+      if (applyEpoch === this.refreshEpoch) {
+        this.pendingProviderId = null;
+        this.applyError = toErrorMessage(error);
+      }
     } finally {
-      this.applyingProviderId = null;
+      if (applyEpoch === this.refreshEpoch) {
+        this.applyingProviderId = null;
+      }
     }
   }
 
