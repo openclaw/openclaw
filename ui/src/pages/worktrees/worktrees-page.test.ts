@@ -18,7 +18,7 @@ type WorktreesPageTestElement = HTMLElement & {
   createBranches: string[];
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
-  load: () => Promise<void>;
+  load: (options?: { preserveError?: boolean }) => Promise<void>;
   loadCreateBranches: () => void;
   createWorktree: () => Promise<void>;
   removeWorktree: (record: WorktreeRecord) => Promise<void>;
@@ -308,6 +308,64 @@ describe("WorktreesPage lifecycle", () => {
     await restoring;
 
     expect(page.error).toBeNull();
+    expect(page.busyId).toBeNull();
+  });
+
+  it("keeps a restore error after the reconciliation refresh succeeds", async () => {
+    const record = worktree();
+    let listRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.list") {
+        listRequests += 1;
+        return Promise.resolve({ worktrees: [record] });
+      }
+      if (method === "worktrees.restore") {
+        return Promise.reject(new Error("restore failed"));
+      }
+      return Promise.resolve({});
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    document.body.append(page);
+    await vi.waitFor(() => expect(listRequests).toBe(1));
+    await vi.waitFor(() => expect(page.loading).toBe(false));
+
+    await page.restore(record);
+
+    expect(listRequests).toBe(2);
+    expect(page.error).toBe("Error: restore failed");
+    expect(page.busyId).toBeNull();
+  });
+
+  it("replaces a mutation error when the reconciliation refresh also fails", async () => {
+    const record = worktree();
+    let listRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.list") {
+        listRequests += 1;
+        return listRequests === 1
+          ? Promise.resolve({ worktrees: [record] })
+          : Promise.reject(new Error("list failed"));
+      }
+      if (method === "worktrees.restore") {
+        return Promise.reject(new Error("restore failed"));
+      }
+      return Promise.resolve({});
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    document.body.append(page);
+    await vi.waitFor(() => expect(listRequests).toBe(1));
+    await vi.waitFor(() => expect(page.loading).toBe(false));
+
+    await page.restore(record);
+
+    expect(listRequests).toBe(2);
+    expect(page.error).toBe("Error: list failed");
     expect(page.busyId).toBeNull();
   });
 
