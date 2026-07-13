@@ -218,14 +218,14 @@ describe("runAuthProbes", () => {
         },
         auth: { order: { openai: [] } },
       });
-      const expectedProfile = expect.objectContaining({
+      const expected = expect.objectContaining({
         type: "oauth",
         provider: "openai",
         access: "test",
       });
       expect(upsertAuthProfileWithLock).toHaveBeenCalledWith({
         profileId: configKeyCall?.[0].authProfileId,
-        credential: expectedProfile,
+        credential: expected,
         agentDir: configKeyCall?.[0].agentDir,
       });
       expect(clearRuntimeAuthProfileStoreSnapshot).toHaveBeenCalledWith(
