@@ -358,8 +358,12 @@ struct OpenClawTypographyTests {
     @Test func `accessibility metadata text does not require visual typography`() throws {
         let accessibilityTextSamples = [
             ".accessibilityLabel(Text(title))",
+            "Image(systemName: \"circle\").accessibilityLabel(Text(title))",
+            ".accessibilityLabel(Text(title)).accessibilityIdentifier(\"status\")",
+            "Image(systemName: \"circle\").accessibilityLabel(Text(title)).accessibilityHint(Text(hint))",
             ".accessibilityLabel(Text(title))\n)",
             ".accessibilityLabel(\n    Text(title)\n)",
+            "Image(systemName: \"circle\")\n    .accessibilityLabel(\n        Text(title)\n    )",
             ".accessibilityValue(\n    Text(value))",
             ".accessibilityHint(\n\n    Text(hint))",
         ]
@@ -391,6 +395,12 @@ struct OpenClawTypographyTests {
             "Text(body)",
         ]
         #expect(!Self.isAccessibilityMetadataTextCall(at: 1, in: modifierTextInString))
+
+        let modifierTextInComment = [
+            "// Example: .accessibilityLabel(",
+            "Text(body)",
+        ]
+        #expect(!Self.isAccessibilityMetadataTextCall(at: 1, in: modifierTextInComment))
     }
 
     @Test func `secure fields do not use platform placeholder text`() throws {
@@ -513,23 +523,40 @@ struct OpenClawTypographyTests {
     }
 
     private static func isAccessibilityMetadataTextCall(at idx: Int, in lines: [String]) -> Bool {
-        let contextStart = max(lines.startIndex, idx - 4)
+        let rawLine = lines[idx]
         let textArgument = #"(?:[^()"\\]|\\.|"(?:\\.|[^"\\])*")*"#
-        let accessibilityExpression =
-            #"(?s)(?:^|\n)\s*\.accessibility(?:Label|Value|Hint)\s*\(\s*Text\s*\(\#(textArgument)\)\s*\)\s*$"#
+        let inlineAccessibilityText =
+            #"\.accessibility(?:Label|Value|Hint)\s*\(\s*Text\s*\(\#(textArgument)\)\s*\)"#
 
-        // Direct accessibility metadata is announced, not rendered. Complex expressions fail closed.
-        let context = lines[contextStart...idx].joined(separator: "\n")
-        if context.range(of: accessibilityExpression, options: .regularExpression) != nil {
-            return true
+        var inlineRemainder = rawLine
+        var removedInlineMetadata = false
+        while let range = inlineRemainder.range(of: inlineAccessibilityText, options: .regularExpression) {
+            inlineRemainder.removeSubrange(range)
+            removedInlineMetadata = true
+        }
+        if removedInlineMetadata {
+            // Do not let metadata Text hide a visual Text or Label sharing the audited line.
+            return !self.isTextOrLabelCall(inlineRemainder)
         }
 
-        // Only extend an incomplete modifier; a following ")" can instead close an outer expression.
-        guard idx + 1 < lines.endIndex,
-              lines[idx + 1].trimmingCharacters(in: .whitespaces) == ")"
-        else { return false }
-        let extendedContext = lines[contextStart...idx + 1].joined(separator: "\n")
-        return extendedContext.range(of: accessibilityExpression, options: .regularExpression) != nil
+        let directText = #"^\s*Text\s*\(\#(textArgument)\)"#
+        guard let range = rawLine.range(of: directText, options: .regularExpression) else { return false }
+        let remainder = rawLine.replacingCharacters(in: range, with: "")
+        guard !self.isTextOrLabelCall(remainder) else { return false }
+
+        let contextStart = max(lines.startIndex, idx - 4)
+        // Comment text cannot open a metadata modifier for a following visual Text.
+        let leadingContext = lines[contextStart..<idx]
+            .map { line in
+                guard let comment = line.range(of: "//") else { return line }
+                return String(line[..<comment.lowerBound])
+            }
+            .joined(separator: "\n")
+        let accessibilityOpener =
+            #"(?s)(?:^|\n)[^\n]*\.accessibility(?:Label|Value|Hint)\s*\(\s*$"#
+
+        // Direct accessibility metadata is announced, not rendered. Complex expressions fail closed.
+        return leadingContext.range(of: accessibilityOpener, options: .regularExpression) != nil
     }
 
     private static func isShorthandControlCall(_ line: String) -> Bool {
