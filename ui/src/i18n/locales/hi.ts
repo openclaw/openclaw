@@ -533,6 +533,7 @@ export const hi: TranslationMap = {
     on: "चालू",
     off: "बंद",
     full: "पूर्ण",
+    commentary: "कमेंटरी",
     stream: "स्ट्रीम",
     customOption: "{value} (कस्टम)",
     manual: "मैनुअल",

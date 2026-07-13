@@ -106,7 +106,7 @@ import {
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
+import { resolveVerboseKinds, type VerboseLevel } from "../thinking.js";
 import {
   HEARTBEAT_TOKEN,
   isSilentReplyPrefixText,
@@ -594,7 +594,7 @@ function isNonDirectConversationContext(ctx: ExternalFailureConversationContext)
 }
 
 function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): boolean {
-  return level === "on" || level === "full";
+  return resolveVerboseKinds(level)?.toolSummaries === true;
 }
 
 function resolveExternalRunFailureTextForConversation(params: {

@@ -64,6 +64,7 @@ import {
   isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../reply-payload.js";
+import { resolveVerboseKinds } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   createAgentLifecycleTerminalBackstop,
@@ -652,19 +653,25 @@ export function createFollowupRunner(params: {
           : undefined;
         return liveEntryLevel ?? activeSessionEntry?.verboseLevel ?? run.verboseLevel;
       };
-      const shouldEmitVerboseProgress = () => {
-        const verboseLevel = resolveCurrentVerboseLevel();
-        return verboseLevel === "on" || verboseLevel === "full";
-      };
+      const resolveCurrentVerboseKinds = () => resolveVerboseKinds(resolveCurrentVerboseLevel());
+      const shouldEmitVerboseProgress = () => resolveCurrentVerboseKinds()?.toolSummaries === true;
+      // Commentary PROGRESS is re-read live like the tool lanes: a session
+      // switched to "commentary" after this run was queued still gets its
+      // narration. Scope: the progress bridge only — isCommentary FINAL
+      // payloads stay behind the explicit commentaryPayloadsEnabled opt-in,
+      // matching direct dispatch.
+      const shouldEmitCommentaryProgress = () => resolveCurrentVerboseKinds()?.commentary === true;
       const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
       const shouldEmitToolResultProgress = () =>
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>
-        resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
+        resolveCurrentVerboseKinds()?.toolOutput === true &&
+        !shouldSuppressDefaultToolProgressMessages();
       const isRoomEventFollowup = () => queued.currentInboundEventKind === "room_event";
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
-        if (resolveCurrentVerboseLevel() === "on" && shouldEmitToolResultProgress()) {
+        const kinds = resolveCurrentVerboseKinds();
+        if (kinds?.toolSummaries === true && !kinds.toolOutput && shouldEmitToolResultProgress()) {
           observedVisibleToolErrorProgress = true;
         }
       };
@@ -872,7 +879,7 @@ export function createFollowupRunner(params: {
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
         const preflightCompactionFailureText = buildPreflightCompactionFailureText(message, {
-          includeDetails: run.verboseLevel === "on" || run.verboseLevel === "full",
+          includeDetails: resolveVerboseKinds(run.verboseLevel)?.toolSummaries === true,
         });
         if (preflightCompactionFailureText) {
           if (isRoomEventFollowup()) {
@@ -1235,7 +1242,9 @@ export function createFollowupRunner(params: {
                         ]);
                       },
                       onCommentaryText:
-                        progressOpts?.commentaryProgressEnabled === true && progressOpts.onItemEvent
+                        progressOpts?.onItemEvent &&
+                        (progressOpts.commentaryProgressEnabled === true ||
+                          shouldEmitCommentaryProgress())
                           ? async ({ text, itemId }) => {
                               await forwardFollowupProgressEvent({
                                 evt: {
@@ -1506,7 +1515,14 @@ export function createFollowupRunner(params: {
                       evt,
                       opts: progressOpts,
                       detailMode: toolProgressDetail,
-                      emitChannelProgress: shouldEmitToolResultProgress(),
+                      // Commentary narration (item/preamble events) rides its
+                      // own lane so embedded queued runs emit it under
+                      // /verbose commentary, matching the CLI followup path.
+                      emitChannelProgress:
+                        shouldEmitToolResultProgress() ||
+                        (evt.stream === "item" &&
+                          readStringValue(evt.data.kind) === "preamble" &&
+                          shouldEmitCommentaryProgress()),
                       onCompactionComplete: () => {
                         attemptCompactionCount += 1;
                       },

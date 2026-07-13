@@ -537,6 +537,7 @@ export const tr: TranslationMap = {
     on: "açık",
     off: "kapalı",
     full: "tam",
+    commentary: "yorum",
     stream: "akış",
     customOption: "{value} (özel)",
     manual: "manuel",

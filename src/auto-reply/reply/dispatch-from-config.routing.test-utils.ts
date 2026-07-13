@@ -985,6 +985,49 @@ describe("dispatchReplyFromConfig", () => {
     expect(callbackOrder).toEqual(["item", "partial"]);
   });
 
+  it("delivers commentary without tool summaries for the commentary verbose level", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "commentary",
+    };
+    const cfg = automaticGroupReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      ChatType: "group",
+      From: "whatsapp:group:123@g.us",
+      SessionKey: "agent:main:whatsapp:group:123@g.us",
+    });
+
+    let commentaryEnabled: boolean | undefined;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      commentaryEnabled = opts?.commentaryProgressEnabled;
+      await opts?.onItemEvent?.({
+        itemId: "c1",
+        kind: "preamble",
+        progressText: "checking the config first",
+      });
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 exec: ls" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(commentaryEnabled).toBe(true);
+    const sendToolResult = dispatcher.sendToolResult as ReturnType<typeof vi.fn>;
+    expect(sendToolResult).toHaveBeenCalledTimes(1);
+    expect((sendToolResult.mock.calls[0]?.[0] as ReplyPayload | undefined)?.text).toBe(
+      "💬 checking the config first",
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("flushes trailing verbose commentary before the final reply", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

@@ -1203,6 +1203,16 @@ describe("tui command handlers", () => {
     expect(clearTools).not.toHaveBeenCalled();
   });
 
+  it("lists every verbose level in the /verbose usage hint when args are omitted", async () => {
+    const patchSession = vi.fn();
+    const { handleCommand, addSystem } = createHarness({ patchSession });
+
+    await handleCommand("/verbose");
+
+    expect(addSystem).toHaveBeenCalledWith("usage: /verbose <off|on|full|commentary>");
+    expect(patchSession).not.toHaveBeenCalled();
+  });
+
   it("refreshes session info for /trace without reloading history", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);

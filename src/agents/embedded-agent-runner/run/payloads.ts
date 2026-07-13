@@ -17,7 +17,12 @@ import {
   type ReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
-import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import {
+  resolveVerboseKinds,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -121,7 +126,7 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
-  return level === "full";
+  return resolveVerboseKinds(level)?.toolOutput === true;
 }
 
 function isAssistantTextContentBlockType(value: unknown): boolean {
@@ -662,7 +667,10 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: errorText, isError: true });
   }
   const inlineToolResults =
-    params.inlineToolResultsAllowed && params.verboseLevel !== "off" && params.toolMetas.length > 0;
+    params.inlineToolResultsAllowed &&
+    (params.verboseLevel === undefined ||
+      resolveVerboseKinds(params.verboseLevel)?.toolSummaries === true) &&
+    params.toolMetas.length > 0;
   if (inlineToolResults) {
     for (const { toolName, meta } of params.toolMetas) {
       const agg = formatToolAggregate(toolName, meta ? [meta] : [], {

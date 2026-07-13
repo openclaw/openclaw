@@ -528,6 +528,7 @@ export const th: TranslationMap = {
     on: "เปิด",
     off: "ปิด",
     full: "เต็ม",
+    commentary: "คำบรรยาย",
     stream: "สตรีม",
     customOption: "{value} (กำหนดเอง)",
     manual: "ด้วยตนเอง",

@@ -961,7 +961,7 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
     {
       "command": "/verbose",
       "description": "Toggle verbose output",
-      "usage_hint": "on|off|full"
+      "usage_hint": "on|off|full|commentary"
     },
     {
       "command": "/fast",

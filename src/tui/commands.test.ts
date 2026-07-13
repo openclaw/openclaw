@@ -33,11 +33,22 @@ describe("getSlashCommands", () => {
     const verbose = commands.find((command) => command.name === "verbose");
     const activation = commands.find((command) => command.name === "activation");
     expect(verbose?.getArgumentCompletions?.("o")).toEqual([
-      { value: "on", label: "on" },
       { value: "off", label: "off" },
+      { value: "on", label: "on" },
     ]);
     expect(activation?.getArgumentCompletions?.("a")).toEqual([
       { value: "always", label: "always" },
+    ]);
+  });
+
+  it("exposes commentary and full as discoverable /verbose levels", () => {
+    const commands = getSlashCommands();
+    const verbose = commands.find((command) => command.name === "verbose");
+    expect(verbose?.getArgumentCompletions?.("")).toEqual([
+      { value: "off", label: "off" },
+      { value: "on", label: "on" },
+      { value: "full", label: "full" },
+      { value: "commentary", label: "commentary" },
     ]);
   });
 

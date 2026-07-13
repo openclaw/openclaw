@@ -537,6 +537,7 @@ export const es: TranslationMap = {
     on: "activado",
     off: "apagado",
     full: "completo",
+    commentary: "comentario",
     stream: "stream",
     customOption: "{value} (personalizado)",
     manual: "manual",

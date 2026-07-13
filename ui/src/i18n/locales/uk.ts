@@ -535,6 +535,7 @@ export const uk: TranslationMap = {
     on: "увімкнено",
     off: "вимкнено",
     full: "повний",
+    commentary: "коментар",
     stream: "потік",
     customOption: "{value} (власне)",
     manual: "вручну",

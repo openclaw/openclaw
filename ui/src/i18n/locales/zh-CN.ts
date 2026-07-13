@@ -526,6 +526,7 @@ export const zh_CN: TranslationMap = {
     on: "开启",
     off: "关闭",
     full: "完整",
+    commentary: "解说",
     stream: "流式",
     customOption: "{value}（自定义）",
     manual: "手动",

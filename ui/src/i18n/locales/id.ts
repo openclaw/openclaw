@@ -534,6 +534,7 @@ export const id: TranslationMap = {
     on: "aktif",
     off: "nonaktif",
     full: "penuh",
+    commentary: "komentar",
     stream: "stream",
     customOption: "{value} (khusus)",
     manual: "manual",

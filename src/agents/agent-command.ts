@@ -730,7 +730,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
 
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
   if (opts.verbose && !verboseOverride) {
-    throw new Error('Invalid verbose level. Use "on", "full", or "off".');
+    throw new Error('Invalid verbose level. Use "on", "full", "commentary", or "off".');
   }
 
   const laneRaw = normalizeOptionalString(opts.lane) ?? "";

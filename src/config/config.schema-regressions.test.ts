@@ -38,6 +38,30 @@ describe("config schema regressions", () => {
     ).toBe(false);
   });
 
+  it("rejects commentary as a persisted verboseDefault (session-level only)", () => {
+    // `commentary` is a `/verbose` session level, deliberately NOT a persisted
+    // config default — persisting it would break strict config validation on
+    // downgrade to an older runtime.
+    expect(
+      validateConfigObject({
+        agents: {
+          defaults: {
+            verboseDefault: "commentary",
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateConfigObject({
+        agents: {
+          defaults: {
+            verboseDefault: "loud",
+          },
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {
