@@ -684,6 +684,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.put",
       "sessions.groups.rename",
       "sessions.groups.delete",
+      "sessions.dispatch",
     ],
     loadHandlers: loadSessionsHandlers,
   }),

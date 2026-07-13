@@ -1,5 +1,6 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import pMap, { pMapSkip } from "p-map";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -1501,7 +1502,6 @@ async function onAdmittedTimer(state: CronServiceState) {
     };
 
     const concurrency = Math.min(resolveRunConcurrency(state), Math.max(1, dueJobs.length));
-    const results: (TimedCronRunOutcome | undefined)[] = Array.from({ length: dueJobs.length });
     const claimedIndexes = new Set<number>();
     let reservationReleaseError: unknown;
     let setupTimeoutNotified = false;
@@ -1530,20 +1530,14 @@ async function onAdmittedTimer(state: CronServiceState) {
       await releaseUnclaimedDueJobReservations();
       return;
     }
-    let cursor = 0;
-    const workers = Array.from({ length: concurrency }, async () => {
-      for (;;) {
+    // Skipped mappers must not claim reservations: recovery releases those rows,
+    // while already-started jobs drain under the same concurrency cap.
+    const completedResults = await pMap(
+      dueJobs,
+      async (due, index): Promise<TimedCronRunOutcome | typeof pMapSkip> => {
         if (stopAdmittingDueJobs || state.stopped || state.restartRecoveryPending) {
           stopAdmittingDueJobs = true;
-          return;
-        }
-        const index = cursor++;
-        if (index >= dueJobs.length) {
-          return;
-        }
-        const due = dueJobs[index];
-        if (!due) {
-          return;
+          return pMapSkip;
         }
         claimedIndexes.add(index);
         const result = await runDueJob(due);
@@ -1552,11 +1546,10 @@ async function onAdmittedTimer(state: CronServiceState) {
           try {
             finalizedResults = await finalizeCompletedResults([result], { clearOnFailure: false });
           } catch {
-            results[index] = result;
-            continue;
+            return result;
           }
           if (!hasSetupTimeoutRecoveryHandler || finalizedResults.length === 0) {
-            continue;
+            return pMapSkip;
           }
           if (!setupTimeoutNotified) {
             setupTimeoutNotified = true;
@@ -1568,12 +1561,12 @@ async function onAdmittedTimer(state: CronServiceState) {
             }
             maybeNotifyIsolatedAgentSetupTimeout(state, result);
           }
-          continue;
+          return pMapSkip;
         }
-        results[index] = result;
-      }
-    });
-    await Promise.all(workers);
+        return result;
+      },
+      { concurrency, stopOnError: true },
+    );
     if (reservationReleaseError) {
       throw reservationReleaseError instanceof Error
         ? reservationReleaseError
@@ -1582,10 +1575,6 @@ async function onAdmittedTimer(state: CronServiceState) {
     if (stopAdmittingDueJobs) {
       await releaseUnclaimedDueJobReservations();
     }
-
-    const completedResults: TimedCronRunOutcome[] = results.filter(
-      (entry): entry is TimedCronRunOutcome => entry !== undefined,
-    );
 
     if (completedResults.length > 0) {
       const finalizedResults = await finalizeCompletedResults(completedResults);

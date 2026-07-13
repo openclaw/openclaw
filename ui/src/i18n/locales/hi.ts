@@ -126,6 +126,7 @@ export const hi: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, द्वारा {author}",
   },
   channels: {
+    lastError: "पिछली त्रुटि",
     refreshingStaleSnapshot:
       "चैनल स्थिति पृष्ठभूमि में रीफ्रेश की जा रही है; अंतिम सफल स्नैपशॉट दिखाया जा रहा है।",
     config: {
@@ -382,7 +383,6 @@ export const hi: TranslationMap = {
   },
   worktrees: {
     newWorktree: "नया worktree",
-    owner: "स्वामी",
     ownerManual: "मैन्युअल",
     ownerSession: "सत्र",
     ownerWorkboard: "वर्कबोर्ड",
@@ -403,10 +403,6 @@ export const hi: TranslationMap = {
     cleanupSaveFailed: "सफ़ाई की सीमाएँ सहेजना विफल रहा।",
     name: "नाम",
     repo: "Repository",
-    branch: "Branch",
-    status: "स्थिति",
-    lastActive: "अंतिम सक्रिय",
-    actions: "कार्रवाइयाँ",
     empty: "कोई प्रबंधित worktrees नहीं हैं.",
     restorable: "पुनर्स्थापित करने योग्य",
     restore: "पुनर्स्थापित करें",
@@ -459,6 +455,7 @@ export const hi: TranslationMap = {
     start: "Session शुरू करें",
     starting: "शुरू हो रहा है…",
     createFailed: "Session नहीं बनाया जा सका।",
+    catalogUnavailable: "यह सत्र लक्ष्य उपलब्ध नहीं है।",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -820,6 +817,7 @@ export const hi: TranslationMap = {
     },
     manualRpcTitle: "मैन्युअल RPC",
     manualRpcSubtitle: "JSON पैराम्स के साथ एक raw gateway method भेजें।",
+    callFailed: "कॉल विफल रही",
     method: "मेथड",
     selectMethod: "एक मेथड चुनें…",
     paramsJson: "पैराम्स (JSON)",
@@ -1406,6 +1404,7 @@ export const hi: TranslationMap = {
     moreLiveTitle: "नीचे दिए गए समूहों में {count} और लाइव टूल उपलब्ध हैं।",
     moreLive: "+{count} और लाइव टूल",
     quickPresets: "क्विक प्रीसेट",
+    catalogTitle: "टूल कैटलॉग",
     inherit: "इनहेरिट",
     profile: "प्रोफ़ाइल",
     source: "स्रोत",
@@ -2475,6 +2474,7 @@ export const hi: TranslationMap = {
       uptime: "अपटाइम",
       tickInterval: "टिक अंतराल",
       lastChannelsRefresh: "अंतिम चैनल रिफ्रेश",
+      lastError: "पिछली त्रुटि",
     },
     help: {
       title: "कैसे connect करें",

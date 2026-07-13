@@ -2207,57 +2207,6 @@
 }
 
 /* ===========================================
-   Tables
-   =========================================== */
-
-.table {
-  display: grid;
-  container-type: inline-size;
-  gap: 6px;
-}
-
-.table-head,
-.table-row {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr 0.8fr 0.7fr 0.8fr 0.8fr 0.8fr 0.8fr 0.6fr;
-  gap: 12px;
-  align-items: center;
-}
-
-.table-head {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--muted);
-  padding: 0 12px;
-}
-
-.table-row {
-  border: 1px solid var(--border);
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--card);
-  transition: border-color var(--duration-fast) ease;
-}
-
-.table-row:hover {
-  border-color: var(--border-strong);
-}
-
-@media (max-width: 1100px) {
-  .table-head,
-  .table-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-@container (max-width: 1100px) {
-  .table-head,
-  .table-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* ===========================================
    Data Table
    =========================================== */
 

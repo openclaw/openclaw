@@ -126,6 +126,7 @@ export const it: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, di {author}",
   },
   channels: {
+    lastError: "Ultimo errore",
     refreshingStaleSnapshot:
       "Aggiornamento dello stato del canale in background; visualizzazione dell'ultima istantanea riuscita.",
     config: {
@@ -387,7 +388,6 @@ export const it: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Nuovo worktree",
-    owner: "Proprietario",
     ownerManual: "Manuale",
     ownerSession: "Sessione",
     ownerWorkboard: "Workboard",
@@ -408,10 +408,6 @@ export const it: TranslationMap = {
     cleanupSaveFailed: "Salvataggio dei limiti di pulizia non riuscito.",
     name: "Nome",
     repo: "Repository",
-    branch: "Branch",
-    status: "Stato",
-    lastActive: "Ultima attività",
-    actions: "Azioni",
     empty: "Nessun worktree gestito.",
     restorable: "Ripristinabile",
     restore: "Ripristina",
@@ -464,6 +460,7 @@ export const it: TranslationMap = {
     start: "Avvia sessione",
     starting: "Avvio…",
     createFailed: "Impossibile creare la sessione.",
+    catalogUnavailable: "La destinazione di questa sessione non è disponibile.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -835,6 +832,7 @@ export const it: TranslationMap = {
     },
     manualRpcTitle: "RPC manuale",
     manualRpcSubtitle: "Invia un metodo gateway grezzo con parametri JSON.",
+    callFailed: "Chiamata non riuscita",
     method: "Metodo",
     selectMethod: "Seleziona un metodo…",
     paramsJson: "Parametri (JSON)",
@@ -1426,6 +1424,7 @@ export const it: TranslationMap = {
     moreLiveTitle: "Altri {count} strumenti live sono disponibili nei gruppi qui sotto.",
     moreLive: "+{count} altri strumenti live",
     quickPresets: "Preset rapidi",
+    catalogTitle: "Catalogo degli strumenti",
     inherit: "Eredita",
     profile: "Profilo",
     source: "Origine",
@@ -2522,6 +2521,7 @@ export const it: TranslationMap = {
       uptime: "Tempo di attività",
       tickInterval: "Intervallo di aggiornamento",
       lastChannelsRefresh: "Ultimo aggiornamento dei canali",
+      lastError: "Ultimo errore",
     },
     help: {
       title: "Come connettersi",

@@ -25587,7 +25587,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 139,
+      "line": 162,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "Browser import requires Local mode",
       "surface": "apple",
@@ -25595,7 +25595,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 141,
+      "line": 164,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "Switch this Mac app to a local Gateway before importing browser cookies.",
       "surface": "apple",
@@ -25603,7 +25603,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 161,
+      "line": 190,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.",
       "surface": "apple",
@@ -25611,7 +25611,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 163,
+      "line": 192,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "System browser profile import is disabled in the local Gateway configuration.",
       "surface": "apple",
@@ -25619,7 +25619,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 164,
+      "line": 194,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "No browser login available",
       "surface": "apple",
@@ -25627,7 +25627,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 174,
+      "line": 206,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "Browser import unavailable",
       "surface": "apple",
@@ -27147,7 +27147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 665,
+      "line": 718,
       "path": "apps/macos/Sources/OpenClaw/DashboardWindowController.swift",
       "source": "[\\(host)]",
       "surface": "apple",
@@ -29027,7 +29027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 108,
+      "line": 103,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Settings...",
       "surface": "apple",
@@ -29035,7 +29035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 115,
+      "line": 110,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Back",
       "surface": "apple",
@@ -29043,7 +29043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 120,
+      "line": 115,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Forward",
       "surface": "apple",
@@ -29051,7 +29051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 138,
+      "line": 133,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw - Voice Wake live meter active",
       "surface": "apple",
@@ -29059,7 +29059,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 139,
+      "line": 134,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -29067,7 +29067,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 339,
+      "line": 334,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -29075,7 +29075,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 339,
+      "line": 334,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Open Canvas",
       "surface": "apple",
@@ -29651,7 +29651,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 687,
+      "line": 688,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Finish",
       "surface": "apple",
@@ -29659,7 +29659,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 687,
+      "line": 688,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Next",
       "surface": "apple",

@@ -126,6 +126,7 @@ export const pt_BR: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, por {author}",
   },
   channels: {
+    lastError: "Último erro",
     refreshingStaleSnapshot:
       "Atualizando o status do canal em segundo plano; exibindo o último snapshot bem-sucedido.",
     config: {
@@ -384,7 +385,6 @@ export const pt_BR: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Novo worktree",
-    owner: "Proprietário",
     ownerManual: "Manual",
     ownerSession: "Sessão",
     ownerWorkboard: "Workboard",
@@ -405,10 +405,6 @@ export const pt_BR: TranslationMap = {
     cleanupSaveFailed: "Falha ao salvar os limites de limpeza.",
     name: "Nome",
     repo: "Repositório",
-    branch: "Branch",
-    status: "Status",
-    lastActive: "Última atividade",
-    actions: "Ações",
     empty: "Nenhuma worktree gerenciada.",
     restorable: "Restaurável",
     restore: "Restaurar",
@@ -461,6 +457,7 @@ export const pt_BR: TranslationMap = {
     start: "Iniciar sessão",
     starting: "Iniciando…",
     createFailed: "Não foi possível criar a sessão.",
+    catalogUnavailable: "O destino desta sessão está indisponível.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -824,6 +821,7 @@ export const pt_BR: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "Falha na chamada",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1414,6 +1412,7 @@ export const pt_BR: TranslationMap = {
     moreLiveTitle: "Mais {count} ferramentas ao vivo estão disponíveis nos grupos abaixo.",
     moreLive: "+{count} ferramentas ao vivo",
     quickPresets: "Predefinições rápidas",
+    catalogTitle: "Catálogo de ferramentas",
     inherit: "Herdar",
     profile: "Perfil",
     source: "Origem",
@@ -2501,6 +2500,7 @@ export const pt_BR: TranslationMap = {
       uptime: "Tempo de atividade",
       tickInterval: "Intervalo de atualização",
       lastChannelsRefresh: "Última atualização dos canais",
+      lastError: "Último erro",
     },
     help: {
       title: "Como se conectar",
