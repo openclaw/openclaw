@@ -170,8 +170,9 @@ spend and lockups while preserving normal tool access.
 
 - Warnings come first.
 - Blocking follows once a pattern persists past the warning threshold.
-- Critical thresholds block the next tool-cycle and surface a clear
-  loop-detection reason in the run record.
+- Critical thresholds block the next tool-cycle, surface a clear
+  loop-detection reason in the run record, and terminate the agent run so
+  the model cannot keep retrying the blocked tool indefinitely.
 - The post-compaction guard emits `compaction_loop_persisted` errors naming
   the offending tool and identical-call count.
 

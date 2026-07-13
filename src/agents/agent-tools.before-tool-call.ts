@@ -1296,13 +1296,21 @@ export function buildBlockedToolResult(params: {
   runId?: string;
 }) {
   recordPreExecutionBlockedToolCall(params.toolCallId, params.runId);
+  const deniedReason = params.deniedReason ?? "plugin-before-tool-call";
+  // tool-loop vetoes must terminate the agent run so the model cannot keep
+  // retrying the blocked tool indefinitely (issue #106231). agent-core's
+  // shouldTerminateToolBatch stops the loop when every finalized result in
+  // the batch carries terminate: true; without it the run continues burning
+  // resources for hours after the critical-level safety breaker fires.
+  const terminateRun = deniedReason === "tool-loop";
   return {
     content: [{ type: "text" as const, text: params.reason }],
     details: {
       status: "blocked",
-      deniedReason: params.deniedReason ?? "plugin-before-tool-call",
+      deniedReason,
       reason: params.reason,
     },
+    ...(terminateRun ? { terminate: true } : {}),
   };
 }
 
