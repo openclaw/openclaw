@@ -2,16 +2,15 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 
 afterEach(async () => {
   await Promise.all(Array.from(activeChildren, terminateChild));
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
 });
 
 async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<void> {
@@ -27,8 +26,7 @@ async function createLingeringPluginFixture(): Promise<{
   markerPath: string;
   stateDir: string;
 }> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-cli-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("openclaw-hooks-cli-");
   const stateDir = path.join(root, "state");
   const pluginDir = path.join(root, "linger-plugin");
   const markerPath = path.join(root, "registered");
@@ -84,8 +82,7 @@ async function createLingeringPreloadFixture(): Promise<{
   preloadPath: string;
   stateDir: string;
 }> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-relay-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("openclaw-hooks-relay-");
   const markerPath = path.join(root, "loaded");
   const preloadPath = path.join(root, "linger.mjs");
   const stateDir = path.join(root, "state");
