@@ -510,6 +510,8 @@ export async function getReplyFromConfig(
             ...(internalOptsWithSkillFilter?.expectedExistingSessionId
               ? { expectedExistingSessionId: internalOptsWithSkillFilter.expectedExistingSessionId }
               : {}),
+            pinExpectedExistingSession:
+              internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
             requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
             resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
             signal: internalOptsWithSkillFilter?.abortSignal,

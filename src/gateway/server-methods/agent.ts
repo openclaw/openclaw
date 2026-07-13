@@ -155,6 +155,7 @@ import {
 } from "../../sessions/session-key-utils.js";
 import {
   beginSessionWorkAdmission,
+  consumeSessionWorkAdmissionHandoff,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -1318,6 +1319,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       replyTo?: string;
       sessionId?: string;
       sessionKey?: string;
+      expectedExistingSessionId?: string;
       thinking?: string;
       deliver?: boolean;
       attachments?: Array<{
@@ -1375,6 +1377,10 @@ export const agentHandlers: GatewayRequestHandlers = {
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
     const canUseCronRunContinuation = resolveCanUseCronRunContinuation(client);
+    const expectedExistingSessionId = normalizeOptionalString(request.expectedExistingSessionId);
+    const sessionWorkAdmissionHandoffId = expectedExistingSessionId
+      ? normalizeOptionalString(request.internalRuntimeHandoffId)
+      : undefined;
     const requestedModelOverride = Boolean(request.provider || request.model);
     const requestedInternalSessionEffects = request.sessionEffects === "internal";
     const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
@@ -1412,6 +1418,17 @@ export const agentHandlers: GatewayRequestHandlers = {
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           "internal session-effect controls are reserved for backend callers.",
+        ),
+      );
+      return;
+    }
+    if (expectedExistingSessionId && !canUseInternalRuntimeHandoff) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "expectedExistingSessionId is reserved for backend callers.",
         ),
       );
       return;
@@ -1759,6 +1776,29 @@ export const agentHandlers: GatewayRequestHandlers = {
             agentId,
           })
         : undefined);
+    if (expectedExistingSessionId && !requestedSessionKey) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "expectedExistingSessionId requires an explicit session key.",
+        ),
+      );
+      return;
+    }
+    if (
+      expectedExistingSessionId &&
+      requestedSessionId &&
+      requestedSessionId !== expectedExistingSessionId
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "conflicting session identity constraints."),
+      );
+      return;
+    }
     if (agentId && requestedSessionKeyRaw) {
       const parsedRequestedSessionKey = parseAgentSessionKey(requestedSessionKeyRaw);
       const requestedCanonicalKey = resolveSessionStoreKey({
@@ -2344,6 +2384,11 @@ export const agentHandlers: GatewayRequestHandlers = {
             clone: false,
           }).entry;
         }
+        if (expectedExistingSessionId && latestEntry?.sessionId !== expectedExistingSessionId) {
+          throw new Error(
+            `Session "${resolvedSessionKey}" changed while starting expected work. Retry.`,
+          );
+        }
         if (sessionPersistedBeforeGatewayAdmission && !latestEntry) {
           throw new Error(
             `Session "${resolvedSessionKey}" was deleted while starting work. Retry.`,
@@ -2390,6 +2435,18 @@ export const agentHandlers: GatewayRequestHandlers = {
       };
       const acquireGatewayWorkAdmission = async (scope: string) => {
         if (gatewayWorkAdmission) {
+          return;
+        }
+        if (sessionWorkAdmissionHandoffId) {
+          gatewayWorkAdmission = consumeSessionWorkAdmissionHandoff({
+            handoffId: sessionWorkAdmissionHandoffId,
+            scope,
+            identities: [resolvedSessionKey, resolvedSessionId],
+            onInterrupt: interruptGatewayWorkAdmission,
+          });
+          if (!gatewayWorkAdmission) {
+            throw new Error("session work admission handoff is unavailable");
+          }
           return;
         }
         gatewayWorkAdmission = await beginSessionWorkAdmission({
@@ -2566,6 +2623,17 @@ export const agentHandlers: GatewayRequestHandlers = {
           storeKeys,
         } = loadSessionEntry(requestedSessionKey, sessionLoadOptions);
         cfgForAgent = cfgLocal;
+        if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `Session "${canonicalKey}" changed before expected work could start.`,
+            ),
+          );
+          return;
+        }
         const isGeneratedMediaCronContinuation =
           hasGeneratedMediaCompletionEvent(request.internalEvents) &&
           parseCronRunScopeSuffix(canonicalKey).runId !== undefined;
@@ -2689,6 +2757,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             })
           : undefined;
         const skipImplicitExpiry =
+          expectedExistingSessionId !== undefined ||
           restoredCronContinuationIdentity !== undefined ||
           entry?.modelSelectionLocked === true ||
           (resetPolicy.configured !== true && hasProviderOwnedSession(entry));
@@ -2908,6 +2977,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               })
             : undefined;
           const freshSkipImplicitExpiry =
+            expectedExistingSessionId !== undefined ||
             restoredCronContinuationIdentity !== undefined ||
             freshEntry?.modelSelectionLocked === true ||
             (resetPolicy.configured !== true && hasProviderOwnedSession(freshEntry));
@@ -3072,6 +3142,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           let persisted: SessionEntry | undefined;
           let archivedDuringStoreUpdateError: string | undefined;
           let deletedDuringStoreUpdateError: string | undefined;
+          let expectedSessionChangedDuringStoreUpdateError: string | undefined;
           try {
             persisted =
               (await patchSessionEntryTarget(
@@ -3088,6 +3159,13 @@ export const agentHandlers: GatewayRequestHandlers = {
                   // transaction admission; once admitted, let the atomic write finish.
                   assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
                   const freshEntry = patchContext.existingEntry;
+                  if (
+                    expectedExistingSessionId &&
+                    freshEntry?.sessionId !== expectedExistingSessionId
+                  ) {
+                    expectedSessionChangedDuringStoreUpdateError = `Session "${canonicalSessionKey}" changed before expected work could start.`;
+                    throw new Error(expectedSessionChangedDuringStoreUpdateError);
+                  }
                   // A completed delete must win over this request's earlier read;
                   // otherwise the initial touch would recreate the removed row.
                   // The accessor target already spans the requested key plus its
@@ -3215,6 +3293,14 @@ export const agentHandlers: GatewayRequestHandlers = {
             }
             if (deletedDuringStoreUpdateError) {
               respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+              return;
+            }
+            if (expectedSessionChangedDuringStoreUpdateError) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.UNAVAILABLE, expectedSessionChangedDuringStoreUpdateError),
+              );
               return;
             }
             if (restoredCronContinuationError) {

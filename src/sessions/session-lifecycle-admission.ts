@@ -1,5 +1,6 @@
 // Serializes lifecycle mutations and work admission for logical session identities.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   GatewayDrainingError,
@@ -10,8 +11,22 @@ import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writ
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
 type SessionWorkAdmission = {
+  handoffIds?: Set<string>;
+  identities?: ReadonlySet<string>;
   interrupt?: () => void;
+  interrupted?: boolean;
   released: Promise<void>;
+};
+
+export type SessionWorkAdmissionLease = {
+  createHandoff: () => string;
+  release: () => void;
+  run: <T>(run: () => Promise<T>) => Promise<T>;
+};
+
+type SessionWorkAdmissionHandoff = {
+  admission: SessionWorkAdmission;
+  lease: SessionWorkAdmissionLease;
 };
 
 type SessionLifecycleAdmissionState = {
@@ -21,6 +36,7 @@ type SessionLifecycleAdmissionState = {
   activeMutations: Map<string, number>;
   activeMutationRuns?: Set<object>;
   activeMutationKinds: Map<string, Map<SessionLifecycleMutationKind, number>>;
+  admissionHandoffs?: Map<string, SessionWorkAdmissionHandoff>;
   idleWaiters: Map<string, Set<() => void>>;
   currentAdmissions: AsyncLocalStorage<ReadonlySet<SessionWorkAdmission>>;
 };
@@ -38,6 +54,7 @@ const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
     activeMutations: new Map(),
     activeMutationRuns: new Set(),
     activeMutationKinds: new Map(),
+    admissionHandoffs: new Map(),
     idleWaiters: new Map(),
     currentAdmissions: new AsyncLocalStorage(),
   }),
@@ -51,14 +68,11 @@ const {
   idleWaiters: SESSION_LIFECYCLE_IDLE_WAITERS,
   currentAdmissions: CURRENT_SESSION_WORK_ADMISSIONS,
 } = SESSION_LIFECYCLE_ADMISSION_STATE;
+const SESSION_WORK_ADMISSION_HANDOFFS = (SESSION_LIFECYCLE_ADMISSION_STATE.admissionHandoffs ??=
+  new Map());
 // Older runtime chunks can create the shared state without this newer index.
 const ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS =
   (SESSION_LIFECYCLE_ADMISSION_STATE.activeMutationRuns ??= new Set());
-
-export type SessionWorkAdmissionLease = {
-  release: () => void;
-  run: <T>(run: () => Promise<T>) => Promise<T>;
-};
 
 function normalizeSessionIdentities(
   scope: string,
@@ -421,7 +435,10 @@ export async function beginSessionWorkAdmission(params: {
       }
       let resolveReleased = () => {};
       const admission: SessionWorkAdmission = {
+        handoffIds: new Set(),
+        identities: new Set(identities),
         interrupt: params.onInterrupt,
+        interrupted: false,
         released: new Promise<void>((resolve) => {
           resolveReleased = resolve;
         }),
@@ -444,9 +461,22 @@ export async function beginSessionWorkAdmission(params: {
             ACTIVE_SESSION_WORK_ADMISSIONS.delete(identity);
           }
         }
+        for (const handoffId of admission.handoffIds ?? []) {
+          SESSION_WORK_ADMISSION_HANDOFFS.delete(handoffId);
+        }
+        admission.handoffIds?.clear();
         resolveReleased();
       };
       const lease: SessionWorkAdmissionLease = {
+        createHandoff: () => {
+          if (released) {
+            throw new Error("cannot hand off a released session work admission");
+          }
+          const handoffId = randomUUID();
+          admission.handoffIds?.add(handoffId);
+          SESSION_WORK_ADMISSION_HANDOFFS.set(handoffId, { admission, lease });
+          return handoffId;
+        },
         release,
         run: async <T>(run: () => Promise<T>) => {
           const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
@@ -502,6 +532,53 @@ export async function beginSessionWorkAdmission(params: {
   });
 }
 
+/**
+ * Atomically adopts a previously admitted work lease across an in-process RPC.
+ * The opaque token is single-use; requested identities must be covered by the lease.
+ */
+export function consumeSessionWorkAdmissionHandoff(params: {
+  handoffId: string;
+  scope: string;
+  identities: Iterable<string | undefined>;
+  onInterrupt?: () => void;
+}): SessionWorkAdmissionLease | undefined {
+  const handoffId = params.handoffId.trim();
+  if (!handoffId) {
+    return undefined;
+  }
+  const handoff = SESSION_WORK_ADMISSION_HANDOFFS.get(handoffId);
+  if (!handoff) {
+    return undefined;
+  }
+  const identities = normalizeSessionIdentities(params.scope, params.identities);
+  if (
+    identities.length === 0 ||
+    identities.some((identity) => !handoff.admission.identities?.has(identity))
+  ) {
+    return undefined;
+  }
+  SESSION_WORK_ADMISSION_HANDOFFS.delete(handoffId);
+  handoff.admission.handoffIds?.delete(handoffId);
+  handoff.admission.interrupt = params.onInterrupt;
+  if (handoff.admission.interrupted) {
+    params.onInterrupt?.();
+  }
+  return handoff.lease;
+}
+
+/** Releases a handoff that was never consumed; the adopter owns consumed leases. */
+export function cancelSessionWorkAdmissionHandoff(handoffId: string): boolean {
+  const normalizedHandoffId = handoffId.trim();
+  const handoff = SESSION_WORK_ADMISSION_HANDOFFS.get(normalizedHandoffId);
+  if (!handoff) {
+    return false;
+  }
+  SESSION_WORK_ADMISSION_HANDOFFS.delete(normalizedHandoffId);
+  handoff.admission.handoffIds?.delete(normalizedHandoffId);
+  handoff.lease.release();
+  return true;
+}
+
 export async function interruptSessionWorkAdmissions(params: {
   scope: string;
   identities: Iterable<string | undefined>;
@@ -520,6 +597,7 @@ export async function interruptSessionWorkAdmissions(params: {
     }
   }
   for (const admission of admissions) {
+    admission.interrupted = true;
     admission.interrupt?.();
   }
   const released = Promise.all(Array.from(admissions, (admission) => admission.released));

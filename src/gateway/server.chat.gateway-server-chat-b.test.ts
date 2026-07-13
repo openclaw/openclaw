@@ -14,8 +14,10 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntry,
+  loadExactSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntry,
+  replaceSessionEntry,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
 import { appendSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
@@ -43,6 +45,26 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+
+const restartRecoveryMocks = vi.hoisted(() => ({
+  retryRestartAbortedMainSessionRecovery: vi.fn<
+    typeof import("../agents/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
+  >(async () => ({
+    recovered: 0,
+    failed: 1,
+    skipped: 0,
+  })),
+}));
+
+vi.mock("../agents/main-session-restart-recovery.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../agents/main-session-restart-recovery.js")>();
+  return {
+    ...actual,
+    retryRestartAbortedMainSessionRecovery:
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery,
+  };
+});
 
 installGatewayTestHooks({ scope: "suite" });
 const FAST_WAIT_OPTS = { timeout: 2_000, interval: 5 } as const;
@@ -2624,10 +2646,86 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.send suppresses a durable Control UI retry after recovery rebinds the run", async () => {
+  test("chat.send keeps a durable Control UI retry pending when recovery remains abandoned", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const storePath = path.join(sessionDir, "sessions.json");
     const idempotencyKey = "idem-restart-safe-duplicate";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({ entries: {} });
+      await replaceSessionEntry(
+        { sessionKey: "main", storePath },
+        {
+          sessionId: "sess-main",
+          status: "running",
+          abortedLastRun: true,
+          restartRecoveryDeliveryRunId: "recovery-run",
+          restartRecoveryDeliverySourceRunId: idempotencyKey,
+          updatedAt: Date.now(),
+        },
+      );
+      await appendTranscriptMessage(
+        {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "main",
+          storePath,
+        },
+        {
+          message: {
+            role: "user",
+            content: "already admitted",
+            idempotencyKey: `${idempotencyKey}:user`,
+          },
+        },
+      );
+      const context = createDirectChatContext();
+      const responses: Array<{ error?: unknown; ok: boolean; payload?: unknown }> = [];
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey,
+        message: "already admitted",
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+      });
+
+      expect(responses).toEqual([
+        {
+          error: expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+          ok: false,
+          payload: undefined,
+        },
+      ]);
+      expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
+        canonicalSessionKey: "agent:main:main",
+        cfg: expect.any(Object),
+        expectedRecoveryRunId: "recovery-run",
+        expectedRecoverySourceRunId: idempotencyKey,
+        expectedSessionId: "sess-main",
+        sessionKey: "main",
+        storePath,
+      });
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(loadExactSessionEntry({ sessionKey: "main", storePath })?.entry).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: idempotencyKey,
+        sessionId: "sess-main",
+        status: "running",
+      });
+    } finally {
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send retires a durable retry after recovery re-dispatch succeeds", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const idempotencyKey = "idem-restart-safe-recovered-retry";
     try {
       testState.sessionStorePath = storePath;
       await writeSessionStore({
@@ -2642,19 +2740,13 @@ describe("gateway server chat", () => {
           },
         },
       });
-      await appendTranscriptMessage(
-        {
-          agentId: "main",
-          sessionId: "sess-main",
-          sessionKey: "agent:main:main",
-          storePath,
-        },
-        {
-          message: {
-            role: "user",
-            content: "already admitted",
-            idempotencyKey: `${idempotencyKey}:user`,
-          },
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockImplementationOnce(
+        async ({ sessionKey, storePath: recoveryStorePath }) => {
+          await patchSessionEntry({ sessionKey, storePath: recoveryStorePath }, () => ({
+            abortedLastRun: false,
+            updatedAt: Date.now(),
+          }));
+          return { recovered: 1, failed: 0, skipped: 0 };
         },
       );
       const context = createDirectChatContext();
@@ -2670,21 +2762,18 @@ describe("gateway server chat", () => {
       expect(responses).toEqual([
         {
           ok: true,
-          payload: expect.objectContaining({
-            runId: idempotencyKey,
-            status: "ok",
-          }),
+          payload: { runId: idempotencyKey, status: "ok" },
         },
       ]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-        abortedLastRun: true,
+        abortedLastRun: false,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,
-        sessionId: "sess-main",
         status: "running",
       });
     } finally {
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
@@ -2752,6 +2841,109 @@ describe("gateway server chat", () => {
     } finally {
       releaseMutation.resolve();
       await Promise.allSettled(mutation ? [mutation] : []);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send does not re-dispatch an archived durable recovery claim", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const idempotencyKey = "idem-restart-safe-archived-retry";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            archivedAt: Date.now(),
+            status: "running",
+            abortedLastRun: true,
+            restartRecoveryDeliveryRunId: "recovery-run",
+            restartRecoveryDeliverySourceRunId: idempotencyKey,
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      const responses: Array<{ error?: unknown; ok: boolean; payload?: unknown }> = [];
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey,
+        message: "must stay archived",
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+      });
+
+      expect(responses).toEqual([
+        {
+          error: expect.objectContaining({ code: "INVALID_REQUEST", retryable: false }),
+          ok: false,
+          payload: undefined,
+        },
+      ]);
+      expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).not.toHaveBeenCalled();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send stops automatic retry when durable recovery ownership changes", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const idempotencyKey = "idem-restart-safe-replaced-retry";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "running",
+            abortedLastRun: true,
+            restartRecoveryDeliveryRunId: "recovery-run",
+            restartRecoveryDeliverySourceRunId: idempotencyKey,
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockImplementationOnce(
+        async ({ sessionKey, storePath: recoveryStorePath }) => {
+          await patchSessionEntry({ sessionKey, storePath: recoveryStorePath }, () => ({
+            sessionId: "replacement-session",
+            restartRecoveryDeliveryRunId: "replacement-recovery",
+            restartRecoveryDeliverySourceRunId: "replacement-source",
+            updatedAt: Date.now(),
+          }));
+          return { recovered: 0, failed: 0, skipped: 0 };
+        },
+      );
+      const context = createDirectChatContext();
+      const responses: Array<{ error?: unknown; ok: boolean; payload?: unknown }> = [];
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey,
+        message: "must not dispatch replacement ownership",
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+      });
+
+      expect(responses).toEqual([
+        {
+          error: expect.objectContaining({ code: "UNAVAILABLE", retryable: false }),
+          ok: false,
+          payload: undefined,
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();

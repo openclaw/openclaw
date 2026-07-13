@@ -619,6 +619,20 @@ function isRetryableUnadoptedChatClaim(
   );
 }
 
+function isAdoptedRestartRecoveryClaim(
+  entry: SessionEntry | undefined,
+  clientRunId: string,
+): entry is SessionEntry & {
+  restartRecoveryDeliveryRunId: string;
+  restartRecoveryDeliverySourceRunId: string;
+} {
+  return Boolean(
+    entry?.restartRecoveryDeliveryRunId &&
+    entry.restartRecoveryDeliverySourceRunId === clientRunId &&
+    !isRetryableUnadoptedChatClaim(entry, clientRunId),
+  );
+}
+
 function hasRestartUnsafeChatWork(params: {
   context: GatewayRequestContext;
   sessionId: string;
@@ -2078,12 +2092,78 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const retryableUnadoptedClaim = isRetryableUnadoptedChatClaim(entry, clientRunId);
+    let durableClaimEntry = entry;
     if (
-      (entry?.restartRecoveryDeliveryRunId &&
-        entry.restartRecoveryDeliverySourceRunId === clientRunId &&
-        !retryableUnadoptedClaim) ||
-      hasRestartRecoveryTerminalRun(entry, clientRunId)
+      isAdoptedRestartRecoveryClaim(durableClaimEntry, clientRunId) &&
+      durableClaimEntry.status === "running" &&
+      durableClaimEntry.abortedLastRun === true
+    ) {
+      const recoverySessionError = resolveSessionWorkStartError(sessionKey, durableClaimEntry);
+      if (recoverySessionError) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, recoverySessionError, { retryable: false }),
+        );
+        return;
+      }
+      // Startup retries may have exhausted while preserving an ambiguous, stable
+      // recovery run id. Re-dispatch that id before retiring the browser outbox.
+      try {
+        const { retryRestartAbortedMainSessionRecovery } =
+          await import("../../agents/main-session-restart-recovery.js");
+        await retryRestartAbortedMainSessionRecovery({
+          canonicalSessionKey: sessionKey,
+          cfg,
+          expectedRecoveryRunId: durableClaimEntry.restartRecoveryDeliveryRunId,
+          expectedRecoverySourceRunId: durableClaimEntry.restartRecoveryDeliverySourceRunId,
+          expectedSessionId: durableClaimEntry.sessionId,
+          sessionKey: legacyKey ?? sessionKey,
+          storePath,
+        });
+      } catch (err) {
+        context.logGateway.warn(
+          `failed to retry durable chat recovery ${clientRunId}: ${formatForLog(err)}`,
+        );
+      }
+      durableClaimEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
+      if (
+        isAdoptedRestartRecoveryClaim(durableClaimEntry, clientRunId) &&
+        durableClaimEntry.status === "running" &&
+        durableClaimEntry.abortedLastRun === true
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "accepted chat turn recovery is still pending; retry",
+            {
+              retryable: true,
+            },
+          ),
+        );
+        return;
+      }
+      if (
+        !isAdoptedRestartRecoveryClaim(durableClaimEntry, clientRunId) &&
+        !hasRestartRecoveryTerminalRun(durableClaimEntry, clientRunId)
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "accepted chat turn recovery ownership changed; automatic retry stopped to avoid duplicate execution",
+            { retryable: false },
+          ),
+        );
+        return;
+      }
+    }
+    if (
+      isAdoptedRestartRecoveryClaim(durableClaimEntry, clientRunId) ||
+      hasRestartRecoveryTerminalRun(durableClaimEntry, clientRunId)
     ) {
       // An active source claim or terminal tombstone proves the durable turn
       // was already accepted. Retire the outbox without dispatching twice.
@@ -3112,11 +3192,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                     ? { taskSuggestionDeliveryMode: "gateway" as const }
                     : {}),
                   requestedSessionId,
-                  ...(entry?.sessionId
+                  ...(restartSafeAdmission
                     ? {
-                        expectedExistingSessionId: entry.sessionId,
+                        expectedExistingSessionId: admittedSessionId,
+                        pinExpectedExistingSession: true,
                       }
-                    : {}),
+                    : entry?.sessionId
+                      ? { expectedExistingSessionId: entry.sessionId }
+                      : {}),
                   resumeRequestedSession: controlUiReconnectResume.resumeRequested,
                   onSessionPrepared: (binding) => {
                     if (binding.sessionKey === sessionKey) {

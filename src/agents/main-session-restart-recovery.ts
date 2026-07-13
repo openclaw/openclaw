@@ -15,6 +15,7 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   type RestartRecoveryRun,
   type SessionEntry,
+  resolveSessionWorkStartError,
   resolveAllAgentSessionStoreTargetsSync,
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
@@ -22,6 +23,7 @@ import {
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import {
   applySessionEntryReplacements,
+  loadExactSessionEntry,
   listSessionEntriesByStatus,
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
@@ -43,6 +45,10 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import {
+  beginSessionWorkAdmission,
+  cancelSessionWorkAdmissionHandoff,
+} from "../sessions/session-lifecycle-admission.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
@@ -69,6 +75,44 @@ const RETRY_BACKOFF_MULTIPLIER = 2;
 const UNRESUMABLE_SESSION_NOTICE =
   "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
   "Please send that last request again and I'll pick it up cleanly.";
+
+type ExpectedRestartRecoveryClaim = {
+  canonicalSessionKey?: string;
+  recoveryRunId: string;
+  recoverySourceRunId: string;
+  sessionId: string;
+  sessionKey: string;
+};
+
+function matchesExpectedRestartRecoveryClaim(
+  entry: SessionEntry | undefined,
+  expected: ExpectedRestartRecoveryClaim,
+): entry is SessionEntry {
+  return Boolean(
+    entry &&
+    entry.sessionId === expected.sessionId &&
+    entry.status === "running" &&
+    entry.abortedLastRun === true &&
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === expected.recoveryRunId &&
+    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ===
+      expected.recoverySourceRunId,
+  );
+}
+
+function loadExpectedRestartRecoveryClaim(params: {
+  expected: ExpectedRestartRecoveryClaim;
+  storePath: string;
+}): SessionEntry | undefined {
+  const exact = loadExactSessionEntry({
+    readConsistency: "latest",
+    sessionKey: params.expected.sessionKey,
+    storePath: params.storePath,
+  });
+  return exact?.sessionKey === params.expected.sessionKey &&
+    matchesExpectedRestartRecoveryClaim(exact.entry, params.expected)
+    ? exact.entry
+    : undefined;
+}
 
 function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
@@ -913,26 +957,28 @@ async function settleRestartRecoveryDispatch(params: {
   expectedRecoverySourceRunId?: string;
   expectedSessionId: string;
   pendingFinalDeliveryText: string;
-  sessionKey: string;
+  sessionKeys: readonly string[];
   storePath: string;
   terminalStatus?: RestartRecoveryTerminalStatus;
 }): Promise<void> {
   await applySessionEntryReplacements({
-    sessionKeys: [params.sessionKey],
+    sessionKeys: params.sessionKeys,
     storePath: params.storePath,
     update: (entries) => {
-      const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
-      const entry = current?.entry;
-      if (
-        !entry ||
-        entry.sessionId !== params.expectedSessionId ||
-        normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !==
-          params.expectedRecoveryRunId ||
-        normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
-          params.expectedRecoverySourceRunId
-      ) {
+      const current = entries
+        .filter(
+          ({ entry }) =>
+            entry.sessionId === params.expectedSessionId &&
+            normalizeOptionalString(entry.restartRecoveryDeliveryRunId) ===
+              params.expectedRecoveryRunId &&
+            normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ===
+              params.expectedRecoverySourceRunId,
+        )
+        .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))[0];
+      if (!current) {
         return { result: undefined };
       }
+      const entry = current.entry;
       const now = Date.now();
       if (params.terminalStatus) {
         entry.abortedLastRun = params.terminalStatus !== "ok";
@@ -979,19 +1025,21 @@ async function settleRestartRecoveryDispatch(params: {
       }
       return {
         result: undefined,
-        replacements: [{ sessionKey: params.sessionKey, entry }],
+        replacements: [{ sessionKey: current.sessionKey, entry }],
       };
     },
   });
 }
 
 async function resumeMainSession(params: {
+  canonicalSessionKey?: string;
   cfg?: OpenClawConfig;
   entry: SessionEntry;
   storePath: string;
   sessionKey: string;
   pendingFinalDeliveryText?: string | null;
   forceRestartSafeTools?: boolean;
+  sessionWorkAdmissionHandoffId?: string;
 }): Promise<boolean> {
   const sanitizedPendingText =
     typeof params.pendingFinalDeliveryText === "string"
@@ -1007,6 +1055,8 @@ async function resumeMainSession(params: {
   const recoveryRunId =
     claimedRunId && claimedRunId !== sourceRunId ? claimedRunId : crypto.randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
+  const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
+  const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
   try {
     // Persist one stable RPC id before dispatch. A transport rejection is
     // ambiguous; retries must reuse this id so an accepted run cannot duplicate.
@@ -1021,7 +1071,8 @@ async function resumeMainSession(params: {
           entry.sessionId !== params.entry.sessionId ||
           entry.status !== "running" ||
           entry.abortedLastRun !== true ||
-          normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId
+          normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId ||
+          normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !== sourceRunId
         ) {
           return { result: false };
         }
@@ -1041,7 +1092,11 @@ async function resumeMainSession(params: {
     }
     const agentParams: Record<string, unknown> = {
       message: buildResumeMessage(sanitizedPendingText),
-      sessionKey: params.sessionKey,
+      sessionKey: dispatchSessionKey,
+      expectedExistingSessionId: params.entry.sessionId,
+      ...(params.sessionWorkAdmissionHandoffId
+        ? { internalRuntimeHandoffId: params.sessionWorkAdmissionHandoffId }
+        : {}),
       idempotencyKey: recoveryRunId,
       deliver: Boolean(deliveryContext),
       lane: CommandLane.Main,
@@ -1075,7 +1130,7 @@ async function resumeMainSession(params: {
       expectedRecoverySourceRunId: sourceRunId,
       expectedSessionId: params.entry.sessionId,
       pendingFinalDeliveryText: sanitizedPendingText,
-      sessionKey: params.sessionKey,
+      sessionKeys: recoverySessionKeys,
       storePath: params.storePath,
       terminalStatus,
     });
@@ -1094,7 +1149,7 @@ async function resumeMainSession(params: {
           expectedRecoverySourceRunId: sourceRunId,
           expectedSessionId: params.entry.sessionId,
           pendingFinalDeliveryText: sanitizedPendingText,
-          sessionKey: params.sessionKey,
+          sessionKeys: recoverySessionKeys,
           storePath: params.storePath,
           terminalStatus,
         });
@@ -1157,26 +1212,26 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
   return result;
 }
 
-function isRoutableRecoveryStore(params: {
+function resolveRecoveryDispatchSessionKey(params: {
   cfg?: OpenClawConfig;
   sessionKey: string;
   storePath: string;
-}): boolean {
+}): string | undefined {
   if (!params.cfg) {
-    return true;
-  }
-  if (!params.cfg.session?.store) {
-    return true;
+    return params.sessionKey;
   }
   try {
     const target = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
       key: params.sessionKey,
     });
-    return path.resolve(target.storePath) === path.resolve(params.storePath);
+    return !params.cfg.session?.store ||
+      path.resolve(target.storePath) === path.resolve(params.storePath)
+      ? target.canonicalKey
+      : undefined;
   } catch (err) {
     log.warn(`failed to resolve recovery store for ${params.sessionKey}: ${String(err)}`);
-    return false;
+    return undefined;
   }
 }
 
@@ -1184,6 +1239,8 @@ async function recoverStore(params: {
   cfg?: OpenClawConfig;
   storePath: string;
   resumedSessionKeys: Set<string>;
+  expectedClaim?: ExpectedRestartRecoveryClaim;
+  sessionWorkAdmissionHandoffId?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
@@ -1200,7 +1257,15 @@ async function recoverStore(params: {
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
   let entries: Array<{ sessionKey: string; entry: SessionEntry }>;
   try {
-    entries = listSessionEntriesByStatus({ storePath: params.storePath }, ["running"]);
+    if (params.expectedClaim) {
+      const entry = loadExpectedRestartRecoveryClaim({
+        expected: params.expectedClaim,
+        storePath: params.storePath,
+      });
+      entries = entry ? [{ sessionKey: params.expectedClaim.sessionKey, entry }] : [];
+    } else {
+      entries = listSessionEntriesByStatus({ storePath: params.storePath }, ["running"]);
+    }
   } catch (err) {
     log.warn(`failed to load session store ${params.storePath}: ${String(err)}`);
     result.failed++;
@@ -1217,16 +1282,21 @@ async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    if (
-      !isRoutableRecoveryStore({
-        cfg: params.cfg,
-        sessionKey,
-        storePath: params.storePath,
-      })
-    ) {
+    if (resolveSessionWorkStartError(sessionKey, entry)) {
       result.skipped++;
       continue;
     }
+    const resolvedDispatchSessionKey = resolveRecoveryDispatchSessionKey({
+      cfg: params.cfg,
+      sessionKey,
+      storePath: params.storePath,
+    });
+    if (!resolvedDispatchSessionKey) {
+      result.skipped++;
+      continue;
+    }
+    const dispatchSessionKey =
+      params.expectedClaim?.canonicalSessionKey ?? resolvedDispatchSessionKey;
     if (
       hasCurrentProcessOwner({
         activeSessionIds: resolveActiveSessionIds(),
@@ -1250,12 +1320,14 @@ async function recoverStore(params: {
       entry.restartRecoveryForceSafeTools === true
     ) {
       const resumed = await resumeMainSession({
+        canonicalSessionKey: dispatchSessionKey,
         cfg: params.cfg,
         entry,
         storePath: params.storePath,
         sessionKey,
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
         forceRestartSafeTools: true,
+        sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
       });
       if (resumed) {
         params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1288,11 +1360,13 @@ async function recoverStore(params: {
           `transcript unavailable for ${sessionKey}; resuming its durable pending final delivery`,
         );
         const resumed = await resumeMainSession({
+          canonicalSessionKey: dispatchSessionKey,
           cfg: params.cfg,
           entry,
           storePath: params.storePath,
           sessionKey,
           pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+          sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
         });
         if (resumed) {
           params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1309,12 +1383,14 @@ async function recoverStore(params: {
 
     if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
       const resumed = await resumeMainSession({
+        canonicalSessionKey: dispatchSessionKey,
         cfg: params.cfg,
         entry,
         storePath: params.storePath,
         sessionKey,
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
         forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
+        sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
       });
       if (resumed) {
         params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1383,12 +1459,14 @@ async function recoverStore(params: {
     }
 
     const resumed = await resumeMainSession({
+      canonicalSessionKey: dispatchSessionKey,
       cfg: params.cfg,
       entry,
       storePath: params.storePath,
       sessionKey,
       pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
       forceRestartSafeTools: resumePolicy.forceRestartSafeTools,
+      sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
     });
     if (resumed) {
       params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1450,6 +1528,59 @@ export async function recoverRestartAbortedMainSessions(
     );
   }
   return result;
+}
+
+/** Retries one exact durable Control UI row from its owning per-agent SQLite store. */
+export async function retryRestartAbortedMainSessionRecovery(params: {
+  canonicalSessionKey?: string;
+  cfg?: OpenClawConfig;
+  expectedRecoveryRunId: string;
+  expectedRecoverySourceRunId: string;
+  expectedSessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<{ recovered: number; failed: number; skipped: number }> {
+  const expectedClaim: ExpectedRestartRecoveryClaim = {
+    canonicalSessionKey: params.canonicalSessionKey,
+    recoveryRunId: params.expectedRecoveryRunId,
+    recoverySourceRunId: params.expectedRecoverySourceRunId,
+    sessionId: params.expectedSessionId,
+    sessionKey: params.sessionKey,
+  };
+  if (!loadExpectedRestartRecoveryClaim({ expected: expectedClaim, storePath: params.storePath })) {
+    return { recovered: 0, failed: 0, skipped: 0 };
+  }
+  const assertClaimCurrent = () => {
+    if (
+      !loadExpectedRestartRecoveryClaim({ expected: expectedClaim, storePath: params.storePath })
+    ) {
+      throw new Error("restart recovery session ownership changed before dispatch");
+    }
+  };
+  // Keep lifecycle replacement behind the accepted recovery dispatch. The agent
+  // RPC atomically adopts this lease, so no second admission can deadlock behind
+  // a mutation that already sees the accepted browser turn as active work.
+  const admission = await beginSessionWorkAdmission({
+    scope: params.storePath,
+    identities: [params.sessionKey, params.canonicalSessionKey, params.expectedSessionId],
+    assertAllowed: assertClaimCurrent,
+    revalidateAllowed: assertClaimCurrent,
+  });
+  const handoffId = admission.createHandoff();
+  try {
+    return await admission.run(
+      async () =>
+        await recoverStore({
+          cfg: params.cfg,
+          storePath: params.storePath,
+          resumedSessionKeys: new Set<string>(),
+          expectedClaim,
+          sessionWorkAdmissionHandoffId: handoffId,
+        }),
+    );
+  } finally {
+    cancelSessionWorkAdmissionHandoff(handoffId);
+  }
 }
 
 export async function recoverStartupOrphanedMainSessions(

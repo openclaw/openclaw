@@ -204,6 +204,7 @@ type InitSessionStateParams = {
   commandAuthorized: boolean;
   ctx: MsgContext;
   expectedExistingSessionId?: string;
+  pinExpectedExistingSession?: boolean;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
@@ -628,6 +629,8 @@ async function initSessionStateAttemptLocked(
   if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
     throw new Error(`session rebound for sessionKey: ${sessionKey}`);
   }
+  const pinExpectedExistingSession =
+    params.pinExpectedExistingSession === true && expectedExistingSessionId !== undefined;
   const requestedSessionId = params.requestedSessionId?.trim() || undefined;
   const requestedCurrentSession = Boolean(
     requestedSessionId && entry?.sessionId && entry.sessionId === requestedSessionId,
@@ -690,7 +693,8 @@ async function initSessionStateAttemptLocked(
   const freshEntry =
     (lockedModelSelection && canReuseExistingEntry) ||
     (isSystemEvent && canReuseExistingEntry) ||
-    (((reconnectResumeRequested && canReuseExistingEntry) ||
+    (((pinExpectedExistingSession && canReuseExistingEntry) ||
+      (reconnectResumeRequested && canReuseExistingEntry) ||
       recoverTerminalVisibleEntry ||
       (entryFreshness?.fresh ?? false) ||
       (softResetAllowed && canReuseExistingEntry)) &&
