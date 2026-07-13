@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   ProviderFetchUsageSnapshotContext,
   ProviderResolveUsageAuthContext,
@@ -497,6 +500,35 @@ function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string 
   return formatClaudePlanLabel(credential.subscriptionType, credential.rateLimitTier);
 }
 
+const CLAUDE_CLI_CONFIG_EMAIL_TTL_MS = 5 * 60_000;
+const cachedClaudeCliEmail = new Map<string, { value: string | undefined; readAt: number }>();
+
+// Best-effort account email. Preferred source is the resolved auth profile;
+// keychain-synced Claude CLI logins don't store one, so fall back to the CLI
+// config file (`~/.claude.json` `oauthAccount.emailAddress`). Same caveat as
+// the plan label above: with multiple Claude accounts the CLI login may differ
+// from the profile that fetched usage; a mislabeled email is acceptable.
+function readClaudeCliAccountEmail(env: NodeJS.ProcessEnv): string | undefined {
+  const homeDir = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+  const now = Date.now();
+  const cached = cachedClaudeCliEmail.get(homeDir);
+  if (cached && now - cached.readAt < CLAUDE_CLI_CONFIG_EMAIL_TTL_MS) {
+    return cached.value;
+  }
+  let value: string | undefined;
+  try {
+    const raw = JSON.parse(readFileSync(path.join(homeDir, ".claude.json"), "utf8")) as unknown;
+    const email = objectRecord(objectRecord(raw)?.oauthAccount)?.emailAddress;
+    value = typeof email === "string" && email.trim() ? email.trim() : undefined;
+  } catch {
+    value = undefined;
+  }
+  // Single-slot per home dir; usage polls hit one home in steady state.
+  cachedClaudeCliEmail.clear();
+  cachedClaudeCliEmail.set(homeDir, { value, readAt: now });
+  return value;
+}
+
 export async function fetchAnthropicUsage(
   ctx: ProviderFetchUsageSnapshotContext,
 ): Promise<ProviderUsageSnapshot> {
@@ -509,9 +541,17 @@ export async function fetchAnthropicUsage(
     });
   }
   const snapshot = await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
-  if (snapshot.error || snapshot.plan || snapshot.windows.length === 0) {
+  if (snapshot.error) {
     return snapshot;
   }
-  const plan = resolveClaudePlanLabel(ctx);
-  return plan ? { ...snapshot, plan } : snapshot;
+  const accountEmail = ctx.email ?? readClaudeCliAccountEmail(ctx.env);
+  // Plan labels stay window-gated: a windowless response has no plan quota to
+  // label, while the account identity is still worth surfacing.
+  const plan =
+    snapshot.plan ?? (snapshot.windows.length > 0 ? resolveClaudePlanLabel(ctx) : undefined);
+  return {
+    ...snapshot,
+    ...(plan ? { plan } : {}),
+    ...(accountEmail ? { accountEmail } : {}),
+  };
 }

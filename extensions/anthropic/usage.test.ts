@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchAnthropicAdminUsage,
   fetchAnthropicUsage,
@@ -25,6 +28,20 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importActual) => {
 function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
+
+const tempHomes: string[] = [];
+
+async function createTempHome(): Promise<string> {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "claude-usage-email-"));
+  tempHomes.push(home);
+  return home;
+}
+
+afterEach(async () => {
+  await Promise.all(
+    tempHomes.splice(0).map((home) => fs.rm(home, { recursive: true, force: true })),
+  );
+});
 
 describe("Anthropic provider usage", () => {
   it("aggregates provider-reported costs, cache tokens, models, and categories", async () => {
@@ -218,6 +235,42 @@ describe("Anthropic provider usage", () => {
     });
     expect(snapshot.plan).toBe("Max (20x)");
     expect(snapshot.windows).toHaveLength(2);
+  });
+
+  it("attaches the resolved credential email to OAuth usage snapshots", async () => {
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
+    );
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: { HOME: await createTempHome() },
+      provider: "anthropic",
+      token: "oauth-token",
+      email: "profile@example.com",
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.accountEmail).toBe("profile@example.com");
+  });
+
+  it("falls back to the Claude CLI config file for the account email", async () => {
+    const home = await createTempHome();
+    await fs.writeFile(
+      path.join(home, ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "cli-login@example.com" } }),
+    );
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
+    );
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: { HOME: home },
+      provider: "anthropic",
+      token: "oauth-token",
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.accountEmail).toBe("cli-login@example.com");
   });
 
   it("does not attach a plan label when usage has no windows", async () => {
