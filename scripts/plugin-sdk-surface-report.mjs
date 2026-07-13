@@ -91,6 +91,7 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 }
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
+  "agent-core": 1,
   core: 2,
   health: 1,
   lmstudio: 1,
