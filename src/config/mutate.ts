@@ -808,13 +808,21 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
           }
         : undefined,
     onCommitted: (previousRaw) => {
-      if (previousRaw === null) return;
-      if (params.writeOptions?.skipOutputLogs) return;
-      if (!hasJSON5Comments(previousRaw)) return;
-      const writeEnv = params.io?.env ?? process.env;
-      const isVitest = writeEnv.VITEST === "true";
-      const shouldLogInVitest = writeEnv.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
-      if (isVitest && !shouldLogInVitest) return;
+      if (previousRaw === null) {
+        return;
+      }
+      if (params.writeOptions?.skipOutputLogs) {
+        return;
+      }
+      if (!hasJSON5Comments(previousRaw)) {
+        return;
+      }
+      const logEnv = params.io?.env ?? process.env;
+      const isVitest = logEnv.VITEST === "true";
+      const shouldLogInVitest = logEnv.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
+      if (isVitest && !shouldLogInVitest) {
+        return;
+      }
       console.warn(
         `Config write removed JSON5 comments from ${expectedIncludeTarget}. ` +
           `A pre-write backup was saved to the config directory; ` +

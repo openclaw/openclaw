@@ -1486,8 +1486,12 @@ export function hasJSON5Comments(raw: string): boolean {
     }
     if (ch === "/") {
       const next = raw[i + 1];
-      if (next === "/") return true;
-      if (next === "*") return true;
+      if (next === "/") {
+        return true;
+      }
+      if (next === "*") {
+        return true;
+      }
       continue;
     }
     // Entered a string literal — consume it including escapes.
@@ -1507,10 +1511,14 @@ export function hasJSON5Comments(raw: string): boolean {
           }
           if (escaped === "\r") {
             i++;
-            if (i < raw.length && raw[i] === "\n") i++;
+            if (i < raw.length && raw[i] === "\n") {
+              i++;
+            }
             continue;
           }
-          if (escaped === " " || escaped === " ") {
+          // U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR)
+          // are valid JSON5 line terminators in escape sequences.
+          if (escaped === "\u2028" || escaped === "\u2029") {
             i++;
             continue;
           }
