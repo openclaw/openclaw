@@ -673,7 +673,10 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
 
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
-  await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
+  await noteSessionTranscriptHealth({
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
 }
 
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {

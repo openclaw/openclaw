@@ -128,13 +128,13 @@ const loadManagerRuntime = managerRuntimeLoader;
 
 const loadQmdManagerModule = createLazyRuntimeModule(() => import("./qmd-manager.js"));
 
-export type MemorySearchManagerResult = {
+type MemorySearchManagerResult = {
   manager: Maybe<MemorySearchManager>;
   error?: string;
   debug?: MemorySearchManagerDebug;
 };
 
-export type MemorySearchManagerPurpose = "default" | "status" | "cli";
+type MemorySearchManagerPurpose = "default" | "status" | "cli";
 type MemorySearchManagerParams = {
   cfg: OpenClawConfig;
   agentId: string;

@@ -100,7 +100,7 @@ import {
   migrateLegacyDebugProxyCaptureSidecar,
 } from "./state-migrations.debug-proxy.js";
 import {
-  ensureDir,
+  ensureMigrationDir,
   existsDir,
   fileExists,
   parseSessionStoreJson5,
@@ -3112,7 +3112,7 @@ async function runLegacyMigrationPlans(
       continue;
     }
     try {
-      ensureDir(path.dirname(plan.targetPath));
+      ensureMigrationDir(path.dirname(plan.targetPath));
       if (plan.kind === "move") {
         fs.renameSync(plan.sourcePath, plan.targetPath);
         changes.push(`Moved ${plan.label} → ${plan.targetPath}`);
@@ -4628,7 +4628,7 @@ async function migrateLegacySessions(
     return { changes, warnings };
   }
 
-  ensureDir(detected.sessions.targetDir);
+  ensureMigrationDir(detected.sessions.targetDir);
 
   const legacyParsed = fileExists(detected.sessions.legacyStorePath)
     ? readSessionStoreJson5(detected.sessions.legacyStorePath)
@@ -4895,7 +4895,7 @@ export async function migrateLegacyAgentDir(
     return { changes, warnings };
   }
 
-  ensureDir(detected.agentDir.targetDir);
+  ensureMigrationDir(detected.agentDir.targetDir);
 
   const entries = safeReadDir(detected.agentDir.legacyDir);
   for (const entry of entries) {

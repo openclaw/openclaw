@@ -1179,7 +1179,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                 aria-label=${startLabel}
                 @click=${() => void this.submit()}
               >
-                ${this.submitting ? icons.loader : icons.send}
+                ${this.submitting ? icons.loader : icons.arrowUp}
               </button>
             </openclaw-tooltip>
           </div>

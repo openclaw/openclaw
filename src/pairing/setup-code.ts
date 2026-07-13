@@ -43,7 +43,7 @@ type PairingSetupPayload = {
   bootstrapToken: string;
 };
 
-export type PairingSetupAccess = "full" | "limited" | "node";
+type PairingSetupAccess = "full" | "limited" | "node";
 
 const PAIRING_SETUP_MAX_URLS = 8;
 

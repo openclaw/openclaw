@@ -92,9 +92,7 @@ export function isMobilePairingSetupBootstrapProfile(
 }
 
 /** Return whether an input exactly matches the existing limited setup profile. */
-export function isPairingSetupBootstrapProfile(
-  input: DeviceBootstrapProfileInput | undefined,
-): boolean {
+function isPairingSetupBootstrapProfile(input: DeviceBootstrapProfileInput | undefined): boolean {
   return matchesBootstrapProfile(input, PAIRING_SETUP_BOOTSTRAP_PROFILE);
 }
 
