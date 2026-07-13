@@ -1,0 +1,167 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OnePasswordError } from "./errors.js";
+import { OpClient, type OpProcessRunner } from "./op-client.js";
+
+describe("OpClient", () => {
+  let root = "";
+  let opBin = "";
+  let tokenFile = "";
+  const fixtureAuth = ["fixture", "auth"].join("-");
+  const rightFixture = ["right", "fixture"].join("-");
+
+  beforeEach(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onepassword-")));
+    opBin = path.join(root, "op");
+    tokenFile = path.join(root, "service-account-token");
+    await fs.writeFile(opBin, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    await fs.writeFile(tokenFile, `  ${fixtureAuth}\n`, { mode: 0o600 });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("constructs one cache-disabled request with minimal environment and trims the token", async () => {
+    const runner = vi.fn<OpProcessRunner>(async () => ({
+      stdout: JSON.stringify({
+        title: "Repository token",
+        fields: [
+          { id: "credential", label: "legacy", value: ["wrong", "fixture"].join("-") },
+          { id: "new", label: "credential", value: rightFixture },
+          { id: "duplicate", label: "credential", value: ["later", "fixture"].join("-") },
+        ],
+      }),
+      stderr: "",
+    }));
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1234, runner, home: root });
+
+    await expect(
+      client.getItem({ item: "Repository token", vault: "Automation", field: "credential" }),
+    ).resolves.toEqual({
+      value: rightFixture,
+      itemTitle: "Repository token",
+      fieldLabel: "credential",
+    });
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(runner).toHaveBeenCalledWith(
+      opBin,
+      [
+        "item",
+        "get",
+        "Repository token",
+        "--vault",
+        "Automation",
+        "--format",
+        "json",
+        "--cache=false",
+      ],
+      {
+        env: { OP_SERVICE_ACCOUNT_TOKEN: fixtureAuth, HOME: root },
+        timeoutMs: 1234,
+        maxBufferBytes: 1024 * 1024,
+      },
+    );
+  });
+
+  it("falls back from label to field id", async () => {
+    const runner: OpProcessRunner = async () => ({
+      stdout: JSON.stringify({
+        title: "Token",
+        fields: [{ id: "credential", label: "password", value: "by-id" }],
+      }),
+      stderr: "",
+    });
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    await expect(
+      client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
+    ).resolves.toMatchObject({ value: "by-id", fieldLabel: "password" });
+  });
+
+  it("reports available labels without values when a field is absent", async () => {
+    const runner: OpProcessRunner = async () => ({
+      stdout: JSON.stringify({
+        title: "Token",
+        fields: [
+          { id: "one", label: "username", value: ["private", "user"].join("-") },
+          { id: "two", label: "password", value: ["private", "pass"].join("-") },
+        ],
+      }),
+      stderr: "",
+    });
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    const error = await client
+      .getItem({ item: "Token", vault: "Automation", field: "credential" })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(OnePasswordError);
+    expect(error).toMatchObject({ code: "FIELD_NOT_FOUND" });
+    expect(String(error)).toContain("password, username");
+    expect(String(error)).not.toContain("private-");
+  });
+
+  it("surfaces missing and empty token files as TOKEN_MISSING", async () => {
+    await fs.rm(tokenFile);
+    const runner = vi.fn<OpProcessRunner>();
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    await expect(
+      client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
+    ).rejects.toMatchObject({ code: "TOKEN_MISSING" });
+    expect(runner).not.toHaveBeenCalled();
+
+    await fs.writeFile(tokenFile, " \n", { mode: 0o600 });
+    await expect(
+      client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
+    ).rejects.toMatchObject({ code: "TOKEN_MISSING" });
+  });
+
+  it("warns once for token file permissions broader than 0600", async () => {
+    await fs.chmod(tokenFile, 0o644);
+    const warn = vi.fn();
+    const runner: OpProcessRunner = async () => ({
+      stdout: JSON.stringify({
+        title: "Token",
+        fields: [{ label: "credential", value: "value" }],
+      }),
+      stderr: "",
+    });
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner, warn });
+    await client.getItem({ item: "Token", vault: "Automation", field: "credential" });
+    await client.getItem({ item: "Token", vault: "Automation", field: "credential" });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["RATE_LIMITED", { stderr: "request failed: 429 rate limit", code: 1 }],
+    ["ITEM_NOT_FOUND", { stderr: "item is not found", code: 1 }],
+    ["ITEM_NOT_FOUND", { stderr: `"Token" isn't an item in the "Automation" vault`, code: 1 }],
+    ["AUTH_FAILED", { stderr: "unauthorized service account", code: 1 }],
+    ["TIMEOUT", { stderr: "", killed: true, signal: "SIGTERM" }],
+    ["OP_ERROR", { stderr: "unexpected failure", code: 1 }],
+  ] as const)("maps process failure to %s without retry", async (expectedCode, failure) => {
+    const runner = vi.fn<OpProcessRunner>(async () => {
+      throw Object.assign(new Error("op failed"), failure);
+    });
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    await expect(
+      client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
+    ).rejects.toMatchObject({ code: expectedCode });
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports an unresolved binary without invoking a runner", async () => {
+    const runner = vi.fn<OpProcessRunner>();
+    const client = new OpClient({
+      opBin: path.join(root, "missing-op"),
+      tokenFile,
+      timeoutMs: 1000,
+      runner,
+    });
+    await expect(
+      client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
+    ).rejects.toMatchObject({ code: "OP_NOT_FOUND" });
+    expect(runner).not.toHaveBeenCalled();
+  });
+});
