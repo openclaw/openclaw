@@ -649,7 +649,11 @@ export const registerTelegramHandlers = ({
           .join("\n");
         const combinedMedia = entries.flatMap((entry) => entry.allMedia);
         if (!combinedText.trim() && combinedMedia.length === 0) {
-          await Promise.all(entries.map((entry) => entry.afterAdmissionShouldDrop?.(false)));
+          await Promise.all(
+            entries.flatMap((entry) =>
+              entry.afterAdmissionShouldDrop ? [entry.afterAdmissionShouldDrop(false)] : [],
+            ),
+          );
           settleSpooledReplayParticipants(spooledReplayParticipants, { kind: "skipped" });
           return;
         }
@@ -2169,11 +2173,11 @@ export const registerTelegramHandlers = ({
           const withinBatchLimits =
             existing.messages.length + 1 <= maxParts && nextTotalChars <= maxTotalChars;
           if (withinBatchLimits) {
-            const spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
+            const continuationReplayParticipant = createSpooledReplayParticipantForBufferedWork(
               `text-fragment:${key}:${msg.message_id}`,
             );
-            if (spooledReplayParticipant) {
-              existing.spooledReplayParticipants.push(spooledReplayParticipant);
+            if (continuationReplayParticipant) {
+              existing.spooledReplayParticipants.push(continuationReplayParticipant);
             }
             existing.messages.push({ msg, ctx, receivedAtMs: nowMs });
             if (effectiveAfterAdmissionShouldDrop) {
@@ -2261,7 +2265,7 @@ export const registerTelegramHandlers = ({
         !isAbortControlMessage &&
         text.length >= TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS;
       if (shouldStart) {
-        const spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
+        const initialReplayParticipant = createSpooledReplayParticipantForBufferedWork(
           `text-fragment:${key}:${msg.message_id}`,
         );
         const entry: TextFragmentEntry = {
@@ -2272,7 +2276,7 @@ export const registerTelegramHandlers = ({
             ? [{ messageId: msg.message_id, callback: effectiveAfterAdmissionShouldDrop }]
             : [],
           dispatchDedupeKeys,
-          spooledReplayParticipants: spooledReplayParticipant ? [spooledReplayParticipant] : [],
+          spooledReplayParticipants: initialReplayParticipant ? [initialReplayParticipant] : [],
           ...promptContextBoundaryOptions(promptContextMinTimestampMs),
           ...(standardFragment?.kind === "start" ? { frameBatchId: standardFragment.batchId } : {}),
           maxGapMs:
@@ -2314,9 +2318,9 @@ export const registerTelegramHandlers = ({
         threadId,
         senderId: senderIdValue,
       });
-      const existing = textFragmentBuffer.get(baseKey);
+      const bufferedTextEntry = textFragmentBuffer.get(baseKey);
       const bufferedEntries = [
-        ...(existing ? [existing] : []),
+        ...(bufferedTextEntry ? [bufferedTextEntry] : []),
         ...listFramedTextFragmentEntries(baseKey),
       ];
       for (const entry of bufferedEntries) {
@@ -2335,40 +2339,40 @@ export const registerTelegramHandlers = ({
     // Media group handling - buffer multi-image messages
     const mediaGroupId = msg.media_group_id;
     if (mediaGroupId) {
-      const threadId = resolvedThreadId ?? dmThreadId;
-      const mediaGroupKey = `media:${chatId}:${threadId ?? "main"}:${mediaGroupId}`;
-      const existing = mediaGroupBuffer.get(mediaGroupKey);
-      if (existing) {
-        const spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
+      const mediaThreadId = resolvedThreadId ?? dmThreadId;
+      const mediaGroupKey = `media:${chatId}:${mediaThreadId ?? "main"}:${mediaGroupId}`;
+      const mediaGroupEntry = mediaGroupBuffer.get(mediaGroupKey);
+      if (mediaGroupEntry) {
+        const continuationReplayParticipant = createSpooledReplayParticipantForBufferedWork(
           `media-group:${mediaGroupKey}:${msg.message_id}`,
         );
-        if (spooledReplayParticipant) {
-          existing.spooledReplayParticipants.push(spooledReplayParticipant);
+        if (continuationReplayParticipant) {
+          mediaGroupEntry.spooledReplayParticipants.push(continuationReplayParticipant);
         }
-        clearTimeout(existing.timer);
-        existing.messages.push({ msg, ctx });
+        clearTimeout(mediaGroupEntry.timer);
+        mediaGroupEntry.messages.push({ msg, ctx });
         if (effectiveAfterAdmissionShouldDrop) {
-          existing.afterAdmissionCallbacks.push({
+          mediaGroupEntry.afterAdmissionCallbacks.push({
             messageId: msg.message_id,
             callback: effectiveAfterAdmissionShouldDrop,
           });
         }
-        existing.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
-          existing.promptContextMinTimestampMs,
+        mediaGroupEntry.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
+          mediaGroupEntry.promptContextMinTimestampMs,
           promptContextMinTimestampMs,
         );
-        existing.dispatchDedupeKeys = mergeDispatchDedupeKeys(
-          existing.dispatchDedupeKeys,
+        mediaGroupEntry.dispatchDedupeKeys = mergeDispatchDedupeKeys(
+          mediaGroupEntry.dispatchDedupeKeys,
           dispatchDedupeKeys,
         );
-        existing.timer = setTimeout(() => {
-          detachMediaGroupEntry(mediaGroupKey, existing);
+        mediaGroupEntry.timer = setTimeout(() => {
+          detachMediaGroupEntry(mediaGroupKey, mediaGroupEntry);
           void queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
-            await processMediaGroup(existing);
+            await processMediaGroup(mediaGroupEntry);
           });
         }, mediaGroupTimeoutMs);
       } else {
-        const spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
+        const initialReplayParticipant = createSpooledReplayParticipantForBufferedWork(
           `media-group:${mediaGroupKey}:${msg.message_id}`,
         );
         const entry: BufferedMediaGroupEntry = {
@@ -2387,7 +2391,7 @@ export const registerTelegramHandlers = ({
           groupConfig,
           topicConfig,
           dispatchDedupeKeys,
-          spooledReplayParticipants: spooledReplayParticipant ? [spooledReplayParticipant] : [],
+          spooledReplayParticipants: initialReplayParticipant ? [initialReplayParticipant] : [],
           ...promptContextBoundaryOptions(promptContextMinTimestampMs),
           timer: setTimeout(() => {
             detachMediaGroupEntry(mediaGroupKey, entry);

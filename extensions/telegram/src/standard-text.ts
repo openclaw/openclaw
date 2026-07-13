@@ -160,10 +160,12 @@ export function resolveTelegramStandardFragmentFrame(
   );
   if (
     batchId.length !== TELEGRAM_STANDARD_FRAGMENT_ID_BITS ||
-    [...batchId].some(
-      (char) =>
-        char !== TELEGRAM_STANDARD_FRAGMENT_ID_ZERO && char !== TELEGRAM_STANDARD_FRAGMENT_ID_ONE,
-    )
+    batchId
+      .split("")
+      .some(
+        (char) =>
+          char !== TELEGRAM_STANDARD_FRAGMENT_ID_ZERO && char !== TELEGRAM_STANDARD_FRAGMENT_ID_ONE,
+      )
   ) {
     return undefined;
   }

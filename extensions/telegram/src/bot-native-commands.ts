@@ -654,7 +654,7 @@ async function resolveTelegramCommandAuth(params: {
                 },
               }
             : {}),
-          ...(threadParams ?? {}),
+          ...threadParams,
         }),
     });
     return null;
@@ -1059,7 +1059,7 @@ export const registerTelegramNativeCommands = ({
               chatId,
               "Configured ACP binding is unavailable right now. Please try again.",
               {
-                ...(buildTelegramThreadParams(threadSpec) ?? {}),
+                ...buildTelegramThreadParams(threadSpec),
                 ...(isTelegramPeerBotMessage(msg) && peerBotReplyToMode !== "off"
                   ? {
                       reply_parameters: {
@@ -1632,7 +1632,7 @@ export const registerTelegramNativeCommands = ({
                       },
                     }
                   : {}),
-                ...(threadParams ?? {}),
+                ...threadParams,
               }),
           });
           return;

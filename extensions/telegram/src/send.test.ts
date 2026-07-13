@@ -1073,7 +1073,7 @@ describe("sendMessageTelegram", () => {
       .mockResolvedValueOnce({
         message_id: 45,
         date: 1_779_394_740,
-        chat: { id: "123", type: "private" },
+        chat: { id: "123", type: "private", first_name: "Peer" },
         from: { id: 42, is_bot: true, first_name: "OpenClaw" },
       })
       .mockRejectedValueOnce(failure);
@@ -1093,7 +1093,7 @@ describe("sendMessageTelegram", () => {
       accountId: "default",
       chatId: "123",
       msg: {
-        chat: { id: 123, type: "private" },
+        chat: { id: 123, type: "private", first_name: "Peer" },
         message_id: 46,
         date: 1_779_425_460,
         text: "next",

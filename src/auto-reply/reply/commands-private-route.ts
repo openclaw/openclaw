@@ -108,8 +108,7 @@ export async function deliverPrivateCommandReply(params: {
     ),
   );
   return results.some(
-    (result) =>
-      result.status === "fulfilled" && (result.value.ok || result.value.delivered === true),
+    (result) => result.status === "fulfilled" && (result.value.ok || result.value.delivered),
   );
 }
 

@@ -92,11 +92,15 @@ function buildChunkTextResolver(params: {
 }): ChunkTextFn {
   if (params.standardMessages) {
     return (markdown: string) =>
-      buildTelegramStandardTextChunks(markdown, { tableMode: params.tableMode }).map((chunk) => ({
-        text: chunk.htmlText ?? chunk.plainText,
-        plainText: chunk.plainText,
-        ...(chunk.htmlText ? { textMode: "html" as const } : {}),
-      }));
+      buildTelegramStandardTextChunks(markdown, { tableMode: params.tableMode }).map((chunk) =>
+        Object.assign(
+          {
+            text: chunk.htmlText ?? chunk.plainText,
+            plainText: chunk.plainText,
+          },
+          chunk.htmlText ? { textMode: "html" as const } : {},
+        ),
+      );
   }
   return (markdown: string) => {
     return splitTelegramRichMarkdownChunks(markdown, params.textLimit, params.chunkMode).map(
@@ -166,7 +170,7 @@ async function retireIncompleteFramedBatch(params: {
     replyToMessageId: params.replyToMessageId,
     standardMessage: { plainText: abortText },
     silent: params.silent,
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     logVerbose(`telegram framed batch abort failed: ${String(error)}`);
   });
 }

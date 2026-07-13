@@ -108,11 +108,22 @@ function firstDeliverRepliesParams() {
 }
 
 function deliverRepliesParamsAt(index: number) {
-  const params = deliverReplies.mock.calls[index]?.[0];
+  const calls = (deliverReplies as unknown as { mock: { calls: Array<Array<unknown>> } }).mock
+    .calls;
+  const params = calls[index]?.[0];
   if (!params) {
     throw new Error(`expected deliverReplies call ${index}`);
   }
   return params as Record<string, unknown>;
+}
+
+function requireTelegramDeps(
+  params: ReturnType<typeof createNativeCommandTestParams>,
+): TelegramNativeCommandDeps {
+  if (!params.telegramDeps) {
+    throw new Error("expected telegram native command dependencies");
+  }
+  return params.telegramDeps;
 }
 
 function firstExecutePluginCommandParams() {
@@ -476,7 +487,7 @@ describe("registerTelegramNativeCommands", () => {
     registerTelegramNativeCommands({
       ...baseParams,
       telegramDeps: {
-        ...baseParams.telegramDeps,
+        ...requireTelegramDeps(baseParams),
         dispatchReplyWithBufferedBlockDispatcher,
       },
     });
@@ -527,7 +538,7 @@ describe("registerTelegramNativeCommands", () => {
         try {
           await params.dispatcherOptions.deliver({ text: "failed framed response" }, info);
         } catch (error) {
-          params.dispatcherOptions.onError?.(error, info);
+          await params.dispatcherOptions.onError?.(error, info);
         }
         return { queuedFinal: false, counts: { block: 1, final: 0, tool: 0 } };
       };
@@ -538,7 +549,7 @@ describe("registerTelegramNativeCommands", () => {
     registerTelegramNativeCommands({
       ...baseParams,
       telegramDeps: {
-        ...baseParams.telegramDeps,
+        ...requireTelegramDeps(baseParams),
         dispatchReplyWithBufferedBlockDispatcher,
       },
     });

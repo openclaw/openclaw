@@ -442,7 +442,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (!result.ok) {
         if (tracksVisibleText) {
           state.failedVisibleTextDelivery = true;
-          if (result.delivered !== true) {
+          if (!result.delivered) {
             state.requiresVisibleTextFallback = true;
           }
         }
@@ -459,7 +459,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         }
         return true;
       }
-      if (result.delivered !== true) {
+      if (!result.delivered) {
         return false;
       }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {

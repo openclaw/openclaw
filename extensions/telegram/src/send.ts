@@ -809,11 +809,13 @@ export async function sendMessageTelegram(
 
   const buildChunkedTextPlan = (rawText: string): TelegramTextChunk[] => {
     if (opts.standardMessage === true) {
-      return buildTelegramStandardTextChunks(rawText, { tableMode }).map((chunk) => ({
-        text: chunk.plainText,
-        ...(chunk.htmlText ? { htmlText: chunk.htmlText } : {}),
-        plainText: chunk.plainText,
-      }));
+      return buildTelegramStandardTextChunks(rawText, { tableMode }).map((chunk) =>
+        Object.assign(
+          { text: chunk.plainText },
+          chunk.htmlText ? { htmlText: chunk.htmlText } : {},
+          { plainText: chunk.plainText },
+        ),
+      );
     }
     return splitTelegramRichTextChunks({
       text: rawText,

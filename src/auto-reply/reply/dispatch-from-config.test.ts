@@ -43,6 +43,7 @@ import {
   type ReplyDispatchBeforeDeliver,
   type ReplyDispatcher,
 } from "./reply-dispatcher.js";
+import type { RouteReplyResult } from "./route-reply.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -52,7 +53,11 @@ type ResolveInboundConversationParams = Parameters<
 >[0];
 
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, delivered: true, messageId: "mock" })),
+  routeReply: vi.fn<(_params: unknown) => Promise<RouteReplyResult>>(async () => ({
+    ok: true,
+    delivered: true,
+    messageId: "mock",
+  })),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,

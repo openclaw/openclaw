@@ -314,7 +314,7 @@ function buildFollowupSummaryGroups(queue: {
   }
   const retainedCount = sources.length;
   const unretainedCount = Math.max(0, queue.droppedCount - retainedCount);
-  const firstGroup = groups.values().next().value as FollowupSummaryGroup | undefined;
+  const firstGroup = groups.values().next().value;
   if (firstGroup) {
     firstGroup.droppedCount += unretainedCount;
   }

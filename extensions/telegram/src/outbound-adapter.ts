@@ -157,7 +157,7 @@ export async function sendTelegramPayloadMessages(params: {
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
   const singleUseImplicitReply =
-    payloadOpts.standardMessage === true &&
+    payloadOpts.standardMessage &&
     payloadOpts.replyToMessageId != null &&
     payloadOpts.replyToIdSource !== "explicit" &&
     payloadOpts.replyToMode != null &&

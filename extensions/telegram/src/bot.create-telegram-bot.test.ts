@@ -583,9 +583,9 @@ describe("createTelegramBot", () => {
         message_id: 2,
       },
     });
-    await new Promise((resolve) =>
-      setTimeout(resolve, TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs * 2),
-    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs * 2);
+    });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     expect(getFile).not.toHaveBeenCalled();
@@ -1076,7 +1076,9 @@ describe("createTelegramBot", () => {
       ...contextBase,
       message: { ...messageBase, message_id: 1, text: firstFragment },
     });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 40);
+    });
     expect(replySpy).not.toHaveBeenCalled();
     await handler({
       ...contextBase,
@@ -1254,9 +1256,9 @@ describe("createTelegramBot", () => {
     });
 
     await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) =>
-      setTimeout(resolve, TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs * 2),
-    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs * 2);
+    });
     expect(replySpy).toHaveBeenCalledTimes(1);
     expect(replySpy.mock.calls[0]?.[0].BodyForAgent).toBe(`${"A".repeat(3_998)}admitted-first`);
   });
@@ -1702,9 +1704,9 @@ describe("createTelegramBot", () => {
       ...contextBase,
       message: { ...messageBase, message_id: 3, text: "stop" },
     });
-    await new Promise((resolve) =>
-      setTimeout(resolve, TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs * 2),
-    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs * 2);
+    });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const calls = JSON.stringify(replySpy.mock.calls);
@@ -1759,9 +1761,9 @@ describe("createTelegramBot", () => {
 
     // The 13th fragment starts a second batch; wait for its suppressed flush too
     // so no timer-backed work leaks into the next test.
-    await new Promise((resolve) =>
-      setTimeout(resolve, TELEGRAM_TEST_TIMINGS.textFragmentGapMs * 2),
-    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, TELEGRAM_TEST_TIMINGS.textFragmentGapMs * 2);
+    });
     expect(replySpy).toHaveBeenCalledTimes(1);
     await handler({
       ...contextBase,
@@ -1817,9 +1819,9 @@ describe("createTelegramBot", () => {
         },
       });
     }
-    await new Promise((resolve) =>
-      setTimeout(resolve, TELEGRAM_TEST_TIMINGS.textFragmentGapMs * 2),
-    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, TELEGRAM_TEST_TIMINGS.textFragmentGapMs * 2);
+    });
     await handler({
       ...contextBase,
       message: {
@@ -6498,7 +6500,9 @@ describe("createTelegramBot", () => {
 
       await downloadFinished.promise;
       await flushTelegramTestMicrotasks();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(fetchSpy).not.toHaveBeenCalled();
       const calls = JSON.stringify(replySpy.mock.calls);
       expect(calls).not.toContain("canceled media turn");
