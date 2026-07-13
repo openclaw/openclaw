@@ -4,13 +4,13 @@ import { randomUUID } from "node:crypto";
 import { spawnTerminalPty, type TerminalPtyHandle } from "./pty.js";
 
 /** Emits one terminal event frame to the single owning connection. */
-export type TerminalEventSink = (connId: string, event: string, payload: unknown) => void;
+type TerminalEventSink = (connId: string, event: string, payload: unknown) => void;
 
 /** Injectable PTY spawner so tests can drive sessions without a real shell. */
-export type TerminalSpawner = typeof spawnTerminalPty;
+type TerminalSpawner = typeof spawnTerminalPty;
 
-export const TERMINAL_EVENT_DATA = "terminal.data" as const;
-export const TERMINAL_EVENT_EXIT = "terminal.exit" as const;
+const TERMINAL_EVENT_DATA = "terminal.data" as const;
+const TERMINAL_EVENT_EXIT = "terminal.exit" as const;
 
 type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "detached" | "error";
 
@@ -32,7 +32,7 @@ type TerminalSession = {
 };
 
 /** One session's facts as reported by terminal.list. */
-export type TerminalSessionSummary = {
+type TerminalSessionSummary = {
   sessionId: string;
   agentId: string;
   shell: string;
@@ -95,7 +95,7 @@ class TerminalOutputRing {
   }
 }
 
-export type TerminalSessionManagerOptions = {
+type TerminalSessionManagerOptions = {
   emit: TerminalEventSink;
   spawn?: TerminalSpawner;
   maxSessions?: number;
@@ -112,7 +112,7 @@ export type TerminalSessionManagerOptions = {
 };
 
 /** Parameters for a resolved host terminal launch (isolation already checked). */
-export type TerminalOpenRequest = {
+type TerminalOpenRequest = {
   connId: string;
   agentId: string;
   cwd: string;
@@ -123,7 +123,7 @@ export type TerminalOpenRequest = {
   env: Record<string, string>;
 };
 
-export type TerminalOpenOutcome =
+type TerminalOpenOutcome =
   | { ok: true; sessionId: string; agentId: string; cwd: string; shell: string }
   | { ok: false; code: "limit" | "spawn_failed" | "closed"; message: string };
 

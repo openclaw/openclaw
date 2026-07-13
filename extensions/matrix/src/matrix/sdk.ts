@@ -234,7 +234,7 @@ export type MatrixRecoveryKeyVerificationResult = MatrixOwnDeviceVerificationSta
   error?: string;
 };
 
-export type MatrixOwnCrossSigningPublicationStatus = {
+type MatrixOwnCrossSigningPublicationStatus = {
   userId: string | null;
   masterKeyPublished: boolean;
   selfSigningKeyPublished: boolean;
@@ -282,7 +282,7 @@ export type MatrixOwnDeviceInfo = {
   current: boolean;
 };
 
-export type MatrixRoomKeyBackupResetOptions = {
+type MatrixRoomKeyBackupResetOptions = {
   rotateRecoveryKey?: boolean;
 };
 
@@ -902,8 +902,12 @@ export class MatrixClient {
   }
 
   async getAccountData(eventType: string): Promise<Record<string, unknown> | undefined> {
-    const event = this.client.getAccountData(eventType as never);
-    return (event?.getContent() as Record<string, unknown> | undefined) ?? undefined;
+    return (
+      ((await this.client.getAccountDataFromServer(eventType as never)) as Record<
+        string,
+        unknown
+      > | null) ?? undefined
+    );
   }
 
   async setAccountData(eventType: string, content: Record<string, unknown>): Promise<void> {

@@ -32,14 +32,34 @@ openclaw-chat-pane {
   min-height: 0;
 }
 
-.chat-split-view__pane {
+/* One cell = pane header + pane; the header lives in-flow with its pane, so
+   split geometry needs no mirrored toolbar layer. */
+.chat-split-view__cell {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 200px;
   overflow: hidden;
 }
 
-.chat-split-view--narrow .chat-split-view__pane {
+.chat-split-view__cell--active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.chat-split-view__pane {
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view--narrow .chat-split-view__cell {
+  min-height: 0;
+}
+
+/* Narrow mode shows only the active pane; a focus ring is pure noise there. */
+.chat-split-view--narrow .chat-split-view__cell--active {
+  box-shadow: none;
 }
 
 .chat-split-view__drop-indicator {
@@ -109,34 +129,33 @@ openclaw-chat-pane {
 
 .chat-pane__header {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  flex: 0 0 auto;
-  min-width: 0;
-  min-height: 36px;
-  padding: 4px 6px 4px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  /* 48px centers the 28px actions on the app's shared 24px chrome
+     centerline (sidebar brand row, floating toggles), so split headers
+     line up with the sidebar across the top of the shell. */
+  min-height: 48px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
+  /* Chrome row, not content: a selectable title would fight the native
+     window drag the macOS app starts from this row. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.chat-pane__header.chat-pane--active {
-  border-top: 2px solid var(--accent);
-  padding-top: 2px;
+.chat-pane__header--active {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.chat-pane__session-label {
+.chat-pane__session-title {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.chat-pane__session-select {
-  width: 100%;
-  min-width: 0;
-  border: 0;
+  overflow: hidden;
   color: var(--text);
-  background: transparent;
-  font: inherit;
   font-size: 12px;
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 
@@ -147,16 +166,52 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
-.chat-pane__actions .btn--icon,
-.chat-open-split-view.btn--icon {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 5px;
-}
+/* Native macOS: with the nav column collapsed the top-left pane header is the
+   window's top surface, so its content shifts right of the floating window
+   chrome (Safari-style) instead of hiding under it. Traffic lights end at
+   x=78; newer apps (openclaw-native-nav) also float the titlebar accessory
+   (sidebar toggle + back/forward, DashboardWindowController) ending ~x=194.
+   Drawer widths (<=1100px) reserve a 58px topbar row instead
+   (layout.mobile.css). The first column's min-width grows by the extra inset
+   (90/204 minus the 12px base padding): the header's action row cannot
+   shrink, and the cell's overflow:hidden would clip the close/split buttons
+   at the 320px column minimum otherwise. */
+@media (min-width: 1101px) {
+  html.openclaw-native-macos .shell--nav-collapsed .chat-split-view__column:first-child {
+    min-width: 398px;
+  }
 
-@media (max-width: 1099px) {
-  .chat-open-split-view {
-    display: none;
+  html.openclaw-native-macos
+    .shell--nav-collapsed
+    .chat-split-view__column:first-child
+    > .chat-split-view__cell:first-child
+    .chat-pane__header {
+    padding-left: 90px;
+  }
+
+  html.openclaw-native-nav .shell--nav-collapsed .chat-split-view__column:first-child {
+    min-width: 512px;
+  }
+
+  html.openclaw-native-nav
+    .shell--nav-collapsed
+    .chat-split-view__column:first-child
+    > .chat-split-view__cell:first-child
+    .chat-pane__header {
+    padding-left: 204px;
+  }
+
+  /* 246px = 78px traffic lights + (5 * 28px buttons + 4 * 4px gaps) + 12px.
+     The 554px minimum adds the 234px inset delta to the 320px base column. */
+  html.openclaw-native-web-chrome .shell--nav-collapsed .chat-split-view__column:first-child {
+    min-width: 554px;
+  }
+
+  html.openclaw-native-web-chrome
+    .shell--nav-collapsed
+    .chat-split-view__column:first-child
+    > .chat-split-view__cell:first-child
+    .chat-pane__header {
+    padding-left: 246px;
   }
 }

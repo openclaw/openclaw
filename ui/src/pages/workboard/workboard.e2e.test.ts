@@ -343,6 +343,47 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         .locator(".workboard-toolbar__filters .workboard-select")
         .nth(1);
       const priorityTrigger = prioritySelect.locator(".workboard-select__trigger");
+      const priorityMenu = prioritySelect.locator(".workboard-select__menu");
+      const immediateOpen = await prioritySelect.evaluate((select) => {
+        const details = select as HTMLDetailsElement;
+        const menu = details.querySelector<HTMLElement>(".workboard-select__menu");
+        if (!menu) {
+          throw new Error("Workboard select menu is missing");
+        }
+        details.open = true;
+        const style = getComputedStyle(menu);
+        return { left: style.left, top: style.top, visibility: style.visibility };
+      });
+      expect(immediateOpen).toEqual({ left: "0px", top: "0px", visibility: "hidden" });
+      await expect
+        .poll(() => priorityMenu.evaluate((menu) => menu.style.visibility))
+        .toBe("visible");
+      const positionedMenu = await prioritySelect.evaluate((select) => {
+        const trigger = select.querySelector<HTMLElement>(".workboard-select__trigger");
+        const menu = select.querySelector<HTMLElement>(".workboard-select__menu");
+        if (!trigger || !menu) {
+          throw new Error("Workboard select is incomplete");
+        }
+        const triggerRect = trigger.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+        return {
+          menuLeft: menuRect.left,
+          menuTop: menuRect.top,
+          triggerBottom: triggerRect.bottom,
+          triggerLeft: triggerRect.left,
+          visibility: getComputedStyle(menu).visibility,
+        };
+      });
+      expect(positionedMenu.visibility).toBe("visible");
+      expect(Math.abs(positionedMenu.menuLeft - positionedMenu.triggerLeft)).toBeLessThanOrEqual(1);
+      expect(positionedMenu.menuTop).toBeGreaterThan(positionedMenu.triggerBottom);
+      await prioritySelect.evaluate((select) => {
+        (select as HTMLDetailsElement).open = false;
+      });
+      await expect
+        .poll(() => priorityMenu.evaluate((menu) => menu.style.visibility))
+        .toBe("hidden");
+
       await priorityTrigger.focus();
       await writable.page.keyboard.press("ArrowDown");
       expect(await writable.page.locator(":focus").textContent()).toContain("All priorities");
@@ -385,6 +426,26 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         status: "todo",
         title: createdCard.title,
       });
+      expect(await createDialog.getByLabel("Title").isDisabled()).toBe(true);
+      expect(await createDialog.getByLabel("Notes").isDisabled()).toBe(true);
+      expect(await createDialog.getByLabel("Labels").isDisabled()).toBe(true);
+      expect(
+        await createDialog.locator(".workboard-select__trigger[aria-disabled='true']").count(),
+      ).toBe(4);
+      const pendingCancelButtons = createDialog.getByRole("button", {
+        name: "Cancel",
+        exact: true,
+      });
+      expect(await pendingCancelButtons.count()).toBe(2);
+      expect(await pendingCancelButtons.first().isDisabled()).toBe(true);
+      expect(await pendingCancelButtons.last().isDisabled()).toBe(true);
+      expect(await createDialog.locator(".workboard-template-strip button:disabled").count()).toBe(
+        5,
+      );
+      await writable.page.keyboard.press("Escape");
+      await expect.poll(() => createDialog.isVisible()).toBe(true);
+      await writable.page.locator(".workboard-modal").click({ position: { x: 4, y: 4 } });
+      await expect.poll(() => createDialog.isVisible()).toBe(true);
       await writableGateway.resolveDeferred("workboard.cards.create", { card: createdCard });
       await cardInColumn(writable.page, "Todo", createdCard.title).waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "03-created-card");
@@ -423,6 +484,13 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await details.getByText("Acceptance: mocked Gateway browser proof").waitFor({
         state: "visible",
       });
+      await details.locator(".workboard-card__move-select").waitFor({ state: "visible" });
+      expect(await details.getByRole("button", { name: "Open session" }).count()).toBe(1);
+      expect(await details.getByRole("button", { name: "Edit card" }).count()).toBe(1);
+      expect(await details.getByRole("button", { name: "Archive card" }).count()).toBe(1);
+      expect(await details.getByRole("button", { name: "Delete card" }).count()).toBe(1);
+      expect(await details.getByRole("button", { name: "Stop session" }).count()).toBe(0);
+      await captureScreenshot(writable.page, artifacts, "05-detail-actions");
       await details.locator('button[aria-label="Cancel"]').click();
 
       await writableGateway.deferNext("workboard.cards.move");
@@ -443,10 +511,12 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await cardInColumn(writable.page, "Running", editedCard.title).waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "05-moved-running");
+      await captureScreenshot(writable.page, artifacts, "06-moved-running");
 
       await writableGateway.deferNext("workboard.cards.update");
       const syncBefore = (await writableGateway.getRequests("workboard.cards.update")).length;
+      const sessionListBeforeSync = (await writableGateway.getRequests("sessions.list")).length;
+      await writableGateway.deferNext("sessions.list");
       await writableGateway.emitGatewayEvent("sessions.changed", {
         ...sessionRow({
           hasActiveRun: false,
@@ -457,6 +527,13 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         sessionKey: linkedSessionKey,
         ts: baseTime + 4,
       });
+      await waitForNextRequest(writableGateway, "sessions.list", sessionListBeforeSync);
+      await writableGateway.resolveDeferred(
+        "sessions.list",
+        sessionsListResponse([
+          sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
+        ]),
+      );
       const syncRequest = await waitForNextRequest(
         writableGateway,
         "workboard.cards.update",
@@ -464,6 +541,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       );
       expect(requestParams(syncRequest)).toMatchObject({ id: runningCard.id });
       expect(requireRecord(requestParams(syncRequest).patch)).toMatchObject({
+        metadata: { lifecycleStatusSourceUpdatedAt: baseTime + 4 },
         status: "review",
       });
       await writableGateway.resolveDeferred("workboard.cards.update", { card: reviewedCard });
@@ -473,7 +551,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writable.page.locator(".workboard-detail").getByText("Moved to Review").waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "06-lifecycle-review");
+      await captureScreenshot(writable.page, artifacts, "07-lifecycle-review");
       await details.locator('button[aria-label="Cancel"]').click();
       await details.waitFor({ state: "hidden" });
 
@@ -492,7 +570,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writable.page.getByText("Acceptance: mocked Gateway browser proof").waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "07-reloaded-review");
+      await captureScreenshot(writable.page, artifacts, "08-reloaded-review");
     } finally {
       await closeRecordedPage(writable, artifacts, "workboard-writable");
     }
@@ -515,7 +593,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await cardInColumn(readOnly.page, "Running", editedCard.title).waitFor({
         state: "visible",
       });
-      await captureScreenshot(readOnly.page, artifacts, "08-read-only-board");
+      await captureScreenshot(readOnly.page, artifacts, "09-read-only-board");
       expect(await readOnly.page.getByRole("button", { name: /New card/u }).count()).toBe(0);
       expect(await readOnly.page.locator('button[aria-label="Edit card"]').count()).toBe(0);
       expect(await readOnly.page.locator('button[aria-label="Delete card"]').count()).toBe(0);
@@ -528,6 +606,11 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await readOnly.page.locator(".workboard-detail").getByText(editedCard.title).waitFor({
         state: "visible",
       });
+      const readOnlyDetail = readOnly.page.locator(".workboard-detail");
+      expect(await readOnlyDetail.locator(".workboard-card__move-select").count()).toBe(0);
+      expect(await readOnlyDetail.getByRole("button", { name: "Edit card" }).count()).toBe(0);
+      expect(await readOnlyDetail.getByRole("button", { name: "Archive card" }).count()).toBe(0);
+      expect(await readOnlyDetail.getByRole("button", { name: "Delete card" }).count()).toBe(0);
       expect(await readOnly.page.locator(".workboard-detail__note").count()).toBe(0);
       expect(await readOnly.page.getByRole("button", { name: /Add note/u }).count()).toBe(0);
       expect(await readOnlyGateway.getRequests("workboard.cards.update")).toHaveLength(0);

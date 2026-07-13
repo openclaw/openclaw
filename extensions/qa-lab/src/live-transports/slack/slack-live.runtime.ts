@@ -3,10 +3,12 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   createSlackWebClient,
   createSlackWriteClient,
   listSlackReactions,
+  sendSlackMessage,
 } from "@openclaw/slack/api.js";
 import type { WebClient } from "@slack/web-api";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
@@ -27,6 +29,7 @@ import {
   normalizeQaProviderMode,
   type QaProviderModeInput,
 } from "../../run-config.js";
+import type { RuntimeId } from "../../runtime-parity.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -73,6 +76,59 @@ const SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS = 2;
 const SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS = 30_000;
 const SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS = 120_000;
 const SLACK_QA_REACTION_VERIFY_TIMEOUT_MS = 15_000;
+const SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS = 15_000;
+const SLACK_QA_INVALID_TABLE_DATA_ROW_COUNT = 101;
+const SLACK_QA_LOG_TAIL_TIMEOUT_MS = 20_000;
+const SLACK_QA_INVALID_TABLE_CAPTION = "QA invalid_blocks fallback";
+const SLACK_QA_INVALID_TABLE_HEADERS = ["Row", "Value"] as const;
+const SLACK_QA_CHART_TITLE = "QA latency trend";
+const SLACK_QA_CHART_CATEGORIES = ["P50", "P95"] as const;
+const SLACK_QA_CHART_SERIES_NAME = "Latency";
+const SLACK_QA_CHART_VALUES = [120, 240] as const;
+const SLACK_QA_CHART_X_LABEL = "Percentile";
+const SLACK_QA_CHART_Y_LABEL = "Milliseconds";
+const SLACK_QA_TABLE_CAPTION = "QA pipeline report";
+const SLACK_QA_TABLE_HEADERS = ["Account", "Stage", "ARR"] as const;
+const SLACK_QA_TABLE_ROWS = [
+  ["Acme", "Won", 125_000],
+  ["Globex", "Review", 82_000],
+] as const;
+const SLACK_QA_NATIVE_CHART = {
+  type: "data_visualization",
+  title: SLACK_QA_CHART_TITLE,
+  chart: {
+    type: "line",
+    series: [
+      {
+        name: SLACK_QA_CHART_SERIES_NAME,
+        data: [
+          { label: SLACK_QA_CHART_CATEGORIES[0], value: SLACK_QA_CHART_VALUES[0] },
+          { label: SLACK_QA_CHART_CATEGORIES[1], value: SLACK_QA_CHART_VALUES[1] },
+        ],
+      },
+    ],
+    axis_config: {
+      categories: [...SLACK_QA_CHART_CATEGORIES],
+      x_label: SLACK_QA_CHART_X_LABEL,
+      y_label: SLACK_QA_CHART_Y_LABEL,
+    },
+  },
+} as const;
+const SLACK_QA_NATIVE_TABLE = {
+  type: "data_table",
+  caption: SLACK_QA_TABLE_CAPTION,
+  rows: [
+    SLACK_QA_TABLE_HEADERS.map((text) => ({ type: "raw_text", text })),
+    ...SLACK_QA_TABLE_ROWS.map((row) =>
+      row.map((cell) =>
+        typeof cell === "number"
+          ? { type: "raw_number", value: cell, text: String(cell) }
+          : { type: "raw_text", text: cell },
+      ),
+    ),
+  ],
+  row_header_column_index: 0,
+} as const;
 // These scenarios force the Codex harness, whose default provider set is intentionally narrow.
 const SLACK_QA_CODEX_PROVIDER_IDS = new Set(["codex", "openai"]);
 
@@ -83,12 +139,28 @@ type SlackQaScenarioId =
   | "slack-canary"
   | "slack-codex-approval-exec-native"
   | "slack-codex-approval-plugin-native"
+  | "slack-chart-presentation-native"
+  | "slack-channel-disabled-warning"
   | "slack-mention-gating"
+  | "slack-progress-commentary-false"
+  | "slack-progress-commentary-omitted"
+  | "slack-progress-commentary-true"
+  | "slack-progress-commentary-verbose-dedupe"
   | "slack-reaction-glyph-native"
+  | "slack-table-invalid-blocks-fallback"
+  | "slack-table-presentation-native"
   | "slack-top-level-reply-shape";
 
 type SlackQaApprovalKind = "exec" | "plugin";
 type SlackQaApprovalDecision = "allow-always" | "allow-once" | "deny";
+const SLACK_QA_APPROVAL_ACTION_PREFIX = "openclaw:approval:v1:";
+const SlackQaApprovalActionValueSchema = z
+  .object({
+    approvalId: z.string().min(1),
+    approvalKind: z.enum(["exec", "plugin"]),
+    decision: z.enum(["allow-always", "allow-once", "deny"]),
+  })
+  .strict();
 type SlackQaCodexApprovalMethod =
   | "item/commandExecution/requestApproval"
   | "item/fileChange/requestApproval";
@@ -108,13 +180,42 @@ function resolveSlackQaSutAccountId(value?: string) {
 }
 
 type SlackQaMessageScenarioRun = {
+  afterNoReply?: (context: SlackQaScenarioContext) => Promise<string | void>;
   kind?: "message";
   expectReply: boolean;
   input: string;
   matchText: string;
+  preserveGatewayDebug?: boolean;
+  settleObservedMs?: number;
   verify?: (message: SlackMessage, context: { requestThreadTs: string; sentTs: string }) => void;
+  verifyObserved?: (params: {
+    finalMessage: SlackMessage;
+    messages: readonly SlackObservedMessage[];
+  }) => string | void;
   beforeRun?: (context: Omit<SlackQaScenarioContext, "sentTs">) => Promise<SlackQaBeforeRunResult>;
   afterReply?: (message: SlackMessage, context: SlackQaScenarioContext) => Promise<string | void>;
+};
+
+type SlackQaDirectTransportScenarioRun = {
+  kind: "direct-transport";
+  execute: (
+    context: SlackQaDirectTransportScenarioContext,
+  ) => Promise<SlackQaDirectTransportScenarioResult>;
+};
+
+type SlackQaDirectTransportScenarioContext = {
+  cfg: OpenClawConfig;
+  channelId: string;
+  sutAccountId: string;
+  sutIdentity: SlackAuthIdentity;
+  sutReadClient: WebClient;
+  sutWriteClient: WebClient;
+  timeoutMs: number;
+};
+
+type SlackQaDirectTransportScenarioResult = {
+  details: string;
+  message: SlackMessage;
 };
 
 type SlackQaApprovalScenarioRun = {
@@ -135,6 +236,7 @@ type SlackQaCodexApprovalScenarioRun = {
 type SlackQaScenarioRun =
   | SlackQaApprovalScenarioRun
   | SlackQaCodexApprovalScenarioRun
+  | SlackQaDirectTransportScenarioRun
   | SlackQaMessageScenarioRun;
 
 type SlackQaBeforeRunResult =
@@ -147,6 +249,7 @@ type SlackQaBeforeRunResult =
 
 type SlackQaConfigOverrides = {
   allowFrom?: string[];
+  channelEnabled?: boolean;
   approvals?: {
     exec?: boolean;
     plugin?: boolean;
@@ -154,6 +257,11 @@ type SlackQaConfigOverrides = {
   };
   codexApproval?: boolean;
   messageTool?: boolean;
+  progress?: {
+    commentary?: boolean;
+    toolProgress: boolean;
+    verboseDefault?: "off" | "on" | "full";
+  };
   replyToMode?: "all" | "off";
   users?: string[];
 };
@@ -172,6 +280,8 @@ type SlackQaScenarioContext = {
 type SlackQaScenarioDefinition = LiveTransportScenarioDefinition<SlackQaScenarioId> & {
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
   configOverrides?: SlackQaConfigOverrides;
+  defaultEnabled?: boolean;
+  forcedRuntime?: RuntimeId;
 };
 
 type SlackQaGatewayHarness = Awaited<ReturnType<typeof startQaLiveLaneGateway>>;
@@ -264,7 +374,7 @@ type SlackQaScenarioResult = {
   title: string;
 };
 
-export type SlackQaRunResult = {
+type SlackQaRunResult = {
   gatewayDebugDirPath?: string;
   observedMessagesPath: string;
   outputDir: string;
@@ -330,6 +440,190 @@ const slackRepliesSchema = z.object({
   messages: z.array(slackHistoryMessageSchema).optional(),
 });
 
+function buildSlackChartMessageToolArgs(summaryText: string) {
+  return {
+    action: "send",
+    message: summaryText,
+    presentation: {
+      blocks: [
+        {
+          type: "chart",
+          chartType: "line",
+          title: SLACK_QA_CHART_TITLE,
+          categories: [...SLACK_QA_CHART_CATEGORIES],
+          series: [{ name: SLACK_QA_CHART_SERIES_NAME, values: [...SLACK_QA_CHART_VALUES] }],
+          xLabel: SLACK_QA_CHART_X_LABEL,
+          yLabel: SLACK_QA_CHART_Y_LABEL,
+        },
+      ],
+    },
+  };
+}
+
+function renderSlackChartAccessibleText(summaryText: string) {
+  return [
+    summaryText,
+    "",
+    `${SLACK_QA_CHART_TITLE} (line chart)`,
+    `X axis: ${SLACK_QA_CHART_X_LABEL}`,
+    `Y axis: ${SLACK_QA_CHART_Y_LABEL}`,
+    `- ${SLACK_QA_CHART_SERIES_NAME}: ${SLACK_QA_CHART_CATEGORIES[0]}: ${SLACK_QA_CHART_VALUES[0]}; ${SLACK_QA_CHART_CATEGORIES[1]}: ${SLACK_QA_CHART_VALUES[1]}`,
+  ].join("\n");
+}
+
+function buildSlackTableMessageToolArgs(summaryText: string) {
+  return {
+    action: "send",
+    message: summaryText,
+    presentation: {
+      blocks: [
+        {
+          type: "table",
+          caption: SLACK_QA_TABLE_CAPTION,
+          headers: [...SLACK_QA_TABLE_HEADERS],
+          rows: SLACK_QA_TABLE_ROWS.map((row) => [...row]),
+          rowHeaderColumnIndex: 0,
+        },
+      ],
+    },
+  };
+}
+
+function renderSlackTableAccessibleText(summaryText: string) {
+  return [
+    summaryText,
+    "",
+    `${SLACK_QA_TABLE_CAPTION} (table)`,
+    SLACK_QA_TABLE_HEADERS.join("\t"),
+    ...SLACK_QA_TABLE_ROWS.map((row) => row.join("\t")),
+  ].join("\n");
+}
+
+function buildSlackInvalidBlocksTableRow(index: number) {
+  const rowId = String(index).padStart(3, "0");
+  return [`row-${rowId}`, `value-${rowId}`] as const;
+}
+
+function buildSlackInvalidBlocksTableProbe() {
+  const summaryText = `SLACK_QA_TABLE_INVALID_BLOCKS_${randomUUID().slice(0, 8).toUpperCase()}`;
+  const dataRows = Array.from({ length: SLACK_QA_INVALID_TABLE_DATA_ROW_COUNT }, (_entry, index) =>
+    buildSlackInvalidBlocksTableRow(index + 1),
+  );
+  const block = {
+    type: "data_table",
+    caption: SLACK_QA_INVALID_TABLE_CAPTION,
+    rows: [
+      SLACK_QA_INVALID_TABLE_HEADERS.map((text) => ({ type: "raw_text", text })),
+      ...dataRows.map((row) => row.map((text) => ({ type: "raw_text", text }))),
+    ],
+    row_header_column_index: 0,
+  } as const;
+  const fallbackText = [
+    summaryText,
+    "",
+    `${SLACK_QA_INVALID_TABLE_CAPTION} (table)`,
+    SLACK_QA_INVALID_TABLE_HEADERS.join("\t"),
+    ...dataRows.map((row) => row.join("\t")),
+  ].join("\n");
+  return {
+    block,
+    dataRowCount: dataRows.length,
+    fallbackText,
+    firstRowText: buildSlackInvalidBlocksTableRow(1).join("\t"),
+    finalRowText: buildSlackInvalidBlocksTableRow(SLACK_QA_INVALID_TABLE_DATA_ROW_COUNT).join("\t"),
+    summaryText,
+  };
+}
+
+type SlackProgressCommentaryExpectation = {
+  commentary: "absent" | "draft" | "standalone";
+  toolProgress: "absent" | "draft" | "standalone";
+};
+
+function buildSlackProgressCommentaryRun(
+  sutUserId: string,
+  expectation: SlackProgressCommentaryExpectation,
+): SlackQaMessageScenarioRun {
+  const suffix = randomUUID().slice(0, 8).toUpperCase();
+  // Slack mrkdwn escapes underscores in progress drafts. Hyphenated markers
+  // stay byte-identical across draft edits and final-message reads.
+  const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
+  const toolMarker = `SLACK-QA-TOOL-${suffix}`;
+  const finalMarker = `SLACK-QA-COMMENTARY-DONE-${suffix}`;
+  return {
+    expectReply: true,
+    input: [
+      `<@${sutUserId}> This is a Slack progress protocol test. First, emit an assistant commentary message whose entire text is exactly ${commentaryMarker}.`,
+      "Do not call any tool until that commentary message is complete.",
+      `Then use the exec tool exactly once to run: grep '${toolMarker}' /dev/null || sleep 5.`,
+      `After the command finishes, reply with only this exact marker: ${finalMarker}`,
+    ].join(" "),
+    matchText: finalMarker,
+    settleObservedMs: 3_000,
+    verifyObserved: ({ finalMessage, messages }) => {
+      if (!finalMessage.ts) {
+        throw new Error("Slack progress commentary final message had no ts");
+      }
+      if ((finalMessage.text ?? "").trim() !== finalMarker) {
+        throw new Error("expected the Slack final answer to contain only the final marker");
+      }
+      const progressMessages = messages.filter((message) => !message.text.includes(finalMarker));
+      const commentaryMessages = progressMessages.filter((message) =>
+        message.text.includes(commentaryMarker),
+      );
+      const commentaryTimestamps = new Set(commentaryMessages.map((message) => message.ts));
+      if (expectation.commentary === "absent" && commentaryTimestamps.size !== 0) {
+        throw new Error("expected commentary to stay out of Slack progress messages");
+      }
+      if (expectation.commentary !== "absent" && commentaryTimestamps.size !== 1) {
+        throw new Error(
+          `expected exactly one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
+        );
+      }
+      const commentaryTs = [...commentaryTimestamps][0];
+      if (expectation.commentary === "draft" && commentaryTs !== finalMessage.ts) {
+        throw new Error("expected commentary on the progress draft finalized as the answer");
+      }
+      if (expectation.commentary === "standalone" && commentaryTs === finalMessage.ts) {
+        throw new Error("expected commentary only in the standalone verbose message");
+      }
+      const toolTimestamps = new Set(
+        progressMessages
+          .filter((message) => message.text.includes(toolMarker))
+          .map((message) => message.ts),
+      );
+      if (expectation.toolProgress === "draft") {
+        if (toolTimestamps.size !== 1 || !toolTimestamps.has(finalMessage.ts)) {
+          throw new Error("expected tool progress on the progress draft finalized as the answer");
+        }
+      } else if (expectation.toolProgress === "standalone") {
+        if (toolTimestamps.size === 0 || toolTimestamps.has(finalMessage.ts)) {
+          throw new Error("expected tool progress only in standalone verbose messages");
+        }
+      } else if (toolTimestamps.size !== 0) {
+        throw new Error("expected tool progress to stay out of Slack progress messages");
+      }
+      const finalTimestamps = new Set(
+        messages
+          .filter((message) => message.text.includes(finalMarker))
+          .map((message) => message.ts),
+      );
+      if (finalTimestamps.size !== 1 || !finalTimestamps.has(finalMessage.ts)) {
+        throw new Error(
+          "expected one final-marker Slack message identity matching the final answer",
+        );
+      }
+      const commentaryDetails =
+        expectation.commentary === "draft"
+          ? "commentary on progress/final identity"
+          : expectation.commentary === "standalone"
+            ? "one standalone commentary identity"
+            : "commentary absent from Slack progress";
+      return `verified ${commentaryDetails}; tool progress ${expectation.toolProgress}; final identity unique`;
+    },
+  };
+}
+
 const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-canary",
@@ -378,6 +672,52 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
     },
   },
   {
+    id: "slack-channel-disabled-warning",
+    title: "Slack disabled channel warns and does not trigger",
+    timeoutMs: 8_000,
+    defaultEnabled: false,
+    configOverrides: { channelEnabled: false },
+    buildRun: (sutUserId) => {
+      const marker = `SLACK_QA_DISABLED_${randomUUID().slice(0, 8).toUpperCase()}`;
+      let logCursor = 0;
+      return {
+        expectReply: false,
+        input: `<@${sutUserId}> reply with only this exact marker: ${marker}`,
+        matchText: marker,
+        preserveGatewayDebug: true,
+        beforeRun: async ({ gateway }) => {
+          const gatewayLogTail = (await gateway.call(
+            "logs.tail",
+            { limit: 1, maxBytes: 32_000 },
+            { timeoutMs: SLACK_QA_LOG_TAIL_TIMEOUT_MS },
+          )) as { cursor?: unknown };
+          logCursor = typeof gatewayLogTail.cursor === "number" ? gatewayLogTail.cursor : 0;
+        },
+        afterNoReply: async ({ gateway }) => {
+          const gatewayLogTail = (await gateway.call(
+            "logs.tail",
+            { cursor: logCursor, limit: 200, maxBytes: 256_000 },
+            { timeoutMs: SLACK_QA_LOG_TAIL_TIMEOUT_MS },
+          )) as { lines?: unknown };
+          const gatewayLogLines = Array.isArray(gatewayLogTail.lines)
+            ? gatewayLogTail.lines.filter((line): line is string => typeof line === "string")
+            : [];
+          const expectedFields = [
+            "Slack channel denied by configuration",
+            "channel_not_allowed",
+            "channel_disabled",
+          ];
+          if (
+            !gatewayLogLines.some((line) => expectedFields.every((field) => line.includes(field)))
+          ) {
+            throw new Error("disabled Slack channel did not emit the structured warning");
+          }
+          return "structured disabled-channel warning observed";
+        },
+      };
+    },
+  },
+  {
     id: "slack-top-level-reply-shape",
     standardId: "top-level-reply-shape",
     title: "Slack top-level reply stays top-level",
@@ -398,6 +738,146 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
         },
       };
     },
+  },
+  {
+    id: "slack-progress-commentary-true",
+    title: "Slack progress commentary true is independent from tool progress",
+    defaultEnabled: false,
+    timeoutMs: 90_000,
+    configOverrides: {
+      progress: { commentary: true, toolProgress: false },
+    },
+    buildRun: (sutUserId) =>
+      buildSlackProgressCommentaryRun(sutUserId, {
+        commentary: "draft",
+        toolProgress: "absent",
+      }),
+  },
+  {
+    id: "slack-progress-commentary-false",
+    title: "Slack progress commentary false stays out of the progress draft",
+    defaultEnabled: false,
+    timeoutMs: 90_000,
+    configOverrides: {
+      progress: { commentary: false, toolProgress: false },
+    },
+    buildRun: (sutUserId) =>
+      buildSlackProgressCommentaryRun(sutUserId, {
+        commentary: "absent",
+        toolProgress: "absent",
+      }),
+  },
+  {
+    id: "slack-progress-commentary-omitted",
+    title: "Slack omitted progress commentary preserves the tool-progress default",
+    defaultEnabled: false,
+    timeoutMs: 90_000,
+    configOverrides: {
+      progress: { toolProgress: true },
+    },
+    buildRun: (sutUserId) =>
+      buildSlackProgressCommentaryRun(sutUserId, {
+        commentary: "draft",
+        toolProgress: "draft",
+      }),
+  },
+  {
+    id: "slack-progress-commentary-verbose-dedupe",
+    title: "Slack explicit commentary yields to durable verbose progress",
+    defaultEnabled: false,
+    timeoutMs: 90_000,
+    configOverrides: {
+      progress: { commentary: true, toolProgress: false, verboseDefault: "on" },
+    },
+    buildRun: (sutUserId) =>
+      buildSlackProgressCommentaryRun(sutUserId, {
+        commentary: "standalone",
+        toolProgress: "standalone",
+      }),
+  },
+  {
+    id: "slack-chart-presentation-native",
+    title: "Slack portable chart renders as a native data visualization",
+    timeoutMs: 90_000,
+    configOverrides: { messageTool: true },
+    buildRun: (sutUserId) => {
+      const suffix = randomUUID().slice(0, 8).toUpperCase();
+      const summaryText = `SLACK_QA_CHART_SUMMARY_${suffix}`;
+      const finalMarker = `SLACK_QA_CHART_DONE_${suffix}`;
+      const messageToolArgs = buildSlackChartMessageToolArgs(summaryText);
+      return {
+        expectReply: true,
+        input: [
+          `<@${sutUserId}> Slack native chart QA check ${summaryText}.`,
+          `Call the message tool exactly once with these exact arguments: ${JSON.stringify(messageToolArgs)}.`,
+          `After the chart send succeeds, reply with only this exact marker: ${finalMarker}`,
+        ].join(" "),
+        matchText: finalMarker,
+        afterReply: async (_message, context) => {
+          await waitForSlackStoredMessage({
+            channelId: context.channelId,
+            client: context.sutReadClient,
+            description: "message with native chart",
+            matchesMessage: (message) =>
+              isExpectedSlackNativeChartMessage(
+                message,
+                renderSlackChartAccessibleText(summaryText),
+              ),
+            oldestTs: context.sentTs,
+            sutIdentity: context.sutIdentity,
+            timeoutMs: SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
+          });
+          return "verified native data_visualization block and deterministic accessible text";
+        },
+      };
+    },
+  },
+  {
+    id: "slack-table-presentation-native",
+    title: "Slack portable table renders as a native data table",
+    timeoutMs: 90_000,
+    configOverrides: { messageTool: true },
+    buildRun: (sutUserId) => {
+      const suffix = randomUUID().slice(0, 8).toUpperCase();
+      const summaryText = `SLACK_QA_TABLE_SUMMARY_${suffix}`;
+      const finalMarker = `SLACK_QA_TABLE_DONE_${suffix}`;
+      const messageToolArgs = buildSlackTableMessageToolArgs(summaryText);
+      return {
+        expectReply: true,
+        input: [
+          `<@${sutUserId}> Slack native table QA check ${summaryText}.`,
+          `Call the message tool exactly once with these exact arguments: ${JSON.stringify(messageToolArgs)}.`,
+          `After the table send succeeds, reply with only this exact marker: ${finalMarker}`,
+        ].join(" "),
+        matchText: finalMarker,
+        afterReply: async (_message, context) => {
+          await waitForSlackStoredMessage({
+            channelId: context.channelId,
+            client: context.sutReadClient,
+            description: "message with native table",
+            matchesMessage: (message) =>
+              isExpectedSlackNativeTableMessage(
+                message,
+                renderSlackTableAccessibleText(summaryText),
+              ),
+            oldestTs: context.sentTs,
+            sutIdentity: context.sutIdentity,
+            timeoutMs: SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
+          });
+          return "verified native data_table block and deterministic accessible text";
+        },
+      };
+    },
+  },
+  {
+    id: "slack-table-invalid-blocks-fallback",
+    title: "Slack rejects an over-limit native table and stores its complete fallback",
+    defaultEnabled: false,
+    timeoutMs: 45_000,
+    buildRun: () => ({
+      kind: "direct-transport",
+      execute: runSlackTableInvalidBlocksFallbackScenario,
+    }),
   },
   {
     id: "slack-reaction-glyph-native",
@@ -476,6 +956,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       },
       codexApproval: true,
     },
+    forcedRuntime: "codex",
     buildRun: () => ({
       approvalKind: "plugin",
       appServerMethod: "item/commandExecution/requestApproval",
@@ -496,6 +977,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       },
       codexApproval: true,
     },
+    forcedRuntime: "codex",
     buildRun: () => ({
       approvalKind: "plugin",
       appServerMethod: "item/fileChange/requestApproval",
@@ -557,17 +1039,73 @@ function parseSlackQaCredentialPayload(payload: unknown): SlackQaRuntimeEnv {
 }
 
 function findScenario(ids?: string[]) {
-  return selectLiveTransportScenarios({
+  const selected = selectLiveTransportScenarios({
     ids,
     laneLabel: "Slack",
     scenarios: SLACK_QA_SCENARIOS,
   });
+  return ids?.length ? selected : selected.filter((scenario) => scenario.defaultEnabled !== false);
 }
 
 function asPlainRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+type SlackQaPostMessageAttempt = {
+  failureCode?: string;
+  formattingDisabled: boolean;
+  nativeDataBlockCount: number;
+  status: "failed" | "sent";
+};
+
+function countSlackNativeDataBlocks(value: unknown) {
+  if (!Array.isArray(value)) {
+    return 0;
+  }
+  return value.filter((block) => {
+    const type = asPlainRecord(block).type;
+    return type === "data_table" || type === "data_visualization";
+  }).length;
+}
+
+function readSlackApiFailureCode(error: unknown) {
+  const record = asPlainRecord(error);
+  const data = asPlainRecord(record.data);
+  const code = data.error ?? record.error;
+  return typeof code === "string" && /^[a-z0-9_]{1,64}$/u.test(code) ? code : undefined;
+}
+
+function instrumentSlackPostMessage(client: WebClient) {
+  const originalPostMessage = client.chat.postMessage;
+  const attempts: SlackQaPostMessageAttempt[] = [];
+  client.chat.postMessage = (async (payload) => {
+    const payloadRecord = payload as { blocks?: unknown; mrkdwn?: boolean };
+    const attempt = {
+      formattingDisabled: payloadRecord.mrkdwn === false,
+      nativeDataBlockCount: countSlackNativeDataBlocks(payloadRecord.blocks),
+    };
+    try {
+      const response = await originalPostMessage.call(client.chat, payload);
+      attempts.push({ ...attempt, status: "sent" });
+      return response;
+    } catch (error) {
+      const failureCode = readSlackApiFailureCode(error);
+      attempts.push({
+        ...attempt,
+        ...(failureCode ? { failureCode } : {}),
+        status: "failed",
+      });
+      throw error;
+    }
+  }) as typeof client.chat.postMessage;
+  return {
+    attempts,
+    restore: () => {
+      client.chat.postMessage = originalPostMessage;
+    },
+  };
 }
 
 function buildSlackQaConfig(
@@ -583,6 +1121,7 @@ function buildSlackQaConfig(
   },
 ): OpenClawConfig {
   const codexApprovalConfig = params.overrides?.codexApproval === true;
+  const progressOverrides = params.overrides?.progress;
   const primaryModel = params.primaryModel;
   const pluginAllow = uniqueStrings([
     ...(baseCfg.plugins?.allow ?? []),
@@ -632,6 +1171,26 @@ function buildSlackQaConfig(
           },
         }
       : baseCfg.agents?.defaults;
+  const qaAgentDefaults = progressOverrides
+    ? {
+        ...codexAgentDefaults,
+        ...(progressOverrides.verboseDefault
+          ? { verboseDefault: progressOverrides.verboseDefault }
+          : {}),
+      }
+    : codexAgentDefaults;
+  const qaAgentList = progressOverrides
+    ? baseCfg.agents?.list?.map((agent) => {
+        if (agent.id !== "qa") {
+          return agent;
+        }
+        // Slack draft edits cannot preserve custom authorship. Remove the
+        // synthetic QA identity so progress scenarios reach the draft path.
+        const qaAgent = { ...agent };
+        delete qaAgent.identity;
+        return qaAgent;
+      })
+    : baseCfg.agents?.list;
   const execApprovalsConfig = approvalOverrides
     ? {
         enabled: true,
@@ -689,11 +1248,12 @@ function buildSlackQaConfig(
           : {}),
       },
     },
-    ...(codexApprovalConfig
+    ...(codexApprovalConfig || progressOverrides
       ? {
           agents: {
             ...baseCfg.agents,
-            ...(codexAgentDefaults ? { defaults: codexAgentDefaults } : {}),
+            ...(qaAgentDefaults ? { defaults: qaAgentDefaults } : {}),
+            ...(qaAgentList ? { list: qaAgentList } : {}),
           },
         }
       : {}),
@@ -719,10 +1279,25 @@ function buildSlackQaConfig(
             groupPolicy: "allowlist",
             allowBots: true,
             replyToMode: params.overrides?.replyToMode ?? "off",
+            ...(progressOverrides
+              ? {
+                  streaming: {
+                    mode: "progress" as const,
+                    progress: {
+                      label: false,
+                      maxLines: 4,
+                      toolProgress: progressOverrides.toolProgress,
+                      ...(progressOverrides.commentary === undefined
+                        ? {}
+                        : { commentary: progressOverrides.commentary }),
+                    },
+                  },
+                }
+              : {}),
             ...(execApprovalsConfig ? { execApprovals: execApprovalsConfig } : {}),
             channels: {
               [params.channelId]: {
-                enabled: true,
+                enabled: params.overrides?.channelEnabled ?? true,
                 requireMention: true,
                 allowBots: true,
                 users: params.overrides?.users ?? [params.driverBotUserId],
@@ -754,9 +1329,9 @@ async function sendSlackChannelMessage(params: {
   text: string;
   threadTs?: string;
 }) {
-  const sendSlackMessage = params.client.chat.postMessage.bind(params.client.chat);
+  const postSlackMessage = params.client.chat.postMessage.bind(params.client.chat);
   const sent = slackPostMessageSchema.parse(
-    await sendSlackMessage({
+    await postSlackMessage({
       channel: params.channelId,
       text: params.text,
       thread_ts: params.threadTs,
@@ -834,6 +1409,19 @@ function collectSlackActionValues(blocks?: unknown[]) {
   return collectSlackBlockStringFields(blocks ?? [], "value");
 }
 
+function parseSlackNativeApprovalAction(value: string) {
+  if (!value.startsWith(SLACK_QA_APPROVAL_ACTION_PREFIX)) {
+    return undefined;
+  }
+  try {
+    const decoded: unknown = JSON.parse(value.slice(SLACK_QA_APPROVAL_ACTION_PREFIX.length));
+    const parsed = SlackQaApprovalActionValueSchema.safeParse(decoded);
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function collectSlackButtonLabels(blocks?: unknown[]) {
   const labels: string[] = [];
   function visit(value: unknown) {
@@ -871,7 +1459,7 @@ function buildSlackApprovalCheckpointMessage(
   return {
     actionLabels: collectSlackButtonLabels(message.blocks),
     blockText: collectSlackBlockText(message.blocks),
-    hasNativeActions: actionValues.some((value) => value.includes("/approve")),
+    hasNativeActions: actionValues.some((value) => parseSlackNativeApprovalAction(value)),
     text: message.text ?? "",
   };
 }
@@ -881,12 +1469,13 @@ function hasSlackNativeApprovalActions(params: {
   approvalId?: string;
   decision: SlackQaApprovalDecision;
 }) {
-  return params.actionValues.some(
-    (value) =>
-      value.includes("/approve") &&
-      (!params.approvalId || value.includes(params.approvalId)) &&
-      value.includes(params.decision),
-  );
+  return params.actionValues.some((value) => {
+    const action = parseSlackNativeApprovalAction(value);
+    return (
+      action?.decision === params.decision &&
+      (!params.approvalId || action.approvalId === params.approvalId)
+    );
+  });
 }
 
 function extractSlackNativeApprovalId(params: {
@@ -894,12 +1483,9 @@ function extractSlackNativeApprovalId(params: {
   decision: SlackQaApprovalDecision;
 }) {
   for (const value of params.actionValues) {
-    if (!value.includes("/approve") || !value.includes(params.decision)) {
-      continue;
-    }
-    const match = value.match(/\b((?:exec|plugin):[^\s]+)/);
-    if (match?.[1]) {
-      return match[1];
+    const action = parseSlackNativeApprovalAction(value);
+    if (action?.decision === params.decision) {
+      return action.approvalId;
     }
   }
   return undefined;
@@ -912,51 +1498,238 @@ function isSutSlackMessage(message: SlackMessage, sutIdentity: SlackAuthIdentity
   );
 }
 
-async function waitForSlackScenarioReply(params: {
+// Slack history can flatten top-level accessibility newlines on readback.
+// Normalize only whitespace; the native chart structure stays byte-for-byte strict below.
+function normalizeSlackAccessibleText(value: string) {
+  return value.trim().replace(/\s+/gu, " ");
+}
+
+function isExpectedSlackNativeChartMessage(message: SlackMessage, expectedAccessibleText: string) {
+  if (
+    normalizeSlackAccessibleText(message.text ?? "") !==
+    normalizeSlackAccessibleText(expectedAccessibleText)
+  ) {
+    return false;
+  }
+  return (message.blocks ?? []).some((value) => {
+    const block = asPlainRecord(value);
+    return isDeepStrictEqual(
+      { type: block.type, title: block.title, chart: block.chart },
+      SLACK_QA_NATIVE_CHART,
+    );
+  });
+}
+
+async function waitForSlackStoredMessage(params: {
   channelId: string;
   client: WebClient;
+  description: string;
+  matchesMessage: (message: SlackMessage) => boolean;
+  oldestTs: string;
+  sutIdentity: SlackAuthIdentity;
+  timeoutMs: number;
+}) {
+  const startedAt = Date.now();
+  while (true) {
+    const messages = await listSlackMessages({
+      channelId: params.channelId,
+      client: params.client,
+      oldestTs: params.oldestTs,
+    });
+    const message = messages.find(
+      (entry) =>
+        entry.ts !== params.oldestTs &&
+        isSutSlackMessage(entry, params.sutIdentity) &&
+        params.matchesMessage(entry),
+    );
+    if (message) {
+      return message;
+    }
+    const remainingMs = params.timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(1_000, remainingMs));
+    });
+  }
+  throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
+}
+
+function isExpectedSlackNativeTableMessage(message: SlackMessage, expectedAccessibleText: string) {
+  if (
+    normalizeSlackAccessibleText(message.text ?? "") !==
+    normalizeSlackAccessibleText(expectedAccessibleText)
+  ) {
+    return false;
+  }
+  return (message.blocks ?? []).some((value) => {
+    const block = asPlainRecord(value);
+    return isDeepStrictEqual(
+      {
+        type: block.type,
+        caption: block.caption,
+        rows: block.rows,
+        row_header_column_index: block.row_header_column_index,
+      },
+      SLACK_QA_NATIVE_TABLE,
+    );
+  });
+}
+
+async function runSlackTableInvalidBlocksFallbackScenario(
+  context: SlackQaDirectTransportScenarioContext,
+): Promise<SlackQaDirectTransportScenarioResult> {
+  const probe = buildSlackInvalidBlocksTableProbe();
+  const oldestTs = ((Date.now() - 5_000) / 1_000).toFixed(6);
+  const instrumentation = instrumentSlackPostMessage(context.sutWriteClient);
+  let sent: Awaited<ReturnType<typeof sendSlackMessage>>;
+  try {
+    try {
+      sent = await sendSlackMessage(`channel:${context.channelId}`, probe.summaryText, {
+        accountId: context.sutAccountId,
+        blocks: [probe.block] as never,
+        cfg: context.cfg,
+        client: context.sutWriteClient,
+        nativeDataFallbackBaseText: probe.summaryText,
+      });
+    } catch {
+      const [nativeAttempt, fallbackAttempt] = instrumentation.attempts;
+      if (nativeAttempt?.failureCode !== "invalid_blocks") {
+        throw new Error(
+          `expected first Slack API failure code invalid_blocks; observed ${nativeAttempt?.failureCode ?? "none"}`,
+        );
+      }
+      throw new Error(
+        `Slack fallback failed after invalid_blocks; observed ${fallbackAttempt?.failureCode ?? "no fallback API failure code"}`,
+      );
+    }
+  } finally {
+    instrumentation.restore();
+  }
+
+  const [nativeAttempt, fallbackAttempt] = instrumentation.attempts;
+  if (instrumentation.attempts.length !== 2) {
+    throw new Error(
+      `expected exactly two Slack API attempts; observed ${instrumentation.attempts.length}`,
+    );
+  }
+  if (
+    nativeAttempt?.status !== "failed" ||
+    nativeAttempt.failureCode !== "invalid_blocks" ||
+    nativeAttempt.nativeDataBlockCount !== 1
+  ) {
+    throw new Error(
+      `expected first Slack API attempt to fail with invalid_blocks for one native data block; observed ${nativeAttempt?.failureCode ?? "none"}`,
+    );
+  }
+  if (
+    fallbackAttempt?.status !== "sent" ||
+    fallbackAttempt.nativeDataBlockCount !== 0 ||
+    !fallbackAttempt.formattingDisabled
+  ) {
+    throw new Error("Slack fallback did not use one formatting-disabled blockless API request");
+  }
+
+  const message = await waitForSlackStoredMessage({
+    channelId: context.channelId,
+    client: context.sutReadClient,
+    description: "stored invalid_blocks fallback message",
+    matchesMessage: (candidate) => candidate.ts === sent.messageId,
+    oldestTs,
+    sutIdentity: context.sutIdentity,
+    timeoutMs: context.timeoutMs,
+  });
+  const storedText = message.text ?? "";
+  if (countSlackNativeDataBlocks(message.blocks) !== 0) {
+    throw new Error("stored Slack fallback retained a native data block");
+  }
+  const storedLines = storedText.split("\n");
+  if (!storedLines.includes(probe.firstRowText)) {
+    throw new Error("stored Slack fallback omitted the exact first data row");
+  }
+  if (!storedLines.includes(probe.finalRowText)) {
+    throw new Error("stored Slack fallback omitted the exact final data row");
+  }
+  if (storedText !== probe.fallbackText) {
+    throw new Error(
+      `stored Slack fallback was incomplete: expected ${probe.fallbackText.length} characters, observed ${storedText.length}`,
+    );
+  }
+  return {
+    details: [
+      "direct transport",
+      "first API failure=invalid_blocks",
+      "API attempts=2",
+      `data rows=${probe.dataRowCount}`,
+      "fallback formatting disabled=true",
+      "stored native data blocks=0",
+      "first row=present",
+      "final row=present",
+      "complete delivery=true",
+    ].join("; "),
+    message,
+  };
+}
+
+type SlackScenarioObservationContext = {
+  channelId: string;
   matchText: string;
   observedMessages: SlackObservedMessage[];
   observationScenarioId: string;
   observationScenarioTitle: string;
   sentTs: string;
-  threadTs?: string;
   sutIdentity: SlackAuthIdentity;
-  timeoutMs: number;
-}) {
+};
+
+function recordSlackScenarioMessages(
+  params: SlackScenarioObservationContext & { messages: SlackMessage[] },
+) {
+  let matchedMessage: SlackMessage | undefined;
+  for (const message of params.messages) {
+    const text = message.text ?? "";
+    if (
+      !message.ts ||
+      message.ts === params.sentTs ||
+      !isSutSlackMessage(message, params.sutIdentity)
+    ) {
+      continue;
+    }
+    const matchedScenario = text.includes(params.matchText);
+    params.observedMessages.push({
+      actionValues: collectSlackActionValues(message.blocks),
+      blockText: collectSlackBlockText(message.blocks),
+      botId: message.bot_id,
+      channelId: params.channelId,
+      matchedScenario,
+      scenarioId: params.observationScenarioId,
+      scenarioTitle: params.observationScenarioTitle,
+      text,
+      threadTs: message.thread_ts,
+      ts: message.ts,
+      userId: message.user,
+    });
+    if (matchedScenario && !matchedMessage) {
+      matchedMessage = message;
+    }
+  }
+  return matchedMessage;
+}
+
+async function waitForSlackScenarioReply(
+  params: SlackScenarioObservationContext & {
+    client: WebClient;
+    threadTs?: string;
+    timeoutMs: number;
+  },
+) {
+  const observationContext: SlackScenarioObservationContext = params;
   const startedAt = Date.now();
   const inspectMessages = (messages: SlackMessage[]) => {
-    for (const message of messages) {
-      const text = message.text ?? "";
-      if (
-        !message.ts ||
-        message.ts === params.sentTs ||
-        !isSutSlackMessage(message, params.sutIdentity)
-      ) {
-        continue;
-      }
-      const matchedScenario = text.includes(params.matchText);
-      params.observedMessages.push({
-        actionValues: collectSlackActionValues(message.blocks),
-        blockText: collectSlackBlockText(message.blocks),
-        botId: message.bot_id,
-        channelId: params.channelId,
-        matchedScenario,
-        scenarioId: params.observationScenarioId,
-        scenarioTitle: params.observationScenarioTitle,
-        text,
-        threadTs: message.thread_ts,
-        ts: message.ts,
-        userId: message.user,
-      });
-      if (matchedScenario) {
-        return {
-          message,
-          observedAt: new Date().toISOString(),
-        };
-      }
-    }
-    return undefined;
+    const matchedMessage = recordSlackScenarioMessages({ ...observationContext, messages });
+    return matchedMessage
+      ? { message: matchedMessage, observedAt: new Date().toISOString() }
+      : undefined;
   };
 
   while (Date.now() - startedAt < params.timeoutMs) {
@@ -991,6 +1764,50 @@ async function waitForSlackScenarioReply(params: {
     });
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack message`);
+}
+
+async function observeSlackScenarioMessages(
+  params: SlackScenarioObservationContext & {
+    client: WebClient;
+    settleMs: number;
+    threadTs?: string;
+  },
+) {
+  const observationContext: SlackScenarioObservationContext = params;
+  const startedAt = Date.now();
+
+  while (true) {
+    recordSlackScenarioMessages({
+      ...observationContext,
+      messages: await listSlackMessages({
+        channelId: params.channelId,
+        client: params.client,
+        oldestTs: params.sentTs,
+      }),
+    });
+    try {
+      recordSlackScenarioMessages({
+        ...observationContext,
+        messages: await listSlackThreadMessages({
+          channelId: params.channelId,
+          client: params.client,
+          threadTs: params.threadTs ?? params.sentTs,
+        }),
+      });
+    } catch (error) {
+      throw new Error(
+        `Slack conversations.replies failed while settling ${params.observationScenarioId}: ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
+    const remainingMs = params.settleMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(1_000, remainingMs));
+    });
+  }
 }
 
 async function waitForSlackNoReply(params: {
@@ -1295,7 +2112,7 @@ function matchesSlackApprovalResolvedUpdate(params: {
     ) &&
     (!params.token || params.text.includes(params.token)) &&
     (params.extraTextMatches ?? []).every((match) => params.text.includes(match)) &&
-    !params.actionValues.some((value) => value.includes("/approve"))
+    !params.actionValues.some((value) => parseSlackNativeApprovalAction(value))
   );
 }
 
@@ -2437,6 +3254,60 @@ export async function runSlackQaLive(params: {
         let retryScenario = false;
         try {
           assertLeaseHealthy();
+          const scenarioRun = scenario.buildRun(sutIdentity.userId);
+          if (scenarioRun.kind === "direct-transport") {
+            const directResult = await scenarioRun.execute({
+              cfg: buildSlackQaConfig(
+                {},
+                {
+                  channelId: activeRuntimeEnv.channelId,
+                  driverBotUserId: driverIdentity.userId,
+                  overrides: scenario.configOverrides,
+                  primaryModel,
+                  sutAccountId,
+                  sutAppToken: activeRuntimeEnv.sutAppToken,
+                  sutBotToken: activeRuntimeEnv.sutBotToken,
+                },
+              ),
+              channelId: activeRuntimeEnv.channelId,
+              sutAccountId,
+              sutIdentity,
+              sutReadClient,
+              sutWriteClient: createSlackWriteClient(activeRuntimeEnv.sutBotToken, {
+                timeout: SLACK_QA_WEB_API_TIMEOUT_MS,
+              }),
+              timeoutMs: scenario.timeoutMs,
+            });
+            const message = directResult.message;
+            if (!message.ts) {
+              throw new Error("direct Slack transport scenario returned no stored message id");
+            }
+            observedMessages.push({
+              actionValues: collectSlackActionValues(message.blocks),
+              blockText: collectSlackBlockText(message.blocks),
+              botId: message.bot_id,
+              channelId: activeRuntimeEnv.channelId,
+              matchedScenario: true,
+              scenarioId: scenario.id,
+              scenarioTitle: scenario.title,
+              text: message.text ?? "",
+              threadTs: message.thread_ts,
+              ts: message.ts,
+              userId: message.user,
+            });
+            scenarioResults.push({
+              id: scenario.id,
+              title: scenario.title,
+              status: "pass",
+              details: [
+                directResult.details,
+                scenarioAttempt > 1 ? `retried ${scenarioAttempt - 1}x` : undefined,
+              ]
+                .filter(Boolean)
+                .join("; "),
+            });
+            break;
+          }
           gatewayHarness = await startQaLiveLaneGateway({
             repoRoot,
             transport: {
@@ -2448,6 +3319,7 @@ export async function runSlackQaLive(params: {
             primaryModel,
             alternateModel,
             fastMode: params.fastMode,
+            forcedRuntime: scenario.forcedRuntime,
             controlUiEnabled: false,
             mutateConfig: (cfg) =>
               buildSlackQaConfig(cfg, {
@@ -2461,7 +3333,6 @@ export async function runSlackQaLive(params: {
               }),
           });
           const activeGatewayHarness = gatewayHarness;
-          const scenarioRun = scenario.buildRun(sutIdentity.userId);
           if (
             scenarioRun.kind === "codex-approval" &&
             scenarioRun.appServerMethod === "item/fileChange/requestApproval"
@@ -2578,6 +3449,8 @@ export async function runSlackQaLive(params: {
           const beforeRunResult = await scenarioRun.beforeRun?.(baseScenarioContext);
           const beforeRunDetails =
             typeof beforeRunResult === "string" ? beforeRunResult : beforeRunResult?.details;
+          // Keep identity checks attempt-local so earlier scenario traffic cannot mask duplicates.
+          const observedMessageStartIndex = observedMessages.length;
           const requestStartedAt = new Date();
           const sent = await sendSlackChannelMessage({
             channelId: activeRuntimeEnv.channelId,
@@ -2603,6 +3476,25 @@ export async function runSlackQaLive(params: {
               timeoutMs: scenario.timeoutMs,
             });
             scenarioRun.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
+            if (scenarioRun.settleObservedMs) {
+              // Negative and dedupe checks need late Slack deliveries, not only the first final hit.
+              await observeSlackScenarioMessages({
+                channelId: activeRuntimeEnv.channelId,
+                client: sutReadClient,
+                matchText: scenarioRun.matchText,
+                observedMessages,
+                observationScenarioId: scenario.id,
+                observationScenarioTitle: scenario.title,
+                sentTs: sent.ts,
+                settleMs: scenarioRun.settleObservedMs,
+                sutIdentity,
+                threadTs: requestThreadTs,
+              });
+            }
+            const observedDetails = scenarioRun.verifyObserved?.({
+              finalMessage: reply.message,
+              messages: observedMessages.slice(observedMessageStartIndex),
+            });
             const responseObservedAt = new Date(reply.observedAt);
             const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
             const afterReplyDetails = await scenarioRun.afterReply?.(reply.message, {
@@ -2617,6 +3509,7 @@ export async function runSlackQaLive(params: {
               details: [
                 `reply matched in ${rttMs}ms`,
                 beforeRunDetails,
+                observedDetails,
                 afterReplyDetails,
                 scenarioAttempt > 1 ? `retried ${scenarioAttempt - 1}x` : undefined,
               ]
@@ -2644,13 +3537,26 @@ export async function runSlackQaLive(params: {
               sutIdentity,
               timeoutMs: scenario.timeoutMs,
             });
+            const afterNoReplyDetails = await scenarioRun.afterNoReply?.({
+              ...baseScenarioContext,
+              sentTs: sent.ts,
+            });
+            if (scenarioRun.preserveGatewayDebug) {
+              preserveAttemptGatewayDebug = true;
+              preservedGatewayDebugArtifacts = true;
+            }
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
               standardId: scenario.standardId,
               status: "pass",
-              details:
-                scenarioAttempt > 1 ? `no reply; retried ${scenarioAttempt - 1}x` : "no reply",
+              details: [
+                "no reply",
+                afterNoReplyDetails,
+                scenarioAttempt > 1 ? `retried ${scenarioAttempt - 1}x` : undefined,
+              ]
+                .filter(Boolean)
+                .join("; "),
             });
           }
           break;
@@ -2672,9 +3578,9 @@ export async function runSlackQaLive(params: {
                   ? `${formatErrorMessage(error)}; retried ${scenarioAttempt - 1}x`
                   : formatErrorMessage(error),
             });
-            preserveAttemptGatewayDebug = true;
-            preservedGatewayDebugArtifacts = true;
             if (gatewayHarness) {
+              preserveAttemptGatewayDebug = true;
+              preservedGatewayDebugArtifacts = true;
               const stopped = await preserveSlackGatewayDebugArtifacts({
                 cleanupIssues,
                 gatewayDebugDirPath,
@@ -2841,6 +3747,7 @@ export const testing = {
   assertSlackCodexApprovalModelSupported,
   assertCodexApprovalTranscriptSucceeded,
   buildCodexApprovalInstruction,
+  buildSlackInvalidBlocksTableProbe,
   buildSlackApprovalCheckpointMessage,
   buildSlackQaConfig,
   collectSlackActionValues,
@@ -2853,6 +3760,8 @@ export const testing = {
   isSlackChannelReadyForQa,
   matchesSlackApprovalResolvedUpdate,
   matchesSlackApprovalPromptText,
+  observeSlackScenarioMessages,
+  parseSlackNativeApprovalAction,
   parseSlackQaCredentialPayload,
   preserveSlackGatewayDebugArtifacts,
   quiesceCodexApprovalAgentRun,
@@ -2864,11 +3773,13 @@ export const testing = {
   resolveApprovalDecision,
   resolveSlackQaSutAccountId,
   resolveSlackQaRuntimeEnv,
+  runSlackTableInvalidBlocksFallbackScenario,
   sendSlackChannelMessage,
   listSlackMessages,
   listSlackThreadMessages,
   SLACK_QA_STANDARD_SCENARIO_IDS,
   toSlackQaScenarioArtifactResults,
+  waitForSlackStoredMessage,
   waitForSlackNoReply,
   waitForSlackReaction,
   waitForSlackChannelStable,

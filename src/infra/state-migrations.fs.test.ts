@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  ensureDir,
+  ensureMigrationDir,
   existsDir,
   fileExists,
   isLegacyWhatsAppAuthFile,
@@ -18,7 +18,7 @@ describe("state migration fs helpers", () => {
       const nested = path.join(base, "nested");
 
       expect(safeReadDir(nested)).toStrictEqual([]);
-      ensureDir(nested);
+      ensureMigrationDir(nested);
       fs.writeFileSync(path.join(nested, "file.txt"), "ok", "utf8");
 
       expect(safeReadDir(nested).map((entry) => entry.name)).toEqual(["file.txt"]);

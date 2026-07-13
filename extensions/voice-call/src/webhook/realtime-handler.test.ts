@@ -1,7 +1,9 @@
 // Voice Call tests cover realtime handler plugin behavior.
 import http from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceForcedConsultCoordinator,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -75,6 +77,7 @@ function makeHandler(
     provider?: Partial<VoiceCallProvider>;
     providerConfig?: Record<string, unknown>;
     realtimeProvider?: RealtimeVoiceProviderPlugin;
+    resolveInstructions?: (call: CallRecord) => string;
   },
 ) {
   const config: VoiceCallRealtimeConfig = {
@@ -124,6 +127,8 @@ function makeHandler(
     deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge()),
     deps?.providerConfig ?? { apiKey: "test-key" },
     "/voice/webhook",
+    undefined,
+    deps?.resolveInstructions,
   );
 }
 
@@ -140,7 +145,7 @@ const startRealtimeServer = async (
   }
 
   return await startUpgradeWsServer({
-    urlPath: match[1],
+    urlPath: expectDefined(match[1], "realtime stream path"),
     onUpgrade: (request, socket, head) => {
       handler.handleWebSocketUpgrade(request, socket, head);
     },
@@ -365,7 +370,7 @@ describe("RealtimeCallHandler path routing", () => {
       throw new Error("Failed to extract realtime stream path");
     }
     const server = await startUpgradeWsServer({
-      urlPath: match[1],
+      urlPath: expectDefined(match[1], "realtime stream path"),
       onUpgrade: (request, socket, head) => {
         handler.handleWebSocketUpgrade(request, socket, head);
       },
@@ -406,9 +411,11 @@ describe("RealtimeCallHandler path routing", () => {
 
   it("joins Telnyx realtime streams to the token-bound call", async () => {
     const processEvent = vi.fn();
+    const resolveInstructions = vi.fn((call: CallRecord) => `instructions:${call.agentId}`);
     const getCall = vi.fn(
       (): CallRecord => ({
         callId: "call-1",
+        agentId: "support",
         providerCallId: "v3:call-1",
         provider: "telnyx",
         direction: "inbound",
@@ -421,7 +428,7 @@ describe("RealtimeCallHandler path routing", () => {
         metadata: { initialMessage: "hello" },
       }),
     );
-    const createBridge = vi.fn(() => makeBridge());
+    const createBridge = vi.fn((_request: RealtimeBridgeRequest) => makeBridge());
     const handler = makeHandler(undefined, {
       manager: {
         processEvent,
@@ -431,6 +438,7 @@ describe("RealtimeCallHandler path routing", () => {
         name: "telnyx",
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
+      resolveInstructions,
     });
     handler.setPublicUrl("https://public.example/voice/webhook");
     const session = handler.issueStreamSession({
@@ -463,6 +471,13 @@ describe("RealtimeCallHandler path routing", () => {
         expect((processEvent.mock.calls[0]?.[0] as NormalizedEvent | undefined)?.callId).toBe(
           "call-1",
         );
+        expect(resolveInstructions).toHaveBeenCalledWith(
+          expect.objectContaining({
+            callId: "call-1",
+            agentId: "support",
+          }),
+        );
+        expect(createBridge.mock.calls[0]?.[0].instructions).toBe("instructions:support");
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
@@ -1023,8 +1038,45 @@ describe("RealtimeCallHandler path routing", () => {
         }
       | undefined;
     let resolveConsult: ((value: unknown) => void) | undefined;
+    let resolveWorkingSubmission: (() => void) | undefined;
+    let rejectWorkingSubmission = false;
+    const resolveFinalSubmissions: Array<() => void> = [];
     let receivedPartialTranscript: string | undefined;
-    const submitToolResult = vi.fn();
+    const submitToolResult = vi.fn(
+      (_callId: string, result: unknown, _options?: unknown): void | Promise<void> => {
+        if (
+          rejectWorkingSubmission &&
+          result &&
+          typeof result === "object" &&
+          "status" in result &&
+          result.status === "working"
+        ) {
+          return Promise.reject(new Error("working result rejected"));
+        }
+        if (
+          _callId === "consult-call" &&
+          result &&
+          typeof result === "object" &&
+          "status" in result &&
+          result.status === "working"
+        ) {
+          return new Promise<void>((resolve) => {
+            resolveWorkingSubmission = resolve;
+          });
+        }
+        if (
+          result &&
+          typeof result === "object" &&
+          "text" in result &&
+          result.text === "The basement lights are on."
+        ) {
+          return new Promise<void>((resolve) => {
+            resolveFinalSubmissions.push(resolve);
+          });
+        }
+        return undefined;
+      },
+    );
     const bridge = makeBridge({
       supportsToolResultContinuation: true,
       submitToolResult,
@@ -1035,33 +1087,35 @@ describe("RealtimeCallHandler path routing", () => {
         return bridge;
       },
     );
-    const getCallByProviderCallId = vi.fn(
-      (): CallRecord => ({
-        callId: "call-1",
-        providerCallId: "CA-tool",
-        provider: "twilio",
-        direction: "inbound",
-        state: "ringing",
-        from: "+15550001234",
-        to: "+15550009999",
-        startedAt: Date.now(),
-        transcript: [],
-        processedEventIds: [],
-        metadata: {},
-      }),
-    );
+    const call: CallRecord = {
+      callId: "call-1",
+      providerCallId: "CA-tool",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    };
+    const getCallByProviderCallId = vi.fn((): CallRecord => call);
     const handler = makeHandler(undefined, {
       manager: {
         getCallByProviderCallId,
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    handler.registerToolHandler("openclaw_agent_consult", (_args, _callId, context) => {
-      receivedPartialTranscript = context.partialUserTranscript;
-      return new Promise((resolve) => {
-        resolveConsult = resolve;
-      });
-    });
+    const consultHandler = vi.fn(
+      (_args: unknown, _callId: string, context: { partialUserTranscript?: string }) => {
+        receivedPartialTranscript = context.partialUserTranscript;
+        return new Promise((resolve) => {
+          resolveConsult = resolve;
+        });
+      },
+    );
+    handler.registerToolHandler("openclaw_agent_consult", consultHandler);
     handler.registerToolHandler("custom_lookup", async () => ({ ok: true }));
     const server = await startRealtimeServer(handler);
 
@@ -1086,6 +1140,14 @@ describe("RealtimeCallHandler path routing", () => {
           name: "openclaw_agent_consult",
           args: { question: "Are the basement lights on?" },
         });
+        callbacks?.onToolCall?.({
+          itemId: "item-2",
+          callId: "consult-call-2",
+          name: "openclaw_agent_consult",
+          args: { question: "Are the basement lights on?" },
+        });
+        expect(receivedPartialTranscript).toBeUndefined();
+        resolveWorkingSubmission?.();
         await vi.advanceTimersByTimeAsync(350);
         await waitForRealtimeTest(() => {
           expect(receivedPartialTranscript).toBe("Are the basement");
@@ -1104,19 +1166,35 @@ describe("RealtimeCallHandler path routing", () => {
           expect(typeof payload?.message).toBe("string");
           expect(workingCall[2]).toEqual({ willContinue: true });
         });
-        expect(submitToolResult).toHaveBeenCalledTimes(1);
+        expect(
+          submitToolResult.mock.calls.filter(
+            ([, result]) =>
+              result &&
+              typeof result === "object" &&
+              "status" in result &&
+              result.status === "working",
+          ),
+        ).toHaveLength(2);
 
         resolveConsult?.({ text: "The basement lights are on." });
 
         await waitForRealtimeTest(() => {
           expect(submitToolResult).toHaveBeenLastCalledWith(
-            "consult-call",
+            "consult-call-2",
             {
               text: "The basement lights are on.",
             },
             undefined,
           );
         });
+        expect(recentTalkEvents(call).some((event) => event.type === "tool.result")).toBe(false);
+        for (const resolve of resolveFinalSubmissions) {
+          resolve();
+        }
+        await waitForRealtimeTest(() => {
+          expect(recentTalkEvents(call).some((event) => event.type === "tool.result")).toBe(true);
+        });
+        expect(consultHandler).toHaveBeenCalledTimes(1);
 
         submitToolResult.mockClear();
         callbacks?.onToolCall?.({
@@ -1134,8 +1212,118 @@ describe("RealtimeCallHandler path routing", () => {
         );
         expect(customCallResults).toHaveLength(1);
         expect(customCallResults[0]?.[2]).toBeUndefined();
+
+        submitToolResult.mockClear();
+        rejectWorkingSubmission = true;
+        callbacks?.onToolCall?.({
+          itemId: "item-rejected",
+          callId: "consult-rejected",
+          name: "openclaw_agent_consult",
+          args: { question: "Do not run this twice" },
+        });
+        await waitForRealtimeTest(() => {
+          expect(submitToolResult).toHaveBeenCalledTimes(1);
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(consultHandler).toHaveBeenCalledTimes(1);
+        expect(submitToolResult).toHaveBeenCalledWith(
+          "consult-rejected",
+          expect.objectContaining({ status: "working" }),
+          { willContinue: true },
+        );
       } finally {
         vi.useRealTimers();
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("terminally satisfies a late native call for a cancelled forced consult", async () => {
+    let callbacks:
+      | {
+          onToolCall?: (event: {
+            itemId: string;
+            callId: string;
+            name: string;
+            args: unknown;
+          }) => void;
+        }
+      | undefined;
+    const submitToolResult = vi.fn();
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge({ submitToolResult });
+      },
+    );
+    const call: CallRecord = {
+      callId: "call-1",
+      providerCallId: "CA-cancelled-consult",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    };
+    const handler = makeHandler(undefined, {
+      manager: { getCallByProviderCallId: vi.fn(() => call) },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const consult = vi.fn(async () => ({ text: "should not run" }));
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const coordinator = (
+      handler as unknown as {
+        forcedConsultCoordinator(callId: string): RealtimeVoiceForcedConsultCoordinator;
+      }
+    ).forcedConsultCoordinator(call.callId);
+    const cancelled = coordinator.prepare("cancelled question");
+    if (!cancelled) {
+      throw new Error("expected forced consult handle");
+    }
+    coordinator.markStarted(cancelled);
+    coordinator.markCancelled(cancelled);
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-cancelled-consult", callSid: call.providerCallId },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onToolCall?.({
+          itemId: "item-cancelled",
+          callId: "native-cancelled",
+          name: "openclaw_agent_consult",
+          args: { question: "cancelled question" },
+        });
+
+        await waitForRealtimeTest(() => {
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "native-cancelled",
+            {
+              status: "cancelled",
+              message: "OpenClaw cancelled this consult before completion. Do not restart it.",
+            },
+            undefined,
+          );
+        });
+        expect(consult).not.toHaveBeenCalled();
+      } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
         }

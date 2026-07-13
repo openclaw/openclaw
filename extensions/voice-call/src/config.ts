@@ -299,6 +299,7 @@ const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "xhigh",
   "adaptive",
   "max",
+  "ultra",
 ]);
 
 const VoiceCallStreamingProvidersConfigSchema = z
@@ -363,7 +364,7 @@ export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSche
 
 const VoiceCallStreamingConfigSchema = z
   .object({
-    /** Enable real-time audio streaming (requires WebSocket support) */
+    /** Enable Twilio Media Streams for real-time transcription. */
     enabled: z.boolean().default(false),
     /** Provider id from registered realtime transcription providers. */
     provider: z.string().min(1).optional(),
@@ -506,7 +507,7 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
-export type VoiceCallEffectiveConfigResult = {
+type VoiceCallEffectiveConfigResult = {
   config: VoiceCallConfig;
   numberRouteKey?: string;
 };
@@ -920,6 +921,12 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   if (config.realtime.enabled && config.streaming.enabled) {
     errors.push(
       "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
+    );
+  }
+
+  if (config.streaming.enabled && config.provider && config.provider !== "twilio") {
+    errors.push(
+      'plugins.entries.voice-call.config.provider must be "twilio" when streaming.enabled is true',
     );
   }
 

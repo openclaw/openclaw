@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -13,6 +13,8 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -24,15 +26,28 @@ import {
   requestSessionUsageTimeSeries,
 } from "../../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
-import { selectUsageSessionKeys, toggleUsageRangeSelection } from "./helpers.ts";
-import type { SessionLogEntry, SessionLogRole, UsageColumnId, UsageProps } from "./types.ts";
+import {
+  currentLocalDate,
+  selectUsageSessionKeys,
+  toggleUsageRangeSelection,
+  toUsageErrorMessage,
+} from "./helpers.ts";
+import {
+  DEFAULT_VISIBLE_COLUMNS,
+  type SessionLogEntry,
+  type SessionLogRole,
+  type UsageProps,
+} from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 export type UsageRouteData = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
   query: {
     startDate: string;
     endDate: string;
@@ -46,45 +61,8 @@ export type UsageRouteData = {
   error: string | null;
 };
 
-const DEFAULT_VISIBLE_COLUMNS: UsageColumnId[] = [
-  "channel",
-  "agent",
-  "provider",
-  "model",
-  "messages",
-  "tools",
-  "errors",
-  "duration",
-];
-
-function currentLocalDate(): string {
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function toErrorMessage(error: unknown): string {
-  if (typeof error === "string") {
-    return error;
-  }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  if (error && typeof error === "object") {
-    try {
-      return JSON.stringify(error) || "request failed";
-    } catch {
-      // Fall through to the stable generic message.
-    }
-  }
-  return "request failed";
-}
-
-class UsagePage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class UsagePage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: UsageRouteData;
@@ -135,36 +113,53 @@ class UsagePage extends LitElement {
   private logsRequestId = 0;
   private dateDebounceTimer: number | null = null;
   private queryDebounceTimer: number | null = null;
-  private subscriptions: Array<() => void> = [];
   private routeDataInitialized = false;
   private routeDataEnabled = true;
+  private hasBoundGatewaySource = false;
+  private observedAgentScopeId: string | null | undefined;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const resetForSourceBind = this.hasBoundGatewaySource;
+        this.hasBoundGatewaySource = true;
+        const cleanup = gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot));
+        this.applyGatewaySnapshot(gateway.snapshot, resetForSourceBind);
+        return cleanup;
+      },
+    )
+    .effect(
+      () => this.context?.agentSelection,
+      (selection) => {
+        const sync = () => {
+          const nextScopeId = selection.state.scopeId;
+          const changed = this.observedAgentScopeId !== nextScopeId;
+          this.observedAgentScopeId = nextScopeId;
+          if (changed && this.routeDataInitialized && this.usageAgentId !== nextScopeId) {
+            this.usageAgentId = nextScopeId;
+            this.clearSelectionsAndDetails();
+            this.reloadUsage();
+          }
+          this.requestUpdate();
+        };
+        sync();
+        return selection.subscribe(sync);
+      },
+    )
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+    );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.subscriptions = [
-      this.context.gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot)),
-      this.context.agents.subscribe(() => this.requestUpdate()),
-    ];
-    this.applyGatewaySnapshot(this.context.gateway.snapshot, true);
-  }
-
-  override willUpdate(changed: Map<PropertyKey, unknown>) {
+  override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
-    }
-  }
-
-  override updated(changed: Map<PropertyKey, unknown>) {
-    if (changed.has("routeData")) {
       this.ensureInitialData();
     }
   }
 
   override disconnectedCallback() {
-    for (const unsubscribe of this.subscriptions) {
-      unsubscribe();
-    }
-    this.subscriptions = [];
+    this.subscriptions.clear();
     this.clearDateDebounce();
     this.clearQueryDebounce();
     this.invalidateRequests();
@@ -173,13 +168,13 @@ class UsagePage extends LitElement {
     super.disconnectedCallback();
   }
 
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, initial = false) {
-    const clientChanged = snapshot.client !== this.client;
+  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
+    const clientChanged = resetForSourceBind || snapshot.client !== this.client;
     const becameConnected = snapshot.connected && !this.connected;
     this.client = snapshot.client;
     this.connected = snapshot.connected;
 
-    if (clientChanged && !initial) {
+    if (clientChanged) {
       this.resetForClientChange();
     }
     if (!snapshot.connected || !snapshot.client) {
@@ -202,10 +197,22 @@ class UsagePage extends LitElement {
     if (!this.routeDataEnabled) {
       return;
     }
-    const gateway = this.context.gateway.snapshot;
-    if (data.client !== gateway.client || data.connected !== gateway.connected) {
+    const gateway = this.context.gateway;
+    const snapshot = gateway.snapshot;
+    this.client = snapshot.client;
+    this.connected = snapshot.connected;
+    if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
       this.routeDataEnabled = false;
       this.usageLoading = false;
+      return;
+    }
+    const currentAgentId = this.context.agentSelection.state.scopeId;
+    if (data.query.agentId !== currentAgentId) {
+      // Route loaders may finish after the page scope changes. Ignore their
+      // stale result and restart from the current scope in one operation.
+      this.usageAgentId = currentAgentId;
+      this.clearSelectionsAndDetails();
+      this.reloadUsage();
       return;
     }
 
@@ -237,12 +244,14 @@ class UsagePage extends LitElement {
   private resetForClientChange() {
     this.clearDateDebounce();
     this.invalidateRequests();
-    this.routeDataEnabled = false;
+    if (this.routeDataInitialized) {
+      this.routeDataEnabled = false;
+    }
     this.usageResult = null;
     this.usageCostSummary = null;
     this.providerUsageSummary = null;
     this.usageError = null;
-    this.usageAgentId = null;
+    this.usageAgentId = this.context.agentSelection.state.scopeId;
     this.clearSelectionsAndDetails();
   }
 
@@ -331,7 +340,7 @@ class UsagePage extends LitElement {
         this.usageCostSummary = null;
         this.usageError = formatMissingOperatorReadScopeMessage("usage");
       } else {
-        this.usageError = toErrorMessage(error);
+        this.usageError = toUsageErrorMessage(error);
       }
     } finally {
       if (this.isCurrentRequest(requestId, client)) {
@@ -450,8 +459,10 @@ class UsagePage extends LitElement {
 
     if (this.usageSelectedSessions.length === 1) {
       const sessionKey = this.usageSelectedSessions[0];
-      void this.loadSessionTimeSeries(sessionKey);
-      void this.loadSessionLogs(sessionKey);
+      if (sessionKey) {
+        void this.loadSessionTimeSeries(sessionKey);
+        void this.loadSessionLogs(sessionKey);
+      }
     }
   }
 
@@ -532,9 +543,7 @@ class UsagePage extends LitElement {
             this.reloadUsage();
           },
           onAgentChange: (agentId) => {
-            this.usageAgentId = agentId;
-            this.clearSelectionsAndDetails();
-            this.reloadUsage();
+            this.context.agentSelection.setScope(agentId);
           },
           onRefresh: () => this.reloadUsage(),
           onTimeZoneChange: (timeZone) => {
@@ -660,8 +669,16 @@ class UsagePage extends LitElement {
           <div class="page-title">${titleForRoute("usage")}</div>
           <div class="page-sub">${subtitleForRoute("usage")}</div>
         </div>
+        ${renderAgentScopeControl({
+          agents: this.context.agents.state.agentsList?.agents ?? [],
+          additionalAgentIds:
+            this.usageResult?.sessions
+              .map((entry) => entry.agentId)
+              .filter((agentId): agentId is string => Boolean(agentId?.trim())) ?? [],
+          selection: this.context.agentSelection,
+        })}
       </section>
-      ${renderUsage(props)}
+      ${renderSettingsWorkspace(renderUsage(props))}
     `;
   }
 }

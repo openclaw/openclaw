@@ -12,7 +12,7 @@ import { sleep } from "../utils.js";
 
 export type PortProcess = { pid: number; command?: string };
 
-export type ForceFreePortResult = {
+type ForceFreePortResult = {
   killed: PortProcess[];
   waitedMs: number;
   escalatedToSigkill: boolean;
@@ -275,15 +275,16 @@ export async function forceFreePortAndWait(
   let killed: PortProcess[] = [];
   let useFuserFallback = false;
 
-  if (!(await isPortBusy(port))) {
-    return { killed, waitedMs: 0, escalatedToSigkill: false };
-  }
-
   try {
     killed = forceFreePort(port);
   } catch (err) {
     if (!isRecoverableLsofError(err)) {
       throw err;
+    }
+    // Keep --force usable on minimal systems when the bind probe can confirm
+    // the port is free; otherwise use fuser to cover listeners lsof cannot inspect.
+    if (!(await isPortBusy(port))) {
+      return { killed, waitedMs: 0, escalatedToSigkill: false };
     }
     useFuserFallback = true;
     killed = killPortWithFuser(port, "SIGTERM");

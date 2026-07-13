@@ -72,6 +72,7 @@ export type EmbeddedAgentSubscribeState = {
     toolName?: string;
     meta?: string;
     replaySafe?: boolean;
+    isError?: true;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -131,6 +132,7 @@ export type EmbeddedAgentSubscribeState = {
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
+  lastAssistantStreamContentIndex?: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
   lastAssistantTextNormalized?: string;

@@ -258,15 +258,19 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expectWarningContaining("lsof exited with status 2");
     });
 
-    it("returns [] when lsof returns an error object (e.g. ENOENT)", () => {
-      mockSpawnSync.mockReturnValue({
-        error: new Error("ENOENT"),
-        status: null,
-        stdout: "",
-        stderr: "",
-      });
+    it("silently skips the initial scan when lsof is missing", () => {
+      mockSpawnSync.mockReturnValue(createErrnoResult("ENOENT", "lsof not found"));
       expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
-      expectWarningContaining("lsof failed during initial stale-pid scan");
+      expect(mockRestartWarn).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["EACCES", "lsof permission denied"],
+      ["ETIMEDOUT", "lsof timed out"],
+    ])("warns when the initial lsof scan fails with %s", (code, message) => {
+      mockSpawnSync.mockReturnValue(createErrnoResult(code, message));
+      expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
+      expectWarningContaining(`lsof failed during initial stale-pid scan for port 18789: ${code}`);
     });
 
     it("parses openclaw-gateway pids and excludes the current process", () => {
@@ -872,7 +876,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
             stderr: "",
           };
         }
-        return { error: null, status: 0, stdout: "", stderr: "" };
+        return createLsofResult({ status: 1 });
       });
 
       const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
@@ -912,7 +916,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           };
         }
         events.push("port-free");
-        return { error: null, status: 0, stdout: "", stderr: "" };
+        return createLsofResult({ status: 1 });
       });
 
       vi.spyOn(process, "kill").mockReturnValue(true);

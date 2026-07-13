@@ -4,6 +4,7 @@
  * Defines execution, completion, delivery, pending-delivery, and attachment state stored for child runs.
  */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
@@ -33,7 +34,7 @@ export type SubagentExecutionState = {
   outcome?: SubagentRunOutcome;
   interruptedAt?: number;
   interruptionReason?: "gateway-restart" | "lost-execution-context";
-  transcriptFile?: string;
+  transcriptTarget?: AgentRunSessionTarget;
 };
 
 export type SubagentCompletionState = {
@@ -123,6 +124,8 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
+  /** Sticky owner while restart recovery replays this exact terminal run. */
+  terminalOwner?: "interrupted-recovery";
   /** Present only while a current-version killed run awaits bounded reconciliation. */
   killReconciliation?: SubagentKillReconciliationState;
   /** Durable requester-stop policy until silent completion cleanup finishes. */

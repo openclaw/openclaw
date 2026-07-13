@@ -4,6 +4,9 @@ import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.verbatimText
 import android.Manifest
 import android.content.ComponentName
 import android.content.IntentFilter
@@ -12,10 +15,13 @@ import android.speech.RecognitionService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -316,20 +322,69 @@ class TalkModeManagerTest {
   }
 
   @Test
-  fun realtimeClosePreservesDetailedProviderFailure() {
+  fun realtimeClosePreservesTypedFailureWithoutEnglishPrefix() {
     val manager = createManager()
 
     setPrivateField(manager, "realtimeSessionId", "relay-1")
     setMutableStateFlow(manager, "_isEnabled", true)
-    setMutableStateFlow(manager, "_statusText", "Talk failed: Provider rejected the session.")
+    setTalkFailure(manager, verbatimText("Échec de Talk : session refusée."))
 
     manager.handleGatewayEvent(
       "talk.event",
       """{"relaySessionId":"relay-1","type":"close","reason":"error"}""",
     )
 
-    assertEquals("Talk failed: Provider rejected the session.", manager.statusText.value)
+    assertEquals("Échec de Talk : session refusée.", manager.statusText.value)
   }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun localizedOffStatusDoesNotBecomeRealtimeStartFailure() =
+    runTest {
+      val manager = createManager(scope = this)
+      val turn =
+        async(start = CoroutineStart.UNDISPATCHED) {
+          runCatching {
+            manager.runE2eRealtimeTurn(
+              userText = "ignored",
+              assistantText = "ignored",
+              timeoutMs = 250L,
+            )
+          }.exceptionOrNull()
+        }
+
+      manager.stopAllCapture()
+      setMutableStateFlow(manager, "_statusText", verbatimText("Désactivé"))
+      assertEquals("Désactivé", manager.statusText.value)
+      advanceUntilIdle()
+
+      assertTrue(turn.await() is TimeoutCancellationException)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun realtimePlaybackMarkAcknowledgesAfterQueuedAudioBarrier() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val dispatcher = StandardTestDispatcher(testScheduler)
+      val manager =
+        createManager(
+          scope = this,
+          realtimePlaybackDispatcher = dispatcher,
+          realtimeMarkAcknowledger = { sessionId, markName ->
+            acknowledgements += sessionId to markName
+          },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+      manager.handleGatewayEvent(
+        "talk.event",
+        """{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""",
+      )
+      runCurrent()
+
+      assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
+    }
 
   @Test
   fun realtimeTranscriptsPopulateVoiceConversation() {
@@ -357,6 +412,35 @@ class TalkModeManagerTest {
       ),
       manager.conversation.value,
     )
+  }
+
+  @Test
+  fun realtimeUserTranscriptsDriveSpeechActive() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    assertFalse(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello"))
+    assertTrue(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello world", final = true))
+    assertFalse(manager.speechActive.value)
+  }
+
+  @Test
+  fun finalUserTranscriptMarksAwaitingAgentUntilStatusMovesOn() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    assertFalse(manager.awaitingAgent.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello", final = true))
+    assertTrue(manager.awaitingAgent.value)
+    // Any later status transition clears the typed flag; forgetting it at a
+    // new setStatus site fails safe instead of showing a stale Thinking wave.
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "hi there", final = true))
+    manager.stopAllCapture()
+    assertFalse(manager.awaitingAgent.value)
   }
 
   @Test
@@ -744,7 +828,7 @@ class TalkModeManagerTest {
       setPrivateField(pause, "sessionId", "relay-1")
       setPrivateField(manager, "realtimeSessionId", "relay-1")
       setMutableStateFlow(manager, "_isListening", false)
-      setMutableStateFlow(manager, "_statusText", "Thinking…")
+      setMutableStateFlow(manager, "_statusText", nativeText("Thinking…"))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
@@ -800,7 +884,7 @@ class TalkModeManagerTest {
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       setPrivateField(pause, "restartRelay", true)
       setPrivateField(manager, "stopRequested", true)
-      setMutableStateFlow(manager, "_statusText", "Off")
+      setMutableStateFlow(manager, "_statusText", nativeText("Off"))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
@@ -872,7 +956,7 @@ class TalkModeManagerTest {
       setPrivateField(pause, "sessionId", "relay-1")
       setPrivateField(manager, "realtimeSessionId", "relay-1")
       setMutableStateFlow(manager, "_isListening", false)
-      setMutableStateFlow(manager, "_statusText", "Gateway not connected")
+      setMutableStateFlow(manager, "_statusText", nativeText("Gateway not connected"))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
@@ -905,6 +989,8 @@ class TalkModeManagerTest {
     isConnected: () -> Boolean = { true },
     onStoppedByRelay: () -> Unit = {},
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -926,6 +1012,8 @@ class TalkModeManagerTest {
       talkSpeakClient = talkSpeakClient,
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
       realtimeCaptureDispatcher = realtimeCaptureDispatcher,
+      realtimePlaybackDispatcher = realtimePlaybackDispatcher,
+      realtimeMarkAcknowledger = realtimeMarkAcknowledger,
     )
   }
 
@@ -958,6 +1046,15 @@ class TalkModeManagerTest {
     val field = target.javaClass.getDeclaredField(name)
     field.isAccessible = true
     return field.get(target)
+  }
+
+  private fun setTalkFailure(
+    manager: TalkModeManager,
+    text: NativeText,
+  ) {
+    val method = manager.javaClass.getDeclaredMethod("setTalkFailure", NativeText::class.java)
+    method.isAccessible = true
+    method.invoke(manager, text)
   }
 
   @Suppress("UNCHECKED_CAST")

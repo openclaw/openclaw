@@ -12,7 +12,7 @@ import type {
   WhatsAppInboundPlatform,
 } from "./types.js";
 
-export type TestWhatsAppInboundAdmissionOverrides = Partial<
+type TestWhatsAppInboundAdmissionOverrides = Partial<
   Omit<
     WhatsAppInboundAdmission,
     | "account"

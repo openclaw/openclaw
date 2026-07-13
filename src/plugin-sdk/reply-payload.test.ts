@@ -1,4 +1,5 @@
 // Reply payload tests cover reply target parsing, media payloads, and approval metadata.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildTtsSupplementMediaPayload,
@@ -335,6 +336,39 @@ describe("normalizeOutboundReplyPayload", () => {
       replyToId: undefined,
     });
   });
+
+  it("normalizes portable location and video-note hints", () => {
+    expect(
+      normalizeOutboundReplyPayload({
+        location: {
+          latitude: 48.858844,
+          longitude: 2.294351,
+          name: "  Eiffel Tower ",
+          address: " Champ de Mars ",
+        },
+        videoAsNote: true,
+      }),
+    ).toMatchObject({
+      location: {
+        latitude: 48.858844,
+        longitude: 2.294351,
+        name: "Eiffel Tower",
+        address: "Champ de Mars",
+      },
+      videoAsNote: true,
+    });
+  });
+
+  it.each(["source", "isLive", "caption"])(
+    "rejects unsupported outbound location %s semantics from loose payloads",
+    (field) => {
+      expect(() =>
+        normalizeOutboundReplyPayload({
+          location: { latitude: 1, longitude: 2, [field]: "unsupported" },
+        }),
+      ).toThrow(`${field} is not supported`);
+    },
+  );
 
   it("keeps the normalized deliverer from forwarding trustedLocalMedia", async () => {
     const handler = vi.fn(async () => {});
@@ -724,16 +758,21 @@ describe("sendMediaWithLeadingCaption", () => {
     ).resolves.toBe(true);
 
     expect(onError).toHaveBeenCalledTimes(1);
-    const [[errorPayload]] = onError.mock.calls as unknown as Array<
-      [
-        {
-          mediaUrl?: string;
-          caption?: string;
-          index?: number;
-          isFirst?: boolean;
-        },
-      ]
-    >;
+    const [errorPayload] = expectDefined(
+      (
+        onError.mock.calls as unknown as Array<
+          [
+            {
+              mediaUrl?: string;
+              caption?: string;
+              index?: number;
+              isFirst?: boolean;
+            },
+          ]
+        >
+      )[0],
+      "(onError.mock.calls as unknown as Array<\n        [\n          {\n            mediaUrl?: string;\n            caption?: string;\n            index?: number;\n            isFirst?: boolean;\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(errorPayload.mediaUrl).toBe("https://example.com/a.png");
     expect(errorPayload.caption).toBe("hello");
     expect(errorPayload.index).toBe(0);

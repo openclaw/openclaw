@@ -29,14 +29,15 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
-import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
+import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type {
+  ProviderUsageBilling,
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageWindow,
 } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { refreshActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
@@ -45,7 +46,10 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 const log = createSubsystemLogger("models-auth-status");
 const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
 
-type ProviderUsageStatus = Pick<ProviderUsageSnapshot, "windows" | "summary" | "plan">;
+type ProviderUsageStatus = Pick<
+  ProviderUsageSnapshot,
+  "windows" | "summary" | "plan" | "billing" | "accountEmail"
+>;
 
 /**
  * Models-auth status wire types. Mirrored in ui/src/ui/types.ts via an
@@ -78,9 +82,18 @@ export type ModelAuthStatusProvider = {
   expiry?: ModelAuthExpiry;
   profiles: ModelAuthStatusProfile[];
   usage?: {
+    /**
+     * Normalized usage provider id this payload was fetched under (e.g.
+     * "anthropic" for a claude-cli auth row). Session rows report canonical
+     * model providers, so consumers must match against both ids.
+     */
+    providerId: UsageProviderId;
     windows: UsageWindow[];
     summary?: string;
     plan?: string;
+    billing?: ProviderUsageBilling[];
+    /** Account email the usage was fetched under, when known. */
+    accountEmail?: string;
   };
 };
 
@@ -98,6 +111,7 @@ export type ModelAuthLogoutResult = {
 
 const CACHE_TTL_MS = 60_000;
 let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
+let cacheGeneration = 0;
 
 /**
  * Invalidate the in-memory cache. Reserved for future gateway-side auth
@@ -106,6 +120,7 @@ let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
  * `{refresh: true}` param cover the stale-data window.
  */
 export function invalidateModelAuthStatusCache(): void {
+  cacheGeneration += 1;
   cached = null;
   // The prepared provider-auth map (model-provider-auth.ts) was built from
   // the pre-mutation auth state, so it must be invalidated alongside this
@@ -118,7 +133,7 @@ export function invalidateModelAuthStatusCache(): void {
 async function refreshModelAuthStatusRuntimeState(): Promise<void> {
   invalidateModelAuthStatusCache();
   try {
-    if (await refreshActiveSecretsRuntimeSnapshot()) {
+    if (await refreshActiveProviderAuthRuntimeSnapshot()) {
       return;
     }
   } catch (err) {
@@ -196,74 +211,62 @@ function buildExpiry(
 
 function providerDisplayName(provider: string): string {
   const usageId = resolveUsageProviderId(provider);
-  if (usageId && PROVIDER_LABELS[usageId]) {
-    return PROVIDER_LABELS[usageId];
+  const usageLabel = usageId ? providerUsageLabel(usageId) : undefined;
+  if (usageLabel) {
+    return usageLabel;
   }
   return provider;
 }
 
-/**
- * Aggregate provider status from OAuth profiles only. `buildAuthHealthSummary`
- * rolls up across both OAuth and token profiles, which mis-reports providers
- * where a healthy OAuth sits alongside an expired/missing bearer token.
- * For the dashboard's OAuth-health signal, token profiles are a separate
- * concern — we want "is OAuth healthy?", not "is every credential healthy?"
- * It also consumes the provider's effective profile subset when auth order
- * excludes stale inventory from the runtime credential path.
- *
- * `expectsOAuth` surfaces the configured-OAuth-but-no-oauth-profile case as
- * `missing` instead of silently falling back to the provider's rollup (which
- * would report `static` if only api_key credentials exist). Without this,
- * switching a provider from api_key to oauth in config but forgetting to
- * login hides behind the residual api_key profile until runtime fails.
- *
- * Exported for direct unit testing of the rollup rules.
- */
-export function aggregateOAuthStatus(
-  prov: AuthProviderHealth,
-  now: number = Date.now(),
-  expectsOAuth = false,
-): {
+type ModelAuthStatusRollup = {
   status: AuthProviderHealthStatus;
   expiresAt?: number;
   remainingMs?: number;
-} {
-  const profiles = prov.effectiveProfiles ?? prov.profiles;
-  const oauth = profiles.filter((p) => p.type === "oauth");
-  if (oauth.length === 0) {
-    if (expectsOAuth) {
-      return { status: "missing" };
-    }
-    return { status: prov.status, expiresAt: prov.expiresAt, remainingMs: prov.remainingMs };
-  }
-  const statuses = new Set<AuthProfileHealthStatus>(oauth.map((p) => p.status));
-  // Priority: expired/missing > expiring > ok > static. Exhaustive — if a
-  // new AuthProfileHealthStatus variant is added, the `never` check fires.
-  let status: AuthProviderHealthStatus;
-  if (statuses.has("expired")) {
-    status = "expired";
-  } else if (statuses.has("missing")) {
-    status = "missing";
-  } else if (statuses.has("expiring")) {
-    status = "expiring";
-  } else if (statuses.has("ok")) {
-    status = "ok";
-  } else if (statuses.has("static")) {
-    status = "static";
-  } else {
-    // Compile-time guard: exhaustiveness over AuthProfileHealthStatus. If
-    // auth-health ever adds a new variant without updating this rollup,
-    // TypeScript will fail the `never` assignment.
-    const exhaustive: never = Array.from(statuses)[0] as never;
-    void exhaustive;
-    status = "static";
-  }
-  const expirable = oauth
+};
+
+function aggregateProfileStatus(
+  profiles: AuthProviderHealth["profiles"],
+  now: number,
+): ModelAuthStatusRollup {
+  const statuses = new Set<AuthProfileHealthStatus>(profiles.map((profile) => profile.status));
+  const status = (["expired", "missing", "expiring", "ok", "static"] as const).find((candidate) =>
+    statuses.has(candidate),
+  );
+  const expirable = profiles
     .map((p) => p.expiresAt)
     .filter((v): v is number => asDateTimestampMs(v) !== undefined);
   const expiresAt = expirable.length > 0 ? Math.min(...expirable) : undefined;
   const remainingMs = expiresAt !== undefined ? expiresAt - now : undefined;
-  return { status, expiresAt, remainingMs };
+  return { status: status ?? "static", expiresAt, remainingMs };
+}
+
+/**
+ * Aggregate the effective refreshable credential status for the dashboard.
+ * OAuth remains authoritative when present; token credentials are the
+ * supported fallback after an OAuth-to-token migration. Explicit auth-order
+ * exclusions remain authoritative through `effectiveProfiles`.
+ *
+ * `expectsOAuth` keeps an API-key-only provider `missing` after config switches
+ * to OAuth but login has not completed.
+ */
+export function aggregateRefreshableAuthStatus(
+  prov: AuthProviderHealth,
+  now: number = Date.now(),
+  expectsOAuth = false,
+): ModelAuthStatusRollup {
+  const profiles = prov.effectiveProfiles ?? prov.profiles;
+  const oauth = profiles.filter((profile) => profile.type === "oauth");
+  if (oauth.length > 0) {
+    return aggregateProfileStatus(oauth, now);
+  }
+  const tokens = profiles.filter((profile) => profile.type === "token");
+  if (tokens.length > 0) {
+    return aggregateProfileStatus(tokens, now);
+  }
+  if (expectsOAuth) {
+    return { status: "missing" };
+  }
+  return { status: prov.status, expiresAt: prov.expiresAt, remainingMs: prov.remainingMs };
 }
 
 function mapProvider(
@@ -278,7 +281,11 @@ function mapProvider(
     credentialType: usageProfile?.type,
   });
   const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
-  const rollup = aggregateOAuthStatus(prov, Date.now(), expectsOAuthSet.has(prov.provider));
+  const rollup = aggregateRefreshableAuthStatus(
+    prov,
+    Date.now(),
+    expectsOAuthSet.has(prov.provider),
+  );
   return {
     provider: prov.provider,
     displayName: providerDisplayName(prov.provider),
@@ -291,13 +298,17 @@ function mapProvider(
       reasonCode: prof.reasonCode,
       expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
     })),
-    usage: usage
-      ? {
-          windows: usage.windows,
-          ...(usage.summary ? { summary: usage.summary } : {}),
-          ...(usage.plan ? { plan: usage.plan } : {}),
-        }
-      : undefined,
+    usage:
+      usage && usageKey
+        ? {
+            providerId: usageKey,
+            windows: usage.windows,
+            ...(usage.summary ? { summary: usage.summary } : {}),
+            ...(usage.plan ? { plan: usage.plan } : {}),
+            ...(usage.billing?.length ? { billing: usage.billing } : {}),
+            ...(usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
+          }
+        : undefined,
   };
 }
 
@@ -429,9 +440,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      await refreshActiveSecretsRuntimeSnapshot();
+      // Fence status work that may have captured the removed profiles before
+      // it awaits auxiliary usage. It must not repopulate the cache afterward.
       invalidateModelAuthStatusCache();
-      clearCurrentProviderAuthState();
+      await refreshActiveProviderAuthRuntimeSnapshot();
       void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch(
         (err: unknown) => {
           log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
@@ -465,6 +477,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       if (bypassCache) {
         await refreshModelAuthStatusRuntimeState();
       }
+      const publishGeneration = cacheGeneration;
       const cfg = context.getRuntimeConfig();
       const agentDir = resolveDefaultAgentDir(cfg);
       // Use the external-profile-aware store for status reads so the dashboard
@@ -512,6 +525,8 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               windows: snap.windows,
               ...(snap.summary ? { summary: snap.summary } : {}),
               ...(snap.plan ? { plan: snap.plan } : {}),
+              ...(snap.billing?.length ? { billing: snap.billing } : {}),
+              ...(snap.accountEmail ? { accountEmail: snap.accountEmail } : {}),
             });
           }
         } catch (err) {
@@ -528,7 +543,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         mapProvider(prov, usageByProvider, configured.expectsOAuth),
       );
       const result: ModelAuthStatusResult = { ts: now, providers };
-      cached = { ts: now, result };
+      if (publishGeneration === cacheGeneration) {
+        cached = { ts: now, result };
+      }
       respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));

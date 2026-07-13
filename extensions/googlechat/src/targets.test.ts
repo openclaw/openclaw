@@ -1,5 +1,6 @@
 // Googlechat tests cover targets plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import {
@@ -20,10 +21,12 @@ const mocks = vi.hoisted(() => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist: vi.fn((hosts: string[]) => ({
     hostnameAllowlist: hosts,
   })),
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
-    response: await fetch(params.url, params.init),
-    release: async () => {},
-  })),
+  fetchWithSsrFGuard: vi.fn(
+    async (params: { url: string; init?: RequestInit; timeoutMs?: number }) => ({
+      response: await fetch(params.url, params.init),
+      release: async () => {},
+    }),
+  ),
   googleAuthCtor: vi.fn(),
   gaxiosCtor: vi.fn(),
   getAccessToken: vi.fn().mockResolvedValue({ token: "access-token" }),
@@ -115,6 +118,15 @@ function stubSuccessfulSend(name: string, threadName?: string) {
   return fetchMock;
 }
 
+function createStalledResponse(status = 200): Response {
+  return new Response(
+    new ReadableStream({
+      start() {},
+    }),
+    { status },
+  );
+}
+
 async function expectDownloadToRejectForResponse(
   response: Response,
   expected: string | RegExp = /max bytes/i,
@@ -131,6 +143,14 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
     throw new Error(`Expected mock call ${callIndex}`);
   }
   return call[argIndex];
+}
+
+function lastGuardedFetchOptions(): { timeoutMs?: number } {
+  const call = mocks.fetchWithSsrFGuard.mock.calls.at(-1);
+  if (!call) {
+    throw new Error("Expected guarded fetch call");
+  }
+  return call[0] as { timeoutMs?: number };
 }
 
 describe("normalizeGoogleChatTarget", () => {
@@ -252,7 +272,7 @@ describe("googlechat group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/AAA" })).toBe(false);
     expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/BBB" })).toBe(true);
@@ -265,6 +285,7 @@ describe("downloadGoogleChatMedia", () => {
     authTesting.resetGoogleChatAuthForTests();
     mocks.fetchWithSsrFGuard.mockClear();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("rejects when content-length exceeds max bytes", async () => {
@@ -279,6 +300,7 @@ describe("downloadGoogleChatMedia", () => {
       headers: { "content-length": "50", "content-type": "application/octet-stream" },
     });
     await expectDownloadToRejectForResponse(response);
+    expect(lastGuardedFetchOptions().timeoutMs).toBe(30_001);
   });
 
   it("rejects malformed content-length before reading media", async () => {
@@ -315,6 +337,72 @@ describe("downloadGoogleChatMedia", () => {
     });
     await expectDownloadToRejectForResponse(response);
   });
+
+  it("cancels a media body that stops producing chunks", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse()));
+
+    const result = expect(
+      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
+    ).rejects.toThrow("Media download stalled: no data received for 30000ms");
+    await vi.advanceTimersByTimeAsync(30_001);
+    await result;
+  });
+
+  it("cancels a stalled media error body", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse(500)));
+
+    const result = expect(
+      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
+    ).rejects.toThrow("Google Chat API error response stalled after 30000ms");
+    await vi.advanceTimersByTimeAsync(30_001);
+    await result;
+  });
+});
+
+describe("supported Google Chat request bounds", () => {
+  afterEach(() => {
+    authTesting.resetGoogleChatAuthForTests();
+    mocks.fetchWithSsrFGuard.mockClear();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("derives a bounded transfer deadline from the payload size", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "application/octet-stream" },
+        }),
+      ),
+    );
+
+    await downloadGoogleChatMedia({
+      account,
+      resourceName: "media/123",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(lastGuardedFetchOptions().timeoutMs).toBe(34_000);
+  });
+
+  it("cancels a stalled JSON response body", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse()));
+
+    const result = expect(
+      sendGoogleChatMessage({
+        account,
+        space: "spaces/AAA",
+        text: "hello",
+      }),
+    ).rejects.toThrow("Google Chat API request failed: response body stalled after 30000ms");
+    await vi.advanceTimersByTimeAsync(30_001);
+    await result;
+  });
 });
 
 describe("sendGoogleChatMessage", () => {
@@ -350,6 +438,7 @@ describe("sendGoogleChatMessage", () => {
       messageName: "spaces/AAA/messages/123",
       threadName: "spaces/AAA/threads/xyz",
     });
+    expect(lastGuardedFetchOptions().timeoutMs).toBe(30_000);
   });
 
   it("does not set messageReplyOption for non-thread sends", async () => {
@@ -616,6 +705,7 @@ describe("verifyGoogleChatRequest", () => {
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
       url: "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com",
       auditContext: "googlechat.auth.certs",
+      timeoutMs: 30_000,
     });
     expect(mocks.verifySignedJwtWithCertsAsync).toHaveBeenCalledWith(
       "token",

@@ -233,7 +233,13 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
       entries.map((input) => ({ input, resolved: false })),
     );
   const client = getSlackClient();
-  client.auth.test.mockReset().mockResolvedValue({ user_id: "bot-user", bot_id: "bot-id" });
+  client.auth.test.mockReset().mockResolvedValue({
+    user_id: "bot-user",
+    bot_id: "bot-id",
+    app_id: "A_TEST",
+    team_id: "T_TEST",
+    is_enterprise_install: false,
+  });
   client.conversations.info.mockReset().mockResolvedValue({
     channel: { name: "dm", is_im: true },
   });

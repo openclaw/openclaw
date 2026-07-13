@@ -1,7 +1,8 @@
 // Control UI component implements the modal dialog element.
-import { LitElement, css, html, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { property, query } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -13,7 +14,7 @@ const FOCUSABLE_SELECTOR = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export class OpenClawModalDialog extends LitElement {
+export class OpenClawModalDialog extends OpenClawLitElement {
   @property() label = "";
   @property() description = "";
 
@@ -40,8 +41,8 @@ export class OpenClawModalDialog extends LitElement {
       position: fixed;
       top: 50%;
       left: 50%;
-      width: min(540px, calc(100vw - 48px));
-      max-height: calc(100dvh - 48px);
+      width: min(var(--openclaw-modal-width, 540px), calc(100vw - 48px));
+      max-height: var(--openclaw-modal-max-height, calc(100dvh - 48px));
       margin: 0;
       padding: 0;
       border: 0;
@@ -85,6 +86,10 @@ export class OpenClawModalDialog extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     this.previouslyFocused = this.ownerDocument.activeElement;
+    // firstUpdated only runs once; retained dialogs must reopen on later connection epochs.
+    if (this.hasUpdated) {
+      this.openDialog();
+    }
   }
 
   override firstUpdated() {
@@ -108,6 +113,7 @@ export class OpenClawModalDialog extends LitElement {
         aria-describedby=${ifDefined(descriptionId || undefined)}
         tabindex="-1"
         @cancel=${this.handleCancel}
+        @click=${this.handleDialogClick}
         @keydown=${this.handleKeydown}
       >
         ${this.label
@@ -152,6 +158,7 @@ export class OpenClawModalDialog extends LitElement {
   }
 
   private closeDialog() {
+    this.opened = false;
     const dialog = this.dialogElement;
     if (!dialog?.open) {
       return;
@@ -181,6 +188,13 @@ export class OpenClawModalDialog extends LitElement {
     if (!dialog) {
       return;
     }
+    const autofocusTarget = this.getFocusableElements().find((element) =>
+      element.hasAttribute("autofocus"),
+    );
+    if (autofocusTarget) {
+      autofocusTarget.focus({ preventScroll: true });
+      return;
+    }
     try {
       dialog.focus({ preventScroll: true });
     } catch {
@@ -191,6 +205,12 @@ export class OpenClawModalDialog extends LitElement {
   private handleCancel = (event: Event) => {
     event.preventDefault();
     this.dispatchCancel();
+  };
+
+  private handleDialogClick = (event: MouseEvent) => {
+    if (event.target === event.currentTarget) {
+      this.dispatchCancel();
+    }
   };
 
   private handleKeydown = (event: KeyboardEvent) => {
@@ -215,6 +235,9 @@ export class OpenClawModalDialog extends LitElement {
     const active = this.getActiveElement();
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
+    if (!first || !last) {
+      return;
+    }
     const focusInside = active ? focusable.includes(active) : false;
 
     if (event.shiftKey && (!focusInside || active === first || active === this.dialogElement)) {

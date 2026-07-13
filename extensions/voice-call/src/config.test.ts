@@ -313,6 +313,34 @@ describe("validateProviderConfig", () => {
       );
     });
   });
+
+  describe("streaming config", () => {
+    it.each(["telnyx", "plivo", "mock"] as const)(
+      "rejects streaming.enabled with provider=%s",
+      (provider) => {
+        const config = createBaseConfig(provider);
+        config.streaming.enabled = true;
+
+        const result = validateProviderConfig(config);
+
+        expect(result.valid).toBe(false);
+        expect(result.errors).toContain(
+          'plugins.entries.voice-call.config.provider must be "twilio" when streaming.enabled is true',
+        );
+      },
+    );
+
+    it("accepts streaming.enabled with provider=twilio", () => {
+      const config = createBaseConfig("twilio");
+      config.streaming.enabled = true;
+      config.twilio = {
+        accountSid: "AC123",
+        authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
+      };
+
+      expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
+    });
+  });
 });
 
 describe("resolveVoiceCallConfig session routing", () => {
@@ -707,12 +735,12 @@ describe("resolveVoiceCallConfig realtime settings", () => {
       enabled: true,
       provider: "mock",
       realtime: {
-        consultThinkingLevel: "low",
+        consultThinkingLevel: "ultra",
         consultFastMode: true,
       },
     });
 
-    expect(resolved.realtime.consultThinkingLevel).toBe("low");
+    expect(resolved.realtime.consultThinkingLevel).toBe("ultra");
     expect(resolved.realtime.consultFastMode).toBe(true);
   });
 

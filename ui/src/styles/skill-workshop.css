@@ -26,7 +26,27 @@
   flex-shrink: 0;
 }
 
-.content--skill-workshop > .skill-workshop {
+/* Hub tab strip stays fixed; the board scrolls inside the panel below it.
+   The board is full-width, so the strip skips the settings-column centering. */
+.content--skill-workshop .plugins-hub-tabs-row {
+  flex-shrink: 0;
+  max-width: none;
+  margin: 0;
+  padding-inline: 0;
+}
+
+.sw-hub-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: var(--space-4);
+}
+
+/* Replaces the old .content--skill-workshop > .skill-workshop rule: the board
+   nests inside the hub tabpanel now, and dropping min-height: 0 at either
+   level would let tall boards grow the page instead of scrolling internally. */
+.sw-hub-panel > .skill-workshop {
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -37,7 +57,12 @@
   padding-bottom: 32px;
 }
 
-.content--skill-workshop-today > .skill-workshop,
+.content--skill-workshop-today .sw-hub-panel {
+  display: block;
+  min-height: auto;
+}
+
+.content--skill-workshop-today .skill-workshop,
 .content--skill-workshop-today .sw-view,
 .content--skill-workshop-today .sw-view__pane {
   display: block;
@@ -45,6 +70,10 @@
 }
 
 .sw-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin: 0 0 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 10px;
@@ -70,7 +99,6 @@
   border: none;
   padding: 9px 14px;
   color: var(--muted);
-  cursor: pointer;
   font: inherit;
   font-size: 13px;
   display: flex;
@@ -88,19 +116,6 @@
   color: var(--text-strong);
   font-weight: 600;
   border-bottom-color: var(--accent);
-}
-
-.sw-lifecycle-tab__count {
-  background: var(--bg-elevated);
-  color: var(--muted);
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 12px; /* was 11px */
-}
-
-.sw-lifecycle-tab.is-active .sw-lifecycle-tab__count {
-  background: var(--accent-subtle);
-  color: var(--accent);
 }
 
 /* ── Triage two-pane card ───────────────────────────────────────────── */
@@ -141,27 +156,6 @@
   outline: none;
 }
 
-.sw-queue__head {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: color-mix(in srgb, var(--bg) 60%, var(--bg-elevated) 40%);
-}
-
-.sw-queue__count {
-  font-weight: 700;
-  color: var(--text-strong);
-  font-size: 15px;
-}
-
-.sw-queue__sub {
-  color: var(--muted);
-  font-size: 12px;
-  margin-left: auto;
-}
-
 .sw-queue__search {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -195,18 +189,9 @@
   align-items: center;
 }
 
-.sw-queue__group-pill {
-  background: var(--bg-elevated);
-  color: var(--muted);
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 12px; /* was 10px */
-}
-
 .sw-row {
   padding: 10px 14px;
   border-left: 3px solid transparent;
-  cursor: pointer;
   display: grid;
   grid-template-columns: 14px 1fr auto;
   gap: 8px;
@@ -420,6 +405,30 @@
   font-size: 12px;
 }
 
+.sw-empty-state__selflearn {
+  margin-top: 16px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  text-align: center;
+}
+
+.sw-empty-state__selflearn h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.sw-empty-state__selflearn p {
+  margin: 8px auto 0;
+  font-size: 13px;
+}
+
+.sw-empty-state__selflearn .sw-btn {
+  margin-top: 12px;
+}
+
 .sw-detail__head {
   padding: 18px 24px 14px;
   border-bottom: 1px solid var(--border);
@@ -470,7 +479,6 @@
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  cursor: pointer;
   font-size: 14px;
 }
 
@@ -577,7 +585,6 @@
   font-size: 12px;
   color: var(--text);
   text-align: left;
-  cursor: pointer;
   transition:
     background 100ms,
     border-color 100ms;
@@ -635,19 +642,8 @@
   text-overflow: ellipsis;
 }
 
-.sw-revision-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, 0.58);
-  backdrop-filter: blur(10px);
-}
-
 .sw-revision-dialog {
-  width: min(560px, 100%);
+  width: 100%;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--card);
@@ -690,7 +686,6 @@
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--muted);
-  cursor: pointer;
   font: inherit;
   font-size: 20px;
   line-height: 1;
@@ -766,7 +761,6 @@
 .sw-btn {
   padding: 7px 14px;
   border-radius: var(--radius-md);
-  cursor: pointer;
   font: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -855,7 +849,6 @@
   font: inherit;
   font-size: 12px;
   color: var(--muted);
-  cursor: pointer;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
   text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
@@ -892,7 +885,6 @@
   color: var(--muted);
   font-size: 12.5px;
   font-weight: 500;
-  cursor: pointer;
   white-space: nowrap;
 }
 
@@ -967,7 +959,6 @@
   font-size: 12.5px;
   font-weight: 500;
   color: var(--muted);
-  cursor: pointer;
   transition: color 160ms ease;
   white-space: nowrap;
 }
@@ -1272,7 +1263,6 @@
   font: inherit;
   color: var(--text-strong);
   font-weight: 600;
-  cursor: pointer;
   border-bottom: 1px dotted var(--border-strong);
 }
 
@@ -1293,7 +1283,6 @@
   border-radius: 12px;
   font-size: 12.5px;
   font-weight: 600;
-  cursor: pointer;
   font-family: inherit;
   border: 1px solid;
   transition:
@@ -1382,7 +1371,6 @@
   font: inherit;
   font-size: 12.5px;
   color: var(--accent);
-  cursor: pointer;
   font-weight: 500;
 }
 
@@ -1405,7 +1393,6 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px 16px;
-  cursor: pointer;
   font-family: inherit;
   text-align: left;
   color: var(--text);
@@ -1456,7 +1443,6 @@
   gap: 14px;
   padding: 12px 16px;
   border-radius: 12px;
-  cursor: pointer;
   background: transparent;
   border: none;
   font: inherit;
@@ -1507,134 +1493,5 @@
   .sw-today__actions,
   .sw-today__upnext {
     grid-template-columns: 1fr;
-  }
-}
-
-/* Workshop chat handoff */
-.sw-handoff-veil {
-  position: fixed;
-  inset: 0;
-  z-index: 1199;
-  background: color-mix(in srgb, var(--bg, #0b0d10) 28%, transparent);
-  pointer-events: auto;
-  opacity: 0;
-  animation: sw-handoff-veil-in 260ms ease-out forwards;
-}
-
-.sw-handoff-veil--landing {
-  animation: sw-handoff-veil-out 360ms ease-out forwards;
-}
-
-@keyframes sw-handoff-veil-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes sw-handoff-veil-out {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
-.sw-handoff {
-  position: fixed;
-  top: 18px;
-  right: 24px;
-  z-index: 1200;
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--card) 92%, transparent);
-  border: 1px solid var(--border-strong);
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.22);
-  pointer-events: none;
-  transform: translateY(-8px) scale(0.96);
-  opacity: 0;
-  animation: sw-handoff-in 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-.sw-handoff--landing {
-  animation: sw-handoff-out 320ms cubic-bezier(0.32, 0, 0.18, 1) forwards;
-}
-
-.sw-handoff--error {
-  border-color: color-mix(in srgb, var(--danger, #ff6b6b) 60%, var(--border-strong));
-}
-
-.sw-handoff__spinner {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  border-top-color: var(--accent);
-  animation: sw-handoff-spin 720ms linear infinite;
-}
-
-.sw-handoff--landing .sw-handoff__spinner {
-  animation: none;
-  border: 2px solid var(--accent);
-  border-top-color: var(--accent);
-  opacity: 0.82;
-  transform: scale(0.74);
-}
-
-.sw-handoff--error .sw-handoff__spinner {
-  border-color: color-mix(in srgb, var(--danger, #ff6b6b) 25%, transparent);
-  border-top-color: var(--danger, #ff6b6b);
-}
-
-@keyframes sw-handoff-in {
-  from {
-    opacity: 0;
-    transform: translateY(-8px) scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes sw-handoff-out {
-  from {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(-10px) scale(0.94);
-  }
-}
-
-@keyframes sw-handoff-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sw-handoff,
-  .sw-handoff__spinner,
-  .sw-handoff-veil {
-    animation: none;
-  }
-  .sw-handoff {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  .sw-handoff-veil {
-    opacity: 1;
-  }
-  .sw-handoff--landing,
-  .sw-handoff-veil--landing {
-    opacity: 0;
   }
 }

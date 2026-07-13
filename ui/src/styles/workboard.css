@@ -116,7 +116,6 @@
   padding: 3px 8px;
   background: color-mix(in srgb, var(--panel-strong) 44%, transparent);
   color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
-  cursor: pointer;
   font-size: 0.76rem;
   font-family: inherit;
   line-height: 1;
@@ -416,7 +415,6 @@
   min-height: var(--workboard-control-height);
   width: 100%;
   padding: 0 9px 0 10px;
-  cursor: pointer;
   user-select: none;
 }
 
@@ -462,6 +460,7 @@
   top: var(--workboard-select-menu-top, 0);
   left: var(--workboard-select-menu-left, 0);
   display: none;
+  visibility: hidden;
   gap: 2px;
   width: var(--workboard-select-menu-width, 100%);
   max-height: var(--workboard-select-menu-max-height, min(320px, calc(100vh - 220px)));
@@ -493,7 +492,6 @@
   color: var(--text);
   font: inherit;
   text-align: left;
-  cursor: pointer;
 }
 
 .workboard-select__option:hover,
@@ -538,6 +536,11 @@
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: normal;
+}
+
+.workboard-select--disabled .workboard-select__trigger {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .workboard-field--wide {
@@ -740,10 +743,6 @@
   width: 3px;
   background: color-mix(in srgb, var(--muted) 44%, transparent);
   content: "";
-}
-
-.workboard-card--openable {
-  cursor: pointer;
 }
 
 .workboard-card--openable:hover {
@@ -1014,6 +1013,10 @@
   color: var(--muted);
 }
 
+.workboard-card__move--wide {
+  width: 100%;
+}
+
 .workboard-card__move-icon {
   position: absolute;
   left: 7px;
@@ -1052,7 +1055,6 @@
     5px 5px;
   background-repeat: no-repeat;
   color: var(--muted);
-  cursor: pointer;
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0;
@@ -1073,6 +1075,11 @@
 .workboard-card__move-select:disabled {
   cursor: not-allowed;
   opacity: 0.58;
+}
+
+.workboard-card__move--wide .workboard-card__move-select {
+  max-width: none;
+  color: var(--text);
 }
 
 .workboard-card__quick-actions .workboard-card__icon,
@@ -1493,6 +1500,7 @@
 
 .workboard-detail__actions {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: auto;
   padding-top: 12px;
@@ -1501,6 +1509,13 @@
 
 .workboard-detail__actions > .btn {
   justify-content: center;
+  min-width: 0;
+  white-space: normal;
+}
+
+.workboard-detail__actions > .workboard-card__move,
+.workboard-detail__actions > .workboard-card__execution-controls {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 860px) {

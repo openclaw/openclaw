@@ -1,8 +1,8 @@
 // Control UI runtime config capability and shared config-domain mutations.
-import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import { copyToClipboard } from "../clipboard.ts";
 import {
   cloneConfigObject,
   removePathValue,
@@ -41,6 +41,7 @@ export type ConfigState = {
 
 const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
 const requestVersionsByState = new WeakMap<ConfigState, { config: number; schema: number }>();
+const connectionEpochsByState = new WeakMap<object, number>();
 
 type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
@@ -63,11 +64,9 @@ export type RuntimeConfigCapability = {
   removeFormValue: (path: Array<string | number>) => void;
   setRaw: (value: string) => void;
   resetDraft: () => void;
-  stagePreset: (patch: Record<string, unknown>) => void;
   save: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
-  setMcpServerEnabled: (name: string, enabled: boolean) => void;
   ensureAgentEntry: (agentId: string) => number;
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
@@ -87,6 +86,11 @@ export type ConfigPatchOptions = {
 
 type ConfigGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
+};
+
+type ConfigConnectionState = {
+  client: ConfigGatewayClient | null;
+  connected: boolean;
 };
 
 type ConfigGatewayState = Pick<
@@ -132,13 +136,37 @@ function nextRequestVersion(state: ConfigState, key: "config" | "schema"): numbe
   return next[key];
 }
 
+function currentConfigConnectionEpoch(state: object): number {
+  return connectionEpochsByState.get(state) ?? 0;
+}
+
+function invalidateConfigConnection(state: object): void {
+  connectionEpochsByState.set(state, currentConfigConnectionEpoch(state) + 1);
+}
+
+function isCurrentConfigConnection(
+  state: ConfigConnectionState,
+  client: ConfigGatewayClient,
+  connectionEpoch: number,
+): boolean {
+  return (
+    state.connected &&
+    state.client === client &&
+    currentConfigConnectionEpoch(state) === connectionEpoch
+  );
+}
+
 function isCurrentRequest(
   state: ConfigState,
   key: "config" | "schema",
   version: number,
   client: GatewayBrowserClient,
+  connectionEpoch: number,
 ): boolean {
-  return state.client === client && requestVersionsByState.get(state)?.[key] === version;
+  return (
+    isCurrentConfigConnection(state, client, connectionEpoch) &&
+    requestVersionsByState.get(state)?.[key] === version
+  );
 }
 
 export async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}) {
@@ -146,22 +174,23 @@ export async function loadConfig(state: ConfigState, options: LoadConfigOptions 
   if (!client || !state.connected) {
     return;
   }
+  const connectionEpoch = currentConfigConnectionEpoch(state);
   const version = nextRequestVersion(state, "config");
   state.configLoading = true;
   state.lastError = null;
   state.chatError = null;
   try {
     const res = await client.request<ConfigSnapshot>("config.get", {});
-    if (!isCurrentRequest(state, "config", version, client)) {
+    if (!isCurrentRequest(state, "config", version, client, connectionEpoch)) {
       return;
     }
     applyConfigSnapshot(state, res, options);
   } catch (err) {
-    if (isCurrentRequest(state, "config", version, client)) {
+    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
       state.lastError = String(err);
     }
   } finally {
-    if (isCurrentRequest(state, "config", version, client)) {
+    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
       state.configLoading = false;
     }
   }
@@ -175,20 +204,21 @@ async function loadConfigSchema(state: ConfigState) {
   if (state.configSchemaLoading) {
     return;
   }
+  const connectionEpoch = currentConfigConnectionEpoch(state);
   const version = nextRequestVersion(state, "schema");
   state.configSchemaLoading = true;
   try {
     const res = await client.request<ConfigSchemaResponse>("config.schema", {});
-    if (!isCurrentRequest(state, "schema", version, client)) {
+    if (!isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
       return;
     }
     applyConfigSchema(state, res);
   } catch (err) {
-    if (isCurrentRequest(state, "schema", version, client)) {
+    if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
       state.lastError = String(err);
     }
   } finally {
-    if (isCurrentRequest(state, "schema", version, client)) {
+    if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
       state.configSchemaLoading = false;
     }
   }
@@ -207,7 +237,7 @@ function asConfigRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function resolveEditableSnapshotConfig(
+export function resolveEditableSnapshotConfig(
   snapshot: ConfigSnapshot | null | undefined,
 ): Record<string, unknown> | null {
   return (
@@ -322,7 +352,8 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     );
 
     if (variants.length === 1) {
-      return coerceFormValues(value, variants[0]);
+      const variant = variants[0];
+      return variant ? coerceFormValues(value, variant) : value;
     }
     if (typeof value === "string") {
       for (const variant of variants) {
@@ -444,9 +475,12 @@ async function submitConfigChange(
   busyKey: ConfigSubmitBusyKey,
   extraParams: Record<string, unknown> = {},
 ): Promise<boolean> {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return false;
   }
+  const connectionEpoch = currentConfigConnectionEpoch(state);
+  const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
   state[busyKey] = true;
   state.lastError = null;
   state.chatError = null;
@@ -457,17 +491,24 @@ async function submitConfigChange(
       state.lastError = "Config hash missing; reload and retry.";
       return false;
     }
-    await state.client.request(method, { raw, baseHash, ...extraParams });
+    await client.request(method, { raw, baseHash, ...extraParams });
+    if (!isCurrent()) {
+      return false;
+    }
     state.configFormDirty = false;
     state.configDraftBaseHash = null;
     autoAllowlistedPluginIdsByState.delete(state);
     await loadConfig(state);
-    return true;
+    return isCurrent();
   } catch (err) {
-    state.lastError = String(err);
+    if (isCurrent()) {
+      state.lastError = String(err);
+    }
     return false;
   } finally {
-    state[busyKey] = false;
+    if (isCurrent()) {
+      state[busyKey] = false;
+    }
   }
 }
 
@@ -500,6 +541,7 @@ async function patchConfig(
   if (!client || !state.connected) {
     return false;
   }
+  const connectionEpoch = currentConfigConnectionEpoch(state);
   const baseHash = state.configSnapshot?.hash;
   if (!baseHash) {
     state.lastError = "Config hash missing; refresh and retry.";
@@ -514,9 +556,11 @@ async function patchConfig(
       sessionKey: state.applySessionKey,
       note: options.note,
     });
-    return true;
+    return isCurrentConfigConnection(state, client, connectionEpoch);
   } catch (err) {
-    state.lastError = String(err);
+    if (isCurrentConfigConnection(state, client, connectionEpoch)) {
+      state.lastError = String(err);
+    }
     return false;
   }
 }
@@ -529,7 +573,16 @@ async function lookupConfigSchemaPath(
   if (!client || !state.connected) {
     return null;
   }
-  return client.request("config.schema.lookup", { path });
+  const connectionEpoch = currentConfigConnectionEpoch(state);
+  try {
+    const result = await client.request("config.schema.lookup", { path });
+    return isCurrentConfigConnection(state, client, connectionEpoch) ? result : null;
+  } catch (error) {
+    if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unknown>) => void) {
@@ -634,20 +687,6 @@ export function updateConfigRawValue(state: ConfigState, value: string) {
   }
 }
 
-export function stageConfigPreset(state: ConfigState, patch: Record<string, unknown>) {
-  const snapshotConfig = resolveEditableSnapshotConfig(state.configSnapshot);
-  const baseSource = state.configForm ?? snapshotConfig;
-  if (!baseSource || (!state.configForm && !state.configSnapshot?.hash)) {
-    return;
-  }
-  const base = cloneConfigObject(baseSource);
-  const merged = applyMergePatch(base, patch);
-  if (!merged || typeof merged !== "object" || Array.isArray(merged)) {
-    return;
-  }
-  syncConfigDraft(state, cloneConfigObject(merged as Record<string, unknown>));
-}
-
 export function resetConfigPendingChanges(state: ConfigState) {
   const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   state.configForm = cloneConfigObject(state.configFormOriginal ?? editableConfig ?? {});
@@ -661,24 +700,6 @@ export function resetConfigPendingChanges(state: ConfigState) {
 
 function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
-}
-
-export function updateMcpServerEnabled(state: ConfigState, name: string, enabled: boolean) {
-  mutateConfigForm(state, (draft) => {
-    const serverPath = ["mcp", "servers", name];
-    if (!enabled) {
-      setPathValue(draft, [...serverPath, "enabled"], false);
-      return;
-    }
-
-    removePathValue(draft, [...serverPath, "enabled"]);
-    const mcp = asConfigRecord(draft.mcp);
-    const servers = asConfigRecord(mcp?.servers);
-    const server = asConfigRecord(servers?.[name]);
-    if (server && Object.keys(server).length === 0) {
-      removePathValue(draft, serverPath);
-    }
-  });
 }
 
 export function findAgentConfigEntryIndex(
@@ -750,39 +771,48 @@ export function stageDefaultAgentConfigEntry(state: ConfigState, agentId: string
 }
 
 export async function openConfigFile(state: ConfigState): Promise<void> {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
+  const connectionEpoch = currentConfigConnectionEpoch(state);
+  const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
   state.lastError = null;
   state.chatError = null;
   try {
-    const res = await state.client.request<{ ok: boolean; path?: string; error?: string }>(
+    const res = await client.request<{ ok: boolean; path?: string; error?: string }>(
       "config.openFile",
       {},
     );
+    if (!isCurrent()) {
+      return;
+    }
     if (!res.ok) {
-      const errorMessage = res.error || "Failed to open config file";
-      state.lastError = errorMessage;
+      let errorMessage = res.error || "Failed to open config file";
       const path = res.path || state.configSnapshot?.path;
       if (path) {
-        try {
-          await navigator.clipboard.writeText(path);
-          state.lastError += `\n\nFile path copied to clipboard: ${path}`;
-        } catch {
-          state.lastError += `\n\nFile path: ${path}`;
+        if (await copyToClipboard(path)) {
+          errorMessage += `\n\nFile path copied to clipboard: ${path}`;
+        } else {
+          errorMessage += `\n\nFile path: ${path}`;
         }
+      }
+      if (isCurrent()) {
+        state.lastError = errorMessage;
       }
     }
   } catch (err) {
+    if (!isCurrent()) {
+      return;
+    }
+    const errorMessage = String(err);
     const path = state.configSnapshot?.path;
     if (path) {
-      try {
-        await navigator.clipboard.writeText(path);
-      } catch {
-        // ignore
-      }
+      await copyToClipboard(path);
     }
-    state.lastError = String(err);
+    if (isCurrent()) {
+      state.lastError = errorMessage;
+    }
   }
 }
 
@@ -805,7 +835,11 @@ export function createRuntimeConfigCapability(
   };
   const run = async <T>(task: () => Promise<T>): Promise<T> => {
     try {
-      return await task();
+      const result = task();
+      // Async config owners mutate their busy flag before the first await.
+      // Publish that transition so editors can lock before accepting more input.
+      publish();
+      return await result;
     } finally {
       publish();
     }
@@ -839,15 +873,20 @@ export function createRuntimeConfigCapability(
     state.configSchema ? Promise.resolve() : loadOnce("schema", () => loadConfigSchema(state));
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
+    const connectionChanged = state.connected !== snapshot.connected;
     state.client = snapshot.client;
     state.connected = snapshot.connected;
     state.applySessionKey = snapshot.sessionKey;
-    if (clientChanged) {
+    if (clientChanged || connectionChanged) {
       configLoad = null;
       schemaLoad = null;
-      requestVersionsByState.delete(state);
+      // A reconnect may reuse the client object. Keep generations monotonic so work
+      // from the previous connection cannot commit into the new connection epoch.
+      invalidateConfigConnection(state);
       state.configLoading = false;
       state.configSchemaLoading = false;
+      state.configSaving = false;
+      state.configApplying = false;
     }
     publish();
   });
@@ -872,12 +911,9 @@ export function createRuntimeConfigCapability(
     removeFormValue: (path) => mutate(() => removeConfigFormValue(state, path)),
     setRaw: (value) => mutate(() => updateConfigRawValue(state, value)),
     resetDraft: () => mutate(() => resetConfigPendingChanges(state)),
-    stagePreset: (patch) => mutate(() => stageConfigPreset(state, patch)),
     save: () => run(() => saveConfig(state)),
     apply: () => run(() => applyConfig(state)),
     openFile: () => run(() => openConfigFile(state)),
-    setMcpServerEnabled: (name, enabled) =>
-      mutate(() => updateMcpServerEnabled(state, name, enabled)),
     ensureAgentEntry: (agentId) => {
       const index = ensureAgentConfigEntry(state, agentId);
       publish();
@@ -896,6 +932,12 @@ export function createRuntimeConfigCapability(
     },
     dispose() {
       disposed = true;
+      invalidateConfigConnection(state);
+      state.connected = false;
+      state.configLoading = false;
+      state.configSchemaLoading = false;
+      state.configSaving = false;
+      state.configApplying = false;
       stopGateway();
       listeners.clear();
       requestVersionsByState.delete(state);

@@ -69,12 +69,15 @@ function compareOpenClawPackageVersions(left: string, right: string): number {
     if (!match) {
       return [0, 0, 0];
     }
-    return [Number(match[1]), Number(match[2]), Number(match[3])];
+    const [, year, month, patch] = match;
+    if (!year || !month || !patch) {
+      return [0, 0, 0];
+    }
+    return [Number(year), Number(month), Number(patch)];
   };
-  const leftParts = parse(left);
-  const rightParts = parse(right);
-  for (let index = 0; index < leftParts.length; index++) {
-    const delta = leftParts[index] - rightParts[index];
+  const [leftYear, leftMonth, leftPatch] = parse(left);
+  const [rightYear, rightMonth, rightPatch] = parse(right);
+  for (const delta of [leftYear - rightYear, leftMonth - rightMonth, leftPatch - rightPatch]) {
     if (delta !== 0) {
       return delta;
     }
@@ -130,6 +133,7 @@ const defaultOptions = (): LinuxOptions => ({
   latestVersion: "",
   mode: "both",
   modelId: undefined,
+  npmRegistry: undefined,
   provider: "openai",
   snapshotHint: "fresh",
   targetPackageSpec: "",
@@ -157,6 +161,7 @@ Options:
   --install-version <ver>    Pin site-installer version/dist-tag for the baseline lane.
   --target-package-spec <npm-spec>
                              Install this npm package tarball instead of packing current main.
+  --npm-registry <url>       Registry used for target package installs.
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
@@ -220,6 +225,10 @@ export function parseArgs(argv: string[]): LinuxOptions {
         break;
       case "--target-package-spec":
         options.targetPackageSpec = ensureValue(args, i, arg);
+        i++;
+        break;
+      case "--npm-registry":
+        options.npmRegistry = ensureValue(args, i, arg);
         i++;
         break;
       case "--keep-server":
@@ -524,7 +533,17 @@ fi`);
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
     this.downloadGuestFile(tgzUrl, `/tmp/${tempName}`);
-    this.guestExec(["npm", "install", "-g", `/tmp/${tempName}`, "--no-fund", "--no-audit"]);
+    const npmArgs = ["npm", "install", "-g", `/tmp/${tempName}`, "--no-fund", "--no-audit"];
+    this.guestExec(
+      this.options.npmRegistry
+        ? [
+            "/usr/bin/env",
+            `NPM_CONFIG_REGISTRY=${this.options.npmRegistry}`,
+            `npm_config_registry=${this.options.npmRegistry}`,
+            ...npmArgs,
+          ]
+        : npmArgs,
+    );
     this.guestExec(["openclaw", "--version"]);
   }
 

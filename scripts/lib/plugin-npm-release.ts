@@ -3,10 +3,14 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
-import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
-import { collectReleaseVersionFloorErrors, resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
+import {
+  collectReleaseVersionFloorErrors,
+  parseReleaseVersion,
+  resolveNpmPublishPlan,
+} from "./npm-publish-plan.mjs";
 
 export type PluginPackageJson = {
   name?: string;
@@ -37,6 +41,7 @@ export type PluginPackageJson = {
       pluginSdkVersion?: string;
     };
     release?: {
+      publishToClawHub?: boolean;
       publishToNpm?: boolean;
       requireLatestDependencies?: unknown;
     };
@@ -76,7 +81,7 @@ export type GitRangeSelection = {
   headRef: string;
 };
 
-export type ParsedPluginReleaseArgs = {
+type ParsedPluginReleaseArgs = {
   selection: string[];
   selectionMode?: PluginReleaseSelectionMode;
   pluginsFlagProvided: boolean;
@@ -98,14 +103,13 @@ function parsePluginNpmDistTagOverride(value: string | undefined): "extended-sta
   throw new Error(`Unknown npm dist-tag override: ${value}. Expected "extended-stable".`);
 }
 
-export type PublishablePluginPackageCandidate<
-  TPackageJson extends PluginPackageJson = PluginPackageJson,
-> = {
-  extensionId: string;
-  packageDir: string;
-  packageJson: TPackageJson;
-  readmeText?: string;
-};
+type PublishablePluginPackageCandidate<TPackageJson extends PluginPackageJson = PluginPackageJson> =
+  {
+    extensionId: string;
+    packageDir: string;
+    packageJson: TPackageJson;
+    readmeText?: string;
+  };
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 
@@ -256,7 +260,7 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   let headRef: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+    const arg = expectDefined(argv[index], `plugin release argument at index ${index}`);
     if (arg === "--") {
       continue;
     }
@@ -309,7 +313,7 @@ export function parsePluginNpmReleaseArgs(argv: string[]): ParsedPluginNpmReleas
   const baseArgs: string[] = [];
   let npmDistTag: "extended-stable" | undefined;
   for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+    const arg = expectDefined(argv[index], `plugin npm release argument at index ${index}`);
     if (arg !== "--npm-dist-tag") {
       baseArgs.push(arg);
       continue;
@@ -402,7 +406,7 @@ export function collectPublishablePluginPackageErrors(
   return errors;
 }
 
-export type PublishablePluginPackageFilters = {
+type PublishablePluginPackageFilters = {
   extensionIds?: readonly string[];
   packageNames?: readonly string[];
   npmDistTag?: "extended-stable";

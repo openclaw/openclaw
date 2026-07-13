@@ -181,7 +181,7 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
   deliveryQueueId?: string;
-  /** @internal Refresh durable timing after provider serialization and before I/O. */
+  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Report each completed platform sub-send before another fallible step. */
   onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
@@ -240,7 +240,7 @@ export const unknownSendReconciliationKinds = [
   "batch",
 ] as const;
 
-export type UnknownSendReconciliationKind = (typeof unknownSendReconciliationKinds)[number];
+type UnknownSendReconciliationKind = (typeof unknownSendReconciliationKinds)[number];
 
 /** Send-attempt context tagged with the adapter method core is about to call. */
 export type ChannelMessageSendAttemptContext<TConfig = OpenClawConfig> =
@@ -307,6 +307,20 @@ export type ChannelMessageUnknownSendReconciliationResult =
       retryable?: boolean;
     };
 
+/** Provider decision made before core persists or replays a deferred delivery. */
+export type ChannelMessageDeferredDeliveryAdmissionResult =
+  | { status: "allowed" }
+  | { status: "permanent_rejection"; reason: string };
+
+/** Minimal context available at deferred-delivery admission boundaries. */
+export type ChannelMessageDeferredDeliveryAdmissionContext<TConfig = OpenClawConfig> = {
+  cfg: TConfig;
+  channel: string;
+  to: string;
+  accountId?: string | null;
+  phase: "live" | "recovery";
+};
+
 /** Optional hooks around adapter send attempts, platform success/failure, and commit. */
 export type ChannelMessageSendLifecycleAdapter<
   TConfig = OpenClawConfig,
@@ -337,6 +351,13 @@ export type ChannelMessageSendAdapter<
 /** Durable final-delivery extension for queue reconciliation and capability declaration. */
 export type ChannelMessageDurableFinalAdapter = {
   capabilities?: DurableFinalDeliveryRequirementMap;
+  /**
+   * Synchronous provider admission before a durable intent is created or replayed.
+   * Providers must not perform I/O from this hook.
+   */
+  admitDeferredDelivery?: (
+    ctx: ChannelMessageDeferredDeliveryAdmissionContext,
+  ) => ChannelMessageDeferredDeliveryAdmissionResult;
   /** Send shapes for which reconciliation can prove the complete durable intent. */
   reconcileUnknownSendKinds?: Partial<Record<UnknownSendReconciliationKind, boolean>>;
   reconcileUnknownSend?: (

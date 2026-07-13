@@ -13,6 +13,7 @@ const REQUIRED_MATRIX_PACKAGES = [
 ];
 const MIN_MATRIX_CRYPTO_NATIVE_BINDING_BYTES = 1_000_000;
 export const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
+const MATRIX_STREAM_ERROR_KILL_GRACE_MS = 1_000;
 
 type MatrixCryptoRuntimeDeps = {
   requireFn?: (id: string) => unknown;
@@ -51,25 +52,34 @@ type CommandResult = {
 
 let defaultMatrixCryptoRuntimeEnsurePromise: Promise<void> | null = null;
 
-function appendBoundedOutputTail(current: string, chunk: Buffer | string): string {
+function sliceUtf8OutputTail(buffer: Buffer): Buffer {
+  let start = Math.max(0, buffer.byteLength - MATRIX_COMMAND_OUTPUT_TAIL_BYTES);
+  while (start < buffer.byteLength) {
+    const byte = buffer[start];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
+    start++;
+  }
+  return buffer.subarray(start);
+}
+
+function appendBoundedOutputTail(current: Buffer, chunk: Buffer | string): Buffer {
   const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   if (chunkBuffer.byteLength >= MATRIX_COMMAND_OUTPUT_TAIL_BYTES) {
-    return chunkBuffer
-      .subarray(chunkBuffer.byteLength - MATRIX_COMMAND_OUTPUT_TAIL_BYTES)
-      .toString("utf8");
+    return sliceUtf8OutputTail(chunkBuffer);
   }
 
-  const currentBuffer = Buffer.from(current);
-  const nextBytes = currentBuffer.byteLength + chunkBuffer.byteLength;
+  const nextBytes = current.byteLength + chunkBuffer.byteLength;
   if (nextBytes <= MATRIX_COMMAND_OUTPUT_TAIL_BYTES) {
-    return `${current}${chunkBuffer.toString("utf8")}`;
+    return Buffer.concat([current, chunkBuffer], nextBytes);
   }
 
-  const currentTailBytes = MATRIX_COMMAND_OUTPUT_TAIL_BYTES - chunkBuffer.byteLength;
-  const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
-  return Buffer.concat([currentTail, chunkBuffer], MATRIX_COMMAND_OUTPUT_TAIL_BYTES).toString(
-    "utf8",
-  );
+  return sliceUtf8OutputTail(Buffer.concat([current, chunkBuffer], nextBytes));
+}
+
+function decodeOutputTail(output: Buffer): string {
+  return sliceUtf8OutputTail(output).toString("utf8");
 }
 
 export async function runFixedCommandWithTimeout(params: {
@@ -95,10 +105,12 @@ export async function runFixedCommandWithTimeout(params: {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    let stdout: Buffer = Buffer.alloc(0);
+    let stderr: Buffer = Buffer.alloc(0);
     let settled = false;
     let timer: NodeJS.Timeout | null = null;
+    let streamKillTimer: NodeJS.Timeout | null = null;
+    let streamErrorMessage: string | null = null;
     const killChildOnExit = () => {
       if (!settled && proc.exitCode === null) {
         proc.kill("SIGTERM");
@@ -113,6 +125,9 @@ export async function runFixedCommandWithTimeout(params: {
       if (timer) {
         clearTimeout(timer);
       }
+      if (streamKillTimer) {
+        clearTimeout(streamKillTimer);
+      }
       process.off("exit", killChildOnExit);
       resolve(result);
     };
@@ -124,29 +139,57 @@ export async function runFixedCommandWithTimeout(params: {
     proc.stderr?.on("data", (chunk: Buffer | string) => {
       stderr = appendBoundedOutputTail(stderr, chunk);
     });
+    const failReadableStream = (streamName: "stdout" | "stderr") => (error: Error) => {
+      if (settled || streamErrorMessage) {
+        return;
+      }
+      streamErrorMessage = `${streamName} stream failed: ${formatErrorMessage(error)}`;
+      if (proc.exitCode === null) {
+        proc.kill("SIGTERM");
+      }
+      streamKillTimer = setTimeout(() => {
+        if (!settled && proc.exitCode === null) {
+          proc.kill("SIGKILL");
+        }
+      }, MATRIX_STREAM_ERROR_KILL_GRACE_MS);
+      streamKillTimer.unref?.();
+    };
+    proc.stdout?.on("error", failReadableStream("stdout"));
+    proc.stderr?.on("error", failReadableStream("stderr"));
 
     timer = setTimeout(() => {
       proc.kill("SIGKILL");
+      if (streamErrorMessage) {
+        return;
+      }
       finalize({
         code: 124,
-        stdout,
-        stderr: stderr || `command timed out after ${params.timeoutMs}ms`,
+        stdout: decodeOutputTail(stdout),
+        stderr: decodeOutputTail(stderr) || `command timed out after ${params.timeoutMs}ms`,
       });
     }, params.timeoutMs);
 
     proc.on("error", (err) => {
+      if (streamErrorMessage) {
+        return;
+      }
       finalize({
         code: 1,
-        stdout,
+        stdout: decodeOutputTail(stdout),
         stderr: err.message,
       });
     });
 
     proc.on("close", (code) => {
+      const streamErrorStderr = streamErrorMessage
+        ? stderr.byteLength > 0
+          ? appendBoundedOutputTail(stderr, `\n${streamErrorMessage}`)
+          : Buffer.from(streamErrorMessage)
+        : stderr;
       finalize({
-        code: code ?? 1,
-        stdout,
-        stderr,
+        code: streamErrorMessage ? 1 : (code ?? 1),
+        stdout: decodeOutputTail(stdout),
+        stderr: decodeOutputTail(streamErrorStderr),
       });
     });
   });

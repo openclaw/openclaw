@@ -16,6 +16,7 @@ import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
+import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
@@ -29,14 +30,17 @@ import type {
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
+import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
   loadSettings,
   patchSettings,
-  resolveApplicationStartupSettings,
+  persistSessionToken,
+  resolvePageGatewaySettings,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
@@ -158,8 +162,9 @@ function createApplicationNavigationPreferences(
   let settings = initialSettings;
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
     navCollapsed: settings.navCollapsed,
+    navWidth: settings.navWidth,
     sidebarPinnedRoutes: settings.sidebarPinnedRoutes,
-    sidebarMoreExpanded: settings.sidebarMoreExpanded,
+    pinnedAgentIds: settings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
 
@@ -171,15 +176,17 @@ function createApplicationNavigationPreferences(
       const nextSnapshot = { ...snapshot, ...patch };
       if (
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
+        nextSnapshot.navWidth === snapshot.navWidth &&
         nextSnapshot.sidebarPinnedRoutes === snapshot.sidebarPinnedRoutes &&
-        nextSnapshot.sidebarMoreExpanded === snapshot.sidebarMoreExpanded
+        nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
       ) {
         return;
       }
       settings = patchSettings({
         navCollapsed: nextSnapshot.navCollapsed,
+        navWidth: nextSnapshot.navWidth,
         sidebarPinnedRoutes: [...nextSnapshot.sidebarPinnedRoutes],
-        sidebarMoreExpanded: nextSnapshot.sidebarMoreExpanded,
+        pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
       });
       snapshot = nextSnapshot;
       for (const listener of listeners) {
@@ -216,6 +223,7 @@ function createSkillWorkshopRevisionHandoff(): ApplicationSkillWorkshopRevisionH
 export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
+  readonly documentMode: ApprovalDocumentMode | null;
   readonly pendingGatewayConnection: {
     readonly gatewayUrl: string;
     readonly token: string;
@@ -227,20 +235,30 @@ export type ApplicationRuntime = {
 };
 
 export function bootstrapApplication(): ApplicationRuntime {
-  const initialSettings = loadSettings();
   const history = createBrowserHistory();
-  const startup = resolveApplicationStartupSettings(initialSettings, history.location());
+  const startupLocation = history.location();
+  const initialBasePath = resolveControlUiBasePath(
+    startupLocation.pathname || globalThis.location?.pathname || "/",
+  );
+  const documentMode = resolveApprovalDocumentMode(startupLocation.pathname, initialBasePath);
+  const persistedSettings = loadSettings();
+  const initialSettings = documentMode
+    ? resolvePageGatewaySettings(persistedSettings)
+    : persistedSettings;
+  const startup = resolveApplicationStartupSettings(initialSettings, startupLocation);
   if (startup.changed) {
-    saveSettings(startup.settings);
+    if (documentMode) {
+      persistSessionToken(startup.settings.gatewayUrl, startup.settings.token);
+    } else {
+      saveSettings(startup.settings);
+    }
   }
   const basePath = resolveControlUiBasePath(
     startup.location.pathname || globalThis.location?.pathname || "/",
   );
-  const initialLocation = normalizeInitialApplicationLocation(
-    startup.location,
-    basePath,
-    startup.settings.sessionKey,
-  );
+  const initialLocation = documentMode
+    ? startup.location
+    : normalizeInitialApplicationLocation(startup.location, basePath, startup.settings.sessionKey);
   const currentLocation = history.location();
   if (
     currentLocation.pathname !== initialLocation.pathname ||
@@ -251,7 +269,13 @@ export function bootstrapApplication(): ApplicationRuntime {
   }
 
   const settings = startup.settings;
-  const gateway = createApplicationGateway(settings, startup.password ?? "");
+  const gateway = createApplicationGateway(
+    settings,
+    startup.password ?? "",
+    startup.pendingBootstrapToken ?? "",
+    undefined,
+    { persistDefaultConnectionSettings: documentMode === null },
+  );
   const agents = createAgentCapability(gateway);
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway);
@@ -270,6 +294,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
+  const nativeLinkRouting = startNativeLinkRouting();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   applyStartupPresentation(settings);
@@ -279,6 +304,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       ? {
           gatewayUrl: startup.pendingGatewayUrl,
           token: startup.pendingGatewayToken ?? "",
+          bootstrapToken: startup.pendingBootstrapToken ?? "",
         }
       : null;
   let lastConfigRefreshClient: GatewayBrowserClient | null = null;
@@ -319,6 +345,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     gateway.connect({
       gatewayUrl: pending.gatewayUrl,
       token: pending.token,
+      bootstrapToken: pending.bootstrapToken,
     });
   };
   const cancelPendingGatewayConnection = () => {
@@ -355,11 +382,13 @@ export function bootstrapApplication(): ApplicationRuntime {
           console.error("[openclaw] route replacement failed", error);
         });
     },
+    revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
   return {
     context,
     router,
+    documentMode,
     get pendingGatewayConnection() {
       return pendingGatewayConnection;
     },
@@ -367,7 +396,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     cancelPendingGatewayConnection,
     start: async () => {
       void config.refresh({ skipWithoutAuthCandidate: true });
-      const routerStart = startApplicationRouter(router, history, basePath, context);
+      const routerStart = documentMode
+        ? Promise.resolve()
+        : startApplicationRouter(router, history, basePath, context);
       gateway.start();
       await routerStart;
     },
@@ -383,6 +414,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       overlays.dispose();
       theme.dispose();
       nativeChatDrafts.dispose();
+      nativeLinkRouting.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
     },

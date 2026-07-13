@@ -61,6 +61,21 @@ missing). Agent allowlists (below) also match on this `name`.
   `openclaw migrate codex` to copy them into your OpenClaw workspace.
 </Note>
 
+## Node-hosted skills
+
+A connected headless node can publish skills installed in its active OpenClaw
+skills directory (`~/.openclaw/skills` by default; profile environment overrides
+apply). They appear in the normal agent skill list while the node is connected
+and disappear when it disconnects. A local or Gateway skill keeps its name on
+collision; the node skill receives a deterministic node-prefixed name.
+Node-hosted v1 requires the directory name to match the skill's `name`
+frontmatter field.
+
+The skill entry includes the node locator. Its files, relative references, and
+binaries live on the node, so load and execute it with
+`exec host=node node=<node-id>`. Restart the node host after changing its skill
+files. See [Nodes](/nodes#node-hosted-skills) for pairing and off-switches.
+
 ## Per-agent vs shared skills
 
 In multi-agent setups, each agent has its own workspace. Use the path that
@@ -579,9 +594,12 @@ prompt. The cost is deterministic and scales linearly per skill:
 - At ~4 chars/token, 97 chars ≈ 24 tokens per skill before field lengths.
 
 If the rendered block would exceed the configured prompt budget
-(`skills.limits.maxSkillsPromptChars`), OpenClaw first drops descriptions
-(compact format: name + location only), then truncates the skill list and adds
-a note pointing at `openclaw skills check`.
+(`skills.limits.maxSkillsPromptChars`), OpenClaw first preserves as many skill
+identities (name, location, and version) as the description-free compact format
+can fit. It then uses any remaining budget for shortened descriptions. If no
+description budget remains, descriptions are omitted. The prompt includes a
+note pointing at `openclaw skills check` whenever compact formatting or list
+truncation is required.
 
 Keep descriptions short and descriptive to minimize prompt overhead.
 

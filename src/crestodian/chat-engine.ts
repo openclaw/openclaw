@@ -17,29 +17,35 @@ import {
 import type { CrestodianAssistantPlanner, CrestodianAssistantTurn } from "./assistant.js";
 import { approvalQuestion } from "./dialogue.js";
 import {
+  CrestodianInferenceUnavailableError,
+  isCrestodianInferenceUnavailableError,
+} from "./inference-error.js";
+import {
   describeCrestodianPersistentOperation,
   executeCrestodianOperation,
   isPersistentCrestodianOperation,
   parseCrestodianOperation,
   type CrestodianCommandDeps,
   type CrestodianOperation,
+  type CrestodianOperationResult,
 } from "./operations.js";
 import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
+import {
+  resolveCrestodianVerifiedInferenceRoute,
+  type CrestodianVerifiedInferenceBinding,
+} from "./verified-inference.js";
 
 /**
  * One conversation with Crestodian, independent of transport. The TUI backend
  * and the gateway `crestodian.chat` RPC both drive this engine, so onboarding
  * behaves the same in a terminal and in the macOS app.
  *
- * The conversation is AI-only: every message is an AI turn (agent loop first,
- * single-turn planner as fallback), and approval of pending mutations is
+ * The conversation is AI-backed: free-form messages run through the agent loop
+ * first and the single-turn planner second. Approval of pending mutations is
  * judged from the user's own words by a host-run classifier — never by the
  * conversation model itself, which cannot self-approve (see
- * crestodian-tool.ts). The anchored typed-command grammar is not a chat
- * feature: it only takes over when no model is usable at all (fresh machine,
- * logged-out CLIs, broken config), so repair keeps working configless.
- * Hosted wizards resolve deterministically because they are structured forms,
- * not conversation.
+ * crestodian-tool.ts). Hosted wizard replies and host navigation remain
+ * deterministic because they are structured UI actions, not conversation.
  */
 export type CrestodianChatEngineOptions = {
   yes?: boolean;
@@ -52,17 +58,23 @@ export type CrestodianChatEngineOptions = {
   /** Where side effects run; the gateway surface never manages its own daemon. */
   surface?: "cli" | "gateway";
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
-  runChannelSetupWizard?: (channel: string, prompter: WizardPrompterLike) => Promise<void>;
+  runChannelSetupWizard?: (
+    channel: string,
+    prompter: WizardPrompterLike,
+    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+  ) => Promise<void>;
+  /** Exact route/credential that passed the host's live inference gate. */
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
 };
 
-export type CrestodianChatReplyAction = "none" | "exit" | "open-tui";
+type CrestodianChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
 
-export type CrestodianChatReply = {
+type CrestodianChatReply = {
   text: string;
   action: CrestodianChatReplyAction;
   /** The next hosted-wizard reply contains a secret and must be masked/redacted by hosts. */
   sensitive?: boolean;
-  /** Present when action is "open-tui"; the TUI host executes it. */
+  /** Present when the host must leave chat for an interactive handoff. */
   handoff?: CrestodianOperation;
 };
 
@@ -80,6 +92,15 @@ type CaptureRuntime = RuntimeEnv & {
   read: () => string;
 };
 
+function createHostedWizardRuntime(runtime: RuntimeEnv): RuntimeEnv {
+  return {
+    ...runtime,
+    exit: (code): never => {
+      throw new Error(`hosted wizard exited with code ${String(code)}`);
+    },
+  };
+}
+
 function createCaptureRuntime(): CaptureRuntime {
   const lines: string[] = [];
   return {
@@ -94,6 +115,7 @@ function createCaptureRuntime(): CaptureRuntime {
 
 function defaultChannelSetupWizardRunner(
   channel: string,
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
 ): (prompter: WizardPrompterLike) => Promise<void> {
   return async (prompter) => {
     const [
@@ -108,10 +130,17 @@ function defaultChannelSetupWizardRunner(
       import("../commands/onboard-channels.js"),
     ]);
     const snapshot = await readSetupConfigFileSnapshot();
-    const baseConfig = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
+    if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
+      throw new Error(
+        "Channel setup requires a valid saved config snapshot. Run `openclaw doctor --fix`, then retry.",
+      );
+    }
+    const baseConfig = snapshot.sourceConfig ?? snapshot.config;
+    const baseHash = snapshot.hash;
     const { defaultRuntime } = await import("../runtime.js");
+    const runtime = createHostedWizardRuntime(defaultRuntime);
     const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
-    const nextConfig = await setupChannels(baseConfig, defaultRuntime, prompter, {
+    const nextConfig = await setupChannels(baseConfig, runtime, prompter, {
       initialSelection: [channel],
       forceAllowFromChannels: [channel],
       allowIMessageInstall: true,
@@ -120,15 +149,20 @@ function defaultChannelSetupWizardRunner(
       quickstartDefaults: true,
       skipDmPolicyPrompt: true,
       skipConfirm: true,
+      beforePersistentEffect: async () => await beforePersistentApply(runtime),
       onPostWriteHook: (hook) => postWriteHooks.collect(hook),
     });
+    await beforePersistentApply(runtime);
     const committedConfig = await writeWizardConfigFile(nextConfig, {
       allowConfigSizeDrop: false,
+      baseHash,
+      migrationBaseConfig: baseConfig,
     });
     await runCollectedChannelOnboardingPostWriteHooks({
       hooks: postWriteHooks.drain(),
       cfg: committedConfig,
-      runtime: defaultRuntime,
+      runtime,
+      beforePersistentEffect: async () => await beforePersistentApply(runtime),
     });
   };
 }
@@ -246,37 +280,51 @@ function redactSensitiveCommandText(text: string): string {
   return text;
 }
 
-/**
- * Hard ceiling for one AI turn. Planner backends carry their own timeouts,
- * but a wedged local CLI (heavy user config, hung app-server) must never
- * freeze the conversation — after this we answer deterministically.
- */
-const ASSISTANT_TURN_DEADLINE_MS = 60_000;
-// Agent-loop turns include tool calls (config writes, doctor); allow longer.
-const AGENT_TURN_DEADLINE_MS = 180_000;
+function formatPendingOperationForAssistant(operation: CrestodianOperation): string {
+  const description = describeCrestodianPersistentOperation(operation);
+  return operation.kind === "setup"
+    ? `${description}. Exact setup JSON: ${JSON.stringify(operation)}. Keep the verified model unless the user explicitly asks to leave Crestodian and reconfigure inference.`
+    : description;
+}
 
-async function withDeadline<T>(work: Promise<T>, fallback: T, deadlineMs: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const deadline = new Promise<T>((resolve) => {
-    timer = setTimeout(() => resolve(fallback), deadlineMs);
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([work, deadline]);
-  } finally {
-    clearTimeout(timer);
+function preservePendingSetupModel(
+  pending: CrestodianOperation | null,
+  operation: CrestodianOperation,
+): CrestodianOperation {
+  if (pending?.kind !== "setup" || operation.kind !== "setup") {
+    return operation;
   }
+  const pendingModel = pending.model?.trim();
+  const requestedModel = operation.model?.trim();
+  if (requestedModel && requestedModel !== pendingModel) {
+    return operation;
+  }
+  return {
+    ...operation,
+    ...(requestedModel ? {} : pendingModel ? { model: pendingModel } : {}),
+  };
 }
 
 export class CrestodianChatEngine {
   private pending: CrestodianOperation | null = null;
   private wizardBridge: ActiveWizardBridge | null = null;
+  private lastSensitiveChannel: string | undefined;
+  private awaitingSetupChannel = false;
+  private hostProposalResolution: "approved" | "declined" | undefined;
   private readonly history: CrestodianAssistantTurn[] = [];
-  private readonly agentSession: CrestodianAgentSession = createCrestodianAgentSession();
+  private readonly agentSession: CrestodianAgentSession;
+  private readonly verifiedInference: CrestodianVerifiedInferenceBinding;
   /** Turns run strictly one at a time; interleaved handles corrupt wizard/pending state. */
   private turnQueue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly opts: CrestodianChatEngineOptions = {}) {}
+  constructor(private readonly opts: CrestodianChatEngineOptions) {
+    const binding = opts?.verifiedInference;
+    if (!binding) {
+      throw new CrestodianInferenceUnavailableError("conversation");
+    }
+    this.verifiedInference = binding;
+    this.agentSession = createCrestodianAgentSession(binding);
+  }
 
   /**
    * Seed a proposed operation that the user's next approval will apply. Used
@@ -301,6 +349,8 @@ export class CrestodianChatEngine {
   async dispose(): Promise<void> {
     this.wizardBridge?.session.cancel();
     this.wizardBridge = null;
+    this.lastSensitiveChannel = undefined;
+    this.awaitingSetupChannel = false;
     await cleanupCrestodianAgentSession(this.agentSession);
   }
 
@@ -312,6 +362,7 @@ export class CrestodianChatEngine {
   }
 
   private async handleSerialized(text: string): Promise<CrestodianChatReply> {
+    await this.requireVerifiedInference();
     // Snapshot before resolving: wizard answers to sensitive steps (tokens,
     // passwords) must never enter the AI-visible history.
     const sensitiveTurn = this.wizardBridge?.step?.sensitive === true;
@@ -345,12 +396,44 @@ export class CrestodianChatEngine {
       // Leaving the process is a host action, not a conversation the AI owns.
       return { text: "Crestodian retracts into shell. Bye.", action: "exit" };
     }
+    if (this.awaitingSetupChannel) {
+      if (/^(cancel|abort|stop)$/i.test(trimmed)) {
+        this.awaitingSetupChannel = false;
+        return { text: "Channel wizard handoff cancelled.", action: "none" };
+      }
+      if (!/^[a-z0-9_-]+$/i.test(trimmed)) {
+        return {
+          text: "Reply with one channel id, such as `slack` or `telegram`, or say `cancel`.",
+          action: "none",
+        };
+      }
+      this.awaitingSetupChannel = false;
+      return await this.runOperation(
+        { kind: "open-setup", target: "channels", channel: trimmed.toLowerCase() },
+        undefined,
+      );
+    }
 
     // Secret hygiene: an exact `config set` on a sensitive path carries a raw
-    // token and must never reach a model. It runs on the deterministic path
-    // (redacted proposal + approval), matching the wizard's masked-input rules.
+    // token and must never reach a model. The host handles its redacted
+    // proposal + approval directly, matching the wizard's masked-input rules.
     const typed = parseCrestodianOperation(text);
     if (typed.kind === "config-set" && isSensitiveConfigPath(typed.path)) {
+      return await this.runOperation(typed, undefined);
+    }
+    if (typed.kind === "open-tui") {
+      // Exact host navigation must not depend on whether a conversation model
+      // chooses to call the handoff tool. Clear any stale proposal first.
+      this.clearPendingProposals();
+      return await this.runOperation(typed, undefined);
+    }
+    if (
+      typed.kind === "open-setup" ||
+      typed.kind === "channel-setup" ||
+      typed.kind === "model-setup"
+    ) {
+      // Exact host-navigation commands do not depend on model interpretation.
+      // Inference/provider setup still exits this session before onboarding.
       return await this.runOperation(typed, undefined);
     }
 
@@ -360,11 +443,21 @@ export class CrestodianChatEngine {
     const intent = await this.classifyApprovalIntent(text);
     if (this.pending) {
       if (intent === "approve") {
+        // Approval classification may invoke inference. Its result authorizes
+        // only the route that was verified before classification started.
+        await this.requireVerifiedInference();
         return await this.applyPendingProposal();
       }
       if (intent === "decline") {
+        const skippedModelSetup = this.pending.kind === "model-setup";
         this.clearPendingProposals();
-        return { text: "Skipped. No barnacles on config today.", action: "none" };
+        this.hostProposalResolution = "declined";
+        return {
+          text: skippedModelSetup
+            ? "Skipped. The current inference route is unchanged."
+            : "Skipped. No barnacles on config today.",
+          action: "none",
+        };
       }
     }
     if (intent === "decline") {
@@ -388,32 +481,57 @@ export class CrestodianChatEngine {
     return await classify({
       message: text,
       ...(this.pending ? { proposal: describeCrestodianPersistentOperation(this.pending) } : {}),
+      verifiedInference: this.verifiedInference,
     });
   }
 
   private async applyPendingProposal(): Promise<CrestodianChatReply> {
     const pending = this.pending;
     this.clearPendingProposals();
+    this.hostProposalResolution = "approved";
     if (!pending) {
       return { text: "", action: "none" };
     }
     if (pending.kind === "channel-setup") {
       return { text: await this.startChannelSetupWizard(pending.channel), action: "none" };
     }
+    if (pending.kind === "model-setup") {
+      return await this.startModelSetup(pending.workspace);
+    }
+    if (!isPersistentCrestodianOperation(pending)) {
+      return await this.runOperation(pending, undefined);
+    }
+    return await this.applyApprovedPersistentOperation(pending);
+  }
+
+  private async applyApprovedPersistentOperation(
+    operation: CrestodianOperation,
+  ): Promise<CrestodianChatReply> {
+    if (!isPersistentCrestodianOperation(operation)) {
+      throw new Error(`Crestodian host received a non-persistent approved operation.`);
+    }
     const capture = createCaptureRuntime();
-    let applied = false;
+    let result: CrestodianOperationResult | undefined;
     try {
-      const result = await executeCrestodianOperation(pending, capture, {
+      result = await executeCrestodianOperation(operation, capture, {
         approved: true,
         deps: this.commandDeps(),
+        // The model turn, approval classifier, and operation preflight all
+        // await. Freeze authority at the actual persistent-apply boundary.
+        beforePersistentApply: async () => {
+          await this.requirePersistentApplyInference(capture);
+        },
       });
-      applied = result.applied;
     } catch (error) {
+      if (isCrestodianInferenceUnavailableError(error)) {
+        throw error;
+      }
       capture.error(formatOperationError(error));
     }
-    const verify = applied ? await this.verifyConfigAfterWrite() : null;
+    const verify = result?.applied ? await this.verifyConfigAfterWrite() : null;
+    const followUp = this.armFollowUp(result?.followUp);
     return {
-      text: [capture.read() || "Applied. Audit entry written.", verify]
+      text: [capture.read() || "Applied. Audit entry written.", verify, followUp]
         .filter(Boolean)
         .join("\n\n"),
       action: "none",
@@ -422,8 +540,8 @@ export class CrestodianChatEngine {
 
   /**
    * AI turn: the custodian persona answers and acts through the ring-zero
-   * tool. Falls back to the single-turn planner, then to the anchored typed
-   * grammar when no model backend is usable at all.
+   * tool. The single-turn planner is a second inference path; if neither path
+   * answers, the turn fails closed instead of executing model-free guesses.
    */
   private async resolveAssistantTurn(
     text: string,
@@ -435,61 +553,95 @@ export class CrestodianChatEngine {
     // persistent session). It acts through audited tool calls, so its reply is
     // final — no engine-side command extraction or approval bookkeeping.
     const agentTurn = this.opts.runAgentTurn ?? runCrestodianAgentTurn;
+    const resolutionMarker = this.hostProposalResolution
+      ? `[host-proposal-resolved] The previously host-seeded proposal was ${this.hostProposalResolution}. Do not present it as pending.\n`
+      : "";
+    let agentFailure: unknown;
+    let loopReply: Awaited<ReturnType<CrestodianAgentTurnRunner>>;
     try {
-      const loopReply = await withDeadline(
-        agentTurn({
-          input: this.pending
+      loopReply = await agentTurn({
+        input: `${resolutionMarker}${
+          this.pending
             ? // Hand a host-seeded proposal (onboarding welcome) to the loop so
               // the conversation can reshape it through the tool handshake.
-              `[pending-proposal] Awaiting the user's approval: ${describeCrestodianPersistentOperation(this.pending)}. If they want it (or a variant), drive it through the crestodian tool yourself.\n${text}`
-            : text,
-          overview,
-          surface: this.opts.surface ?? "cli",
-          // Mutations unlock only on host-verified approval of THIS message;
-          // the model cannot self-approve (see crestodian-tool.ts).
-          approvalArmed,
-          session: this.agentSession,
-        }).catch(() => null),
-        null,
-        AGENT_TURN_DEADLINE_MS,
-      );
-      if (loopReply?.text) {
-        // The loop owns the conversation now. A stale engine-side proposal
-        // must not survive it, or a later approval could apply an operation
-        // the user was no longer looking at.
+              `[pending-proposal] Awaiting the user's approval: ${formatPendingOperationForAssistant(this.pending)}. It is already host-seeded; if they want it (or a variant), drive it through the crestodian tool yourself.\n${text}`
+            : text
+        }`,
+        overview,
+        surface: this.opts.surface ?? "cli",
+        // Mutations unlock only on host-verified approval of THIS message;
+        // the model cannot self-approve (see crestodian-tool.ts).
+        approvalArmed,
+        session: this.agentSession,
+      });
+    } catch (error) {
+      agentFailure = error;
+      loopReply = null;
+    }
+    if (loopReply?.text) {
+      // The native loop saw this marker. Keep it queued across planner fallback
+      // so a recovered persistent session cannot resurrect resolved host work.
+      this.hostProposalResolution = undefined;
+      // A plain answer does not discard the host-seeded approval transaction.
+      // Clear it only once the loop registers a replacement or takes a handoff.
+      if (loopReply.directive) {
+        this.clearPendingProposals();
+      } else if (this.agentSession.proposalRef.current !== undefined) {
         this.pending = null;
-        return await this.applyAgentTurnReply(loopReply);
       }
-    } catch {
-      // Fall through to the single-turn planner.
+      // Directive/wizard failures are host failures, not inference failures;
+      // never replay them through a second model path.
+      return await this.applyAgentTurnReply(loopReply);
     }
 
     const planner =
       this.opts.planWithAssistant ?? (await import("./assistant.js")).planCrestodianCommand;
-    const plan: Awaited<ReturnType<CrestodianAssistantPlanner>> = await withDeadline(
-      planner({
+    let plannerFailure: unknown;
+    let plan: Awaited<ReturnType<CrestodianAssistantPlanner>>;
+    try {
+      plan = await planner({
         input: text,
         overview,
         history: this.history,
         ...(this.pending
-          ? { pendingOperation: describeCrestodianPersistentOperation(this.pending) }
+          ? { pendingOperation: formatPendingOperationForAssistant(this.pending) }
           : {}),
-      }).catch(() => null),
-      null,
-      ASSISTANT_TURN_DEADLINE_MS,
-    ).catch(() => null);
+        verifiedInference: this.verifiedInference,
+      });
+      if (plan) {
+        // Custom planners are test/plugin seams and do not inherit the default
+        // planner's post-cleanup guard. Check before exposing any plan text.
+        await this.requireVerifiedInference();
+      }
+    } catch (error) {
+      plannerFailure = error;
+      plan = null;
+    }
     if (!plan) {
-      return this.resolveDeterministicTurn(text);
+      throw new CrestodianInferenceUnavailableError(
+        "conversation",
+        [agentFailure, plannerFailure].filter((failure) => failure !== undefined),
+      );
     }
 
     const replyText = plan.reply ?? "";
     if (!plan.command) {
-      return { text: replyText || "…", action: "none" };
+      if (!replyText.trim()) {
+        throw new CrestodianInferenceUnavailableError("planner", [agentFailure]);
+      }
+      return { text: replyText, action: "none" };
     }
-    const operation = parseCrestodianOperation(plan.command);
+    const operation = preservePendingSetupModel(
+      this.pending,
+      parseCrestodianOperation(plan.command),
+    );
     if (operation.kind === "none") {
-      // The model suggested something outside the vocabulary; show only its reply.
-      return { text: replyText || "…", action: "none" };
+      if (!replyText.trim()) {
+        throw new CrestodianInferenceUnavailableError("planner", [agentFailure]);
+      }
+      // A conversational reply is still valid even when its optional command
+      // falls outside the closed operation vocabulary.
+      return { text: replyText, action: "none" };
     }
     // Security contract: surface the interpreted command and model before
     // anything runs (docs/cli/crestodian.md, AI conversation).
@@ -505,6 +657,16 @@ export class CrestodianChatEngine {
     text: string;
     directive?: import("./agent-turn.js").CrestodianAgentTurnDirective;
   }): Promise<CrestodianChatReply> {
+    // Recheck after the model turn: the route may have changed while inference
+    // was running, and its stale directive must never cross that boundary.
+    await this.requireVerifiedInference();
+    if (loopReply.directive?.kind === "approved-operation") {
+      const applied = await this.applyApprovedPersistentOperation(loopReply.directive.operation);
+      return {
+        ...applied,
+        text: [loopReply.text, applied.text].filter(Boolean).join("\n\n"),
+      };
+    }
     if (loopReply.directive?.kind === "channel-setup") {
       const wizardIntro = await this.startChannelSetupWizard(loopReply.directive.channel);
       return {
@@ -512,40 +674,42 @@ export class CrestodianChatEngine {
         action: "none",
       };
     }
+    if (loopReply.directive?.kind === "model-setup") {
+      const setup = await this.startModelSetup(loopReply.directive.workspace);
+      return {
+        ...setup,
+        text: [loopReply.text, setup.text].filter(Boolean).join("\n\n"),
+      };
+    }
     if (loopReply.directive?.kind === "open-tui") {
+      // The Gateway keeps this engine after an open-agent handoff. Retire the
+      // abandoned proposal so a later "yes" cannot arm pre-handoff work.
+      this.clearPendingProposals();
       return {
         text: loopReply.text,
         action: "open-tui",
         handoff: loopReply.directive,
       };
     }
-    return { text: loopReply.text, action: "none" };
-  }
-
-  /**
-   * Last resort with zero usable models: the anchored typed grammar keeps
-   * setup/repair working on a fresh or broken machine (docs/cli/crestodian.md,
-   * configless contract). This is never reached while any model answers.
-   */
-  private async resolveDeterministicTurn(text: string): Promise<CrestodianChatReply> {
-    const direct = parseCrestodianOperation(text);
-    if (direct.kind !== "none") {
-      return await this.runOperation(direct, undefined);
+    if (loopReply.directive?.kind === "open-setup") {
+      const handoff = await this.runOperation(loopReply.directive, undefined);
+      return {
+        ...handoff,
+        text: [loopReply.text, handoff.text].filter(Boolean).join("\n\n"),
+      };
     }
-    return {
-      text: [
-        "I could not reach a model for that (deterministic mode).",
-        "I can run doctor/status/health, check or restart Gateway, list agents/models, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.",
-      ].join("\n"),
-      action: "none",
-    };
+    return { text: loopReply.text, action: "none" };
   }
 
   private async runOperation(
     operation: CrestodianOperation,
     provenance: string | undefined,
   ): Promise<CrestodianChatReply> {
+    // Planning and approval classification are asynchronous. Bind every
+    // operation to the same inference owner checked at turn start.
+    await this.requireVerifiedInference();
     if (operation.kind === "open-tui") {
+      this.clearPendingProposals();
       return {
         text: "Opening your normal agent TUI. Use /crestodian there to come back.",
         action: "open-tui",
@@ -553,10 +717,53 @@ export class CrestodianChatEngine {
       };
     }
 
+    if (operation.kind === "open-setup") {
+      // Host-owned setup replaces the current conversation branch. Void both
+      // proposal stores before any prompt or handoff so a later "yes" cannot
+      // approve work from the abandoned branch.
+      this.clearPendingProposals();
+      if (this.opts.surface === "gateway") {
+        return {
+          text: "The app owns the setup screens here — use Settings, or run `openclaw onboard` in a terminal.",
+          action: "none",
+        };
+      }
+      if (operation.target !== "channels") {
+        return {
+          text: "Setup can replace the inference route powering this session. Exit Crestodian and run `openclaw onboard`; it saves only a route that passes a live test. Then start Crestodian again.",
+          action: "none",
+        };
+      }
+      let handoff = operation;
+      if (handoff.target === "channels" && !handoff.channel) {
+        const channel = this.lastSensitiveChannel;
+        if (!channel) {
+          this.awaitingSetupChannel = true;
+          return {
+            text: "Which channel should I open in the masked terminal wizard?",
+            action: "none",
+          };
+        }
+        this.lastSensitiveChannel = undefined;
+        handoff = { ...handoff, channel };
+      }
+      this.awaitingSetupChannel = false;
+      const label =
+        handoff.target === "channels" ? `${handoff.channel ?? "channel"} setup` : "setup";
+      return {
+        text: `Opening the ${label} wizard.`,
+        action: "open-setup",
+        handoff,
+      };
+    }
+
     if (operation.kind === "channel-setup") {
       // Starting the wizard is not a write; the wizard collects explicit
       // answers and commits only at the end.
       return { text: await this.startChannelSetupWizard(operation.channel), action: "none" };
+    }
+    if (operation.kind === "model-setup") {
+      return await this.startModelSetup(operation.workspace);
     }
 
     const capture = createCaptureRuntime();
@@ -575,18 +782,24 @@ export class CrestodianChatEngine {
       };
     }
 
-    let applied = false;
+    let result: CrestodianOperationResult | undefined;
     try {
-      const result = await executeCrestodianOperation(operation, capture, {
+      result = await executeCrestodianOperation(operation, capture, {
         approved: this.opts.yes === true || !isPersistentCrestodianOperation(operation),
         deps: this.commandDeps(),
+        beforePersistentApply: async () => {
+          await this.requirePersistentApplyInference(capture);
+        },
       });
-      applied = result.applied;
     } catch (error) {
+      if (isCrestodianInferenceUnavailableError(error)) {
+        throw error;
+      }
       capture.error(formatOperationError(error));
     }
-    const verify = applied ? await this.verifyConfigAfterWrite() : null;
-    const reply = [provenance, capture.read(), verify].filter(Boolean).join("\n\n");
+    const verify = result?.applied ? await this.verifyConfigAfterWrite() : null;
+    const followUp = this.armFollowUp(result?.followUp);
+    const reply = [provenance, capture.read(), verify, followUp].filter(Boolean).join("\n\n");
     if (operation.kind === "none" && reply.includes("Bye.")) {
       return { text: reply, action: "exit" };
     }
@@ -594,10 +807,77 @@ export class CrestodianChatEngine {
   }
 
   async loadOverview(): Promise<CrestodianOverview> {
-    if (this.opts.deps?.loadOverview) {
-      return await this.opts.deps.loadOverview();
+    const verifiedRoute = await this.requireVerifiedInference();
+    const overview = this.opts.deps?.loadOverview
+      ? await this.opts.deps.loadOverview()
+      : await loadCrestodianOverview();
+    return { ...overview, defaultModel: verifiedRoute.modelLabel };
+  }
+
+  private async requireVerifiedInference() {
+    const binding = this.opts?.verifiedInference;
+    if (
+      !binding ||
+      binding !== this.verifiedInference ||
+      this.agentSession.verifiedInference !== this.verifiedInference
+    ) {
+      return this.throwInferenceUnavailable();
     }
-    return await loadCrestodianOverview();
+    try {
+      const route = await resolveCrestodianVerifiedInferenceRoute(binding, this.opts.deps);
+      if (route) {
+        return route;
+      }
+    } catch (error) {
+      return this.throwInferenceUnavailable([error]);
+    }
+    return this.throwInferenceUnavailable();
+  }
+
+  private async requirePersistentApplyInference(runtime: RuntimeEnv) {
+    const binding = this.opts?.verifiedInference;
+    if (
+      !binding ||
+      binding !== this.verifiedInference ||
+      this.agentSession.verifiedInference !== this.verifiedInference
+    ) {
+      return this.throwInferenceUnavailable();
+    }
+    try {
+      const { resolveCrestodianInferenceForPersistentApply } = await import("./setup-inference.js");
+      const route = await resolveCrestodianInferenceForPersistentApply({
+        binding,
+        runtime,
+        deps: this.opts.deps,
+      });
+      if (route) {
+        return route;
+      }
+    } catch (error) {
+      if (isCrestodianInferenceUnavailableError(error)) {
+        return this.throwInferenceUnavailable(error.failures, false);
+      }
+      return this.throwInferenceUnavailable([error], false);
+    }
+    return this.throwInferenceUnavailable([], false);
+  }
+
+  private throwInferenceUnavailable(failures: readonly unknown[] = [], cancelWizard = true): never {
+    // Inference loss retires every authority-bearing branch. The engine itself
+    // may still be referenced by a host, so leave no proposal, wizard, or CLI
+    // continuation that a later call could revive.
+    this.pending = null;
+    this.hostProposalResolution = undefined;
+    this.agentSession.proposalRef.current = undefined;
+    delete this.agentSession.cliSession;
+    if (cancelWizard) {
+      this.wizardBridge?.session.cancel();
+    }
+    this.wizardBridge = null;
+    this.lastSensitiveChannel = undefined;
+    this.awaitingSetupChannel = false;
+    this.history.splice(0);
+    throw new CrestodianInferenceUnavailableError("conversation", failures);
   }
 
   /**
@@ -611,7 +891,10 @@ export class CrestodianChatEngine {
     try {
       const { readConfigFileSnapshot } = await import("../config/config.js");
       const snapshot = await readConfigFileSnapshot();
-      if (!snapshot.exists || snapshot.valid) {
+      if (!snapshot.exists) {
+        return this.configVerificationUnavailable("openclaw.json was not found");
+      }
+      if (snapshot.valid) {
         return null;
       }
       const issues = (snapshot.issues ?? []).map(
@@ -620,15 +903,23 @@ export class CrestodianChatEngine {
       );
       issuesText = issues.length > 0 ? issues.join("\n") : "unknown validation failure";
     } catch {
-      return null;
+      return this.configVerificationUnavailable("openclaw.json could not be read");
     }
     const notice = `⚠ openclaw.json failed validation after that write:\n${issuesText}`;
-    const recovery = await this.resolveAssistantTurn(
-      `[config-verify] The config file is now invalid:\n${issuesText}\nPropose one corrective command from the allowed list.`,
-      false,
-    );
-    if (!recovery.text || recovery.text.includes("deterministic mode")) {
-      return `${notice}\nSay \`doctor fix\` to repair it, or \`config schema <path>\` to check the expected shape.`;
+    let recovery: CrestodianChatReply;
+    try {
+      recovery = await this.resolveAssistantTurn(
+        `[config-verify] The config file is now invalid:\n${issuesText}\nPropose one corrective command from the allowed list.`,
+        false,
+      );
+    } catch (error) {
+      if (!isCrestodianInferenceUnavailableError(error)) {
+        throw error;
+      }
+      return `${notice}\nThe write was applied, but inference could not propose a repair. Run \`openclaw doctor --fix\`, then try again.`;
+    }
+    if (!recovery.text) {
+      return `${notice}\nExit Crestodian and run \`openclaw doctor --fix\`, or use \`config schema <path>\` to check the expected shape before leaving.`;
     }
     return `${notice}\n\n${recovery.text}`;
   }
@@ -648,13 +939,54 @@ export class CrestodianChatEngine {
     this.agentSession.proposalRef.current = undefined;
   }
 
+  private configVerificationUnavailable(reason: string): string {
+    return [
+      `⚠ The write was applied, but post-write verification is unavailable: ${reason}.`,
+      "Run `openclaw doctor --fix`, then verify the configuration before continuing.",
+    ].join("\n");
+  }
+
+  private armFollowUp(operation: CrestodianOperation | undefined): string | null {
+    if (operation?.kind !== "model-setup") {
+      return null;
+    }
+    return [
+      "No usable inference route is configured, so Crestodian cannot continue.",
+      "Exit and run `openclaw onboard`; it saves only a route that passes a live test.",
+    ].join("\n");
+  }
+
   private async startChannelSetupWizard(channel: string): Promise<string> {
+    this.clearPendingProposals();
+    this.lastSensitiveChannel = undefined;
+    const beforePersistentApply = async (runtime: RuntimeEnv) => {
+      await this.requirePersistentApplyInference(runtime);
+    };
     const runWizard =
       this.opts.runChannelSetupWizard ??
-      ((ch: string, prompter: WizardPrompterLike) => defaultChannelSetupWizardRunner(ch)(prompter));
-    const session = new WizardSession((prompter) => runWizard(channel, prompter));
-    this.wizardBridge = { session, step: null, label: channel, autoSelectChannel: channel };
+      ((ch: string, prompter: WizardPrompterLike, guard: (runtime: RuntimeEnv) => Promise<void>) =>
+        defaultChannelSetupWizardRunner(ch, guard)(prompter));
+    const session = new WizardSession((prompter) =>
+      runWizard(channel, prompter, beforePersistentApply),
+    );
+    this.wizardBridge = {
+      session,
+      step: null,
+      label: channel,
+      autoSelectChannel: channel,
+    };
     return await this.pumpWizardBridge();
+  }
+
+  private async startModelSetup(_workspace: string | undefined): Promise<CrestodianChatReply> {
+    this.clearPendingProposals();
+    return {
+      text: [
+        "Changing provider credentials would replace the inference route powering this session.",
+        "Exit Crestodian and run `openclaw onboard`; it stages credentials, live-tests the new route, and saves only a passing setup. Then start Crestodian again.",
+      ].join("\n"),
+      action: "none",
+    };
   }
 
   /**
@@ -723,9 +1055,10 @@ export class CrestodianChatEngine {
       if (this.opts.surface === "cli" && bridge.step.sensitive === true) {
         bridge.session.cancel();
         this.wizardBridge = null;
+        this.lastSensitiveChannel = bridge.label;
         return [
-          "Sensitive input is not accepted in the Crestodian TUI because terminal input is visible.",
-          `Run \`openclaw channels add --channel ${bridge.label}\` to finish setup with masked prompts.`,
+          "Sensitive input is not accepted in the Crestodian chat because terminal input is visible.",
+          `Say \`open channel wizard\` and I'll hand you to the masked terminal wizard for ${bridge.label}, or run \`openclaw channels add --channel ${bridge.label}\` yourself later.`,
         ].join("\n");
       }
       if (bridge.step.type === "note" || bridge.step.type === "progress") {

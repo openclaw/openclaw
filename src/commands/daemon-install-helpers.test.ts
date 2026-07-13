@@ -84,11 +84,8 @@ vi.mock("../plugins/plugin-registry.js", async (importActual) => {
   };
 });
 
-import {
-  buildGatewayInstallPlan,
-  gatewayInstallErrorHint,
-  resolveGatewayDevMode,
-} from "./daemon-install-helpers.js";
+import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
+import { resolveGatewayDevMode } from "./daemon-install-plan.shared.js";
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -1295,7 +1292,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
                   source: "env",
                   provider: "default",
                   id: "TELEGRAM_DEFAULT_BOTTOKEN",
-                },
+                } as never,
               },
             },
           },

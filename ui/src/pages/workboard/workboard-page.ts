@@ -1,10 +1,12 @@
 import { consume } from "@lit/context";
-import { html, LitElement, nothing } from "lit";
+import { html, nothing } from "lit";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
+import { resetDraftState } from "../../lib/workboard/card-state.ts";
 import {
   configureWorkboardPolling,
   loadWorkboard,
@@ -12,79 +14,84 @@ import {
   stopWorkboardPolling,
   syncWorkboardLifecycle,
 } from "../../lib/workboard/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { matchesAgentScope } from "./agent-filter.ts";
 import { renderWorkboard } from "./view.ts";
 
-class WorkboardPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class WorkboardPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
-  private stopAgentsSubscription?: () => void;
-  private stopConfigSubscription?: () => void;
-  private stopGatewaySubscription?: () => void;
-  private stopSessionsSubscription?: () => void;
-  private stopWorkboardSubscription?: () => void;
-
   private readonly requestPageUpdate = () => this.context?.workboard.notify();
+  private observedAgentScopeId: string | null | undefined;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.agentSelection,
+      (selection) => {
+        const sync = () => this.syncWorkboardAgentScope();
+        sync();
+        return selection.subscribe(sync);
+      },
+    )
+    .effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => {
+        const handleChange = () => {
+          this.requestUpdate();
+          this.ensureInitialData();
+        };
+        handleChange();
+        return runtimeConfig.subscribe(handleChange);
+      },
+    )
+    .watch(
+      () => this.context?.sessions,
+      (sessions, notify) => sessions.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.workboard,
+      (workboard) => {
+        this.syncWorkboardAgentScope();
+        const unsubscribe = workboard.subscribe(() => this.requestUpdate());
+        return () => {
+          unsubscribe();
+          stopWorkboardPolling(workboard);
+          stopWorkboardLifecycleRefresh(workboard);
+        };
+      },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const handleSnapshot = (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
+          if (snapshot.connected && snapshot.client) {
+            this.ensureInitialData();
+          }
+          this.requestUpdate();
+        };
+        handleSnapshot(gateway.snapshot);
+        return gateway.subscribe(handleSnapshot);
+      },
+    );
 
   override connectedCallback() {
     super.connectedCallback();
-    this.ensureSubscriptions();
     this.ensureInitialData();
     this.syncWorkboardRuntime();
   }
 
   override updated() {
-    this.ensureSubscriptions();
     this.syncWorkboardRuntime();
   }
 
   override disconnectedCallback() {
-    this.stopAgentsSubscription?.();
-    this.stopAgentsSubscription = undefined;
-    this.stopConfigSubscription?.();
-    this.stopConfigSubscription = undefined;
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopSessionsSubscription?.();
-    this.stopSessionsSubscription = undefined;
-    this.stopWorkboardSubscription?.();
-    this.stopWorkboardSubscription = undefined;
-    const workboard = this.context?.workboard;
-    if (workboard) {
-      stopWorkboardPolling(workboard);
-      stopWorkboardLifecycleRefresh(workboard);
-    }
+    this.subscriptions.clear();
     super.disconnectedCallback();
-  }
-
-  private ensureSubscriptions() {
-    const context = this.context;
-    if (!context || this.stopGatewaySubscription) {
-      return;
-    }
-    this.stopAgentsSubscription = context.agents.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopConfigSubscription = context.runtimeConfig.subscribe(() => {
-      this.requestUpdate();
-      this.ensureInitialData();
-    });
-    this.stopSessionsSubscription = context.sessions.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopWorkboardSubscription = context.workboard.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      if (snapshot.connected && snapshot.client) {
-        this.ensureInitialData();
-      }
-      this.requestUpdate();
-    });
   }
 
   private ensureInitialData() {
@@ -152,6 +159,34 @@ class WorkboardPage extends LitElement {
     void context.runtimeConfig.refresh({ discardPendingChanges: true });
   }
 
+  private syncWorkboardAgentScope() {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const nextScopeId = context.agentSelection.state.scopeId;
+    if (this.observedAgentScopeId !== nextScopeId) {
+      this.observedAgentScopeId = nextScopeId;
+      const state = context.workboard.state;
+      const agentsList = context.agents.state.agentsList;
+      const remainsVisible = (cardId: string) => {
+        const card = state.cards.find((entry) => entry.id === cardId);
+        return Boolean(card && matchesAgentScope(card, agentsList, nextScopeId));
+      };
+      // The board's richer agent filter is a secondary control available only
+      // in all-agent scope; a chip switch must not retain a hidden subfilter.
+      state.agentFilter = "all";
+      if (state.detailCardId && !remainsVisible(state.detailCardId)) {
+        state.detailCardId = null;
+        state.detailCommentBody = "";
+      }
+      if (state.editingCardId && !remainsVisible(state.editingCardId)) {
+        resetDraftState(state);
+      }
+      context.workboard.notify();
+    }
+  }
+
   override render() {
     const context = this.context;
     if (!context) {
@@ -167,6 +202,10 @@ class WorkboardPage extends LitElement {
           <div class="page-title">${titleForRoute("workboard")}</div>
           <div class="page-sub">${subtitleForRoute("workboard")}</div>
         </div>
+        ${renderAgentScopeControl({
+          agents: context.agents.state.agentsList?.agents ?? [],
+          selection: context.agentSelection,
+        })}
       </section>
       ${renderWorkboard({
         host: context.workboard,
@@ -179,6 +218,8 @@ class WorkboardPage extends LitElement {
           !config.configSnapshot && !config.configLoading ? config.lastError : null,
         agentsList: context.agents.state.agentsList,
         sessions: context.sessions.state.result?.sessions ?? [],
+        scopeAgentId: context.agentSelection.state.scopeId,
+        showAgentFilter: context.agentSelection.state.scopeId === null,
         onOpenSession: (sessionKey) => {
           context.navigate("chat", { search: searchForSession(sessionKey), hash: "" });
         },

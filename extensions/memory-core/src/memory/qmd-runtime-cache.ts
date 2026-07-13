@@ -40,7 +40,7 @@ export type QmdRuntimeMultiCollectionProbeCacheContext = QmdRuntimeCacheContextB
   sources: readonly string[];
 };
 
-export type QmdRuntimeCacheCollectionValidationEntry = {
+type QmdRuntimeCacheCollectionValidationEntry = {
   version: 1;
   createdAtMs: number;
   expiresAtMs: number;
@@ -52,7 +52,7 @@ export type QmdRuntimeCacheCollectionValidationEntry = {
   };
 };
 
-export type QmdRuntimeCacheMultiCollectionProbeEntry = {
+type QmdRuntimeCacheMultiCollectionProbeEntry = {
   version: 1;
   createdAtMs: number;
   expiresAtMs: number;
@@ -62,7 +62,7 @@ export type QmdRuntimeCacheMultiCollectionProbeEntry = {
   };
 };
 
-export type QmdRuntimeCacheResult<T> =
+type QmdRuntimeCacheResult<T> =
   | {
       state: "hit";
       value: T;

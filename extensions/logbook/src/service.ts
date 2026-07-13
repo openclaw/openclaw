@@ -73,7 +73,7 @@ function unwrapInvokePayload(raw: unknown): SnapshotPayload | null {
 /** Capture commands in preference order: app nodes first, headless node hosts second. */
 const CAPTURE_COMMANDS = ["screen.snapshot", "logbook.snapshot"] as const;
 
-export type LogbookStatus = {
+type LogbookStatus = {
   captureEnabled: boolean;
   capturePaused: boolean;
   captureIntervalSeconds: number;

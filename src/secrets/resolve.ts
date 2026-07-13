@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -56,6 +57,8 @@ const DEFAULT_FILE_MAX_BYTES = 1024 * 1024;
 const DEFAULT_FILE_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
+// Exec diagnostics cross CLI, RPC, and log boundaries; surface only canonical safe codes.
+const SAFE_EXEC_ERROR_CODES = new Set(["AMBIGUOUS_DUPLICATE_KEY", "NOT_FOUND"]);
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -624,7 +627,7 @@ function parseExecValues(params: {
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      return { [params.ids[0]]: trimmed };
+      return { [expectDefined(params.ids[0], "ids entry at 0")]: trimmed };
     }
   } else {
     try {
@@ -640,7 +643,7 @@ function parseExecValues(params: {
 
   if (!isRecord(parsed)) {
     if (!params.jsonOnly && params.ids.length === 1 && typeof parsed === "string") {
-      return { [params.ids[0]]: parsed };
+      return { [expectDefined(params.ids[0], "ids entry at 0")]: parsed };
     }
     throw providerResolutionError({
       source: "exec",
@@ -666,24 +669,18 @@ function parseExecValues(params: {
   const responseErrors = isRecord(parsed.errors) ? parsed.errors : null;
   const out: Record<string, unknown> = {};
   for (const id of params.ids) {
-    if (responseErrors && id in responseErrors) {
+    if (responseErrors && Object.hasOwn(responseErrors, id)) {
       const entry = responseErrors[id];
-      if (isRecord(entry) && typeof entry.message === "string" && entry.message.trim()) {
-        throw refResolutionError({
-          source: "exec",
-          provider: params.providerName,
-          refId: id,
-          message: `Exec provider "${params.providerName}" failed for id "${id}" (${entry.message.trim()}).`,
-        });
-      }
+      const code = isRecord(entry) && typeof entry.code === "string" ? entry.code : null;
+      const safeCode = code && SAFE_EXEC_ERROR_CODES.has(code) ? code : null;
       throw refResolutionError({
         source: "exec",
         provider: params.providerName,
         refId: id,
-        message: `Exec provider "${params.providerName}" failed for id "${id}".`,
+        message: `Exec provider "${params.providerName}" failed for id "${id}"${safeCode ? ` (${safeCode})` : ""}.`,
       });
     }
-    if (!(id in responseValues)) {
+    if (!Object.hasOwn(responseValues, id)) {
       throw refResolutionError({
         source: "exec",
         provider: params.providerName,
@@ -952,7 +949,7 @@ export async function resolveSecretRefValues(
         });
       }
       const providerConfig = resolveConfiguredProvider({
-        ref: group.refs[0],
+        ref: expectDefined(group.refs[0], "refs entry at 0"),
         config: options.config,
         env: options.env ?? process.env,
         manifestRegistry: options.manifestRegistry,

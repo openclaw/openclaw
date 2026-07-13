@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.ui.SettingsRoute
 import android.content.Intent
 
 const val extraAndroidScreenshotMode = "openclaw.screenshotMode"
@@ -7,16 +8,18 @@ const val extraAndroidScreenshotScene = "openclaw.screenshotScene"
 
 enum class AndroidScreenshotScene(
   val rawValue: String,
+  val homeDestination: HomeDestination,
+  internal val settingsRoute: SettingsRoute? = null,
 ) {
-  Connect("connect"),
-  Chat("chat"),
-  Voice("voice"),
-  Screen("screen"),
-  Settings("settings"),
+  Home("home", HomeDestination.Connect),
+  Chat("chat", HomeDestination.Chat),
+  Voice("voice", HomeDestination.Voice),
+  Settings("settings", HomeDestination.Settings),
+  Gateway("gateway", HomeDestination.Settings, SettingsRoute.Gateway),
   ;
 
   companion object {
-    fun fromRawValue(raw: String?): AndroidScreenshotScene = entries.firstOrNull { it.rawValue == raw?.trim()?.lowercase() } ?: Connect
+    fun fromRawValue(raw: String?): AndroidScreenshotScene = entries.firstOrNull { it.rawValue == raw?.trim()?.lowercase() } ?: Home
   }
 }
 

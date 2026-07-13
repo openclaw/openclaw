@@ -180,7 +180,7 @@ describe("happy path prompt snapshots", () => {
     const direct = readCommittedSnapshot("telegram-direct-codex-message-tool.md");
     const group = readCommittedSnapshot("discord-group-codex-message-tool.md");
     const heartbeat = readCommittedSnapshot("telegram-heartbeat-codex-tool.md");
-    const heartbeatPhrase = "Use heartbeats to create useful proactive progress";
+    const heartbeatPhrase = "Heartbeat = useful proactive progress";
     const agentSoulHeading = "## OpenClaw Agent Soul";
 
     expect(direct).toContain('"collaborationMode": {');
@@ -313,7 +313,7 @@ describe("happy path prompt snapshots", () => {
         JSON.stringify({
           models: [
             {
-              slug: "gpt-5.5",
+              slug: "gpt-5.6-sol",
               model_messages: {
                 instructions_template: "System\n{{ personality }}\nEnd",
                 instructions_variables: {
@@ -338,12 +338,14 @@ describe("happy path prompt snapshots", () => {
 
       expect(result.status).toBe("written");
       expect(
-        fs.readFileSync(path.join(outputDir, "gpt-5.5.pragmatic.instructions.md"), "utf8"),
+        fs.readFileSync(path.join(outputDir, "gpt-5.6-sol.pragmatic.instructions.md"), "utf8"),
       ).toBe("System\nUse terse engineering judgement.\nEnd\n");
       expect(
-        JSON.parse(fs.readFileSync(path.join(outputDir, "gpt-5.5.pragmatic.source.json"), "utf8")),
+        JSON.parse(
+          fs.readFileSync(path.join(outputDir, "gpt-5.6-sol.pragmatic.source.json"), "utf8"),
+        ),
       ).toEqual({
-        model: "gpt-5.5",
+        model: "gpt-5.6-sol",
         personality: "pragmatic",
         source: {
           catalogPath: "<test-catalog>",

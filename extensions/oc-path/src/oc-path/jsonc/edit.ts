@@ -15,7 +15,7 @@ import { parseJsonc } from "./parse.js";
 
 type JsoncEditPath = Array<string | number>;
 
-export type JsoncEditResult =
+type JsoncEditResult =
   | { readonly ok: true; readonly ast: JsoncAst }
   | { readonly ok: false; readonly reason: "unresolved" | "no-root" };
 

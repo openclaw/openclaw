@@ -210,7 +210,7 @@ describe("createPdfTool", () => {
     await withConfiguredPdfTool(async (tool) => {
       expect(tool.name).toBe("pdf");
       expect(tool.label).toBe("PDF");
-      expect(tool.description).toContain("Analyze PDFs");
+      expect(tool.description).toContain("Analyze PDF(s)");
     });
   });
 
@@ -377,6 +377,9 @@ describe("createPdfTool", () => {
 
       const [, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
       expectFields(loadOptions, { maxBytes: 524_288 });
+      expect(modelAuth.getApiKeyForModel).toHaveBeenCalledWith(
+        expect.objectContaining({ secretSentinels: true }),
+      );
     });
   });
 
@@ -571,6 +574,7 @@ describe("createPdfTool", () => {
       expect(modelsAgentDir).toBe(agentDir);
       expect(modelsOptions).toEqual({ workspaceDir });
       expect(modelDiscovery.discoverModels).toHaveBeenCalledWith(expect.anything(), agentDir, {
+        config: modelsConfigArg,
         workspaceDir,
       });
       expect(extractSpy).not.toHaveBeenCalled();
@@ -621,8 +625,9 @@ describe("createPdfTool", () => {
   it.each([
     ["1.5", "1.5"],
     ["1,2.5", "2.5"],
+    [`1,${String(Number.MAX_SAFE_INTEGER + 1)}`, String(Number.MAX_SAFE_INTEGER + 1)],
   ])(
-    "rejects fractional page selection %s before loading or fallback extraction",
+    "rejects invalid page selection %s before loading or fallback extraction",
     async (pages, invalidPage) => {
       await withTempPdfAgentDir(async (agentDir) => {
         const { loadSpy } = await stubPdfToolInfra(agentDir, {

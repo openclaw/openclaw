@@ -2,47 +2,35 @@
 
 ## Unreleased
 
-Adds multi-gateway support: the app remembers every paired gateway, lists them in Settings with a quick switcher on the Connect tab, and switches between them without pairing again. Credentials, device tokens, TLS trust, notification routing, chat history, and queued offline messages stay scoped to their gateway, and forgetting a gateway removes all of its stored state.
+Allows Android to connect to Gateway protocol v3 or v4 while preserving the current v4 chat stream behavior.
+Creates or adopts Android's existing per-device chat session before loading connected history, preserving prior conversations while isolating each device. Thanks @snowzlmbot.
+Adds polished Installed/Browse skill management on Android with readiness filters, enable/disable controls, and readable Gateway-enforced ClawHub risk review. Thanks @snowzlmbot.
+Marks already installed ClawHub slugs in Browse and prevents fresh-install retries from overwriting or failing against existing skill directories. (#105741)
+Routes exec approval review through the Gateway's durable approval records, including first-answer-wins results from other authorized surfaces, fail-closed reconciliation after ambiguous writes, and compatibility with older Gateway v4 peers.
+Keeps Android session search in the Sessions screen with direct focus, clear controls, and accurate loading and no-match states. Thanks @IWhatsskill.
+Shows the localized app version, Git commit, and build date together on the About screen, with real provenance in repository-backed debug builds.
 
-Stable GitHub Releases now include a signed standalone Android APK with checksums and verifiable GitHub Actions provenance. (#9443)
+Recovers Android permission prompts after timeouts or cancellation without exhausting future requests. Thanks @NianJiuZst.
 
-Android notification forwarding now excludes native WhatsApp, Telegram, Telegram X, Discord, and Signal channel apps to prevent duplicate cross-session replies. (#48516)
+Requires a clear in-app disclosure and fresh consent before Installed Apps can share app names, package IDs, and status with a paired Gateway; existing opt-ins must consent again. Thanks @joshavant.
 
-Assistant messages now offer a long-press Listen action with gateway TTS playback, on-device fallback, and tap-to-stop status.
+Adds an Android system share target that stages bounded text and image shares for review without losing existing composer drafts. Thanks @NianJiuZst.
 
-Android command-palette rows now align icon and navigation affordances consistently and truncate long session details cleanly. Thanks @IWhatsskill.
+Displays configured agent avatars across Android overview, settings, and chat, with bounded data and public remote image loading. Thanks @guarismo.
 
-Android screenshot-mode voice and screen proof scenes now scale cleanly on compact capture widths. Thanks @IWhatsskill.
+Shows source-configured provider model inventory, capabilities, and route-aware availability in Android without exposing runtime route details. Thanks @snowzlmbot.
 
-The Settings About screen now shows the animated mascot with the app tagline plus Website, Docs, GitHub, and Discord links.
+## 2026.7.1 - 2026-07-08
 
-Adds a read-only Files browser for agent workspaces with directory navigation, text and image previews, and system share export.
+Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.
 
-Android onboarding now completes after permission-triggered node approval and keeps Back navigation from cycling between permissions and approval.
+Upgrades chat with offline recovery, session search and groups, model and agent pickers, voice notes, actions, link previews, code and math rendering.
 
-Third-party Android builds can now opt into Always location through Android settings, with requested background checks disclosed in the persistent node notification while Play builds remain foreground-only. (#68581) Thanks @ioridev.
+Adds workspace files, Cron details, terminal access, and Listen playback.
 
-Android SMS permission guidance now explains the separate Gateway `allowCommands` opt-in required for SMS search and sending. (#91781) Thanks @narcissus0702.
+Improves onboarding, reconnects, keyboards, notification filtering, location, canvas safety, and voice reliability.
 
-Android system notifications now open OpenClaw when tapped without accepting arbitrary external deeplinks.
-
-Android chat history now excludes internal, reasoning, and tool-result rows from rendered messages and the offline transcript cache.
-
-Android chat messages now expose long-press actions for whole-message copy, selective text copy, sharing, and quoted replies.
-
-The OpenClaw mascot now comes alive across onboarding and the app headers with the same float, blink, antenna-wiggle, and claw-snap animation as openclaw.ai.
-
-Adds read-only Cron Job details in Settings, including schedule, payload and delivery state, job ID copy, refresh, and nested back navigation.
-
-Gateway sessions now retry immediately when Android regains a validated network, without waiting for the current reconnect backoff.
-
-Canvas main-frame navigation now blocks device-local loopback and unspecified web targets while preserving remote, LAN, emulator-host, and bundled canvases.
-
-Voice settings now stay within their intended width instead of overflowing or clipping on constrained screens.
-
-Camera clip capture no longer emits release-path diagnostics containing temporary file details.
-
-Push-to-talk now waits for realtime input and output to stop, keeps finishing turns serialized, and safely resumes the matching relay capture.
+Thanks @IWhatsskill, @ioridev, and @narcissus0702.
 
 ## 2026.6.11 - 2026-07-01
 

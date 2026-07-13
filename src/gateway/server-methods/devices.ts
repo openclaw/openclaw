@@ -7,6 +7,7 @@ import {
   validateDevicePairListParams,
   validateDevicePairRemoveParams,
   validateDevicePairRejectParams,
+  validateDevicePairRenameParams,
   validateDeviceTokenRevokeParams,
   validateDeviceTokenRotateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -24,6 +25,7 @@ import {
   revokeDeviceToken,
   rotateDeviceToken,
   summarizeDeviceTokens,
+  updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
 import {
@@ -48,12 +50,14 @@ const DEVICE_PAIR_REJECTION_DENIED_MESSAGE = "device pairing rejection denied";
 
 function redactPairedDevice(
   device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,
+  opts?: { connected?: boolean },
 ) {
   // Pairing lists are visible to operators; expose token lifecycle metadata
   // without returning raw token material or the internal approved-scope set.
   const { tokens, approvedScopes: _approvedScopes, ...rest } = device;
   return {
     ...rest,
+    ...(opts?.connected !== undefined ? { connected: opts.connected } : {}),
     tokens: summarizeDeviceTokens(tokens),
   };
 }
@@ -133,7 +137,11 @@ function emitDevicePairingDeniedSecurityEvent(params: {
 }
 
 function emitDevicePairingLifecycleSecurityEvent(params: {
-  action: "device.pairing.approved" | "device.pairing.rejected" | "device.pairing.removed";
+  action:
+    | "device.pairing.approved"
+    | "device.pairing.rejected"
+    | "device.pairing.removed"
+    | "device.pairing.renamed";
   severity: DiagnosticSecurityEventInput["severity"];
   authz: DeviceSessionAuthz;
   targetDeviceId: string;
@@ -202,7 +210,7 @@ function emitDeviceTokenLifecycleSecurityEvent(params: {
 
 /** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
-  "device.pair.list": async ({ params, respond, client }) => {
+  "device.pair.list": async ({ params, respond, context, client }) => {
     if (!validateDevicePairListParams(params)) {
       respond(
         false,
@@ -231,7 +239,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       true,
       {
         pending: visibleList.pending,
-        paired: visibleList.paired.map((device) => redactPairedDevice(device)),
+        // Live-connection state lets clients distinguish active pairings from
+        // stale ones; node-role links alone do not cover operator clients.
+        paired: visibleList.paired.map((device) =>
+          redactPairedDevice(device, {
+            connected: context.hasConnectedClientsForDevice?.(device.deviceId.trim()) ?? false,
+          }),
+        ),
       },
       undefined,
     );
@@ -486,6 +500,82 @@ export const deviceHandlers: GatewayRequestHandlers = {
     queueMicrotask(() => {
       context.disconnectClientsForDevice?.(removed.deviceId);
     });
+  },
+  "device.pair.rename": async ({ params, respond, context, client }) => {
+    if (!validateDevicePairRenameParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid device.pair.rename params: ${formatValidationErrors(
+            validateDevicePairRenameParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const { deviceId, label } = params as {
+      deviceId: string;
+      label: string;
+    };
+    const trimmed = label.trim();
+    if (!trimmed) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "label required"));
+      return;
+    }
+    const authz = resolveDeviceManagementAuthz(client, deviceId);
+    if (deniesCrossDeviceManagement(authz)) {
+      context.logGateway.warn(
+        `device pairing rename denied device=${deviceId} reason=device-ownership-mismatch`,
+      );
+      emitDevicePairingDeniedSecurityEvent({
+        authz,
+        targetDeviceId: deviceId,
+        controlId: "device.pair.rename",
+        reason: "device-ownership-mismatch",
+      });
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "device pairing rename denied"),
+      );
+      return;
+    }
+    if (authz.callerDeviceId && !authz.isAdminCaller) {
+      const paired = await getPairedDevice(authz.normalizedTargetDeviceId);
+      if (paired && pairedDeviceHasNonOperatorRole(paired)) {
+        context.logGateway.warn(
+          `device pairing rename denied device=${deviceId} reason=role-management-requires-admin`,
+        );
+        emitDevicePairingDeniedSecurityEvent({
+          authz,
+          targetDeviceId: deviceId,
+          controlId: "device.pair.rename",
+          reason: "role-management-requires-admin",
+        });
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "device pairing rename denied"),
+        );
+        return;
+      }
+    }
+    const updated = await updatePairedDeviceMetadata(deviceId, { operatorLabel: trimmed });
+    if (!updated) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));
+      return;
+    }
+    context.logGateway.info(`device pairing renamed device=${deviceId} label=${trimmed}`);
+    emitDevicePairingLifecycleSecurityEvent({
+      action: "device.pairing.renamed",
+      severity: "low",
+      authz,
+      targetDeviceId: deviceId,
+      controlId: "device.pair.rename",
+    });
+    respond(true, { deviceId, label: trimmed }, undefined);
   },
   "device.token.rotate": async ({ params, respond, context, client }) => {
     if (!validateDeviceTokenRotateParams(params)) {

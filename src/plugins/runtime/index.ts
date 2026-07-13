@@ -35,13 +35,6 @@ import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
-export type { CreatePluginRuntimeOptions } from "./types.js";
-export {
-  clearGatewaySubagentRuntime,
-  setGatewayNodesRuntime,
-  setGatewaySubagentRuntime,
-} from "./gateway-bindings.js";
-
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
@@ -49,6 +42,22 @@ const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
 const loadModelAuthRuntime = createLazyRuntimeModule(
   () => import("./runtime-model-auth.runtime.js"),
 );
+const loadGatewayPluginRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/server-plugins.js"),
+);
+
+function createRuntimeGateway(): PluginRuntime["gateway"] {
+  return {
+    isAvailable: async () => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.hasInProcessGatewayContext();
+    },
+    request: async (method, params, options) => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
+    },
+  };
+}
 
 function createRuntimeTts(): PluginRuntime["tts"] {
   const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
@@ -100,6 +109,10 @@ function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
 }
 
 function createRuntimeLlmFacade(): PluginRuntime["llm"] {
+  const loadAcquireLocalService = createLazyRuntimeMethod(
+    () => import("../../agents/provider-local-service.js"),
+    (runtime) => runtime.createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
+  );
   const loadLlm = createLazyRuntimeSurface(
     () => import("./runtime-llm.runtime.js"),
     (m) =>
@@ -111,6 +124,7 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
       }),
   );
   return {
+    acquireLocalService: (...args) => loadAcquireLocalService(...args),
     complete: async (params) => {
       const llm = await loadLlm();
       return llm.complete(params);
@@ -243,6 +257,7 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
   };
 }
 
+// Loaded by path from the plugin loader, so static export analysis cannot see this contract.
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
@@ -253,6 +268,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    gateway: createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),
     subagent: createLateBindingSubagent(

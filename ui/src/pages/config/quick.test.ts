@@ -14,9 +14,9 @@ function expectButtonByText(container: Element, text: string): HTMLButtonElement
   return button;
 }
 
-function expectRowByLabel(container: Element, text: string): HTMLElement {
-  const row = Array.from(container.querySelectorAll<HTMLElement>(".qs-row")).find(
-    (candidate) => candidate.querySelector(".qs-row__label")?.textContent?.trim() === text,
+function expectRowByTitle(container: Element, text: string): HTMLElement {
+  const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+    (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === text,
   );
   if (!(row instanceof HTMLElement)) {
     throw new Error(`Expected quick settings row "${text}"`);
@@ -31,8 +31,25 @@ function expectFileInput(input: Element | null | undefined): HTMLInputElement {
   return input;
 }
 
+function expectStatByLabel(container: Element, text: string): HTMLElement {
+  const stat = Array.from(container.querySelectorAll<HTMLElement>(".config-host__stat")).find(
+    (candidate) =>
+      candidate.querySelector(".config-host__stat-label")?.textContent?.trim() === text,
+  );
+  if (!(stat instanceof HTMLElement)) {
+    throw new Error(`Expected system stat "${text}"`);
+  }
+  return stat;
+}
+
 function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettingsProps {
   return {
+    locale: "en",
+    onLocaleChange: vi.fn(),
+    lobsterPetVisits: true,
+    setLobsterPetVisits: () => {},
+    lobsterPetSounds: false,
+    setLobsterPetSounds: () => {},
     currentModel: "gpt-5.5",
     thinkingLevel: "off",
     fastMode: false,
@@ -65,17 +82,13 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     themeMode: "system",
     hasCustomTheme: false,
     customThemeLabel: null,
-    borderRadius: 50,
     textScale: 100,
     setTheme: vi.fn(),
     onOpenCustomThemeImport: vi.fn(),
     setThemeMode: vi.fn(),
-    setBorderRadius: vi.fn(),
     setTextScale: vi.fn(),
     userAvatar: null,
     onUserAvatarChange: vi.fn(),
-    configObject: {},
-    onSelectPreset: vi.fn(),
     connected: true,
     gatewayUrl: "ws://localhost:18789",
     assistantName: "OpenClaw",
@@ -95,21 +108,8 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
   };
 }
 
-function collectQuickSettingsCardKinds(container: Element): string[] {
-  const kinds: string[] = [];
-  for (const card of container.querySelectorAll(".qs-card")) {
-    const kind = Array.from(card.classList).find(
-      (className) => className.startsWith("qs-card--") && className !== "qs-card--span-all",
-    );
-    if (kind) {
-      kinds.push(kind);
-    }
-  }
-  return kinds;
-}
-
 function expectAssistantAvatarSource(container: Element): { label: string; source: string } {
-  const source = container.querySelector(".qs-identity-card--assistant .qs-identity-card__source");
+  const source = container.querySelector(".config-identity--assistant .config-identity__source");
   return {
     label: source?.querySelector("span")?.textContent?.trim() ?? "",
     source: source?.querySelector("code")?.textContent?.trim() ?? "",
@@ -117,21 +117,86 @@ function expectAssistantAvatarSource(container: Element): { label: string; sourc
 }
 
 describe("renderQuickSettings", () => {
-  it("uses direct dashboard cards for the compact settings layout", () => {
+  it("renders the single-column settings sections with stable target ids", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(collectQuickSettingsCardKinds(container)).toEqual([
-      "qs-card--model",
-      "qs-card--channels",
-      "qs-card--security",
-      "qs-card--system",
-      "qs-card--appearance",
-      "qs-card--personal",
-      "qs-card--automations",
+    expect(container.querySelectorAll(".settings-page")).toHaveLength(1);
+    const targetIds = Array.from(
+      container.querySelectorAll<HTMLElement>("[id^='settings-general-']"),
+    ).map((element) => element.id);
+    expect(targetIds).toEqual([
+      "settings-general-model",
+      "settings-general-channels",
+      "settings-general-security",
+      "settings-general-automations",
+      "settings-general-appearance",
+      "settings-general-personal",
+      "settings-general-system",
     ]);
-    expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
+    // One group surface per section; no nested cards.
+    for (const id of targetIds) {
+      const section = container.querySelector(`#${id}`);
+      expect(section?.querySelectorAll(".settings-group")).toHaveLength(1);
+      expect(section?.querySelector(".settings-group .settings-group")).toBeNull();
+    }
+  });
+
+  it("changes the Control UI language from General settings", () => {
+    const onLocaleChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ locale: "pt-BR", onLocaleChange })), container);
+
+    const row = expectRowByTitle(container, "Language");
+    const select = row.querySelector("select");
+    expect(select?.value).toBe("pt-BR");
+    if (!(select instanceof HTMLSelectElement)) {
+      throw new Error("Expected language selector");
+    }
+    select.value = "en";
+    select.dispatchEvent(new Event("change"));
+    expect(onLocaleChange).toHaveBeenCalledWith("en");
+  });
+
+  it("drills into model settings from the Model row", () => {
+    const onModelChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ onModelChange })), container);
+
+    const row = expectRowByTitle(container, "Model");
+    expect(row.classList.contains("settings-row--nav")).toBe(true);
+    expect(row.querySelector(".settings-row__value")?.textContent?.trim()).toBe("gpt-5.5");
+    row.click();
+    expect(onModelChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows channel status and connect actions", () => {
+    const onChannelConfigure = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          channels: [
+            { id: "discord", label: "Discord", connected: true, detail: "Configured" },
+            { id: "telegram", label: "Telegram", connected: false },
+          ],
+          onChannelConfigure,
+        }),
+      ),
+      container,
+    );
+
+    const discordRow = expectRowByTitle(container, "Discord");
+    expect(discordRow.querySelector(".settings-status")?.textContent?.trim()).toBe("Configured");
+    const telegramRow = expectRowByTitle(container, "Telegram");
+    const connectButton = telegramRow.querySelector("button");
+    expect(connectButton?.textContent?.trim()).toBe("Connect →");
+    connectButton?.click();
+    expect(onChannelConfigure).toHaveBeenCalledWith("telegram");
   });
 
   it("renders Gateway host identity and resources", () => {
@@ -166,15 +231,84 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const hostRow = expectRowByLabel(container, "Host");
-    expect(hostRow.querySelector(".qs-row__value")?.textContent).toBe("Gateway Mac");
-    expect(hostRow.querySelector(".qs-row__value")?.getAttribute("title")).toBe("gateway.local");
-    expect(expectRowByLabel(container, "Address").textContent).toContain("192.168.1.20:18789");
-    expect(expectRowByLabel(container, "OS").textContent).toContain("macOS 26.5.0 · arm64");
-    expect(expectRowByLabel(container, "Uptime").textContent).toContain("1h");
-    expect(expectRowByLabel(container, "CPU").textContent).toContain("10 cores · load 1.2");
-    expect(expectRowByLabel(container, "Memory").textContent).toContain("16 GB free of 32 GB");
-    expect(expectRowByLabel(container, "Disk").textContent).toContain("463 GB free of 926 GB");
+    const name = container.querySelector(".config-host__name");
+    expect(name?.textContent?.trim()).toBe("Gateway Mac");
+    expect(name?.getAttribute("title")).toBe("gateway.local");
+    expect(container.querySelector(".config-host__address")?.textContent?.trim()).toBe(
+      "192.168.1.20:18789",
+    );
+    const metas = Array.from(container.querySelectorAll(".config-host__meta")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(metas).toEqual(["macOS 26.5.0 · arm64", "Node v24.1.0 · PID 1234"]);
+    expect(
+      container
+        .querySelector("#settings-general-system .settings-section__actions .settings-status")
+        ?.textContent?.trim(),
+    ).toBe("Up 1h");
+
+    const cpu = expectStatByLabel(container, "CPU");
+    expect(
+      cpu.querySelector(".config-host__stat-value")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("1.2 load");
+    expect(cpu.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe("10 cores");
+    expect(cpu.getAttribute("title")).toBe("Apple M4 · Load average: 1.2 · 1.1 · 0.9");
+    expect(cpu.querySelector(".config-host__meter")?.getAttribute("aria-valuenow")).toBe("12");
+
+    const memory = expectStatByLabel(container, "Memory");
+    expect(
+      memory.querySelector(".config-host__stat-value")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("50% used");
+    expect(memory.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
+      "16 GB free of 32 GB",
+    );
+
+    const disk = expectStatByLabel(container, "Disk");
+    expect(
+      disk.querySelector(".config-host__stat-value")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("50% used");
+    expect(disk.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
+      "463 GB free of 926 GB",
+    );
+    expect(disk.getAttribute("title")).toBe("/Users/operator/.openclaw");
+    for (const fill of container.querySelectorAll(".config-host__meter-fill")) {
+      expect([...fill.classList]).toContain("config-host__meter-fill--ok");
+    }
+  });
+
+  it("escalates meter tones as resources run hot", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          systemInfo: {
+            machineName: "Gateway Mac",
+            hostname: "gateway.local",
+            platform: "darwin",
+            release: "25.5.0",
+            arch: "arm64",
+            osLabel: "macOS 26.5.0",
+            nodeVersion: "v24.1.0",
+            pid: 1234,
+            uptimeMs: 60_000,
+            cpuCount: 10,
+            loadAverage: [9.8, 9.1, 8.4],
+            memoryTotalBytes: 34_359_738_368,
+            memoryFreeBytes: 2_147_483_648,
+            diskTotalBytes: 994_662_584_320,
+            diskAvailableBytes: 198_932_516_864,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const tone = (label: string) =>
+      expectStatByLabel(container, label).querySelector(".config-host__meter-fill")?.classList[1];
+    expect(tone("CPU")).toBe("config-host__meter-fill--critical");
+    expect(tone("Memory")).toBe("config-host__meter-fill--critical");
+    expect(tone("Disk")).toBe("config-host__meter-fill--warn");
   });
 
   it("hides Gateway host details when the RPC is unavailable", () => {
@@ -182,29 +316,124 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ systemInfoUnavailable: true })), container);
 
-    expect(container.querySelector(".qs-card--system")).toBeNull();
+    expect(container.querySelector("#settings-general-system")).toBeNull();
   });
 
-  it("reserves the Gateway host card while its first snapshot loads", () => {
+  it("reserves the Gateway host section while its first snapshot loads", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
-    const systemCard = container.querySelector(".qs-card--system");
-    expect(systemCard).not.toBeNull();
-    expect(expectRowByLabel(systemCard ?? container, "Host").textContent).toContain("—");
-    expect(expectRowByLabel(systemCard ?? container, "Disk").textContent).toContain("—");
+    const systemSection = container.querySelector("#settings-general-system");
+    expect(systemSection).not.toBeNull();
+    expect(systemSection?.querySelector(".config-host__name")?.textContent).toContain("—");
+    for (const label of ["CPU", "Memory", "Disk"]) {
+      const stat = expectStatByLabel(systemSection ?? container, label);
+      expect(stat.querySelector(".config-host__stat-value")?.textContent).toContain("—");
+      expect(stat.querySelector(".config-host__meter")).toBeNull();
+    }
+    expect(systemSection?.querySelector(".config-host__address")).toBeNull();
   });
 
-  it("shows the current bootstrap default when config omits the explicit limit", () => {
+  it("hides the pending changes bar when the config is clean", () => {
     const container = document.createElement("div");
 
-    render(renderQuickSettings(createProps({ configObject: {} })), container);
+    render(renderQuickSettings(createProps()), container);
 
-    const summary = container.querySelector(".qs-profiles__summary-values");
-    expect(summary?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "20,000 chars per file · 60,000 chars total · Every turn",
+    expect(container.querySelector(".settings-group[aria-live='polite']")).toBeNull();
+  });
+
+  it("renders pending config actions and calls their handlers", () => {
+    const onResetConfig = vi.fn();
+    const onSaveConfig = vi.fn();
+    const onApplyConfig = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          configDirty: true,
+          configReady: true,
+          connected: true,
+          onResetConfig,
+          onSaveConfig,
+          onApplyConfig,
+        }),
+      ),
+      container,
     );
+
+    const pending = container.querySelector(".settings-group[aria-live='polite']");
+    expect(pending).not.toBeNull();
+    const discardButton = expectButtonByText(container, "Discard");
+    const saveButton = expectButtonByText(container, "Save");
+    const applyButton = expectButtonByText(container, "Apply Now");
+    expect(saveButton.disabled).toBe(false);
+
+    discardButton.click();
+    saveButton.click();
+    applyButton.click();
+
+    expect(onResetConfig).toHaveBeenCalledTimes(1);
+    expect(onSaveConfig).toHaveBeenCalledTimes(1);
+    expect(onApplyConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("locks config-backed quick controls while a config operation is pending", () => {
+    for (const pending of [
+      { configLoading: true },
+      { configSaving: true },
+      { configApplying: true },
+      { configUpdating: true },
+    ]) {
+      const onThinkingChange = vi.fn();
+      const onFastModeChange = vi.fn();
+      const onToolProfileChange = vi.fn();
+      const container = document.createElement("div");
+      render(
+        renderQuickSettings(
+          createProps({
+            configDirty: true,
+            onThinkingChange,
+            onFastModeChange,
+            onToolProfileChange,
+            ...pending,
+          }),
+        ),
+        container,
+      );
+
+      const thinkingButton = expectButtonByText(expectRowByTitle(container, "Thinking"), "High");
+      expect(thinkingButton.disabled).toBe(true);
+      thinkingButton.click();
+      expect(onThinkingChange).not.toHaveBeenCalled();
+      const fastButton = expectButtonByText(expectRowByTitle(container, "Fast mode"), "Fast");
+      expect(fastButton.disabled).toBe(true);
+      fastButton.click();
+      expect(onFastModeChange).not.toHaveBeenCalled();
+      const profileButton = expectButtonByText(expectRowByTitle(container, "Tool profile"), "full");
+      expect(profileButton.disabled).toBe(true);
+      profileButton.click();
+      expect(onToolProfileChange).not.toHaveBeenCalled();
+      const browserRow = expectRowByTitle(container, "Browser enabled");
+      expect(browserRow.querySelector("input")?.hasAttribute("disabled")).toBe(true);
+      const pendingRow = expectRowByTitle(container, "Unsaved changes");
+      expect(
+        [...pendingRow.querySelectorAll<HTMLButtonElement>("button")].every(
+          (button) => button.disabled,
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("disables commit actions until the config is ready", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ configDirty: true, configReady: false })), container);
+
+    expect(expectButtonByText(container, "Save").disabled).toBe(true);
+    expect(expectButtonByText(container, "Apply Now").disabled).toBe(true);
+    expect(expectButtonByText(container, "Discard").disabled).toBe(false);
   });
 
   it("keeps auto as a first-class quick settings fast mode", () => {
@@ -213,14 +442,14 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ fastMode: "auto", onFastModeChange })), container);
 
-    const row = expectRowByLabel(container, "Fast mode");
+    const row = expectRowByTitle(container, "Fast mode");
     const buttons = Array.from(row.querySelectorAll<HTMLButtonElement>("button"));
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([
       "Auto",
       "Fast",
       "Standard",
     ]);
-    expect(row.querySelector(".qs-segmented__btn--active")?.textContent?.trim()).toBe("Auto");
+    expect(row.querySelector(".settings-segmented__btn--active")?.textContent?.trim()).toBe("Auto");
 
     expectButtonByText(row, "Auto").click();
     expect(onFastModeChange).not.toHaveBeenCalled();
@@ -252,8 +481,9 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const browserRow = expectRowByLabel(container, "Browser enabled");
-    expect(browserRow.querySelector(".qs-toggle__hint")?.textContent).toBe("Disabled");
+    const browserRow = expectRowByTitle(container, "Browser enabled");
+    // Toggle rows are one label so the whole row is clickable.
+    expect(browserRow.tagName).toBe("LABEL");
     const browserInput = browserRow.querySelector("input");
     expect(browserInput).toBeInstanceOf(HTMLInputElement);
     expect((browserInput as HTMLInputElement).checked).toBe(false);
@@ -264,11 +494,34 @@ describe("renderQuickSettings", () => {
 
     expectButtonByText(container, "full").click();
     expect(onToolProfileChange).toHaveBeenCalledWith("full");
-    expect([...expectButtonByText(container, "messaging").classList]).toEqual([
-      "qs-segmented__btn",
-      "qs-segmented__btn--compact",
-      "qs-segmented__btn--active",
-    ]);
+    const activeProfile = expectButtonByText(container, "messaging");
+    expect(activeProfile.classList.contains("settings-segmented__btn--active")).toBe(true);
+  });
+
+  it("shows gateway auth and device auth as dot statuses, not pills", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          security: {
+            gatewayAuth: "none",
+            execPolicy: "allowlist",
+            deviceAuth: true,
+            browserEnabled: true,
+            toolProfile: "full",
+          },
+        }),
+      ),
+      container,
+    );
+
+    const authRow = expectRowByTitle(container, "Gateway auth");
+    const authStatus = authRow.querySelector(".settings-status");
+    expect(authStatus?.textContent?.trim()).toBe("none");
+    expect(authStatus?.classList.contains("settings-status--warn")).toBe(true);
+    const deviceRow = expectRowByTitle(container, "Device auth");
+    expect(deviceRow.querySelector(".settings-status--ok")?.textContent?.trim()).toBe("Enabled");
   });
 
   it("opens mobile pairing from Security quick settings", () => {
@@ -277,7 +530,7 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ onPairMobile })), container);
 
-    expectRowByLabel(container, "OpenClaw mobile");
+    expectRowByTitle(container, "OpenClaw mobile");
     const button = expectButtonByText(container, "Pair mobile device");
     expect(button.disabled).toBe(false);
     button.click();
@@ -290,14 +543,46 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ textScale: 125, setTextScale })), container);
 
-    const textSizeRow = expectRowByLabel(container, "Text size");
+    const textSizeRow = expectRowByTitle(container, "Text size");
     const active = Array.from(textSizeRow.querySelectorAll("button")).find((button) =>
-      button.classList.contains("qs-segmented__btn--active"),
+      button.classList.contains("settings-segmented__btn--active"),
     );
     expect(active?.textContent?.trim()).toBe("XL");
+    expect(active?.getAttribute("title")).toBe("125%");
 
-    expectButtonByText(textSizeRow, "XXL").click();
+    const xxlButton = expectButtonByText(textSizeRow, "XXL");
+    expect(xxlButton.getAttribute("title")).toBe("140%");
+    xxlButton.click();
     expect(setTextScale).toHaveBeenCalledWith(140);
+  });
+
+  it("anchors theme mode transitions on the clicked segmented button", () => {
+    const setThemeMode = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ themeMode: "system", setThemeMode })), container);
+
+    const modeRow = expectRowByTitle(container, "Mode");
+    const darkButton = expectButtonByText(modeRow, "Dark");
+    darkButton.click();
+    expect(setThemeMode).toHaveBeenCalledWith("dark", { element: darkButton });
+  });
+
+  it("renders lobster pet rows as label-wrapped toggle rows", () => {
+    const setLobsterPetVisits = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ setLobsterPetVisits })), container);
+
+    const visitsRow = expectRowByTitle(container, "Lobster visits");
+    expect(visitsRow.tagName).toBe("LABEL");
+    const input = visitsRow.querySelector("input");
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error("Expected lobster visits toggle input");
+    }
+    input.checked = false;
+    input.dispatchEvent(new Event("change"));
+    expect(setLobsterPetVisits).toHaveBeenCalledWith(false);
   });
 
   it("keeps the local user name fixed and shows the assistant identity", () => {
@@ -314,20 +599,24 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const titles = Array.from(container.querySelectorAll(".qs-identity-card__title")).map((node) =>
+    const titles = Array.from(container.querySelectorAll(".config-identity__title")).map((node) =>
       node.textContent?.trim(),
     );
     expect(titles).toEqual(["You", "Nova"]);
     expect(container.querySelector('input[placeholder="You"]')).toBeNull();
     expect(
-      Array.from(container.querySelectorAll(".qs-row__label")).some(
+      Array.from(container.querySelectorAll(".settings-row__title")).some(
         (node) => node.textContent?.trim() === "Name",
       ),
     ).toBe(false);
-    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe("blob:nova");
+    expect(
+      container
+        .querySelector(".config-identity--assistant .config-identity__avatar")
+        ?.getAttribute("src"),
+    ).toBe("blob:nova");
   });
 
-  it("renders same-origin assistant avatar routes from IDENTITY.md", () => {
+  it("renders same-origin configured assistant avatar routes", () => {
     const container = document.createElement("div");
 
     render(
@@ -343,12 +632,14 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
-      "/avatar/main",
-    );
+    expect(
+      container
+        .querySelector(".config-identity--assistant .config-identity__avatar")
+        ?.getAttribute("src"),
+    ).toBe("/avatar/main");
   });
 
-  it("shows the IDENTITY.md avatar source when the assistant falls back to the logo", () => {
+  it("shows the configured avatar source when the assistant falls back to the logo", () => {
     const container = document.createElement("div");
 
     render(
@@ -365,14 +656,16 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
-      "/apple-touch-icon.png",
-    );
+    expect(
+      container
+        .querySelector(".config-identity--assistant .config-identity__avatar")
+        ?.getAttribute("src"),
+    ).toBe("/apple-touch-icon.png");
     expect(expectAssistantAvatarSource(container)).toEqual({
-      label: "IDENTITY.md",
+      label: "Configured avatar",
       source: "assets/avatars/nova-portrait.png",
     });
-    expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".config-identity__issue")?.textContent?.trim()).toBe(
       "File not found",
     );
     expect(
@@ -380,6 +673,103 @@ describe("renderQuickSettings", () => {
         (label) => label.textContent?.trim() === "Choose image",
       ),
     ).toBe(true);
+  });
+
+  it("renders the gateway fallback without retrying a rejected avatar route", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "A",
+          assistantAvatarUrl: "A",
+          assistantAvatarSource: "assets/avatars/missing.png",
+          assistantAvatarStatus: "none",
+          assistantAvatarReason: "missing",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".config-identity__avatar--fallback")?.getAttribute("src")).toBe(
+      "/apple-touch-icon.png",
+    );
+    expect(
+      container.querySelector(
+        '.config-identity--assistant .config-identity__avatar[src*="/avatar/"]',
+      ),
+    ).toBeNull();
+    expect(container.querySelector(".config-identity__issue")?.textContent?.trim()).toBe(
+      "File not found",
+    );
+  });
+
+  it("shows unreadable avatar failures without retrying the protected route", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "A",
+          assistantAvatarUrl: "A",
+          assistantAvatarSource: "assets/avatars/avatar.png",
+          assistantAvatarStatus: "none",
+          assistantAvatarReason: "unreadable",
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      container.querySelector(
+        '.config-identity--assistant .config-identity__avatar[src*="/avatar/"]',
+      ),
+    ).toBeNull();
+    expect(container.querySelector(".config-identity__issue")?.textContent?.trim()).toBe(
+      "Cannot render avatar",
+    );
+  });
+
+  it("keeps a bounded avatar source free of lone surrogates", () => {
+    const container = document.createElement("div");
+    const source = `${"a".repeat(33)}😀${"m".repeat(20)}😀${"b".repeat(23)}`;
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: null,
+          assistantAvatarSource: source,
+          assistantAvatarStatus: "none",
+        }),
+      ),
+      container,
+    );
+
+    expect(expectAssistantAvatarSource(container).source).toBe(
+      `${"a".repeat(33)}...${"b".repeat(23)}`,
+    );
+  });
+
+  it("keeps a malformed data-image header free of lone surrogates", () => {
+    const container = document.createElement("div");
+    const source = `data:image/${"a".repeat(20)}😀tail`;
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: null,
+          assistantAvatarSource: source,
+          assistantAvatarStatus: "none",
+        }),
+      ),
+      container,
+    );
+
+    expect(expectAssistantAvatarSource(container).source).toBe(`data:image/${"a".repeat(20)},...`);
   });
 
   it("reads assistant image imports into an override", () => {
@@ -423,7 +813,7 @@ describe("renderQuickSettings", () => {
 
       const inputs = Array.from(container.querySelectorAll('input[type="file"]'));
       const input = inputs.find((node) =>
-        node.closest(".qs-identity-card--assistant"),
+        node.closest(".config-identity--assistant"),
       ) as HTMLInputElement | null;
       expect(input?.type).toBe("file");
       if (!input) {
@@ -445,7 +835,7 @@ describe("renderQuickSettings", () => {
     }
   });
 
-  it("can clear an assistant avatar override back to IDENTITY.md", () => {
+  it("can clear an assistant avatar override back to the configured avatar", () => {
     const onAssistantAvatarClearOverride = vi.fn();
     const container = document.createElement("div");
 
@@ -472,7 +862,7 @@ describe("renderQuickSettings", () => {
     expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
   });
 
-  it("lets the browser-local assistant avatar override stale missing IDENTITY.md metadata", () => {
+  it("lets the browser-local assistant avatar override stale missing source metadata", () => {
     const dataUrl = "data:image/png;base64,bG9jYWwtYXNzaXN0YW50";
     const container = document.createElement("div");
 
@@ -491,12 +881,16 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(dataUrl);
+    expect(
+      container
+        .querySelector(".config-identity--assistant .config-identity__avatar")
+        ?.getAttribute("src"),
+    ).toBe(dataUrl);
     expect(expectAssistantAvatarSource(container)).toEqual({
       label: "UI override",
       source: "data:image/png;base64,...",
     });
-    expect(container.querySelector(".qs-identity-card__issue")).toBeNull();
+    expect(container.querySelector(".config-identity__issue")).toBeNull();
     expect(
       Array.from(container.querySelectorAll("label.btn")).some(
         (label) => label.textContent?.trim() === "Replace image",
@@ -520,7 +914,7 @@ describe("renderQuickSettings", () => {
 
       const input = expectFileInput(
         Array.from(container.querySelectorAll('input[type="file"]')).find(
-          (node) => !node.closest(".qs-identity-card--assistant"),
+          (node) => !node.closest(".config-identity--assistant"),
         ),
       );
 
@@ -591,10 +985,10 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const customThemeButton = expectButtonByText(container, "Light Green");
-    customThemeButton.click();
+    const customButton = expectButtonByText(container, "Light Green");
+    customButton.click();
 
-    expect(setTheme).toHaveBeenCalledWith("custom", { element: customThemeButton });
+    expect(setTheme).toHaveBeenCalledWith("custom", { element: customButton });
     expect(onOpenCustomThemeImport).not.toHaveBeenCalled();
   });
 });

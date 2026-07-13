@@ -40,7 +40,7 @@ const env = {
 };
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
-const TSDOWN_DECLARATIONS = RUN_NODE_SKIP_DTS_BUILD ? false : true;
+const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -219,10 +219,12 @@ function shouldNeverBundleDependency(id: string): boolean {
 
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
+    id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
     id === "@openclaw/fs-safe" ||
     id.startsWith("@openclaw/fs-safe/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
+    id === "@openclaw/retry" ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
     id === "@openclaw/acp-core" ||
@@ -271,6 +273,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
+    "gateway/worker-environments/runtime": "src/gateway/worker-environments/runtime.ts",
     "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
@@ -323,6 +326,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "config/config": "src/config/config.ts",
     "crestodian/crestodian": "src/crestodian/crestodian.ts",
     "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
+    "crestodian/setup-inference": "src/crestodian/setup-inference.ts",
     "gateway/protocol/index": "packages/gateway-protocol/src/index.ts",
     "infra/errors": "src/infra/errors.ts",
     "infra/ws": "src/infra/ws.ts",
@@ -367,6 +371,7 @@ function buildGatewayProtocolDistEntries(): Record<string, string> {
     index: "packages/gateway-protocol/src/index.ts",
     "client-info": "packages/gateway-protocol/src/client-info.ts",
     "connect-error-details": "packages/gateway-protocol/src/connect-error-details.ts",
+    "frame-guards": "packages/gateway-protocol/src/frame-guards.ts",
     schema: "packages/gateway-protocol/src/schema.ts",
     "startup-unavailable": "packages/gateway-protocol/src/startup-unavailable.ts",
     version: "packages/gateway-protocol/src/version.ts",
@@ -378,6 +383,7 @@ function buildGatewayClientDistEntries(): Record<string, string> {
     // Keep package entrypoints explicit so package.json exports and root build
     // config cannot drift when client internals are split again.
     index: "packages/gateway-client/src/index.ts",
+    browser: "packages/gateway-client/src/browser.ts",
     readiness: "packages/gateway-client/src/readiness.ts",
     timeouts: "packages/gateway-client/src/timeouts.ts",
   };
@@ -408,7 +414,6 @@ function buildMediaGenerationCoreDistEntries(): Record<string, string> {
 
 function buildMediaUnderstandingCoreDistEntries(): Record<string, string> {
   return {
-    index: "packages/media-understanding-common/src/index.ts",
     "active-model": "packages/media-understanding-common/src/active-model.ts",
     defaults: "packages/media-understanding-common/src/defaults.ts",
     errors: "packages/media-understanding-common/src/errors.ts",
@@ -437,31 +442,15 @@ function buildMarkdownCoreDistEntries(): Record<string, string> {
 }
 
 function buildNormalizationCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/normalization-core/src/index.ts",
-    "boolean-coercion": "packages/normalization-core/src/boolean-coercion.ts",
-    "error-coercion": "packages/normalization-core/src/error-coercion.ts",
-    "number-coercion": "packages/normalization-core/src/number-coercion.ts",
-    "record-coerce": "packages/normalization-core/src/record-coerce.ts",
-    "string-coerce": "packages/normalization-core/src/string-coerce.ts",
-    "string-normalization": "packages/normalization-core/src/string-normalization.ts",
-    "utf16-slice": "packages/normalization-core/src/utf16-slice.ts",
-  };
+  return buildPackageDistEntriesFromExports("normalization-core");
+}
+
+function buildRetryDistEntries(): Record<string, string> {
+  return buildPackageDistEntriesFromExports("retry");
 }
 
 function buildMediaCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/media-core/src/index.ts",
-    base64: "packages/media-core/src/base64.ts",
-    constants: "packages/media-core/src/constants.ts",
-    "content-length": "packages/media-core/src/content-length.ts",
-    "file-name": "packages/media-core/src/file-name.ts",
-    "inbound-path-policy": "packages/media-core/src/inbound-path-policy.ts",
-    "inline-image-data-url": "packages/media-core/src/inline-image-data-url.ts",
-    "media-source-url": "packages/media-core/src/media-source-url.ts",
-    mime: "packages/media-core/src/mime.ts",
-    "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
-  };
+  return buildPackageDistEntriesFromExports("media-core");
 }
 
 function buildPackageDistEntriesFromExports(packageDir: string): Record<string, string> {
@@ -520,7 +509,6 @@ function buildTerminalCoreDistEntries(): Record<string, string> {
 
 function buildWebContentCoreDistEntries(): Record<string, string> {
   return {
-    index: "packages/web-content-core/src/index.ts",
     "provider-runtime-shared": "packages/web-content-core/src/provider-runtime-shared.ts",
   };
 }
@@ -579,11 +567,8 @@ function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
 }
 
 function shouldExternalizeGatewayClientDependency(id: string): boolean {
-  return (
-    id === "ws" ||
-    id.startsWith("ws/") ||
-    id === "@openclaw/gateway-protocol" ||
-    id.startsWith("@openclaw/gateway-protocol/")
+  return ["ws", "@openclaw/net-policy", "@openclaw/gateway-protocol"].some(
+    (dependency) => id === dependency || id.startsWith(`${dependency}/`),
   );
 }
 
@@ -624,6 +609,9 @@ function buildUnifiedDistEntries(): Record<string, string> {
         `normalization-core/${entry}`,
         source,
       ]),
+    ),
+    ...Object.fromEntries(
+      Object.entries(buildRetryDistEntries()).map(([entry, source]) => [`retry/${entry}`, source]),
     ),
     ...Object.fromEntries(
       Object.entries(buildMediaCoreDistEntries()).map(([entry, source]) => [
@@ -728,6 +716,12 @@ const configs = [
     dts: TSDOWN_DECLARATIONS,
     entry: buildNormalizationCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("normalization-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: TSDOWN_DECLARATIONS,
+    entry: buildRetryDistEntries(),
+    outDir: tsdownPackageOutputRoot("retry"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

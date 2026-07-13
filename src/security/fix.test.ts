@@ -2,8 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applySecurityFixConfigMutations,
@@ -113,7 +114,9 @@ describe("security fix", () => {
     channels: Record<string, Record<string, unknown>>,
     expectedPolicy = "allowlist",
   ) => {
-    expect(channels.whatsapp.groupPolicy).toBe(expectedPolicy);
+    expect(expectDefined(channels.whatsapp, "channels.whatsapp test invariant").groupPolicy).toBe(
+      expectedPolicy,
+    );
   };
 
   const expectWhatsAppAccountGroupPolicy = (
@@ -121,7 +124,7 @@ describe("security fix", () => {
     accountId: string,
     expectedPolicy = "allowlist",
   ) => {
-    const whatsapp = channels.whatsapp;
+    const whatsapp = expectDefined(channels.whatsapp, "channels.whatsapp test invariant");
     const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
     const account = accounts[accountId];
     if (!account) {
@@ -187,13 +190,25 @@ describe("security fix", () => {
     ]);
 
     const channels = fixed.cfg.channels as Record<string, Record<string, unknown>>;
-    expect(channels.telegram.groupPolicy).toBe("allowlist");
-    expect(channels.whatsapp.groupPolicy).toBe("allowlist");
-    expect(channels.discord.groupPolicy).toBe("allowlist");
-    expect(channels.signal.groupPolicy).toBe("allowlist");
-    expect(channels.imessage.groupPolicy).toBe("allowlist");
+    expect(expectDefined(channels.telegram, "channels.telegram test invariant").groupPolicy).toBe(
+      "allowlist",
+    );
+    expect(expectDefined(channels.whatsapp, "channels.whatsapp test invariant").groupPolicy).toBe(
+      "allowlist",
+    );
+    expect(expectDefined(channels.discord, "channels.discord test invariant").groupPolicy).toBe(
+      "allowlist",
+    );
+    expect(expectDefined(channels.signal, "channels.signal test invariant").groupPolicy).toBe(
+      "allowlist",
+    );
+    expect(expectDefined(channels.imessage, "channels.imessage test invariant").groupPolicy).toBe(
+      "allowlist",
+    );
 
-    expect(channels.whatsapp.groupAllowFrom).toEqual(["+15551234567"]);
+    expect(
+      expectDefined(channels.whatsapp, "channels.whatsapp test invariant").groupAllowFrom,
+    ).toEqual(["+15551234567"]);
   });
 
   it("applies allowlist per-account and seeds WhatsApp groupAllowFrom from store", async () => {
@@ -207,7 +222,9 @@ describe("security fix", () => {
     });
     expect(res.ok).toBe(true);
     const accounts = expectWhatsAppAccountGroupPolicy(channels, "a1");
-    expect(accounts.a1.groupAllowFrom).toEqual(["+15550001111"]);
+    expect(expectDefined(accounts.a1, "accounts.a1 test invariant").groupAllowFrom).toEqual([
+      "+15550001111",
+    ]);
   });
 
   it("does not seed WhatsApp groupAllowFrom if allowFrom is set", async () => {
@@ -220,7 +237,9 @@ describe("security fix", () => {
     });
     expect(res.ok).toBe(true);
     expectWhatsAppGroupPolicy(channels);
-    expect(channels.whatsapp.groupAllowFrom).toBeUndefined();
+    expect(
+      expectDefined(channels.whatsapp, "channels.whatsapp test invariant").groupAllowFrom,
+    ).toBeUndefined();
   });
 
   it("returns ok=false for invalid config but still tightens perms", async () => {
@@ -314,4 +333,73 @@ describe("security fix", () => {
       { path: transcriptPath, mode: 0o600, require: "file" },
     ]);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "tightens only includes accepted by the config include resolver",
+    async () => {
+      const stateDir = await createStateDir("include-boundary");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const safeIncludePath = path.join(stateDir, "safe.json5");
+      const escapedIncludePath = path.join(fixtureRoot, "escaped.json5");
+      await fs.writeFile(safeIncludePath, "{}\n", "utf-8");
+      await fs.writeFile(escapedIncludePath, "{}\n", "utf-8");
+      await fs.chmod(safeIncludePath, 0o644);
+      await fs.chmod(escapedIncludePath, 0o644);
+      await fs.writeFile(
+        configPath,
+        '{ "$include": ["./safe.json5", "../escaped.json5"] }\n',
+        "utf-8",
+      );
+
+      const result = await fixSecurityFootguns({
+        env: createFixEnv(stateDir, configPath),
+        stateDir,
+        configPath,
+      });
+
+      expect(result.actions.some((action) => action.path === escapedIncludePath)).toBe(false);
+      expectPerms((await fs.stat(safeIncludePath)).mode & 0o777, 0o600);
+      expectPerms((await fs.stat(escapedIncludePath)).mode & 0o777, 0o644);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps explicitly allowed include roots in the permission target set",
+    async () => {
+      const stateDir = await createStateDir("include-allowed-root");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const sharedDir = path.join(fixtureRoot, "shared-includes");
+      const sharedIncludePath = path.join(sharedDir, "shared.json5");
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.writeFile(sharedIncludePath, "{}\n", "utf-8");
+      await fs.chmod(sharedIncludePath, 0o644);
+      const canonicalSharedIncludePath = await fs.realpath(sharedIncludePath);
+      await fs.writeFile(
+        configPath,
+        `{ "$include": ${JSON.stringify(sharedIncludePath)} }\n`,
+        "utf-8",
+      );
+
+      const result = await fixSecurityFootguns({
+        env: {
+          ...createFixEnv(stateDir, configPath),
+          OPENCLAW_INCLUDE_ROOTS: sharedDir,
+        },
+        stateDir,
+        configPath,
+      });
+
+      expect(result.actions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "chmod",
+            ok: true,
+            path: canonicalSharedIncludePath,
+            mode: 0o600,
+          }),
+        ]),
+      );
+      expectPerms((await fs.stat(sharedIncludePath)).mode & 0o777, 0o600);
+    },
+  );
 });

@@ -2,12 +2,18 @@
 type MSTeamsQuoteInfo = {
   sender: string;
   body: string;
+  /**
+   * The quoted message's Teams id (the blockquote `itemid`). Present when Teams
+   * includes it; used to fetch the complete message text via Graph because the
+   * inbound blockquote only carries a truncated `preview` snippet.
+   */
+  id?: string;
 };
 
 /**
  * Decode common HTML entities to plain text.
  */
-export function decodeHtmlEntities(html: string): string {
+function decodeHtmlEntities(html: string): string {
   return html
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -21,7 +27,7 @@ export function decodeHtmlEntities(html: string): string {
 /**
  * Strip HTML tags, preserving text content.
  */
-export function htmlToPlainText(html: string): string {
+function htmlToPlainText(html: string): string {
   return decodeHtmlEntities(
     html
       .replace(/<[^>]*>/g, " ")
@@ -64,12 +70,22 @@ export function extractMSTeamsQuoteInfo(
     const senderMatch = /<strong[^>]*itemprop=["']mri["'][^>]*>(.*?)<\/strong>/i.exec(content);
     const sender = senderMatch?.[1] ? htmlToPlainText(senderMatch[1]) : undefined;
 
-    // Extract body from <p itemprop="copy">.
-    const bodyMatch = /<p[^>]*itemprop=["']copy["'][^>]*>(.*?)<\/p>/is.exec(content);
+    // Extract body from <p itemprop="copy"> (full quoted text) and fall back to
+    // <p itemprop="preview"> — the truncated snippet Teams actually sends for
+    // quote replies. Prefer `copy` when both are present.
+    const copyMatch = /<p[^>]*itemprop=["']copy["'][^>]*>(.*?)<\/p>/is.exec(content);
+    const bodyMatch =
+      copyMatch ?? /<p[^>]*itemprop=["']preview["'][^>]*>(.*?)<\/p>/is.exec(content);
     const body = bodyMatch?.[1] ? htmlToPlainText(bodyMatch[1]) : undefined;
 
+    // Capture the blockquote `itemid` (the quoted message's Teams id) so callers
+    // can fetch the complete message text via Graph when only a preview snippet
+    // is available.
+    const idMatch = /<blockquote[^>]*\bitemid=["']([^"']+)["'][^>]*>/is.exec(content);
+    const id = idMatch?.[1]?.trim() || undefined;
+
     if (body) {
-      return { sender: sender ?? "unknown", body };
+      return { sender: sender ?? "unknown", body, ...(id ? { id } : {}) };
     }
   }
   return undefined;
@@ -113,30 +129,6 @@ export function parseMSTeamsActivityTimestamp(value: unknown): Date | undefined 
 export function stripMSTeamsMentionTags(text: string): string {
   // Teams wraps mentions in <at>...</at> tags
   return text.replace(/<at[^>]*>.*?<\/at>/gi, "").trim();
-}
-
-/**
- * Bot Framework uses 'a:xxx' conversation IDs for personal chats, but Graph API
- * requires the '19:{userId}_{botAppId}@unq.gbl.spaces' format.
- *
- * This is the documented Graph API format for 1:1 chat thread IDs between a user
- * and a bot/app. See Microsoft docs "Get chat between user and app":
- * https://learn.microsoft.com/en-us/graph/api/userscopeteamsappinstallation-get-chat
- *
- * The format is only synthesized when the Bot Framework conversation ID starts with
- * 'a:' (the opaque format used by BF but not recognized by Graph). If the ID already
- * has the '19:...' Graph format, it is passed through unchanged.
- */
-export function translateMSTeamsDmConversationIdForGraph(params: {
-  isDirectMessage: boolean;
-  conversationId: string;
-  aadObjectId?: string | null;
-  appId?: string | null;
-}): string {
-  const { isDirectMessage, conversationId, aadObjectId, appId } = params;
-  return isDirectMessage && conversationId.startsWith("a:") && aadObjectId && appId
-    ? `19:${aadObjectId}_${appId}@unq.gbl.spaces`
-    : conversationId;
 }
 
 export function wasMSTeamsBotMentioned(activity: MentionableActivity): boolean {

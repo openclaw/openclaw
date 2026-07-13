@@ -82,6 +82,18 @@ describe("openclaw-modal-dialog", () => {
     expect(document.activeElement).not.toBe(container.querySelector("#first-action"));
   });
 
+  it("focuses slotted autofocus content", async () => {
+    render(
+      html`<openclaw-modal-dialog label="Edit">
+        <textarea id="autofocus-target" autofocus></textarea>
+      </openclaw-modal-dialog>`,
+      container,
+    );
+    await getRenderedModalDialog(container);
+
+    expect(document.activeElement).toBe(container.querySelector("#autofocus-target"));
+  });
+
   it("cycles Tab and Shift+Tab inside focusable dialog content", async () => {
     const { dialog } = await renderModal();
     const first = container.querySelector<HTMLButtonElement>("#first-action");
@@ -134,6 +146,16 @@ describe("openclaw-modal-dialog", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it("emits modal-cancel when the backdrop is clicked", async () => {
+    const { modal, dialog } = await renderModal();
+    const onCancel = vi.fn();
+    modal.addEventListener("modal-cancel", onCancel);
+
+    dialog.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it("restores focus when closed and removed", async () => {
     const returnTarget = document.createElement("button");
     returnTarget.textContent = "Return";
@@ -148,5 +170,19 @@ describe("openclaw-modal-dialog", () => {
 
     expect(document.activeElement).toBe(returnTarget);
     returnTarget.remove();
+  });
+
+  it("reopens the same dialog element after reconnect", async () => {
+    const { modal, dialog } = await renderModal();
+
+    modal.remove();
+    expect(dialog.open).toBe(false);
+
+    container.append(modal);
+    await modal.updateComplete;
+    await nextFrame();
+
+    expect(dialog.open).toBe(true);
+    expect(modal.shadowRoot?.activeElement).toBe(dialog);
   });
 });
