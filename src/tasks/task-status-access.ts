@@ -1,5 +1,6 @@
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import {
+  getAllActiveGeneratedMediaSessionKeys,
   getLatestGeneratedMediaTaskAdmissionIdForSessionKey,
   listActiveGeneratedMediaTaskIdsForSessionKey,
 } from "./generated-media-task-activity.js";
@@ -95,4 +96,27 @@ export function hasPendingGeneratedMediaTaskForSessionKey(sessionKey: string): b
     (task) =>
       GENERATED_MEDIA_TASK_KINDS.has(task.taskKind ?? "") && !isTerminalTaskStatus(task.status),
   );
+}
+
+/**
+ * Builds a one-shot snapshot of all session keys with pending generated-media
+ * work. Consume this once per reaper sweep for O(1) per-row lookups instead of
+ * repeating global task and activity scans for every cron continuation row.
+ */
+export function buildPendingGeneratedMediaSessionKeySet(): Set<string> {
+  const keys = new Set<string>();
+  for (const key of getAllActiveGeneratedMediaSessionKeys()) {
+    keys.add(key);
+  }
+  for (const task of listTaskRecords()) {
+    if (GENERATED_MEDIA_TASK_KINDS.has(task.taskKind ?? "") && !isTerminalTaskStatus(task.status)) {
+      if (task.requesterSessionKey) {
+        keys.add(task.requesterSessionKey);
+      }
+      if (task.ownerKey) {
+        keys.add(task.ownerKey);
+      }
+    }
+  }
+  return keys;
 }

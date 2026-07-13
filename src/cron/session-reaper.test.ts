@@ -14,10 +14,14 @@ import { resetReaperThrottle } from "./session-reaper.test-support.js";
 
 const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
 
-const taskStatusMocks = vi.hoisted(() => ({ hasPendingGeneratedMediaTask: vi.fn() }));
+const taskStatusMocks = vi.hoisted(() => ({
+  hasPendingGeneratedMediaTask: vi.fn(),
+  buildPendingSet: vi.fn<() => Set<string>>(() => new Set()),
+}));
 
 vi.mock("../tasks/task-status-access.js", () => ({
   hasPendingGeneratedMediaTaskForSessionKey: taskStatusMocks.hasPendingGeneratedMediaTask,
+  buildPendingGeneratedMediaSessionKeySet: taskStatusMocks.buildPendingSet,
 }));
 
 function createTestLogger(): Logger {
@@ -77,6 +81,7 @@ describe("sweepCronRunSessions", () => {
   beforeEach(async () => {
     resetReaperThrottle();
     taskStatusMocks.hasPendingGeneratedMediaTask.mockReset().mockReturnValue(false);
+    taskStatusMocks.buildPendingSet.mockReset().mockReturnValue(new Set());
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
@@ -177,7 +182,7 @@ describe("sweepCronRunSessions", () => {
       },
     };
     await seedSessionEntries(storePath, store);
-    taskStatusMocks.hasPendingGeneratedMediaTask.mockReturnValue(true);
+    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([sessionKey]));
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -205,7 +210,7 @@ describe("sweepCronRunSessions", () => {
         },
       },
     });
-    taskStatusMocks.hasPendingGeneratedMediaTask.mockReturnValue(true);
+    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([sessionKey]));
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,

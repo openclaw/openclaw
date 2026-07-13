@@ -9,7 +9,7 @@ import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-r
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { hasPendingGeneratedMediaTaskForSessionKey } from "../tasks/task-status-access.js";
+import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
 import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
@@ -78,15 +78,14 @@ export async function sweepCronRunSessions(params: {
   let transcriptCleanupError: unknown;
   try {
     const cutoff = now - retentionMs;
+    const pendingMediaSessionKeys = buildPendingGeneratedMediaSessionKeySet();
     const removals: SessionEntryLifecycleRemoval[] = [];
     for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
       if (!isCronRunSessionKey(sessionKey)) {
         continue;
       }
       const continuation = entry.cronRunContinuation;
-      const hasPendingMedia = Boolean(
-        continuation && hasPendingGeneratedMediaTaskForSessionKey(sessionKey),
-      );
+      const hasPendingMedia = Boolean(continuation && pendingMediaSessionKeys.has(sessionKey));
       if (continuation && hasPendingMedia) {
         continue;
       }
