@@ -57,6 +57,9 @@ export type ChannelHealthMonitor = {
 type RestartRecord = {
   lastRestartAt: number;
   restartsThisHour: { at: number }[];
+  /** Whether a completion pass was granted for a pending recovery at the hourly
+   *  cap. Reset to false when a new restart record is pushed. */
+  completionPassAllowed?: boolean;
 };
 
 function resolveTimingPolicy(
@@ -183,22 +186,31 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
 
           pruneOldRestarts(record, now);
-          // Pending restarts count towards the per-hour budget to prevent
+          // Pending restarts count toward the per-hour budget to prevent
           // infinite restart loops when a channel is permanently stuck pending.
+          // But a pending recovery that consumed the last slot gets one
+          // completion pass to finish without recording a new restart entry.
           if (record.restartsThisHour.length >= maxRestartsPerHour) {
-            log.warn?.(
-              `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
-            );
-            continue;
+            if (continuingPendingRestart && !record.completionPassAllowed) {
+              record.completionPassAllowed = true;
+            } else {
+              log.warn?.(
+                `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
+              );
+              continue;
+            }
           }
 
           const reason = resolveChannelRestartReason(status, health);
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
-          record.lastRestartAt = now;
-          record.restartsThisHour.push({ at: now });
-          restartRecords.set(key, record);
+          if (!record.completionPassAllowed) {
+            record.lastRestartAt = now;
+            record.restartsThisHour.push({ at: now });
+            record.completionPassAllowed = false;
+            restartRecords.set(key, record);
+          }
 
           try {
             if (status.running) {

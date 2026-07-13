@@ -566,7 +566,7 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
-  it("caps pending recovery restarts at the configured maxRestartsPerHour", async () => {
+  it("caps pending recovery restarts at the configured maxRestartsPerHour with one completion pass", async () => {
     const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
     let callCount = 0;
     const manager = createSnapshotManager(
@@ -596,12 +596,62 @@ describe("channel-health-monitor", () => {
 
     // Without the fix, pending restarts bypass maxRestartsPerHour
     // and startChannel would be called many times (one per check tick).
-    // With the fix, pending restarts count toward the hourly limit
-    // so startChannel should not exceed maxRestartsPerHour.
-    expect(callCount).toBeLessThanOrEqual(2);
+    // With the fix, pending restarts count toward the hourly limit,
+    // but the pending recovery that consumed the last slot gets one
+    // completion pass to finish. After that, further calls are blocked.
+    expect(callCount).toBe(3);
 
-    // Verify at least one pending restart completed before the cap
-    expect(callCount).toBeGreaterThanOrEqual(1);
+    monitor.stop();
+  });
+
+  it("grants one completion pass for a pending recovery that consumed the last hourly slot", async () => {
+    const checkIntervalMs = 1_000;
+    const advanceTick = () => vi.advanceTimersByTimeAsync(checkIntervalMs);
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    let callCount = 0;
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          callCount++;
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs,
+      cooldownCycles: 1,
+      maxRestartsPerHour: 2,
+    });
+
+    // Tick 1: normal restart — first restart uses slot 1
+    await advanceTick();
+    expect(callCount).toBe(1);
+
+    // Tick 2: pending continuation — second restart uses slot 2 (last slot)
+    await advanceTick();
+    expect(callCount).toBe(2);
+
+    // Tick 3: pending continuation — hourly cap hit (2 >= 2), but the
+    // pending recovery that consumed slot 2 gets one completion pass.
+    // No new restart record is created.
+    await advanceTick();
+    expect(callCount).toBe(3);
+
+    // Tick 4+: pending continuation — completion pass already used,
+    // blocked by hourly cap.
+    for (let i = 0; i < 5; i++) {
+      await advanceTick();
+    }
+    expect(callCount).toBe(3);
+
     monitor.stop();
   });
 
