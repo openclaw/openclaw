@@ -10626,6 +10626,7 @@ public struct MigrationsMemoryPlanResult: Codable, Sendable {
 }
 
 public struct MigrationsMemoryApplyParams: Codable, Sendable {
+    public let idempotencykey: String
     public let agentid: String
     public let providerid: String
     public let planfingerprint: String
@@ -10633,12 +10634,14 @@ public struct MigrationsMemoryApplyParams: Codable, Sendable {
     public let overwrite: Bool?
 
     public init(
+        idempotencykey: String,
         agentid: String,
         providerid: String,
         planfingerprint: String,
         itemids: [String],
         overwrite: Bool? = nil)
     {
+        self.idempotencykey = idempotencykey
         self.agentid = agentid
         self.providerid = providerid
         self.planfingerprint = planfingerprint
@@ -10647,6 +10650,7 @@ public struct MigrationsMemoryApplyParams: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case idempotencykey = "idempotencyKey"
         case agentid = "agentId"
         case providerid = "providerId"
         case planfingerprint = "planFingerprint"
