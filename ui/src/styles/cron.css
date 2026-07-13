@@ -124,6 +124,14 @@
   flex-wrap: wrap;
 }
 
+/* Toolbar buttons share the settings control height with the adjacent
+   segmented switches, search input, and filter selects. */
+.cron-toolbar .btn {
+  height: var(--settings-control-height);
+  padding-block: 0;
+  box-sizing: border-box;
+}
+
 .cron-search-box {
   position: relative;
   flex: 1 1 220px;

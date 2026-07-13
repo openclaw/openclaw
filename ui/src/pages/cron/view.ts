@@ -555,6 +555,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         <label class="field">
           <span>${t("cron.jobs.schedule")}</span>
           <select
+            class="settings-select"
             data-test-id="cron-jobs-schedule-filter"
             .value=${props.jobsScheduleKindFilter}
             @change=${(e: Event) =>
@@ -572,6 +573,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         <label class="field">
           <span>${t("cron.jobs.lastRun")}</span>
           <select
+            class="settings-select"
             data-test-id="cron-jobs-last-status-filter"
             .value=${props.jobsLastStatusFilter}
             @change=${(e: Event) =>
@@ -590,6 +592,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         <label class="field">
           <span>${t("cron.jobs.sort")}</span>
           <select
+            class="settings-select"
             .value=${props.jobsSortBy}
             @change=${(e: Event) =>
               props.onJobsFiltersChange({
@@ -604,6 +607,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         <label class="field">
           <span>${t("cron.jobs.direction")}</span>
           <select
+            class="settings-select"
             .value=${props.jobsSortDir}
             @change=${(e: Event) =>
               props.onJobsFiltersChange({
