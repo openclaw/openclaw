@@ -34,7 +34,6 @@ import {
 import {
   createWorkerEnvironmentService,
   type WorkerEnvironmentService,
-  type WorkerEnvironmentServiceOptions,
 } from "../gateway/worker-environments/service.js";
 import {
   createWorkerEnvironmentStore,
@@ -84,6 +83,7 @@ const HANDSHAKE = {
   openclawVersion: "fault-test",
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
+type WorkerEnvironmentServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
 const BUNDLE_ARTIFACT = {
   install: "bundle" as const,
   bundleHash: BUNDLE_HASH,
