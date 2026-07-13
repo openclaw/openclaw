@@ -66,8 +66,14 @@ export function reserveQueuedCronRun(
   state: CronServiceState,
   jobId: string,
   reservationAt: number,
+  opts?: { preserveWhenDisabled?: boolean },
 ): void {
   state.queuedRunReservationAtByJobId.set(jobId, reservationAt);
+  if (opts?.preserveWhenDisabled) {
+    state.queuedForceRunReservationAtByJobId.set(jobId, reservationAt);
+  } else {
+    state.queuedForceRunReservationAtByJobId.delete(jobId);
+  }
 }
 
 export function releaseQueuedCronRun(
@@ -81,6 +87,12 @@ export function releaseQueuedCronRun(
   ) {
     state.queuedRunReservationAtByJobId.delete(jobId);
   }
+  if (
+    reservationAt === undefined ||
+    state.queuedForceRunReservationAtByJobId.get(jobId) === reservationAt
+  ) {
+    state.queuedForceRunReservationAtByJobId.delete(jobId);
+  }
 }
 
 /** A matching process-local record means this durable marker is queued, not stuck. */
@@ -90,6 +102,15 @@ export function isQueuedCronRun(
   runningAtMs: number,
 ): boolean {
   return state.queuedRunReservationAtByJobId.get(jobId) === runningAtMs;
+}
+
+/** A disabled job can retain only a force reservation that predated the disabled state. */
+export function isQueuedForceCronRun(
+  state: CronServiceState,
+  jobId: string,
+  runningAtMs: number,
+): boolean {
+  return state.queuedForceRunReservationAtByJobId.get(jobId) === runningAtMs;
 }
 
 /**

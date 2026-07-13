@@ -244,6 +244,7 @@ export function createMockCronStateForJobs(params: {
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },
     queuedRunReservationAtByJobId: new Map<string, number>(),
+    queuedForceRunReservationAtByJobId: new Map<string, number>(),
     timer: null,
     storeLoadedAtMs: nowMs,
     op: Promise.resolve(),

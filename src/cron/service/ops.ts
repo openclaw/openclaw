@@ -947,7 +947,9 @@ async function prepareManualRun(
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
-    reserveQueuedCronRun(state, job.id, reservationAt);
+    reserveQueuedCronRun(state, job.id, reservationAt, {
+      preserveWhenDisabled: mode === "force" && !isJobEnabled(job),
+    });
     if (state.stopped) {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       const persistedJob = state.store?.jobs.find((entry) => entry.id === id);

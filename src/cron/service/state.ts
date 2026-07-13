@@ -226,6 +226,8 @@ export type CronServiceState = {
   runAdmission: CronRunAdmission;
   /** Durable markers for cron runs that are waiting for the shared admission limit. */
   queuedRunReservationAtByJobId: Map<string, number>;
+  /** Queued manual force runs remain valid when their job was already disabled. */
+  queuedForceRunReservationAtByJobId: Map<string, number>;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -256,6 +258,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },
     queuedRunReservationAtByJobId: new Map<string, number>(),
+    queuedForceRunReservationAtByJobId: new Map<string, number>(),
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),

@@ -977,6 +977,66 @@ describe("cron service ops regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps queued force runs for jobs disabled before reservation through maintenance", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.625Z");
+    const activeJob = createDueIsolatedJob({
+      id: "active-before-disabled-force",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    const waitingJob = createDueIsolatedJob({
+      id: "queued-disabled-force",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    waitingJob.enabled = false;
+    await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
+
+    const activeStarted = createDeferred<void>();
+    const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
+    const waitingStarted = createDeferred<void>();
+    const releaseWaiting = createDeferred<{ status: "ok"; summary: string }>();
+    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
+      if (job.id === activeJob.id) {
+        activeStarted.resolve();
+        return await releaseActive.promise;
+      }
+      waitingStarted.resolve();
+      return await releaseWaiting.promise;
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const activeRun = run(state, activeJob.id, "force");
+    await activeStarted.promise;
+    const waitingRun = run(state, waitingJob.id, "force");
+    await vi.waitFor(() => {
+      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
+        dueAt,
+      );
+    });
+    recomputeNextRunsForMaintenance(state);
+    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
+      dueAt,
+    );
+
+    releaseActive.resolve({ status: "ok", summary: "active" });
+    await waitingStarted.promise;
+    releaseWaiting.resolve({ status: "ok", summary: "waiting" });
+    await Promise.all([activeRun, waitingRun]);
+
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps queued manual reservations out of stuck-marker cleanup", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:06.750Z");

@@ -38,7 +38,7 @@ import {
   normalizeRequiredName,
 } from "./normalize.js";
 import { mergeCronPayload } from "./payload-merge.js";
-import { isQueuedCronRun } from "./run-admission.js";
+import { isQueuedCronRun, isQueuedForceCronRun } from "./run-admission.js";
 import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
@@ -596,7 +596,10 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       job.state.nextRunAtMs = undefined;
       changed = true;
     }
-    if (job.state.runningAtMs !== undefined) {
+    if (
+      job.state.runningAtMs !== undefined &&
+      !isQueuedForceCronRun(state, job.id, job.state.runningAtMs)
+    ) {
       job.state.runningAtMs = undefined;
       changed = true;
     }
