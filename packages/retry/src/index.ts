@@ -30,24 +30,17 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Pro
   }
   const delayMs = Math.min(Math.max(Math.floor(ms), 1), MAX_TIMER_TIMEOUT_MS);
   await new Promise<void>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => abortSignal?.removeEventListener("abort", onAbort);
-    const onAbort = () => {
-      if (timer) {
-        clearTimeout(timer);
-      }
+    function onAbort() {
+      clearTimeout(timer);
       cleanup();
       reject(new Error("aborted", { cause: abortSignal?.reason ?? new Error("aborted") }));
-    };
-    abortSignal?.addEventListener("abort", onAbort, { once: true });
-    if (abortSignal?.aborted) {
-      onAbort();
-      return;
     }
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       cleanup();
       resolve();
     }, delayMs);
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
     if (abortSignal?.aborted) {
       onAbort();
     }
@@ -147,7 +140,10 @@ const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
   jitter: 0,
 };
 
-const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const defaultSleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;

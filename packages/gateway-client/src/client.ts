@@ -1496,7 +1496,10 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
-    const retry = this.reconnectSupervisor.next()!;
+    const retry = this.reconnectSupervisor.next();
+    if (!retry) {
+      return;
+    }
     void sleepWithAbort(retry.delayMs, retry.signal)
       .then(() => this.start())
       .catch(() => {});
