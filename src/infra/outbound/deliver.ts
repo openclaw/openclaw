@@ -110,7 +110,7 @@ import type { OutboundChannel } from "./targets.js";
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
-export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
+export type { OutboundSendDeps } from "./send-deps.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
@@ -130,7 +130,7 @@ export type DurableFinalDeliveryRequirements = Partial<
   Record<DurableFinalDeliveryRequirement, boolean>
 >;
 
-export type OutboundDurableDeliverySupport =
+type OutboundDurableDeliverySupport =
   | { ok: true }
   | {
       ok: false;
