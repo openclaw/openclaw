@@ -211,7 +211,8 @@ function firstBuildAuthHealthSummaryCall() {
 async function firstAuthStatusProvider() {
   const opts = createOptions();
   await handler(opts);
-  const [, payload] = firstRespondCall(opts) ?? [];
+  const [ok, payload, error] = firstRespondCall(opts) ?? [];
+  expect(ok, JSON.stringify(error)).toBe(true);
   return (payload as ModelAuthStatusResult).providers[0];
 }
 
@@ -529,6 +530,23 @@ describe("models.authStatus", () => {
       models: {
         providers: {
           ollama: Object.fromEntries([["apiKey", "ollama-local"]]),
+        },
+      },
+    });
+    mocks.buildAuthHealthSummary.mockImplementationOnce(actualAuthHealth.buildAuthHealthSummary);
+
+    const provider = await firstAuthStatusProvider();
+    expect(provider).toBeUndefined();
+  });
+
+  it("does not report an AWS SDK marker as a configured API key", async () => {
+    const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
+      "../../agents/auth-health.js",
+    );
+    mocks.getRuntimeConfig.mockReturnValue({
+      models: {
+        providers: {
+          "amazon-bedrock": { ...Object.fromEntries([["apiKey", "AWS_PROFILE"]]) },
         },
       },
     });
