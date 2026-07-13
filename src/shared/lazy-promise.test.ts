@@ -15,15 +15,15 @@ describe("getOrCreatePromise", () => {
     const first = getOrCreatePromise(cache, "a", async () => await create("a"));
     expect(getOrCreatePromise(cache, "a", async () => await create("a"))).toBe(first);
     await expect(first).resolves.toBe("loaded-a");
-    await expect(
-      getOrCreatePromise(cache, "b", async () => await create("b")),
-    ).resolves.toBe("loaded-b");
+    await expect(getOrCreatePromise(cache, "b", async () => await create("b"))).resolves.toBe(
+      "loaded-b",
+    );
     expect(create).toHaveBeenCalledTimes(2);
 
     cache.clear();
-    await expect(
-      getOrCreatePromise(cache, "a", async () => await create("a")),
-    ).resolves.toBe("loaded-a");
+    await expect(getOrCreatePromise(cache, "a", async () => await create("a"))).resolves.toBe(
+      "loaded-a",
+    );
     expect(create).toHaveBeenCalledTimes(3);
   });
 });
