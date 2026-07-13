@@ -1748,6 +1748,10 @@ describe("browser tool url alias support", () => {
     const tool = createBrowserTool({ agentSessionKey: "agent:main:main", runId: "run-open" });
     await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
 
+    expect(sessionTabRegistryMocks.claimTrackedBrowserSessionOwner).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      ownerId: "run-open",
+    });
     expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       targetId: "tab-123",

@@ -397,7 +397,11 @@ export function createBrowserTool(opts?: {
   };
 }): AnyAgentTool {
   const ownerClaim =
-    opts?.ownerClaim ?? browserToolSession.resolveBrowserSessionOwnerClaim(opts ?? {});
+    opts?.ownerClaim ??
+    browserToolSession.resolveBrowserSessionOwnerClaim({
+      sessionKey: opts?.agentSessionKey,
+      runId: opts?.runId,
+    });
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
