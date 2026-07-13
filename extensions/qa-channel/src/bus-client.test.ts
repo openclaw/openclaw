@@ -1,7 +1,7 @@
 // Qa Channel tests cover bus client plugin behavior.
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildQaTarget,
   getQaBusState,
