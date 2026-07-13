@@ -1845,26 +1845,34 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const source = "console.log('compressed');\n".repeat(200);
         await writeAssetFile(tmp, "app-AbCd1234.js", source);
+        const closeSync = vi.spyOn(fsSync, "closeSync");
 
-        const { res, end, setHeader, handled } = await runControlUiRequest({
-          url: "/assets/app-AbCd1234.js",
-          method: "GET",
-          rootPath: tmp,
-          rootKind: "bundled",
-          headers: { "accept-encoding": "gzip;q=0.5, br" },
-        });
+        try {
+          const { res, end, setHeader, handled } = await runControlUiRequest({
+            url: "/assets/app-AbCd1234.js",
+            method: "GET",
+            rootPath: tmp,
+            rootKind: "bundled",
+            headers: { "accept-encoding": "gzip;q=0.5, br" },
+          });
 
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(200);
-        expect(setHeader).toHaveBeenCalledWith(
-          "Cache-Control",
-          "public, max-age=31536000, immutable",
-        );
-        expect(setHeader).toHaveBeenCalledWith("Vary", "Accept-Encoding");
-        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
-        const compressed = end.mock.calls[0]?.[0];
-        expect(Buffer.isBuffer(compressed)).toBe(true);
-        expect(brotliDecompressSync(compressed as Buffer).toString()).toBe(source);
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(setHeader).toHaveBeenCalledWith(
+            "Cache-Control",
+            "public, max-age=31536000, immutable",
+          );
+          expect(setHeader).toHaveBeenCalledWith("Vary", "Accept-Encoding");
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
+          const compressed = end.mock.calls[0]?.[0];
+          expect(Buffer.isBuffer(compressed)).toBe(true);
+          expect(brotliDecompressSync(compressed as Buffer).toString()).toBe(source);
+          expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
+            end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+          );
+        } finally {
+          closeSync.mockRestore();
+        }
       },
     });
   });
@@ -1889,27 +1897,38 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("compresses index.html without making it immutable", async () => {
+  it.each([
+    ["index", "/"],
+    ["SPA fallback", "/chat"],
+  ])("compresses %s HTML after closing its descriptor", async (_name, url) => {
     const html = `<html><body>${"hello ".repeat(200)}</body></html>\n`;
     await withControlUiRoot({
       indexHtml: html,
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
-        await handleControlUiHttpRequest(
-          {
-            url: "/",
-            method: "GET",
-            headers: { "accept-encoding": "gzip" },
-          } as IncomingMessage,
-          res,
-          { root: { kind: "resolved", path: tmp } },
-        );
+        const closeSync = vi.spyOn(fsSync, "closeSync");
+        try {
+          await handleControlUiHttpRequest(
+            {
+              url,
+              method: "GET",
+              headers: { "accept-encoding": "gzip" },
+            } as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp } },
+          );
 
-        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
-        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
-        expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
-          '<html data-openclaw-terminal-enabled="false">',
-        );
+          expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+          expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
+            '<html data-openclaw-terminal-enabled="false">',
+          );
+          expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
+            end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+          );
+        } finally {
+          closeSync.mockRestore();
+        }
       },
     });
   });

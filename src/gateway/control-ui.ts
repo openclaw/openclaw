@@ -953,8 +953,18 @@ function readOpenedFile(fd: number): Promise<Buffer> {
   });
 }
 
-async function readOpenedFileText(fd: number): Promise<string> {
-  return (await readOpenedFile(fd)).toString("utf8");
+// Compression can wait in zlib's worker queue, so release the pinned file as
+// soon as its bytes are loaded instead of retaining descriptors per request.
+async function readAndCloseOpenedFile(fd: number): Promise<Buffer> {
+  try {
+    return await readOpenedFile(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+async function readAndCloseOpenedFileText(fd: number): Promise<string> {
+  return (await readAndCloseOpenedFile(fd)).toString("utf8");
 }
 
 function isExpectedSafePathError(error: unknown): boolean {
@@ -1242,27 +1252,22 @@ export async function handleControlUiHttpRequest(
   const immutableAsset = isBundledRoot && fileRel.startsWith("assets/");
   const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
   if (safeFile) {
-    try {
-      if (respondHeadForControlUiFile(req, res, safeFile.path, { immutable: immutableAsset })) {
+    if (req.method === "HEAD") {
+      try {
+        respondHeadForControlUiFile(req, res, safeFile.path, { immutable: immutableAsset });
         return true;
+      } finally {
+        fs.closeSync(safeFile.fd);
       }
-      if (path.basename(safeFile.path) === "index.html") {
-        await serveResolvedIndexHtml(
-          req,
-          res,
-          await readOpenedFileText(safeFile.fd),
-          basePath,
-          terminalEnabled,
-        );
-        return true;
-      }
-      await serveControlUiAsset(req, res, safeFile.path, await readOpenedFile(safeFile.fd), {
-        immutable: immutableAsset,
-      });
-      return true;
-    } finally {
-      fs.closeSync(safeFile.fd);
     }
+    if (path.basename(safeFile.path) === "index.html") {
+      const body = await readAndCloseOpenedFileText(safeFile.fd);
+      await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
+      return true;
+    }
+    const body = await readAndCloseOpenedFile(safeFile.fd);
+    await serveControlUiAsset(req, res, safeFile.path, body, { immutable: immutableAsset });
+    return true;
   }
 
   // If the requested path looks like a static asset (known extension), return
@@ -1279,21 +1284,17 @@ export async function handleControlUiHttpRequest(
   const indexPath = path.join(root, "index.html");
   const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
   if (safeIndex) {
-    try {
-      if (respondHeadForControlUiFile(req, res, safeIndex.path)) {
+    if (req.method === "HEAD") {
+      try {
+        respondHeadForControlUiFile(req, res, safeIndex.path);
         return true;
+      } finally {
+        fs.closeSync(safeIndex.fd);
       }
-      await serveResolvedIndexHtml(
-        req,
-        res,
-        await readOpenedFileText(safeIndex.fd),
-        basePath,
-        terminalEnabled,
-      );
-      return true;
-    } finally {
-      fs.closeSync(safeIndex.fd);
     }
+    const body = await readAndCloseOpenedFileText(safeIndex.fd);
+    await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
+    return true;
   }
 
   respondControlUiNotFound(res);
