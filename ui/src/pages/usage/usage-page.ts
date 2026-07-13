@@ -670,6 +670,10 @@ class UsagePage extends OpenClawLightDomElement {
         </div>
         ${renderAgentScopeControl({
           agents: this.context.agents.state.agentsList?.agents ?? [],
+          additionalAgentIds:
+            this.usageResult?.sessions
+              .map((entry) => entry.agentId)
+              .filter((agentId): agentId is string => Boolean(agentId?.trim())) ?? [],
           selection: this.context.agentSelection,
         })}
       </section>

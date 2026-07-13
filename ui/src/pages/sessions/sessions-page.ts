@@ -501,7 +501,9 @@ class SessionsPage extends OpenClawLightDomElement {
       const result = await searchVisibleSessionTranscripts({
         client: scope.client,
         query,
-        sessions: this.result?.sessions ?? [],
+        result: this.result,
+        listSessions: scope.sessions.list,
+        listOptions: this.sessionListOptions(),
         resolveAgentId: (sessionKey) =>
           parseAgentSessionKey(sessionKey)?.agentId ??
           this.sessionAgentId(sessionKey, scope.context),

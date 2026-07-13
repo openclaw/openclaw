@@ -3,15 +3,32 @@ import type { GatewayAgentRow } from "../api/types.ts";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 
 type AgentScopeControlParams = {
   agents: readonly GatewayAgentRow[];
+  additionalAgentIds?: readonly string[];
   selection: AgentSelectionCapability;
 };
 
 export function renderAgentScopeControl(params: AgentScopeControlParams) {
   const selected = params.selection.state.scopeId ?? "";
-  const agents = params.agents.toSorted((left, right) =>
+  const agentsById = new Map(
+    params.agents.map((agent) => {
+      const agentId = normalizeAgentId(agent.id);
+      return [agentId, agentId === agent.id ? agent : { ...agent, id: agentId }] as const;
+    }),
+  );
+  for (const value of params.additionalAgentIds ?? []) {
+    if (!value.trim()) {
+      continue;
+    }
+    const agentId = normalizeAgentId(value);
+    if (!agentsById.has(agentId)) {
+      agentsById.set(agentId, { id: agentId });
+    }
+  }
+  const agents = [...agentsById.values()].toSorted((left, right) =>
     normalizeAgentLabel(left).localeCompare(normalizeAgentLabel(right)),
   );
   const selectedAgentMissing = selected && !agents.some((agent) => agent.id === selected);
