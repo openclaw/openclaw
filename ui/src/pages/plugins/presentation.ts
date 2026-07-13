@@ -1,6 +1,7 @@
 // Presentation data for the plugins catalog: bundled cover art, deterministic
 // fallback gradients, category shelving, and curated connector suggestions.
 import { expectDefined } from "@openclaw/normalization-core";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { t } from "../../i18n/index.ts";
 
@@ -225,7 +226,7 @@ export function pluginMonogram(name: string): string {
   }
   const first = expectDefined(words[0], "plugin monogram first word");
   const second = words[1];
-  const initials = second ? `${first.charAt(0)}${second.charAt(0)}` : first.slice(0, 2);
+  const initials = second ? `${first.charAt(0)}${second.charAt(0)}` : sliceUtf16Safe(first, 0, 2);
   return initials.toLocaleUpperCase();
 }
 
