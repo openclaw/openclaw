@@ -232,7 +232,9 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    this.wizardController.reset();
+    // Cancel (not just reset): the gateway keeps a running WizardSession and
+    // rejects future wizard.start calls until it is cancelled or purged.
+    void this.wizardController.cancel();
     this.selectedChannel = null;
     this.gatewaySource = undefined;
     this.channelsSource = undefined;

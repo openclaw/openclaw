@@ -146,13 +146,6 @@ export class ChannelWizardController {
     }
   }
 
-  reset(): void {
-    this.generation += 1;
-    this.sessionId = null;
-    this.channel = null;
-    this.setState({ phase: "idle" });
-  }
-
   private applyResult(result: WizardNextResult): void {
     if (!result.done && result.step) {
       this.stepIndex += 1;
