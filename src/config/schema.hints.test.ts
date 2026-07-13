@@ -3,11 +3,64 @@ import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
-import { testApi } from "./schema.hints.js";
+import { buildBaseHints, testApi } from "./schema.hints.js";
+import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const { collectMatchingSchemaPaths, mapSensitivePaths } = testApi;
+const BUNDLED_CHANNEL_HINT_PREFIXES = [
+  "channels.discord",
+  "channels.imessage",
+  "channels.irc",
+  "channels.msteams",
+  "channels.signal",
+  "channels.slack",
+  "channels.telegram",
+  "channels.whatsapp",
+] as const;
+
+describe("isSensitiveConfigPath", () => {
+  it("matches whitelist suffixes case-insensitively", () => {
+    for (const path of [
+      "maxTokens",
+      "maxOutputTokens",
+      "maxInputTokens",
+      "maxCompletionTokens",
+      "contextTokens",
+      "totalTokens",
+      "tokenCount",
+      "tokenLimit",
+      "tokenBudget",
+      "channels.irc.nickserv.passwordFile",
+    ]) {
+      expect(isSensitiveConfigPath(path)).toBe(false);
+      expect(isSensitiveConfigPath(path.toUpperCase())).toBe(false);
+    }
+  });
+
+  it("keeps true sensitive keys redacted", () => {
+    expect(isSensitiveConfigPath("channels.slack.token")).toBe(true);
+    expect(isSensitiveConfigPath("models.providers.openai.apiKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.irc.nickserv.password")).toBe(true);
+    expect(isSensitiveConfigPath("channels.feishu.encryptKey")).toBe(true);
+    expect(isSensitiveConfigPath("models.providers.local.localService.env.HF_HOME")).toBe(true);
+    expect(isSensitiveConfigPath("models.providers.local.localService.env.MAX_TOKENS")).toBe(true);
+  });
+});
+
+describe("plugin-owned channel hint paths", () => {
+  it("keeps bundled channel hints out of the core hint map", () => {
+    for (const key of Object.keys(buildBaseHints())) {
+      expect(
+        BUNDLED_CHANNEL_HINT_PREFIXES.some(
+          (prefix) => key === prefix || key.startsWith(`${prefix}.`),
+        ),
+        `core still owns ${key}`,
+      ).toBe(false);
+    }
+  });
+});
 
 describe("mapSensitivePaths", () => {
   it("should detect sensitive fields nested inside all structural Zod types", () => {

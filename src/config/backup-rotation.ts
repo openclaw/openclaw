@@ -124,7 +124,7 @@ export async function createPreUpdateConfigSnapshot(params: {
   if (preUpdateConfigSnapshotsWritten.has(snapshotKey)) {
     return;
   }
-  // Mark before I/O so a failed best-effort write cannot loop on every later write.
+  // Mark before I/O so concurrent callers coalesce onto the in-flight snapshot attempt.
   preUpdateConfigSnapshotsWritten.add(snapshotKey);
   const snapshotPath = `${params.configPath}.pre-update`;
   try {
@@ -135,7 +135,8 @@ export async function createPreUpdateConfigSnapshot(params: {
       flag: "w",
     });
   } catch {
-    // best-effort, do not block update
+    // Best-effort: let the update continue, but allow its later snapshot pass to retry.
+    preUpdateConfigSnapshotsWritten.delete(snapshotKey);
   }
 }
 

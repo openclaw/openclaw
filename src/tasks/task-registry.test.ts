@@ -3,7 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
-import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  registerAgentRunContext,
+  resetAgentEventsForTest,
+} from "../infra/agent-events.js";
+import {
+  requestHeartbeat,
+  setHeartbeatWakeHandler,
+  type HeartbeatWakeRequest,
+} from "../infra/heartbeat-wake.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import {
@@ -457,9 +466,43 @@ function configureInMemoryTaskStoresForLinkValidationTests() {
   configureInMemoryTaskStoresForTests();
 }
 
+const HEARTBEAT_FLUSH_REASON = "task-registry-test-flush";
+let heartbeatWakeRequests: HeartbeatWakeRequest[] = [];
+let clearHeartbeatWakeHandler: (() => void) | undefined;
+
+async function flushHeartbeatWakeRequests(): Promise<void> {
+  requestHeartbeat({
+    source: "other",
+    intent: "immediate",
+    reason: HEARTBEAT_FLUSH_REASON,
+    coalesceMs: 0,
+  });
+  await vi.waitFor(() => {
+    expect(heartbeatWakeRequests.some((request) => request.reason === HEARTBEAT_FLUSH_REASON)).toBe(
+      true,
+    );
+  });
+}
+
+function expectHeartbeatWake(
+  source: "background-task" | "background-task-blocked",
+  sessionKey: string,
+) {
+  expect(heartbeatWakeRequests).toContainEqual(
+    expect.objectContaining({ source, reason: source, sessionKey }),
+  );
+}
+
 describe("task-registry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetGatewayWorkAdmission();
+    heartbeatWakeRequests = [];
+    clearHeartbeatWakeHandler = setHeartbeatWakeHandler(async (request) => {
+      heartbeatWakeRequests.push(request);
+      return { status: "ran", durationMs: 0 };
+    });
+    await flushHeartbeatWakeRequests();
+    heartbeatWakeRequests = [];
     setTaskRegistryDeliveryRuntimeForTests({
       sendMessage: hoisted.sendMessageMock,
     });
@@ -472,10 +515,14 @@ describe("task-registry", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
+    await flushHeartbeatWakeRequests();
+    clearHeartbeatWakeHandler?.();
+    clearHeartbeatWakeHandler = undefined;
     resetSystemEventsForTest();
+    resetAgentEventsForTest({ preserveListeners: true });
     resetCronActiveJobs();
     resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
@@ -1938,6 +1985,89 @@ describe("task-registry", () => {
     },
   );
 
+  it.each([
+    {
+      id: "channel",
+      name: "room channel",
+      ownerKey: "agent:main:guildchat:channel:123",
+      target: "guildchat:channel:123",
+    },
+    {
+      id: "group",
+      name: "group",
+      ownerKey: "agent:main:guildchat:group:123",
+      target: "guildchat:group:123",
+    },
+    {
+      id: "topic",
+      name: "group topic",
+      ownerKey: "agent:main:guildchat:group:-100123:topic:42",
+      target: "guildchat:group:-100123:topic:42",
+    },
+    {
+      id: "discord-legacy-channel",
+      name: "legacy Discord channel",
+      ownerKey: "agent:main:discord:guild-123:channel-456",
+      target: "guildchat:channel:456",
+    },
+    {
+      id: "whatsapp-legacy-group",
+      name: "legacy WhatsApp group",
+      ownerKey: "agent:main:whatsapp:123@g.us",
+      target: "guildchat:group:123@g.us",
+    },
+  ])("routes $name ACP completion through the parent session", async ({ id, ownerKey, target }) => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryForTests();
+      const runId = `run-group-terminal-${id}`;
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "guildchat",
+        to: target,
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey,
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "guildchat",
+          to: target,
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId,
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() => {
+        const task = findTaskByRunId(runId);
+        if (!task) {
+          throw new Error(`Expected task for run ${runId}`);
+        }
+        expect(task.status).toBe("succeeded");
+        expect(task.deliveryStatus).toBe("session_queued");
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents(ownerKey)).toEqual([
+        expect.stringContaining("Background task ready for review: ACP background task"),
+      ]);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task", ownerKey);
+    });
+  });
+
   it("records delivery failure and queues a session fallback when direct delivery misses", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -1984,6 +2114,44 @@ describe("task-registry", () => {
     });
   });
 
+  it("still wakes the parent when blocked delivery misses the outward channel", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      hoisted.sendMessageMock.mockRejectedValueOnce(new Error("notifychat unavailable"));
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-delivery-blocked",
+        task: "Port the repo changes",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session or apply_patch authorization required.",
+      });
+
+      await waitForAssertion(() =>
+        expectRecordFields(requireTaskByRunId("run-delivery-blocked"), {
+          status: "succeeded",
+          deliveryStatus: "failed",
+          terminalOutcome: "blocked",
+        }),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        "Background task blocked: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
+        "Task needs follow-up: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
+      ]);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task-blocked", "agent:main:main");
+    });
+  });
+
   it("marks internal fallback delivery as session queued instead of delivered", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -2019,6 +2187,39 @@ describe("task-registry", () => {
       expect(events).toHaveLength(1);
       expect(events[0]).toContain("Background task ready for review: ACP background task");
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("wakes the parent for blocked tasks even when delivery falls back to the session", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-session-blocked",
+        task: "Port the repo changes",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session or apply_patch authorization required.",
+      });
+
+      await waitForAssertion(() =>
+        expectRecordFields(requireTaskByRunId("run-session-blocked"), {
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        "Background task blocked: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
+        "Task needs follow-up: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
+      ]);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task-blocked", "agent:main:main");
     });
   });
 
@@ -2071,6 +2272,88 @@ describe("task-registry", () => {
         );
       });
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("surfaces blocked outcomes separately from completed tasks", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-blocked-outcome",
+        task: "Port the repo changes",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session or apply_patch authorization required.",
+      });
+
+      await waitForAssertion(() =>
+        expectRecordFields(sentMessageCall(), {
+          content:
+            "Background task blocked: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
+        }),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        "Task needs follow-up: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
+      ]);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task-blocked", "agent:main:main");
+    });
+  });
+
+  it("does not queue an unblock follow-up for ordinary completed tasks", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-succeeded-outcome",
+        task: "Create the file and verify it",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalSummary: "Created /tmp/file.txt and verified contents.",
+        terminalOutcome: "succeeded",
+      });
+
+      await waitForAssertion(() => {
+        const events = peekSystemEvents("agent:main:main");
+        expect(events).toHaveLength(1);
+        expect(events[0]).toBe(
+          "Background task ready for review: ACP background task (run run-succ). Created /tmp/file.txt and verified contents. Next: parent will review/verify before calling it done.",
+        );
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task", "agent:main:main");
+      expect(heartbeatWakeRequests).not.toContainEqual(
+        expect.objectContaining({ source: "background-task-blocked" }),
+      );
     });
   });
 

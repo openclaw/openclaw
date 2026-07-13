@@ -169,7 +169,7 @@ type LaneExecutionState =
   | "circuit_open"
   | "failed_handoff";
 
-interface QuotaSuspension {
+export interface QuotaSuspension {
   schemaVersion: 1;
   suspendedAt: number; // epoch ms
   reason: "quota_exhausted" | "manual" | "circuit_open";

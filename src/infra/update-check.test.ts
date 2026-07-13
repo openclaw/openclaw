@@ -11,6 +11,7 @@ import {
   checkUpdateStatus,
   compareSemverStrings,
   fetchNpmPackageTargetStatus,
+  fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
@@ -324,6 +325,20 @@ describe("resolveNpmChannelTag", () => {
     });
   });
 
+  it("fetches registry tag versions and reports missing tags", async () => {
+    versionByTag.latest = "1.0.4";
+    await expect(
+      fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000, runCommand }),
+    ).resolves.toEqual({ tag: "latest", version: "1.0.4" });
+    await expect(
+      fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000, runCommand }),
+    ).resolves.toEqual({
+      tag: "missing",
+      version: null,
+      error: "npm view failed: npm ERR! 404 Not Found",
+    });
+  });
+
   it("adds context to malformed npm view JSON errors", async () => {
     const badRunCommand = vi.fn(async () => ({
       stdout: "not valid json {",
@@ -551,6 +566,60 @@ describe("checkUpdateStatus", () => {
       expect(status.git).toBeUndefined();
       expect(status.registry).toBeUndefined();
       expect(status.deps?.manager).toBe("npm");
+    });
+  });
+
+  it("reports missing and stale dependency markers for package installs", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-deps-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+        "utf8",
+      );
+      const lockfilePath = path.join(root, "pnpm-lock.yaml");
+      await fs.writeFile(lockfilePath, "lock", "utf8");
+
+      const missing = await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+      expect(missing.deps).toMatchObject({
+        manager: "pnpm",
+        status: "missing",
+        reason: "node_modules marker missing",
+      });
+
+      const markerPath = path.join(root, "node_modules", ".modules.yaml");
+      await fs.mkdir(path.dirname(markerPath), { recursive: true });
+      await fs.writeFile(markerPath, "marker", "utf8");
+      const staleDate = new Date(Date.now() - 10_000);
+      const freshDate = new Date();
+      await fs.utimes(markerPath, staleDate, staleDate);
+      await fs.utimes(lockfilePath, freshDate, freshDate);
+
+      const stale = await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+      expect(stale.deps).toMatchObject({
+        manager: "pnpm",
+        status: "stale",
+        reason: "lockfile newer than install marker",
+      });
+
+      const newerMarker = new Date(Date.now() + 2_000);
+      await fs.utimes(markerPath, newerMarker, newerMarker);
+      const ok = await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+      expect(ok.deps?.status).toBe("ok");
     });
   });
 

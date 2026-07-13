@@ -132,7 +132,6 @@ vi.mock("../../logging/subsystem.js", () => ({
 type DeliverModule = typeof import("./deliver.js");
 
 let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
-let normalizeOutboundPayloads: DeliverModule["normalizeOutboundPayloads"];
 let resolveOutboundDurableFinalDeliverySupport: DeliverModule["resolveOutboundDurableFinalDeliverySupport"];
 
 const matrixChunkConfig: OpenClawConfig = {
@@ -303,11 +302,8 @@ async function runBestEffortPartialFailureDelivery(params?: { onError?: boolean 
 
 describe("deliverOutboundPayloads", () => {
   beforeAll(async () => {
-    ({
-      deliverOutboundPayloads,
-      normalizeOutboundPayloads,
-      resolveOutboundDurableFinalDeliverySupport,
-    } = await import("./deliver.js"));
+    ({ deliverOutboundPayloads, resolveOutboundDurableFinalDeliverySupport } =
+      await import("./deliver.js"));
   });
 
   beforeEach(() => {
@@ -4018,18 +4014,6 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrixCall[0]).toBe("!room:example");
     expect(sendMatrixCall[1]).toBe("Chart now");
     expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/chart.png");
-  });
-
-  it("normalizes payloads and drops empty entries", () => {
-    const normalized = normalizeOutboundPayloads([
-      { text: "hi" },
-      { text: "MEDIA:https://x.test/a.jpg" },
-      { text: " ", mediaUrls: [] },
-    ]);
-    expect(normalized).toEqual([
-      { text: "hi", mediaUrls: [], audioAsVoice: undefined },
-      { text: "", mediaUrls: ["https://x.test/a.jpg"], audioAsVoice: undefined },
-    ]);
   });
 
   it("continues on errors when bestEffort is enabled", async () => {

@@ -3,6 +3,7 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
+import { applyDerivedTags } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import {
@@ -571,6 +572,31 @@ describe("config schema", () => {
       channels: [{ ...channel }],
     });
     expect(second).toBe(first);
+  });
+
+  it("derives tags for security, network, storage, tools, and performance paths", () => {
+    const tagged = applyDerivedTags({
+      "gateway.auth.token": {},
+      "proxy.tls.caFile": {},
+      "tools.web.fetch.timeoutSeconds": {},
+    });
+    expect(tagged["gateway.auth.token"]?.tags).toEqual(
+      expect.arrayContaining(["security", "auth"]),
+    );
+    expect(tagged["proxy.tls.caFile"]?.tags).toEqual(
+      expect.arrayContaining(["security", "network", "storage"]),
+    );
+    expect(tagged["tools.web.fetch.timeoutSeconds"]?.tags).toEqual(
+      expect.arrayContaining(["tools", "performance"]),
+    );
+  });
+
+  it("covers core config paths with derived tags", () => {
+    for (const [key, hint] of Object.entries(baseSchema.uiHints)) {
+      if (key.includes(".")) {
+        expect(hint.tags?.length ?? 0, `expected tags for ${key}`).toBeGreaterThan(0);
+      }
+    }
   });
 
   it("accepts web fetch readability and firecrawl config in the runtime zod schema", () => {

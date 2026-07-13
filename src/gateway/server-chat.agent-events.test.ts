@@ -14,6 +14,7 @@ import {
   onAgentRuntimeEvent,
   registerAgentRunContext,
   releaseAgentRunContext,
+  resetAgentEventsForTest,
 } from "../infra/agent-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
@@ -73,6 +74,7 @@ import { loadSessionEntry } from "./session-utils.js";
 
 describe("agent event handler", () => {
   beforeEach(() => {
+    resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
     vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
       showOk: false,
@@ -97,6 +99,7 @@ describe("agent event handler", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetAgentEventsForTest({ preserveListeners: true });
   });
 
   function createHarness(params?: {

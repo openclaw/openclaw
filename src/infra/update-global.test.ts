@@ -15,6 +15,7 @@ import {
 } from "../test-utils/vitest-spies.js";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
 import {
+  canResolveRegistryVersionForPackageTarget,
   collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerByPresence,
@@ -105,6 +106,32 @@ describe("update global helpers", () => {
         env: { OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw@next" },
       }),
     ).toBe("openclaw@next");
+  });
+
+  it("maps main and explicit package targets to install specs", () => {
+    expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag: "main" })).toBe(
+      "github:openclaw/openclaw#main",
+    );
+    expect(
+      resolveGlobalInstallSpec({
+        packageName: "openclaw",
+        tag: "github:openclaw/openclaw#feature/my-branch",
+      }),
+    ).toBe("github:openclaw/openclaw#feature/my-branch");
+    expect(
+      resolveGlobalInstallSpec({
+        packageName: "openclaw",
+        tag: "https://example.com/openclaw-main.tgz",
+      }),
+    ).toBe("https://example.com/openclaw-main.tgz");
+  });
+
+  it("identifies package targets that support registry version resolution", () => {
+    expect(canResolveRegistryVersionForPackageTarget("latest")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("2026.3.22")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("main")).toBe(false);
+    expect(canResolveRegistryVersionForPackageTarget("github:openclaw/openclaw#main")).toBe(false);
+    expect(canResolveRegistryVersionForPackageTarget("/tmp/openclaw.tgz")).toBe(false);
   });
 
   it("resolves scoped package paths from the package manager global root", async () => {
@@ -672,6 +699,50 @@ describe("update global helpers", () => {
       "--loglevel=error",
       "--min-release-age=0",
     ]);
+  });
+
+  it("builds global install argv for each supported manager", () => {
+    expect(globalInstallArgs("npm", "openclaw@latest")).toEqual([
+      "npm",
+      "i",
+      "-g",
+      "openclaw@latest",
+      "--no-fund",
+      "--no-audit",
+      "--loglevel=error",
+      "--min-release-age=0",
+    ]);
+    expect(globalInstallArgs("pnpm", "openclaw@latest")).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "openclaw@latest",
+    ]);
+    expect(globalInstallArgs("pnpm", "github:openclaw/openclaw#release/2026.5.12")).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "--allow-build=openclaw",
+      "github:openclaw/openclaw#release/2026.5.12",
+    ]);
+    expect(globalInstallArgs("bun", "openclaw@latest")).toEqual([
+      "bun",
+      "add",
+      "-g",
+      "openclaw@latest",
+    ]);
+    expect(globalInstallFallbackArgs("npm", "openclaw@latest")).toEqual([
+      "npm",
+      "i",
+      "-g",
+      "openclaw@latest",
+      "--omit=optional",
+      "--no-fund",
+      "--no-audit",
+      "--loglevel=error",
+      "--min-release-age=0",
+    ]);
+    expect(globalInstallFallbackArgs("pnpm", "openclaw@latest")).toBeNull();
   });
 
   it("resolves npm prefix layouts for normal global roots", () => {

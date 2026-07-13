@@ -2,10 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { TranscriptEvent } from "./session-accessor.js";
 import {
   appendSqliteTranscriptEvent,
@@ -66,6 +70,20 @@ function search(query: string, options: { limit?: number; sessionKeys?: string[]
     ...(options.sessionKeys ? { sessionKeys: options.sessionKeys } : {}),
   });
 }
+
+async function waitForSearchReconcile(query: string): Promise<void> {
+  await vi.waitFor(() => expect(search(query).indexing).toBe(false), {
+    interval: 10,
+    timeout: 5_000,
+  });
+}
+
+afterEach(async () => {
+  await waitForSearchReconcile("cleanup-probe");
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  fs.rmSync(paths.tempDir, { recursive: true, force: true });
+});
 
 function agentKysely() {
   const database = openOpenClawAgentDatabase({ agentId: "main", env: env() });
@@ -157,6 +175,51 @@ describe("searchSessionTranscripts", () => {
     expect(result.hits[0]?.messageId).toBe("m-new");
   });
 
+  it("only surfaces the active branch after a leaf-control rewind", async () => {
+    const scope = transcriptScope("session-1", "agent:main:main");
+    await replaceSqliteTranscriptEvents(scope, [
+      {
+        type: "message",
+        id: "m1",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "alpha origin" }] },
+      },
+      {
+        type: "message",
+        id: "m2",
+        parentId: "m1",
+        message: { role: "assistant", content: [{ type: "text", text: "beta abandoned" }] },
+      },
+    ] as unknown as TranscriptEvent[]);
+    await appendSqliteTranscriptEvent(scope, {
+      type: "leaf",
+      id: "leaf-1",
+      parentId: "m2",
+      targetId: "m1",
+    } as unknown as TranscriptEvent);
+
+    const dirty = search("beta");
+    expect(dirty.indexing).toBe(true);
+    expect(dirty.hits).toHaveLength(0);
+    await waitForSearchReconcile("beta");
+
+    expect(search("beta").hits).toHaveLength(0);
+    expect(search("alpha").hits).toHaveLength(1);
+  });
+
+  it("backfills transcripts that predate the index via reconcile", async () => {
+    await appendUserMessage("session-1", "agent:main:main", "historic knowledge");
+    const { db, kysely } = agentKysely();
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts"));
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
+    expect(search("historic").indexing).toBe(true);
+
+    await waitForSearchReconcile("historic");
+    const result = search("historic");
+    expect(result.indexing).toBe(false);
+    expect(result.hits).toHaveLength(1);
+  });
+
   it("detects missing, dirty, and lagging transcript index watermarks", async () => {
     await appendUserMessage("session-1", "agent:main:main", "indexed message");
     const { db, kysely } = agentKysely();
@@ -187,5 +250,35 @@ describe("searchSessionTranscripts", () => {
       kysely.deleteFrom("session_transcript_index_state").where("session_id", "=", "session-1"),
     );
     expect(pending()).toEqual(["session-1"]);
+  });
+
+  it("sweeps orphaned index rows during reconcile", async () => {
+    await appendUserMessage("session-1", "agent:main:main", "anchor row");
+    const { db, kysely } = agentKysely();
+    executeSqliteQuerySync(
+      db,
+      kysely.insertInto("session_transcript_fts").values({
+        text: "ghost payload",
+        session_id: "session-ghost",
+        message_id: "m-ghost",
+        role: "user",
+        timestamp: "1",
+      }),
+    );
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
+
+    const ghostRows = () =>
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("session_transcript_fts")
+          .select("message_id")
+          .where("session_id", "=", "session-ghost"),
+      ).rows.length;
+    expect(ghostRows()).toBe(1);
+    expect(search("anchor").indexing).toBe(true);
+    await waitForSearchReconcile("anchor");
+    expect(ghostRows()).toBe(0);
+    expect(search("anchor").hits).toHaveLength(1);
   });
 });

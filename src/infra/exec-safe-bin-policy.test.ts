@@ -1,13 +1,31 @@
 // Covers safe-bin policy profiles, validation, and generated docs text.
+import fs from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_SAFE_BINS,
   SAFE_BIN_PROFILES,
   normalizeSafeBinProfileFixtures,
   resolveSafeBinProfiles,
   type SafeBinProfileFixtures,
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
+
+const SAFE_BIN_DOC_DEFAULTS_START = '[//]: # "SAFE_BIN_DEFAULTS:START"';
+const SAFE_BIN_DOC_DEFAULTS_END = '[//]: # "SAFE_BIN_DEFAULTS:END"';
+const SAFE_BIN_DOC_DENIED_FLAGS_START = '[//]: # "SAFE_BIN_DENIED_FLAGS:START"';
+const SAFE_BIN_DOC_DENIED_FLAGS_END = '[//]: # "SAFE_BIN_DENIED_FLAGS:END"';
+const SAFE_BIN_DOC_PATH = "docs/tools/exec-approvals-advanced.md";
+
+function readGeneratedDocBlock(startMarker: string, endMarker: string): string {
+  const docs = fs.readFileSync(path.resolve(process.cwd(), SAFE_BIN_DOC_PATH), "utf8");
+  const start = docs.indexOf(startMarker);
+  const end = docs.indexOf(endMarker);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return docs.slice(start + startMarker.length, end).trim();
+}
 
 function buildDeniedFlagArgvVariants(flag: string): string[][] {
   if (flag.startsWith("--")) {
@@ -293,4 +311,29 @@ describe("exec safe bin policy denied-flag matrix", () => {
       }
     }
   }
+});
+
+describe("exec safe bin policy docs parity", () => {
+  it("keeps default safe-bin docs in sync with policy defaults", () => {
+    const actual = readGeneratedDocBlock(SAFE_BIN_DOC_DEFAULTS_START, SAFE_BIN_DOC_DEFAULTS_END);
+    const expected = DEFAULT_SAFE_BINS.map((bin) => `\`${bin}\``).join(", ");
+    expect(actual).toBe(expected);
+  });
+
+  it("keeps denied-flag docs in sync with compiled policy profiles", () => {
+    const actual = readGeneratedDocBlock(
+      SAFE_BIN_DOC_DENIED_FLAGS_START,
+      SAFE_BIN_DOC_DENIED_FLAGS_END,
+    );
+    const expected = Object.entries(SAFE_BIN_PROFILES)
+      .flatMap(([bin, profile]) => {
+        const deniedFlags = Array.from(profile.deniedFlags ?? []).toSorted();
+        return deniedFlags.length === 0
+          ? []
+          : [`- \`${bin}\`: ${deniedFlags.map((flag) => `\`${flag}\``).join(", ")}`];
+      })
+      .toSorted()
+      .join("\n");
+    expect(actual).toBe(expected);
+  });
 });

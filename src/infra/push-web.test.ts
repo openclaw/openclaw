@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webPush from "web-push";
-import { broadcastWebPush, registerWebPushSubscription, resolveVapidKeys } from "./push-web.js";
+import {
+  broadcastWebPush,
+  clearWebPushSubscriptionByEndpoint,
+  registerWebPushSubscription,
+  resolveVapidKeys,
+} from "./push-web.js";
 
 // Stub resolveStateDir so tests use a temp directory.
 let tmpDir: string;
@@ -105,6 +110,12 @@ describe("subscription CRUD", () => {
     expect(sub2.subscriptionId).toBe(sub1.subscriptionId);
     expect(sub2.createdAtMs).toBe(sub1.createdAtMs);
     expect(sub2.keys.p256dh).toBe("new-p256dh");
+  });
+
+  it("clears a subscription by endpoint", async () => {
+    await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
+    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).resolves.toBe(true);
+    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).resolves.toBe(false);
   });
 
   it("rejects invalid endpoint", async () => {

@@ -1467,6 +1467,7 @@ describe("exec approvals store helpers", () => {
 
   it("commits an explicit allow-always grant after current-policy authorization", async () => {
     const dir = createHomeDir();
+    vi.spyOn(Date, "now").mockReturnValue(321_000);
     saveExecApprovals({
       version: 1,
       defaults: { security: "allowlist", ask: "always" },
@@ -1498,8 +1499,10 @@ describe("exec approvals store helpers", () => {
       expect.objectContaining({
         pattern: expect.stringMatching(/^=command:/),
         source: "allow-always",
+        lastUsedAt: 321_000,
       }),
     ]);
+    expect(allowlistEntries(dir, "main")[0]).not.toHaveProperty("commandText");
   });
 
   it("preserves concurrent explicit allow-always grants from the same policy snapshot", async () => {

@@ -6,6 +6,7 @@ import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -47,6 +48,7 @@ async function closeTestDispatcher(dispatcher: unknown): Promise<void> {
 
 describe("gateway network runtime", () => {
   beforeEach(() => {
+    resetAgentEventsForTest({ preserveListeners: true });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearSessionStoreCacheForTest();
@@ -54,6 +56,7 @@ describe("gateway network runtime", () => {
   });
 
   afterEach(() => {
+    resetAgentEventsForTest({ preserveListeners: true });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearSessionStoreCacheForTest();

@@ -405,6 +405,42 @@ describe("package dist inventory", () => {
     ).toBe(false);
   });
 
+  it("rejects pre-populated install-stage debris before writing an inventory", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-stage-" }, async (packageRoot) => {
+      for (const relativePath of [
+        "dist/extensions/brave/.openclaw-install-stage/package.json",
+        "dist/extensions/browser/.openclaw-install-stage-AbC123/node_modules/playwright-core/package.json",
+      ]) {
+        const filePath = path.join(packageRoot, relativePath);
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, "{}", "utf8");
+      }
+
+      await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
+        /unexpected legacy plugin dependency staging debris/u,
+      );
+    });
+  });
+
+  it("rejects mixed-case install-stage debris on case-sensitive builders", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-stage-case-" }, async (packageRoot) => {
+      const stagedFile = path.join(
+        packageRoot,
+        "Dist",
+        "Extensions",
+        "browser",
+        ".OPENCLAW-INSTALL-STAGE-AbC123",
+        "package.json",
+      );
+      await fs.mkdir(path.dirname(stagedFile), { recursive: true });
+      await fs.writeFile(stagedFile, "{}", "utf8");
+
+      await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
+        /unexpected legacy plugin dependency staging debris/u,
+      );
+    });
+  });
+
   it("returns null when the inventory is missing", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-missing-" }, async (packageRoot) => {
       await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });

@@ -1,4 +1,5 @@
 // Covers backup archive creation and verification filtering.
+import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,9 @@ import {
   formatBackupCreateSummary,
   type BackupCreateResult,
 } from "./backup-create.js";
+import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
+import { isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
@@ -189,6 +193,259 @@ describe("formatBackupCreateSummary", () => {
       "Created /tmp/openclaw-backup.tar.gz",
       "Skipped 3 volatile files (live sessions, cron logs, queues, sockets, pid/tmp).",
     ]);
+  });
+});
+
+describe("writeTarArchiveWithRetry", () => {
+  it.each([
+    new Error("did not encounter expected EOF"),
+    new Error("encountered unexpected EOF"),
+    new Error("TAR_BAD_ARCHIVE: Unrecognized archive format"),
+    new Error("Truncated input (needed 512 more bytes, only 0 available) (TAR_BAD_ARCHIVE)"),
+    Object.assign(new Error(""), { code: "EOF" }),
+  ])("retries tar-specific EOF-class errors: $message", async (error) => {
+    const runTar = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce();
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await writeTarArchiveWithRetry({
+      tempArchivePath: "/tmp/backup.tar.gz.tmp",
+      runTar,
+      sleepMs: sleep,
+    });
+
+    expect(runTar).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    new Error("EOF occurred in violation of protocol"),
+    new Error("unexpected eof while reading"),
+    new Error("ran out of EOF markers"),
+    new Error("permission denied"),
+    new Error(""),
+    null,
+    undefined,
+    "did not encounter expected EOF",
+  ])("does not retry unrelated errors: %s", async (error) => {
+    const runTar = vi.fn<() => Promise<void>>().mockRejectedValueOnce(error);
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/Backup archive write failed/);
+    expect(runTar).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("retries on EOF-class errors and eventually succeeds", async () => {
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/sessions/s-abc/transcript.jsonl",
+    });
+    const runTar = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockRejectedValueOnce(eofErr)
+      .mockResolvedValueOnce(undefined);
+    const log = vi.fn();
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await writeTarArchiveWithRetry({
+      tempArchivePath: "/tmp/backup.tar.gz.tmp",
+      runTar,
+      log,
+      sleepMs: sleep,
+    });
+
+    expect(runTar).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenNthCalledWith(1, 10_000);
+    expect(sleep).toHaveBeenNthCalledWith(2, 20_000);
+    expect(log).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses a fresh temp archive path when cleanup cannot remove a failed attempt", async () => {
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/sessions/s-abc/transcript.jsonl",
+    });
+    const tempArchivePath = "/tmp/backup.tar.gz.tmp";
+    const runTar = vi
+      .fn<(attemptTempArchivePath: string) => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockResolvedValueOnce(undefined);
+    const log = vi.fn();
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async () => {
+      throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    });
+
+    try {
+      const completedTempArchivePath = await writeTarArchiveWithRetry({
+        tempArchivePath,
+        runTar,
+        log,
+        sleepMs: sleep,
+      });
+
+      expect(runTar).toHaveBeenNthCalledWith(1, tempArchivePath);
+      expect(runTar).toHaveBeenNthCalledWith(2, `${tempArchivePath}.retry-2`);
+      expect(completedTempArchivePath).toBe(`${tempArchivePath}.retry-2`);
+      expect(rmSpy).toHaveBeenCalledWith(tempArchivePath, { force: true });
+      expect(log).toHaveBeenCalledWith(
+        `Backup archiver could not remove temp archive ${tempArchivePath} between retries: EBUSY. Continuing.`,
+      );
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it("cleans retry temp archive paths when a later attempt fails", async () => {
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/sessions/s-abc/transcript.jsonl",
+    });
+    const tempArchivePath = "/tmp/backup.tar.gz.tmp";
+    const runTar = vi
+      .fn<(attemptTempArchivePath: string) => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockRejectedValueOnce(new Error("permission denied"));
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+    const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+
+    try {
+      await expect(
+        writeTarArchiveWithRetry({
+          tempArchivePath,
+          runTar,
+          sleepMs: sleep,
+        }),
+      ).rejects.toThrow(/permission denied/);
+
+      expect(runTar).toHaveBeenNthCalledWith(1, tempArchivePath);
+      expect(runTar).toHaveBeenNthCalledWith(2, `${tempArchivePath}.retry-2`);
+      expect(rmSpy).toHaveBeenCalledWith(`${tempArchivePath}.retry-2`, { force: true });
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it("surfaces the offending path and attempt count after exhausting retries", async () => {
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/logs/gateway.jsonl",
+    });
+    const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(eofErr);
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/last offending path: \/state\/logs\/gateway\.jsonl, after 3 attempts/);
+    expect(runTar).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets callers reset per-attempt counters so retries report the final attempt's count, not a running sum", async () => {
+    // Simulate the caller's pattern: a closure counter populated by a filter
+    // that tar.c invokes while walking the tree. Each attempt re-walks the
+    // same tree, so the runTar closure must reset the counter before calling
+    // tar.c -- otherwise the reported count accumulates across attempts.
+    let skippedVolatileCount = 0;
+    const volatileFilesSeenPerAttempt = 5;
+    let attempt = 0;
+
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/sessions/s-abc/transcript.jsonl",
+    });
+
+    const runTar = vi.fn<() => Promise<void>>().mockImplementation(async () => {
+      attempt += 1;
+      skippedVolatileCount = 0;
+      for (let i = 0; i < volatileFilesSeenPerAttempt; i += 1) {
+        skippedVolatileCount += 1;
+      }
+      if (attempt < 3) {
+        throw eofErr;
+      }
+    });
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await writeTarArchiveWithRetry({
+      tempArchivePath: "/tmp/backup.tar.gz.tmp",
+      runTar,
+      sleepMs: sleep,
+    });
+
+    expect(runTar).toHaveBeenCalledTimes(3);
+    // Without the reset, this would be 15 (5 * 3 attempts). With the reset,
+    // it equals the count from the final (successful) attempt.
+    expect(skippedVolatileCount).toBe(volatileFilesSeenPerAttempt);
+  });
+
+  it("does not retry on non-EOF errors", async () => {
+    const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("permission denied"));
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/permission denied/);
+    expect(runTar).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+});
+
+describe("createBackupVolatileStatCache", () => {
+  it("lets tar filter a volatile file that disappears before lstat", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-volatile-stat-cache-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const volatilePath = await state.writeText("logs/gateway.log", "live log\n");
+        await state.writeText("settings.json", '{"keep":true}\n');
+        const archivePath = state.path("volatile-stat-cache.tar.gz");
+        const volatilePlan = { stateDirs: [state.stateDir] };
+        const statCache = createBackupVolatileStatCache(volatilePlan);
+        const getCachedStat = statCache.get.bind(statCache);
+        let removedBeforeStat = false;
+
+        statCache.get = (key: string) => {
+          if (path.resolve(key) === path.resolve(volatilePath)) {
+            rmSync(volatilePath, { force: true });
+            removedBeforeStat = true;
+          }
+          return getCachedStat(key);
+        };
+
+        await tar.c(
+          {
+            file: archivePath,
+            gzip: true,
+            portable: true,
+            preservePaths: true,
+            statCache,
+            filter: (entryPath) => !isVolatileBackupPath(entryPath, volatilePlan),
+          },
+          [state.stateDir],
+        );
+
+        const entries = await listArchiveEntries(archivePath);
+        expect(removedBeforeStat).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/settings.json"))).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
+      },
+    );
   });
 });
 

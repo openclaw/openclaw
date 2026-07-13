@@ -15,3 +15,18 @@ export function unscopedPackageName(name: string): string {
   }
   return trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
 }
+
+/** Matches a requested install id against either the full package name or unscoped basename. */
+export function packageNameMatchesId(packageName: string, id: string): boolean {
+  const trimmedId = id.trim();
+  if (!trimmedId) {
+    return false;
+  }
+
+  const trimmedPackageName = packageName.trim();
+  if (!trimmedPackageName) {
+    return false;
+  }
+
+  return trimmedId === trimmedPackageName || trimmedId === unscopedPackageName(trimmedPackageName);
+}

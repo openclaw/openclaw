@@ -245,6 +245,42 @@ describe("tailscale helpers", () => {
     await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(true);
   });
 
+  it.each([
+    { proxy: "http://127.0.0.1:18789", expected: true },
+    { proxy: "http://127.0.0.1:18789/", expected: true },
+    { proxy: "http://127.0.0.1:18789/api", expected: true },
+    { proxy: "http://localhost:18789", expected: true },
+    { proxy: "http://[::1]:18789", expected: true },
+    { proxy: "https+insecure://localhost:18789", expected: true },
+    { proxy: "https+insecure://127.0.0.1:18789/api", expected: true },
+    { proxy: "18789", expected: true },
+    { proxy: "http://127.0.0.1:9000", expected: false },
+    { proxy: "http://10.0.0.5:18789", expected: false },
+    { proxy: "https+insecure://10.0.0.5:18789", expected: false },
+  ])("validates Funnel loopback proxy $proxy", async ({ proxy, expected }) => {
+    const host = "device.tailnet.ts.net:443";
+    const exec = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        AllowFunnel: { [host]: true },
+        Web: { [host]: { Handlers: { "/": { Proxy: proxy } } } },
+      }),
+    });
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(expected);
+  });
+
+  it("ignores Funnel handlers whose host is not allowed", async () => {
+    const host = "device.tailnet.ts.net:443";
+    const exec = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        AllowFunnel: { [host]: false },
+        Web: { [host]: { Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } } } },
+      }),
+    });
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(false);
+  });
+
   it("hasTailscaleFunnelRouteForPort preserves malformed status parse failures", async () => {
     const exec = vi.fn().mockResolvedValue({
       stdout: "warning: stale state\n{not json}\n",

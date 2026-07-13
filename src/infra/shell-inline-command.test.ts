@@ -7,6 +7,53 @@ import {
 } from "./shell-inline-command.js";
 
 describe("resolveInlineCommandMatch", () => {
+  it.each([
+    {
+      name: "extracts the next token for bash -lc",
+      argv: ["bash", "-lc", "echo hi"],
+      opts: {},
+      expected: { command: "echo hi", valueTokenIndex: 2 },
+    },
+    {
+      name: "supports combined -c forms when enabled",
+      argv: ["sh", "-cecho hi"],
+      opts: { allowCombinedC: true },
+      expected: { command: "echo hi", valueTokenIndex: 1 },
+    },
+    {
+      name: "keeps post-c no-argument shell flags separate from the command",
+      argv: ["bash", "-cx", "echo hi"],
+      opts: { allowCombinedC: true },
+      expected: { command: "echo hi", valueTokenIndex: 2 },
+    },
+    {
+      name: "keeps post-c stdin shell flags separate from the command",
+      argv: ["bash", "-cs", "echo hi"],
+      opts: { allowCombinedC: true },
+      expected: { command: "echo hi", valueTokenIndex: 2 },
+    },
+    {
+      name: "rejects combined -c forms when disabled",
+      argv: ["sh", "-cecho hi"],
+      opts: { allowCombinedC: false },
+      expected: { command: null, valueTokenIndex: null },
+    },
+    {
+      name: "returns a value index for blank command tokens",
+      argv: ["bash", "-lc", "   "],
+      opts: {},
+      expected: { command: null, valueTokenIndex: 2 },
+    },
+    {
+      name: "returns null value index when the flag has no following token",
+      argv: ["bash", "-lc"],
+      opts: {},
+      expected: { command: null, valueTokenIndex: null },
+    },
+  ])("$name", ({ argv, opts, expected }) => {
+    expect(resolveInlineCommandMatch(argv, POSIX_INLINE_COMMAND_FLAGS, opts)).toEqual(expected);
+  });
+
   it("stops parsing after --", () => {
     expect(
       resolveInlineCommandMatch(["bash", "--", "-lc", "echo hi"], POSIX_INLINE_COMMAND_FLAGS),

@@ -9,6 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -556,6 +557,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  resetAgentEventsForTest({ preserveListeners: true });
   setFastFollowupCliBackendDeps();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
@@ -616,6 +618,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetAgentEventsForTest({ preserveListeners: true });
   cliBackendsTestingForTest?.resetDepsForTest();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();

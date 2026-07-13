@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertSupportedRuntime,
   isAtLeast,
+  isSupportedNodeVersion,
   nodeVersionSatisfiesEngine,
   parseSemver,
 } from "./runtime-guard.js";
@@ -50,6 +51,21 @@ describe("runtime-guard", () => {
     expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
   });
+
+  it.each([
+    ["22.22.3", true],
+    ["22.22.2", false],
+    ["23.11.0", false],
+    ["24.14.1", false],
+    ["24.15.0", true],
+    ["25.8.1", false],
+    ["25.9.0", true],
+    ["26.0.0", true],
+    [null, false],
+  ] as const)("classifies supported Node version %s", (version, expected) => {
+    expect(isSupportedNodeVersion(version)).toBe(expected);
+  });
+
   it("throws via exit when runtime is too old", () => {
     const runtime = {
       log: vi.fn(),

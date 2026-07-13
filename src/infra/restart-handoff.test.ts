@@ -14,6 +14,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import {
+  formatGatewayRestartHandoffDiagnostic,
   readGatewayRestartHandoffSync,
   writeGatewayRestartHandoffSync,
 } from "./restart-handoff.js";
@@ -135,6 +136,28 @@ describe("gateway restart handoff", () => {
     expect(handoff.reason).toHaveLength(199);
     expect(Buffer.from(handoff.reason ?? "").toString()).toBe(handoff.reason);
     expect(readGatewayRestartHandoffSync(env)?.reason).toBe(handoff.reason);
+  });
+
+  it("formats a concise, single-line diagnostic", () => {
+    expect(
+      formatGatewayRestartHandoffDiagnostic(
+        {
+          kind: "gateway-supervisor-restart-handoff",
+          version: 1,
+          intentId: "intent-1",
+          pid: 12_345,
+          createdAt: 10_000,
+          expiresAt: 70_000,
+          reason: "ok\nFake: bad",
+          source: "operator-restart",
+          restartKind: "full-process",
+          supervisorMode: "external",
+        },
+        12_500,
+      ),
+    ).toBe(
+      "Recent restart handoff: full-process via external; source=operator-restart; reason=ok Fake: bad; pid=12345; age=2s; expiresIn=57s",
+    );
   });
 
   it("keeps persisted intent IDs free of lone surrogates", () => {

@@ -21,12 +21,14 @@ import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
 import {
   addSubagentRunForTests,
   finalizeInterruptedSubagentRun,
+  getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
   testing,
 } from "./subagent-registry.js";
 import {
   createSubagentRegistryTestDeps,
+  readSubagentSessionStore,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -38,6 +40,8 @@ vi.mock("../gateway/call.js", () => ({
 vi.mock("../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
 }));
+
+const TWO_HOURS_MS = 2 * 60 * 60 * 1_000;
 
 function makeRunRecord(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   return {
@@ -85,6 +89,67 @@ describe("subagent orphan recovery — faithful restart path", () => {
       tempStateDir = null;
     }
     envSnapshot.restore();
+  });
+
+  it("finalizes a stale (>2h) aborted run instead of resuming it", async () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:stale-aborted";
+    const runId = "run-stale-aborted";
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: tempStateDir!,
+      agentId: "main",
+      sessionKey: childSessionKey,
+      sessionId: "sess-stale-aborted",
+      updatedAt: now,
+      abortedLastRun: true,
+      defaultSessionId: "sess-stale-aborted",
+    });
+    const record = makeRunRecord({
+      runId,
+      childSessionKey,
+      createdAt: now - 3 * TWO_HOURS_MS,
+      startedAt: now - 3 * TWO_HOURS_MS,
+    });
+    expect(
+      createRunningTaskRun({
+        runtime: "subagent",
+        sourceId: runId,
+        ownerKey: record.requesterSessionKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId,
+        task: record.task,
+        deliveryStatus: "pending",
+        startedAt: record.startedAt,
+        lastEventAt: record.startedAt,
+      }),
+    ).not.toBeNull();
+    addSubagentRunForTests(record);
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => new Map([[runId, record]]),
+    });
+
+    const after = getSubagentRunByChildSessionKey(childSessionKey);
+    expect(vi.mocked(callGateway)).not.toHaveBeenCalled();
+    expect(after?.endedAt).toBeTypeOf("number");
+    expect(after?.outcome?.status).toBe("error");
+    expect(result.recovered).toBe(0);
+    expect(findTaskByRunId(runId)).toMatchObject({
+      status: "failed",
+      endedAt: expect.any(Number),
+      error: expect.stringContaining("stale aborted subagent run not resumed"),
+    });
+
+    resetTaskRegistryForTests({ persist: false });
+    expect(findTaskByRunId(runId)).toMatchObject({ status: "failed" });
+    await cleanupSessionStateForTest();
+    const persistedSession = (await readSubagentSessionStore(storePath))[childSessionKey];
+    expect(persistedSession).toMatchObject({
+      status: "failed",
+      endedAt: expect.any(Number),
+    });
+    expect(persistedSession?.abortedLastRun).toBeUndefined();
   });
 
   it("resumes a fresh (<2h) aborted run through the real recovery pass", async () => {

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   assertCanonicalPathWithinBase,
+  packageNameMatchesId,
   resolveSafeInstallDir,
   safeDirName,
   safePathSegmentHashed,
@@ -45,6 +46,18 @@ describe("unscopedPackageName", () => {
     { value: "", expected: "" },
   ])("normalizes package names for %j", ({ value, expected }) => {
     expect(unscopedPackageName(value)).toBe(expected);
+  });
+});
+
+describe("packageNameMatchesId", () => {
+  it.each([
+    { packageName: "@openclaw/matrix", id: "matrix", expected: true },
+    { packageName: "@openclaw/matrix", id: "@openclaw/matrix", expected: true },
+    { packageName: "@openclaw/matrix", id: "quietchat", expected: false },
+    { packageName: " ", id: "matrix", expected: false },
+    { packageName: "@openclaw/matrix", id: " ", expected: false },
+  ])("matches ids for %j", ({ packageName, id, expected }) => {
+    expect(packageNameMatchesId(packageName, id)).toBe(expected);
   });
 });
 

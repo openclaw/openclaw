@@ -4,32 +4,28 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
-import { clearGatewayModelPricingCacheState } from "../gateway/model-pricing-cache-state.js";
+import {
+  persistSessionTranscriptTurn,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import {
+  clearGatewayModelPricingFailures,
+  replaceGatewayModelPricingCache,
+} from "../gateway/model-pricing-cache-state.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
+import * as formatDatetime from "./format-time/format-datetime.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
   loadSessionCostSummary,
+  loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
   resolveExistingUsageSessionFile,
 } from "./session-cost-usage.js";
-
-function setGatewayModelPricing(
-  entries: Array<{
-    provider: string;
-    model: string;
-    pricing: CachedModelPricing;
-  }>,
-): void {
-  replaceGatewayModelPricingCache(
-    new Map(entries.map((entry) => [`${entry.provider}/${entry.model}`, entry.pricing])),
-  );
-}
 
 function clearGatewayModelPricingState(): void {
   replaceGatewayModelPricingCache(new Map(), 0);
@@ -200,6 +196,116 @@ describe("session cost usage", () => {
           sessionId,
         }),
       ).toBe(sqliteMarker);
+    });
+  });
+
+  it("includes SQLite-only sessions in cached usage summaries", async () => {
+    const root = await makeSessionCostRoot("sqlite-cost");
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionId = "sqlite-cost-session";
+    const now = Date.UTC(2026, 5, 25, 12, 0, 0);
+    const sessionFile = `sqlite:main:${sessionId}:${storePath}`;
+
+    await withStateDir(root, async () => {
+      await upsertSessionEntry(
+        { sessionKey, storePath },
+        { sessionFile, sessionId, updatedAt: now },
+      );
+      await persistSessionTranscriptTurn(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        {
+          messages: [
+            { message: { role: "user", content: "sqlite usage prompt", timestamp: now } },
+            {
+              message: {
+                role: "assistant",
+                content: "sqlite usage answer",
+                model: "gpt-5.4",
+                provider: "openai",
+                timestamp: now + 1000,
+                usage: {
+                  input: 7,
+                  output: 11,
+                  totalTokens: 18,
+                  cost: { total: 0.018 },
+                },
+              },
+            },
+          ],
+          touchSessionEntry: false,
+        },
+      );
+
+      const legacyJsonl = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+      await fs.mkdir(path.dirname(legacyJsonl), { recursive: true });
+      await fs.writeFile(
+        legacyJsonl,
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-06-25T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            model: "gpt-5.4",
+            provider: "openai",
+            usage: {
+              input: 100,
+              output: 100,
+              totalTokens: 200,
+              cost: { total: 0.2 },
+            },
+          },
+        }),
+        "utf-8",
+      );
+
+      const summary = await loadCostUsageSummaryFromCache({
+        agentId: "main",
+        startMs: Date.UTC(2026, 5, 25),
+        endMs: Date.UTC(2026, 5, 25, 23, 59, 59, 999),
+        refreshMode: "sync-when-empty",
+      });
+      expect(summary.totals.totalTokens).toBe(18);
+      expect(summary.totals.totalCost).toBeCloseTo(0.018, 8);
+      expect(summary.cacheStatus?.status).toBe("fresh");
+
+      await loadSessionCostSummariesFromCache({
+        agentId: "main",
+        sessions: [{ sessionId, sessionFile }],
+      });
+      await vi.waitFor(
+        async () => {
+          const bulk = await loadSessionCostSummariesFromCache({
+            agentId: "main",
+            sessions: [{ sessionId, sessionFile }],
+            startMs: Date.UTC(2026, 5, 25),
+            endMs: Date.UTC(2026, 5, 25, 23, 59, 59, 999),
+            requestRefresh: false,
+          });
+          expect(bulk.cacheStatus.status).toBe("fresh");
+          expect(bulk.summaries[0]?.totalTokens).toBe(18);
+        },
+        { interval: 10, timeout: 2_000 },
+      );
+
+      const sessionEntry = { sessionFile, sessionId, updatedAt: now };
+      const summaryFromStalePath = await loadSessionCostSummary({
+        agentId: "main",
+        sessionEntry,
+        sessionFile: legacyJsonl,
+        sessionId,
+      });
+      expect(summaryFromStalePath?.totalTokens).toBe(18);
+
+      await expect(loadSessionUsageTimeSeries({ agentId: "main", sessionFile })).resolves.toEqual({
+        sessionId: undefined,
+        points: [expect.objectContaining({ input: 7, output: 11, totalTokens: 18 })],
+      });
+      await expect(loadSessionLogs({ agentId: "main", sessionFile })).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ cost: 0.018, role: "assistant", tokens: 18 }),
+        ]),
+      );
     });
   });
 
@@ -851,6 +957,86 @@ describe("session cost usage", () => {
         },
         { interval: 1, timeout: 2_000 },
       );
+    });
+  });
+
+  it("loads multiple session summaries from one durable cache snapshot", async () => {
+    const root = await makeSessionCostRoot("cost-cache-batch");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessions = await Promise.all(
+      ["sess-a", "sess-b"].map(async (sessionId, index) => {
+        const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+        await fs.writeFile(
+          sessionFile,
+          transcriptText(sessionId, {
+            type: "message",
+            timestamp: `2026-02-05T12:0${index}:00.000Z`,
+            message: {
+              role: "assistant",
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: { input: index + 1, output: 0, totalTokens: index + 1 },
+            },
+          }),
+          "utf-8",
+        );
+        return { sessionId, sessionFile };
+      }),
+    );
+
+    await withStateDir(root, async () => {
+      const warmed = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        refreshMode: "sync-when-empty",
+      });
+      expect(warmed.cacheStatus?.status).toBe("fresh");
+
+      await loadSessionCostSummariesFromCache({
+        sessions,
+        agentId: "main",
+      });
+      await vi.waitFor(
+        async () => {
+          const cached = await loadSessionCostSummariesFromCache({
+            sessions,
+            agentId: "main",
+            requestRefresh: false,
+          });
+          expect(cached.cacheStatus.status).toBe("fresh");
+        },
+        { interval: 10, timeout: 2_000 },
+      );
+
+      const createDayFormatter = formatDatetime.createTimeZoneDayKeyFormatter;
+      let formatDayKeyCalls = 0;
+      const dayFormatterSpy = vi
+        .spyOn(formatDatetime, "createTimeZoneDayKeyFormatter")
+        .mockImplementation((timeZone) => {
+          const formatDayKey = createDayFormatter(timeZone);
+          return (date) => {
+            formatDayKeyCalls += 1;
+            return formatDayKey(date);
+          };
+        });
+      try {
+        const result = await loadSessionCostSummariesFromCache({
+          sessions,
+          agentId: "main",
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          dayBucket: { mode: "time-zone", timeZone: "Europe/Vienna" },
+          requestRefresh: false,
+        });
+
+        expect(result.cacheStatus.status).toBe("fresh");
+        expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2]);
+        expect(dayFormatterSpy).toHaveBeenCalledTimes(1);
+        expect(formatDayKeyCalls).toBe(2);
+      } finally {
+        dayFormatterSpy.mockRestore();
+      }
     });
   });
 

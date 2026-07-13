@@ -1,6 +1,15 @@
 // Verifies OpenClaw gateway tool schema, restart signaling, and config mutations.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { readRestartSentinel } from "../infra/restart-sentinel.js";
+import {
+  resetGatewayRestartStateForInProcessRestart,
+  setPreRestartDeferralCheck,
+} from "../infra/restart.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -288,6 +297,51 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "config.get response is too large; use path to request a narrower config subtree",
     );
+  });
+
+  it("schedules SIGUSR1 restart and writes the routed sentinel", async () => {
+    resetGatewayRestartStateForInProcessRestart();
+    setPreRestartDeferralCheck(() => 0);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const sigusr1Handler = vi.fn();
+    process.on("SIGUSR1", sigusr1Handler);
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+
+    try {
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "isolated" },
+        async () => {
+          const result = await requireGatewayTool().execute("call1", {
+            action: "restart",
+            delayMs: 0,
+          });
+          expectRecordFields(result.details, {
+            ok: true,
+            pid: process.pid,
+            signal: "SIGUSR1",
+            delayMs: 0,
+          });
+
+          await vi.waitFor(() => expect(sigusr1Handler).toHaveBeenCalledTimes(1), {
+            interval: 1,
+            timeout: 1_000,
+          });
+          expect(kill).not.toHaveBeenCalled();
+
+          const sentinel = await readRestartSentinel();
+          expect(sentinel?.payload.kind).toBe("restart");
+          expect(sentinel?.payload.doctorHint).toBe(
+            "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+          );
+        },
+      );
+    } finally {
+      process.removeListener("SIGUSR1", sigusr1Handler);
+      kill.mockRestore();
+      resetGatewayRestartStateForInProcessRestart();
+      setPreRestartDeferralCheck(() => 0);
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("passes config.apply through gateway call", async () => {

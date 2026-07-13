@@ -6,6 +6,7 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
 import {
@@ -276,6 +277,91 @@ describe("session transcript reader facade", () => {
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(3);
   });
 
+  test("uses SQLite marker identity when only sessionFile is provided", async () => {
+    const sessionId = "reader-marker-only";
+    const markerStorePath = path.join(
+      tempDir,
+      "agents",
+      "marker-agent",
+      "sessions",
+      "sessions.json",
+    );
+    const writeScope = {
+      agentId: "marker-agent",
+      sessionId,
+      sessionKey: "agent:marker-agent:main",
+      storePath: markerStorePath,
+    };
+    await persistSessionTranscriptTurn(writeScope, {
+      messages: [
+        {
+          eventId: "marker-message",
+          message: { role: "user", content: "marker scoped prompt" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "marker-agent",
+      sessionId,
+      storePath: markerStorePath,
+    });
+
+    await expect(
+      readSessionMessagesAsync(
+        { sessionFile: marker, sessionId },
+        { mode: "full", reason: "sqlite marker-only read test" },
+      ),
+    ).resolves.toMatchObject([{ content: "marker scoped prompt" }]);
+    await expect(
+      readSessionMessageByIdAsync({ sessionFile: marker, sessionId }, "marker-message"),
+    ).resolves.toMatchObject({ found: true, seq: 2 });
+  });
+
+  test("projects SQLite transcript reads to the active branch", async () => {
+    const sessionId = "reader-sqlite-branch";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "root",
+          parentId: null,
+          message: { role: "user", content: "branch prompt" },
+        },
+        {
+          eventId: "inactive",
+          parentId: "root",
+          message: { role: "assistant", content: "stale branch" },
+        },
+        {
+          eventId: "active",
+          parentId: "root",
+          message: { role: "assistant", content: "active branch" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const messages = await readSessionMessagesAsync(scope, {
+      mode: "full",
+      reason: "sqlite branch facade test",
+    });
+
+    expect(messages).toMatchObject([{ content: "branch prompt" }, { content: "active branch" }]);
+    expect(
+      messages.map((message) => (message as { __openclaw?: { id?: string } }).__openclaw?.id),
+    ).toEqual(["root", "active"]);
+    expect(
+      messages.map((message) => (message as { __openclaw?: { seq?: number } }).__openclaw?.seq),
+    ).toEqual([2, 4]);
+    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
+  });
+
   test("pages SQLite transcript messages through the reader facade", async () => {
     const sessionId = "reader-sqlite-page";
     const scope = {
@@ -309,6 +395,32 @@ describe("session transcript reader facade", () => {
         (message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq,
       ),
     ).toEqual([3, 4]);
+  });
+
+  test("honors agent ids when no store path or session file is provided", async () => {
+    const sessionId = "reader-agent-scope";
+    await persistSessionTranscriptTurn(
+      { agentId: "agent-one", sessionId, sessionKey: "agent:agent-one:main" },
+      {
+        messages: [
+          {
+            eventId: "agent-message",
+            message: { role: "user", content: "agent scoped prompt" },
+          },
+        ],
+        touchSessionEntry: false,
+      },
+    );
+    const scope = { agentId: "agent-one", sessionId };
+
+    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(1);
+    await expect(readSessionMessageByIdAsync(scope, "agent-message")).resolves.toMatchObject({
+      found: true,
+      seq: 2,
+    });
+    await expect(
+      readSessionMessagesAsync(scope, { mode: "full", reason: "facade agent scope test" }),
+    ).resolves.toMatchObject([{ content: "agent scoped prompt" }]);
   });
 
   test("reads explicit transcript files without session store identity", async () => {

@@ -24,6 +24,38 @@ async function expectPathMissing(filePath: string): Promise<void> {
 }
 
 describe("config backup rotation", () => {
+  it("keeps five recovery points while preserving the pre-update snapshot", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const writeVersion = (version: number) =>
+        fs.writeFile(configPath, JSON.stringify({ version }), "utf-8");
+      const readVersion = async (suffix = "") => {
+        const raw = await fs.readFile(`${configPath}${suffix}`, "utf-8");
+        return (JSON.parse(raw) as { version: number }).version;
+      };
+      const { existsSync } = await import("node:fs");
+
+      await writeVersion(0);
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+      for (let version = 1; version <= 6; version += 1) {
+        await maintainConfigBackups(configPath, fs);
+        await writeVersion(version);
+      }
+
+      await expect(readVersion()).resolves.toBe(6);
+      await expect(readVersion(".bak")).resolves.toBe(5);
+      await expect(readVersion(".bak.1")).resolves.toBe(4);
+      await expect(readVersion(".bak.2")).resolves.toBe(3);
+      await expect(readVersion(".bak.3")).resolves.toBe(2);
+      await expect(readVersion(".bak.4")).resolves.toBe(1);
+      await expectPathMissing(`${configPath}.bak.5`);
+      await expect(readVersion(".pre-update")).resolves.toBe(0);
+    });
+  });
+
   it("maintainConfigBackups composes rotate/copy/harden/prune flow", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
@@ -110,6 +142,43 @@ describe("config backup rotation", () => {
       });
 
       await expectPathMissing(`${configPath}.pre-update`);
+    });
+  });
+
+  it("retries snapshot after transient read and write errors (#105431)", async () => {
+    await withTempHome(async () => {
+      const content = JSON.stringify({ plugins: { installs: ["slack"] } });
+      const { existsSync } = await import("node:fs");
+      const rejectingReadFile = (async () => {
+        throw new Error("EIO: transient read error");
+      }) as typeof fs.readFile;
+      const rejectingWriteFile = (async () => {
+        throw new Error("ENOSPC: transient write error");
+      }) as typeof fs.writeFile;
+
+      for (const failingOperation of ["read", "write"] as const) {
+        const configPath = `${resolveConfigPathFromTempState()}.${failingOperation}`;
+        await fs.writeFile(configPath, content, { mode: 0o600 });
+
+        await createPreUpdateConfigSnapshot({
+          configPath,
+          fs: {
+            readFile: failingOperation === "read" ? rejectingReadFile : fs.readFile,
+            writeFile: failingOperation === "write" ? rejectingWriteFile : fs.writeFile,
+            existsSync,
+          },
+        });
+        await expectPathMissing(`${configPath}.pre-update`);
+
+        await createPreUpdateConfigSnapshot({
+          configPath,
+          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+        });
+
+        const snapshotPath = `${configPath}.pre-update`;
+        await expectRegularFile(snapshotPath);
+        await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(content);
+      }
     });
   });
 });

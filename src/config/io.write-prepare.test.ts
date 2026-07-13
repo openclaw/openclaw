@@ -503,6 +503,46 @@ describe("config io write prepare", () => {
     expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).not.toHaveProperty("params");
   });
 
+  it("applies explicit unsets without mutating caller config", () => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch", "read"] },
+    };
+
+    const next = applyUnsetPathsForWrite(input, [
+      ["commands", "ownerDisplay"],
+      ["tools", "alsoAllow", "1"],
+    ]);
+
+    expect(input).toEqual({
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch", "read"] },
+    });
+    expect(next.commands ?? {}).not.toHaveProperty("ownerDisplay");
+    expect(next.tools?.alsoAllow).toEqual(["exec", "read"]);
+  });
+
+  it.each([
+    ["invalid array suffix", ["tools", "alsoAllow", "1abc"]],
+    ["signed array index", ["tools", "alsoAllow", "+0"]],
+    ["unsafe integer", ["tools", "alsoAllow", "9007199254740993"]],
+    ["maximum array key", ["tools", "alsoAllow", "4294967294"]],
+    ["missing key", ["commands", "missingKey"]],
+    ["prototype key", ["commands", "__proto__"]],
+    ["constructor key", ["commands", "constructor"]],
+    ["prototype constructor property", ["commands", "prototype"]],
+  ] as const)("treats %s unset paths as immutable no-ops", (_name, unsetPath) => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch"] },
+    };
+
+    expect(applyUnsetPathsForWrite(input, [[...unsetPath]])).toBe(input);
+  });
+
   it("preserves untouched include-owned subtrees during unrelated writes", () => {
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: {

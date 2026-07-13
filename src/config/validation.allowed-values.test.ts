@@ -47,6 +47,33 @@ describe("config validation allowed-values metadata", () => {
     }
   });
 
+  it.each([
+    { value: 15, expected: "(maximum: 14)" },
+    { value: 0, expected: "(minimum: 1)" },
+  ])("adds numeric bound hints for invalid startup context limits", ({ value, expected }) => {
+    const result = validateConfigObjectRaw({
+      agents: { defaults: { startupContext: { dailyMemoryDays: value } } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "agents.defaults.startupContext.dailyMemoryDays");
+      expect(issue.message).toContain(expected);
+    }
+  });
+
+  it("adds an exclusive lower-bound hint for positive config values", () => {
+    const result = validateConfigObjectRaw({
+      agents: { defaults: { maxConcurrent: 0 } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "agents.defaults.maxConcurrent");
+      expect(issue.message).toContain("(must be greater than 0)");
+    }
+  });
+
   it("surfaces specific sub-issue for invalid_union bindings errors instead of generic 'Invalid input'", () => {
     const result = validateConfigObjectRaw({
       bindings: [

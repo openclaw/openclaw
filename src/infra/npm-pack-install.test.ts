@@ -1,6 +1,7 @@
 // Covers npm package archive installation helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { packNpmSpecToArchive } from "./install-source-utils.js";
+import { packNpmSpecToArchive, withTempDir } from "./install-source-utils.js";
+import type { NpmIntegrityDriftPayload } from "./npm-integrity.js";
 import {
   finalizeNpmSpecArchiveInstall,
   installFromNpmSpecArchiveWithInstaller,
@@ -20,8 +21,208 @@ vi.mock("./install-source-utils.js", async () => {
 });
 
 describe("installFromNpmSpecArchiveWithInstaller", () => {
+  const baseSpec = "@openclaw/test@1.0.0";
+  const baseArchivePath = "/tmp/openclaw-test.tgz";
+
+  const mockPackedSuccess = (overrides?: {
+    resolvedSpec?: string;
+    integrity?: string;
+    name?: string;
+    version?: string;
+  }) => {
+    vi.mocked(packNpmSpecToArchive).mockResolvedValue({
+      ok: true,
+      archivePath: baseArchivePath,
+      metadata: {
+        resolvedSpec: overrides?.resolvedSpec ?? baseSpec,
+        integrity: overrides?.integrity ?? "sha512-same",
+        ...(overrides?.name ? { name: overrides.name } : {}),
+        ...(overrides?.version ? { version: overrides.version } : {}),
+      },
+    });
+  };
+
+  const runInstall = async (overrides: {
+    spec?: string;
+    expectedIntegrity?: string;
+    onIntegrityDrift?: (payload: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
+    warn?: (message: string) => void;
+    installFromArchive: (params: {
+      archivePath: string;
+    }) => Promise<{ ok: boolean; [key: string]: unknown }>;
+  }) =>
+    await installFromNpmSpecArchiveWithInstaller({
+      tempDirPrefix: "openclaw-test-",
+      spec: overrides.spec ?? baseSpec,
+      timeoutMs: 1000,
+      expectedIntegrity: overrides.expectedIntegrity,
+      onIntegrityDrift: overrides.onIntegrityDrift,
+      warn: overrides.warn,
+      installFromArchive: overrides.installFromArchive,
+      archiveInstallParams: {},
+    });
+
+  const expectWrappedOkResult = (
+    result: Awaited<ReturnType<typeof runInstall>>,
+    installResult: Record<string, unknown>,
+  ) => {
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected ok result");
+    }
+    expect(result.installResult).toEqual(installResult);
+    return result;
+  };
+
   beforeEach(() => {
     vi.mocked(packNpmSpecToArchive).mockClear();
+    vi.mocked(withTempDir).mockClear();
+  });
+
+  it("returns pack errors without invoking installer", async () => {
+    vi.mocked(packNpmSpecToArchive).mockResolvedValue({ ok: false, error: "pack failed" });
+    const installFromArchive = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await runInstall({ installFromArchive });
+
+    expect(result).toEqual({ ok: false, error: "pack failed" });
+    expect(installFromArchive).not.toHaveBeenCalled();
+    expect(withTempDir).toHaveBeenCalledWith("openclaw-test-", expect.any(Function));
+  });
+
+  it("rejects unsupported npm specs before packing", async () => {
+    const installFromArchive = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await runInstall({
+      spec: "file:/tmp/openclaw.tgz",
+      installFromArchive,
+    });
+
+    expect(result).toEqual({ ok: false, error: "unsupported npm spec" });
+    expect(packNpmSpecToArchive).not.toHaveBeenCalled();
+    expect(installFromArchive).not.toHaveBeenCalled();
+  });
+
+  it("returns resolution metadata and installer result on success", async () => {
+    mockPackedSuccess({ name: "@openclaw/test", version: "1.0.0" });
+    const installFromArchive = vi.fn(async () => ({ ok: true as const, target: "done" }));
+
+    const result = await runInstall({
+      expectedIntegrity: "sha512-same",
+      installFromArchive,
+    });
+
+    const okResult = expectWrappedOkResult(result, { ok: true, target: "done" });
+    expect(okResult.integrityDrift).toBeUndefined();
+    expect(okResult.npmResolution.resolvedSpec).toBe(baseSpec);
+    expect(Date.parse(okResult.npmResolution.resolvedAt)).not.toBeNaN();
+    expect(installFromArchive).toHaveBeenCalledWith({ archivePath: baseArchivePath });
+  });
+
+  it("proceeds when integrity drift callback accepts drift", async () => {
+    mockPackedSuccess({ integrity: "sha512-new" });
+    const onIntegrityDrift = vi.fn(async () => true);
+    const installFromArchive = vi.fn(async () => ({ ok: true as const, id: "plugin-accept" }));
+
+    const result = await runInstall({
+      expectedIntegrity: "sha512-old",
+      onIntegrityDrift,
+      installFromArchive,
+    });
+
+    const okResult = expectWrappedOkResult(result, { ok: true, id: "plugin-accept" });
+    expect(okResult.integrityDrift).toEqual({
+      expectedIntegrity: "sha512-old",
+      actualIntegrity: "sha512-new",
+    });
+    expect(onIntegrityDrift).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts when integrity drift callback rejects drift", async () => {
+    mockPackedSuccess({ integrity: "sha512-new" });
+    const installFromArchive = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await runInstall({
+      expectedIntegrity: "sha512-old",
+      onIntegrityDrift: async () => false,
+      installFromArchive,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "aborted: npm package integrity drift detected for @openclaw/test@1.0.0",
+    });
+    expect(installFromArchive).not.toHaveBeenCalled();
+  });
+
+  it("warns and aborts on drift when no callback is configured", async () => {
+    mockPackedSuccess({ integrity: "sha512-new" });
+    const warn = vi.fn();
+    const installFromArchive = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await runInstall({
+      expectedIntegrity: "sha512-old",
+      warn,
+      installFromArchive,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "aborted: npm package integrity drift detected for @openclaw/test@1.0.0",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "Integrity drift detected for @openclaw/test@1.0.0: expected sha512-old, got sha512-new",
+    );
+    expect(installFromArchive).not.toHaveBeenCalled();
+  });
+
+  it("returns installer failures for domain-specific handling", async () => {
+    mockPackedSuccess();
+    const installFromArchive = vi.fn(async () => ({ ok: false as const, error: "install failed" }));
+
+    const result = await runInstall({
+      expectedIntegrity: "sha512-same",
+      installFromArchive,
+    });
+
+    const okResult = expectWrappedOkResult(result, { ok: false, error: "install failed" });
+    expect(okResult.integrityDrift).toBeUndefined();
+  });
+
+  it("rejects prerelease resolutions unless explicitly requested", async () => {
+    mockPackedSuccess({
+      resolvedSpec: "@openclaw/test@latest",
+      version: "1.1.0-beta.1",
+    });
+    const installFromArchive = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await runInstall({
+      spec: "@openclaw/test@latest",
+      installFromArchive,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected prerelease rejection");
+    }
+    expect(result.error).toContain("prerelease version 1.1.0-beta.1");
+    expect(installFromArchive).not.toHaveBeenCalled();
+  });
+
+  it("allows prerelease resolutions when explicitly requested by tag", async () => {
+    mockPackedSuccess({
+      resolvedSpec: "@openclaw/test@beta",
+      version: "1.1.0-beta.1",
+    });
+    const installFromArchive = vi.fn(async () => ({ ok: true as const, pluginId: "beta-plugin" }));
+
+    const result = await runInstall({
+      spec: "@openclaw/test@beta",
+      installFromArchive,
+    });
+
+    const okResult = expectWrappedOkResult(result, { ok: true, pluginId: "beta-plugin" });
+    expect(okResult.npmResolution.version).toBe("1.1.0-beta.1");
   });
 
   it("passes archive path and installer params to installFromArchive", async () => {

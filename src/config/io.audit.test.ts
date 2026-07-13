@@ -13,7 +13,7 @@ import {
   scrubConfigAuditLog,
 } from "./io.audit.js";
 
-function createAuditRecordBase(configPath: string) {
+function createAuditRecordBase(configPath: string, argv?: string[]) {
   return createConfigWriteAuditRecordBase({
     configPath,
     env: {} as NodeJS.ProcessEnv,
@@ -37,6 +37,17 @@ function createAuditRecordBase(configPath: string) {
     gatewayModeAfter: "local",
     suspicious: [],
     now: "2026-04-07T08:00:00.000Z",
+    ...(argv
+      ? {
+          processInfo: {
+            pid: 101,
+            ppid: 99,
+            cwd: "/work",
+            argv,
+            execArgv: [],
+          },
+        }
+      : {}),
   });
 }
 
@@ -316,6 +327,36 @@ describe("config io audit helpers", () => {
       },
     });
     expect(base.argv).toEqual(["node", "openclaw", "--token", "***"]);
+  });
+
+  it.each([
+    {
+      name: "inline known secret",
+      argv: ["openclaw", "--token=fake", "--port=8080"],
+      expected: ["openclaw", "--token=***", "--port=8080"],
+    },
+    {
+      name: "custom credential suffix",
+      argv: ["openclaw", "--tenant-credential", "fake", "--bind", "lan"],
+      expected: ["openclaw", "--tenant-credential", "***", "--bind", "lan"],
+    },
+    {
+      name: "underscore key suffix",
+      argv: ["openclaw", "--provider_api_key", "fake"],
+      expected: ["openclaw", "--provider_api_key", "***"],
+    },
+    {
+      name: "dash-leading secret value",
+      argv: ["openclaw", "--password", "-fake"],
+      expected: ["openclaw", "--password", "***"],
+    },
+    {
+      name: "secret flag without a value",
+      argv: ["openclaw", "--token"],
+      expected: ["openclaw", "--token"],
+    },
+  ])("redacts $name in persisted audit process info", ({ argv, expected }) => {
+    expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);
   });
 
   it("also accepts flattened audit record params from legacy call sites", async () => {

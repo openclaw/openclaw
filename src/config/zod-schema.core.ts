@@ -9,7 +9,9 @@ import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
+import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
+import type { MediaToolsConfig } from "./types.tools.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -248,6 +250,12 @@ const ModelCompatSchema = z
   })
   .strict()
   .optional();
+type AssertAssignable<_Left extends _Right, _Right> = true;
+const modelCompatSchemaContract: [
+  AssertAssignable<z.infer<typeof ModelCompatSchema>, ModelCompatConfig | undefined>,
+  AssertAssignable<ModelCompatConfig | undefined, z.infer<typeof ModelCompatSchema>>,
+] = [] as never;
+void modelCompatSchemaContract;
 const ConfiguredProviderRequestTlsSchema = z
   .object({
     ca: SecretInputSchema.optional().register(sensitive),
@@ -1102,6 +1110,18 @@ export const ToolsMediaSchema = z
   })
   .strict()
   .optional();
+type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
+const toolsMediaAsyncCompletionSchemaContract: [
+  AssertAssignable<
+    ToolsMediaConfigFromSchema["asyncCompletion"],
+    MediaToolsConfig["asyncCompletion"]
+  >,
+  AssertAssignable<
+    MediaToolsConfig["asyncCompletion"],
+    ToolsMediaConfigFromSchema["asyncCompletion"]
+  >,
+] = [] as never;
+void toolsMediaAsyncCompletionSchemaContract;
 const LinkModelSchema = z
   .object({
     type: z.literal("cli").optional(),

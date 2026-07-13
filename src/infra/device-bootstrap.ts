@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  deviceBootstrapProfilesEqual,
   normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -68,24 +69,13 @@ function resolvePersistedPendingProfile(
 function resolveRequestedBootstrapProfile(params: {
   role: string;
   scopes: readonly string[];
+  purpose?: DeviceBootstrapProfile["purpose"];
 }): DeviceBootstrapProfile {
   return normalizeDeviceBootstrapProfile({
     roles: [params.role],
-    scopes: resolveBootstrapProfileScopesForRole(params.role, params.scopes),
+    scopes: resolveBootstrapProfileScopesForRole(params.role, params.scopes, params.purpose),
+    purpose: params.purpose,
   });
-}
-
-function sameBootstrapProfile(
-  left: DeviceBootstrapProfile,
-  right: DeviceBootstrapProfile,
-): boolean {
-  if (left.roles.length !== right.roles.length || left.scopes.length !== right.scopes.length) {
-    return false;
-  }
-  return (
-    left.roles.every((role, index) => role === right.roles[index]) &&
-    left.scopes.every((scope, index) => scope === right.scopes[index])
-  );
 }
 
 function resolveIssuedBootstrapProfile(params: {
@@ -98,6 +88,8 @@ function resolveIssuedBootstrapProfile(params: {
     // Issued tokens can request many roles/scopes, but bootstrap handoff persists only the allowlist.
     return normalizeDeviceBootstrapHandoffProfile(input);
   }
+  // Generic bootstrap callers stay least-privilege. Official mobile setup
+  // passes the full profile explicitly after validating the advertised URL.
   return PAIRING_SETUP_BOOTSTRAP_PROFILE;
 }
 
@@ -153,6 +145,7 @@ function bootstrapProfileSatisfiesProfile(params: {
     const requiredScopes = resolveBootstrapProfileScopesForRole(
       requiredRole,
       params.requiredProfile.scopes,
+      params.requiredProfile.purpose,
     );
     if (
       requiredScopes.length > 0 &&
@@ -347,8 +340,9 @@ export async function redeemDeviceBootstrapTokenProfile(params: {
       roles: [...resolvePersistedRedeemedProfile(record).roles, params.role],
       scopes: [
         ...resolvePersistedRedeemedProfile(record).scopes,
-        ...resolveBootstrapProfileScopesForRole(params.role, params.scopes),
+        ...resolveBootstrapProfileScopesForRole(params.role, params.scopes, issuedProfile.purpose),
       ],
+      purpose: issuedProfile.purpose,
     });
     const nextPendingProfile =
       pendingProfile &&
@@ -425,6 +419,7 @@ export async function verifyDeviceBootstrapToken(params: {
     const requestedProfile = resolveRequestedBootstrapProfile({
       role,
       scopes: params.scopes,
+      purpose: allowedProfile.purpose,
     });
 
     const boundDeviceId = record.deviceId?.trim();
@@ -437,7 +432,7 @@ export async function verifyDeviceBootstrapToken(params: {
         return { ok: false, reason: "bootstrap_token_invalid" };
       }
       const pendingProfile = resolvePersistedPendingProfile(record);
-      if (pendingProfile && !sameBootstrapProfile(pendingProfile, requestedProfile)) {
+      if (pendingProfile && !deviceBootstrapProfilesEqual(pendingProfile, requestedProfile)) {
         return { ok: false, reason: "bootstrap_token_invalid" };
       }
       state[tokenKey] = {

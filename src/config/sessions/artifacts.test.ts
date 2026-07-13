@@ -2,9 +2,11 @@
 import { describe, expect, it } from "vitest";
 import {
   formatSessionArchiveTimestamp,
+  isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
+  isTrajectorySessionArtifactName,
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
   parseSessionArchiveTimestamp,
@@ -57,6 +59,21 @@ describe("session artifact helpers", () => {
     );
     expect(isPrimarySessionTranscriptFileName("abc.trajectory.jsonl")).toBe(false);
     expect(isPrimarySessionTranscriptFileName("sessions.json")).toBe(false);
+  });
+
+  it("classifies trajectory sidecar artifacts", () => {
+    expect(isTrajectorySessionArtifactName("abc.trajectory.jsonl")).toBe(true);
+    expect(isTrajectorySessionArtifactName("abc.trajectory-path.json")).toBe(true);
+    expect(isTrajectorySessionArtifactName("abc.jsonl")).toBe(false);
+  });
+
+  it("recognizes exact compaction checkpoint transcript names", () => {
+    expect(
+      isCompactionCheckpointTranscriptFileName(
+        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+      ),
+    ).toBe(true);
+    expect(isCompactionCheckpointTranscriptFileName("abc.checkpoint.not-a-uuid.jsonl")).toBe(false);
   });
 
   it("classifies usage-counted transcript files", () => {

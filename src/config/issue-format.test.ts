@@ -4,6 +4,7 @@ import {
   formatConfigIssueLine,
   formatConfigIssueLines,
   formatConfigIssueSummary,
+  normalizeConfigIssues,
 } from "./issue-format.js";
 
 describe("config issue format", () => {
@@ -51,5 +52,18 @@ describe("config issue format", () => {
         { maxIssues: 2 },
       ),
     ).toBe("<root>: root broken; gateway.auth.password.source: Required; and 1 more");
+  });
+
+  it("normalizes issue collections for machine output", () => {
+    expect(
+      normalizeConfigIssues([
+        {
+          path: "update.channel",
+          message: "invalid",
+          allowedValues: [],
+          allowedValuesHiddenCount: 2,
+        },
+      ]),
+    ).toEqual([{ path: "update.channel", message: "invalid" }]);
   });
 });

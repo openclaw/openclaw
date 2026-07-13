@@ -179,6 +179,40 @@ describe("session store strips resolvedSkills from persistence", () => {
     expect(stat.size).toBeLessThan(2 * 1024 * 1024);
   });
 
+  it("stores duplicate large skills prompts as one content-addressed blob", async () => {
+    const prompt = `<available_skills>\n${"skill prompt body\n".repeat(200)}</available_skills>`;
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+        "agent:main:test:2": makeEntry("session-2", makeSnapshotWithPrompt(prompt)),
+      },
+      { skipMaintenance: true },
+    );
+
+    const parsed = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    const firstRef = parsed["agent:main:test:1"]?.skillsSnapshot?.promptRef;
+    const secondRef = parsed["agent:main:test:2"]?.skillsSnapshot?.promptRef;
+    expect(firstRef).toBeDefined();
+    expect(secondRef).toEqual(firstRef);
+    expect(parsed["agent:main:test:1"]?.skillsSnapshot?.prompt).toBeUndefined();
+    if (!firstRef) {
+      throw new Error("expected prompt ref");
+    }
+
+    const blobPath = path.join(
+      testDir,
+      "skills-prompts",
+      "sha256",
+      firstRef.hash.slice(0, 2),
+      `${firstRef.hash}.txt`,
+    );
+    expect(await fs.readFile(blobPath, "utf-8")).toBe(prompt);
+  });
+
   it("hydrates content-addressed skills prompt blobs on load", async () => {
     const prompt = `<available_skills>\n${"persisted prompt\n".repeat(200)}</available_skills>`;
     await saveSessionStore(

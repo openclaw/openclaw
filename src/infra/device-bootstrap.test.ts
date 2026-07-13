@@ -387,6 +387,32 @@ describe("device bootstrap tokens", () => {
     ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
   });
 
+  it("retains admin only for an explicitly full-mobile handoff profile", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["node", "operator"],
+        scopes: ["operator.admin", "operator.pairing", "operator.read"],
+        purpose: "mobile-full",
+      },
+    });
+
+    await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
+      {
+        roles: ["node", "operator"],
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        purpose: "mobile-full",
+      },
+    );
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("logs when issued bootstrap profiles strip overbroad scopes", async () => {
     const baseDir = await createTempDir();
     const logPath = path.join(baseDir, "bootstrap.log");

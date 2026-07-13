@@ -91,6 +91,66 @@ describe("proxy validation", () => {
     expect(fetchCheck).toHaveBeenCalled();
   });
 
+  it("prefers the configured proxy URL over OPENCLAW_PROXY_URL", async () => {
+    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://config-proxy.example:3128",
+      },
+      env: {
+        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
+      },
+      allowedUrls: ["https://example.com/"],
+      deniedUrls: [],
+      fetchCheck,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.config).toMatchObject({
+      enabled: true,
+      proxyUrl: "http://config-proxy.example:3128",
+      source: "config",
+    });
+    expect(fetchCheck).toHaveBeenCalledWith({
+      proxyUrl: "http://config-proxy.example:3128",
+      targetUrl: "https://example.com/",
+      timeoutMs: 5000,
+    });
+  });
+
+  it("reports a missing effective URL when proxy validation is enabled", async () => {
+    const fetchCheck = vi.fn();
+    const result = await runProxyValidation({
+      config: { enabled: true },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: [],
+      fetchCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(result.config).toMatchObject({ enabled: true, source: "missing" });
+    expect(result.config.errors).toEqual([
+      "proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL",
+    ]);
+  });
+
+  it("rejects unsupported proxy URL protocols before probing", async () => {
+    const fetchCheck = vi.fn();
+    const result = await runProxyValidation({
+      config: { enabled: true, proxyUrl: "socks5://proxy.example:1080" },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: [],
+      fetchCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(result.config.errors).toEqual(["proxyUrl must use http:// or https://"]);
+  });
+
   it("reports disabled proxy config as an actionable validation problem", async () => {
     const fetchCheck = vi.fn();
 

@@ -43,17 +43,26 @@ describe("config io invalid config formatting", () => {
     expect(isInvalidConfigError(new Error(err.message))).toBe(false);
   });
 
-  it("throws INVALID_CONFIG after logging the formatted details", () => {
+  it("throws INVALID_CONFIG after logging the formatted details once per path", () => {
     const logger = { error: vi.fn() };
-
-    expect(() =>
+    const loggedConfigPaths = new Set<string>();
+    const throwInvalid = () =>
       throwInvalidConfig({
         configPath: "/tmp/openclaw.json",
         issues: [{ path: "nope", message: "Unknown key(s): nope" }],
         logger,
-        loggedConfigPaths: new Set<string>(),
-      }),
-    ).toThrowError("Invalid config at /tmp/openclaw.json:\n- nope: Unknown key(s): nope");
+        loggedConfigPaths,
+      });
+
+    expect(throwInvalid).toThrowError(
+      "Invalid config at /tmp/openclaw.json:\n- nope: Unknown key(s): nope",
+    );
+    expect(throwInvalid).toThrowError(
+      "Invalid config at /tmp/openclaw.json:\n- nope: Unknown key(s): nope",
+    );
     expect(logger.error).toHaveBeenCalledOnce();
+    expect(logger.error).toHaveBeenCalledWith(
+      "Invalid config at /tmp/openclaw.json:\\n- nope: Unknown key(s): nope",
+    );
   });
 });

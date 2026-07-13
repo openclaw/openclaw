@@ -57,6 +57,10 @@ describe("getWindowsInstallRoots", () => {
       programFilesX86: "F:\\Programs (x86)",
       programW6432: "E:\\Programs",
     });
+    expect(execFileSyncMock).toHaveBeenCalled();
+    for (const [file] of execFileSyncMock.mock.calls) {
+      expect(file).toBe("C:\\Windows\\System32\\reg.exe");
+    }
   });
 
   it("uses explicit env roots without consulting HKLM", () => {

@@ -47,6 +47,25 @@ describe("command explainer tree-sitter runtime", () => {
     );
   });
 
+  it("maps parser byte offsets to JavaScript string spans for Unicode source", async () => {
+    const source = "echo café && echo ok";
+    const explanation = await explainShellCommand(source);
+
+    expect(explanation.topLevelCommands).toHaveLength(2);
+    expect(explanation.topLevelCommands.map((command) => command.argv)).toEqual([
+      ["echo", "café"],
+      ["echo", "ok"],
+    ]);
+    expect(explanation.topLevelCommands.map((command) => command.span)).toMatchObject([
+      { startIndex: 0, endIndex: 9 },
+      { startIndex: 13, endIndex: 20 },
+    ]);
+    for (const command of explanation.topLevelCommands) {
+      expect(source.slice(command.span.startIndex, command.span.endIndex)).toBe(command.text);
+      expect(command.span.endPosition.column).toBe(command.span.endIndex);
+    }
+  });
+
   it("explains a pipeline with python inline eval", async () => {
     const explanation = await explainShellCommand('ls | grep "stuff" | python -c \'print("hi")\'');
 

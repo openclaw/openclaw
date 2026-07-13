@@ -264,6 +264,27 @@ describe("shouldDeferWake", () => {
   });
 
   describe("min-spacing floor", () => {
+    it("defers recent runs at the default spacing floor", () => {
+      expect(
+        decide({
+          source: "exec-event",
+          now: 200_000,
+          nextDueMs: 199_999,
+          lastRunStartedAtMs: 170_100,
+          reason: "exec-event",
+        }),
+      ).toEqual({ defer: true, reason: "min-spacing" });
+      expect(
+        decide({
+          source: "exec-event",
+          now: 200_000,
+          nextDueMs: 199_999,
+          lastRunStartedAtMs: 169_999,
+          reason: "exec-event",
+        }),
+      ).toEqual({ defer: false });
+    });
+
     it("respects override of minSpacingMs", () => {
       expect(
         decide({
@@ -289,9 +310,43 @@ describe("shouldDeferWake", () => {
       ).toEqual({ defer: false });
     });
   });
+
+  describe("flood guard", () => {
+    it("defers at the default threshold only while starts remain in the flood window", () => {
+      const now = 1_000_000;
+      expect(
+        decide({
+          source: "exec-event",
+          now,
+          nextDueMs: 0,
+          lastRunStartedAtMs: now - 30_001,
+          recentRunStarts: [now - 50_000, now - 40_000, now - 30_000, now - 20_000, now - 10_000],
+          reason: "exec-event",
+        }),
+      ).toEqual({ defer: true, reason: "flood" });
+      expect(
+        decide({
+          source: "exec-event",
+          now,
+          nextDueMs: 0,
+          lastRunStartedAtMs: now - 30_001,
+          recentRunStarts: [now - 65_000, now - 40_000, now - 30_000, now - 20_000, now - 10_000],
+          reason: "exec-event",
+        }),
+      ).toEqual({ defer: false });
+    });
+  });
 });
 
 describe("recordRunStart", () => {
+  it("bounds the default flood buffer", () => {
+    const buffer: number[] = [];
+    for (let value = 1; value <= 10; value += 1) {
+      recordRunStart(buffer, value);
+    }
+    expect(buffer).toEqual([5, 6, 7, 8, 9, 10]);
+  });
+
   it("preserves insertion order", () => {
     const buffer: number[] = [];
     recordRunStart(buffer, 100);

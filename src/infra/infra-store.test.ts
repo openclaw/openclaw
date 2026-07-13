@@ -16,7 +16,11 @@ import {
   resetDiagnosticEventsForTest,
 } from "./diagnostic-events.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
-import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
+import {
+  loadVoiceWakeRoutingConfig,
+  resolveVoiceWakeRouteByTrigger,
+  setVoiceWakeRoutingConfig,
+} from "./voicewake-routing.js";
 import {
   defaultVoiceWakeTriggers,
   loadVoiceWakeConfig,
@@ -142,6 +146,20 @@ describe("infra store", () => {
 
       const loaded = await loadVoiceWakeRoutingConfig(baseDir);
       expect(loaded.routes).toEqual([{ trigger: "hello bot", target: { agentId: "main" } }]);
+    });
+
+    it("resolves routes by normalized trigger", () => {
+      expect(
+        resolveVoiceWakeRouteByTrigger({
+          trigger: "  HELLO   BOT ",
+          config: {
+            version: 1,
+            defaultTarget: { mode: "current" },
+            routes: [{ trigger: "hello bot", target: { sessionKey: "agent:main:main" } }],
+            updatedAtMs: 0,
+          },
+        }),
+      ).toEqual({ sessionKey: "agent:main:main" });
     });
   });
 

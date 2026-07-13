@@ -129,6 +129,17 @@ describe("command-analysis risks", () => {
     ]);
   });
 
+  it.each([
+    { args: ["-S", "sh -c id"], flag: "-S" },
+    { args: ["-Ssh -c id"], flag: "-S" },
+    { args: ["-iS", "sh -c id"], flag: "-S" },
+    { args: ["-iSsh -c id"], flag: "-S" },
+    { args: ["-is", "sh -c id"], flag: "-s" },
+    { args: ["--split-string=sh -c id"], flag: "--split-string" },
+  ])("detects env split-string carrier form $args", ({ args, flag }) => {
+    expect(detectCommandCarrierArgv(["env", ...args])).toEqual([{ command: "env", flag }]);
+  });
+
   it("detects shell wrappers carried through prefix commands", () => {
     const hit = detectShellWrapperThroughCarrierArgv(
       ["sudo", "bash", "-lc", "id"],

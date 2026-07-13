@@ -55,7 +55,7 @@ type GatewayLockHandle = {
 
 type GatewayLockRole = "gateway" | "sqlite-maintenance";
 
-type GatewayLockOptions = {
+export type GatewayLockOptions = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   pollIntervalMs?: number;

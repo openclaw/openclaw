@@ -4,7 +4,9 @@ import {
   channelToNpmTag,
   formatUpdateChannelLabel,
   isBetaTag,
+  isStableTag,
   normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
   resolveRegistryUpdateChannel,
   resolveUpdateChannelDisplay,
   type UpdateChannel,
@@ -22,6 +24,19 @@ describe("update-channels tag detection", () => {
     { tag: "v2026.2.24", beta: false },
   ])("classifies $tag", ({ tag, beta }) => {
     expect(isBetaTag(tag)).toBe(beta);
+  });
+
+  it.each([
+    { tag: "v2026.2.24-alpha.1", stable: false },
+    { tag: "v2026.2.24-beta.1", stable: false },
+    { tag: "v2026.2.24-rc.1", stable: false },
+    { tag: "v2026.2.24-preview.1", stable: false },
+    { tag: "v2026.2.24-custom.1", stable: false },
+    { tag: "v2026.2.24-1", stable: true },
+    { tag: "v1.0.1-1", stable: true },
+    { tag: "v2026.2.24", stable: true },
+  ])("stable classification for $tag", ({ tag, stable }) => {
+    expect(isStableTag(tag)).toBe(stable);
   });
 });
 
@@ -56,6 +71,65 @@ describe("channelToNpmTag", () => {
       expect(channelToNpmTag(channel)).toBe(expected);
     },
   );
+});
+
+describe("resolveEffectiveUpdateChannel", () => {
+  it.each([
+    {
+      name: "prefers config over git metadata",
+      params: {
+        configChannel: "beta" as const,
+        installKind: "git" as const,
+        git: { tag: "v2026.2.24", branch: "feature/test" },
+      },
+      expected: { channel: "beta", source: "config" },
+    },
+    {
+      name: "uses installed beta version over stale stable config",
+      params: {
+        configChannel: "stable" as const,
+        currentVersion: "2026.5.2-beta.1",
+        installKind: "package" as const,
+      },
+      expected: { channel: "beta", source: "installed-version" },
+    },
+    {
+      name: "keeps explicit extended-stable config",
+      params: {
+        configChannel: "extended-stable" as const,
+        currentVersion: "2026.5.2-beta.1",
+        installKind: "package" as const,
+      },
+      expected: { channel: "extended-stable", source: "config" },
+    },
+    {
+      name: "uses beta git tag",
+      params: { installKind: "git" as const, git: { tag: "v2026.2.24-beta.1" } },
+      expected: { channel: "beta", source: "git-tag" },
+    },
+    {
+      name: "treats stable git tag as stable",
+      params: { installKind: "git" as const, git: { tag: "v2026.2.24" } },
+      expected: { channel: "stable", source: "git-tag" },
+    },
+    {
+      name: "treats non-beta prerelease git tag as dev",
+      params: { installKind: "git" as const, git: { tag: "v2026.5.25-alpha.1" } },
+      expected: { channel: "dev", source: "git-tag" },
+    },
+    {
+      name: "uses feature branch as dev",
+      params: { installKind: "git" as const, git: { branch: "feature/test" } },
+      expected: { channel: "dev", source: "git-branch" },
+    },
+    {
+      name: "defaults package installs to stable",
+      params: { installKind: "package" as const },
+      expected: { channel: "stable", source: "default" },
+    },
+  ])("$name", ({ params, expected }) => {
+    expect(resolveEffectiveUpdateChannel(params)).toEqual(expected);
+  });
 });
 
 describe("formatUpdateChannelLabel", () => {
