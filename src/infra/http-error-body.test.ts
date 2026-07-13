@@ -1,4 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { mockWarn } = vi.hoisted(() => ({
+  mockWarn: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: mockWarn }),
+}));
+
 import { readResponseBodySnippet } from "./http-error-body.js";
 
 function bodyLessResponse(text: string): Response {
@@ -135,6 +144,10 @@ describe("readResponseBodySnippet", () => {
 });
 
 describe("readResponseBodySnippet error visibility", () => {
+  beforeEach(() => {
+    mockWarn.mockClear();
+  });
+
   it("logs a warning and returns empty string when response.text() rejects", async () => {
     const error = new Error("body already consumed");
     const badResponse = {
@@ -150,6 +163,10 @@ describe("readResponseBodySnippet error visibility", () => {
     });
 
     expect(result).toBe("");
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to read response body snippet"),
+    );
   });
 
   it("logs a warning and returns empty string when body stream throws", async () => {
@@ -167,5 +184,9 @@ describe("readResponseBodySnippet error visibility", () => {
     });
 
     expect(result).toBe("");
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to read response body snippet"),
+    );
   });
 });
