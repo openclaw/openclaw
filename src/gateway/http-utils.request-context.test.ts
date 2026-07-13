@@ -98,7 +98,7 @@ describe("resolveGatewayRequestContext", () => {
         sessionPrefix: "openai",
         defaultMessageChannel: "webchat",
       }),
-    ).toThrow(/reserved internal session key/u);
+    ).toThrow(/reserved internal session namespaces/u);
   });
 
   it("preserves an existing unlocked legacy harness-prefixed override", () => {
@@ -130,7 +130,7 @@ describe("resolveGatewayRequestContext", () => {
         sessionPrefix: "openai",
         defaultMessageChannel: "webchat",
       }),
-    ).toThrow(/reserved internal session key/u);
+    ).toThrow(/reserved internal session namespaces/u);
   });
 
   it("does not build session state for explicit unknown agent ids", () => {

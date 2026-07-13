@@ -27,7 +27,10 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { isAccountEnabled } from "../shared/account-enabled.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
+import type {
+  ChannelRuntimeSnapshot,
+  StartChannelOptions,
+} from "./server-channel-runtime.types.js";
 
 const RESTART_POLICY: BackoffPolicy = {
   initialMs: 5_000,
@@ -211,13 +214,6 @@ type ChannelManagerOptions = {
   getPluginHttpRouteRegistry?: () => PluginRegistry;
   startupTrace?: GatewayStartupTrace;
   deferStartupAccountStartsUntil?: Promise<void>;
-};
-
-export type StartChannelOptions = {
-  preserveRestartAttempts?: boolean;
-  preserveManualStop?: boolean;
-  deferAccountStartUntil?: Promise<void>;
-  manual?: boolean;
 };
 
 type StopChannelOptions = {

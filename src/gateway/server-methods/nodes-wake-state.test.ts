@@ -1,5 +1,5 @@
 // Tests for node wake state tracking and testing seam.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   NODE_WAKE_RECONNECT_WAIT_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
@@ -8,6 +8,11 @@ import {
   nodeWakeById,
   nodeWakeNudgeById,
 } from "./nodes-wake-state.js";
+
+beforeEach(() => {
+  nodeWakeById.clear();
+  nodeWakeNudgeById.clear();
+});
 
 describe("constants", () => {
   it("exports expected wait/poll constants", () => {

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { clearLoadPluginMetadataSnapshotMemo } from "../plugins/plugin-metadata-snapshot.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() =>
@@ -137,6 +138,7 @@ function requireAbortSignal(signal: RequestInit["signal"] | undefined): AbortSig
 describe("model-pricing-cache", () => {
   beforeEach(() => {
     clearGatewayModelPricingState();
+    clearLoadPluginMetadataSnapshotMemo();
     pluginManifestRegistryMocks.manifestRegistry = undefined;
     pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockClear();
     pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata.mockClear();
@@ -145,6 +147,7 @@ describe("model-pricing-cache", () => {
 
   afterEach(() => {
     clearGatewayModelPricingState();
+    clearLoadPluginMetadataSnapshotMemo();
     loggingState.rawConsole = null;
     resetLogger();
   });

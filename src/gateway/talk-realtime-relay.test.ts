@@ -14,16 +14,43 @@ import type {
 import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
-  createTalkRealtimeRelaySession,
+  createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
   registerTalkRealtimeRelayAgentRun,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
-  stopTalkRealtimeRelaySession,
+  stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
 
+const activeRelaySessions = new Map<string, string>();
+
+function createTalkRealtimeRelaySession(
+  params: Parameters<typeof createTalkRealtimeRelaySessionRaw>[0],
+): ReturnType<typeof createTalkRealtimeRelaySessionRaw> {
+  const session = createTalkRealtimeRelaySessionRaw(params);
+  activeRelaySessions.set(session.relaySessionId, params.connId);
+  return session;
+}
+
+function stopTalkRealtimeRelaySession(
+  params: Parameters<typeof stopTalkRealtimeRelaySessionRaw>[0],
+): void {
+  stopTalkRealtimeRelaySessionRaw(params);
+  activeRelaySessions.delete(params.relaySessionId);
+}
+
 describe("talk realtime gateway relay", () => {
   afterEach(() => {
+    for (const [relaySessionId, connId] of activeRelaySessions) {
+      try {
+        stopTalkRealtimeRelaySessionRaw({ relaySessionId, connId });
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("Unknown realtime relay session")) {
+          throw error;
+        }
+      }
+    }
+    activeRelaySessions.clear();
     vi.useRealTimers();
     embeddedRunTesting.resetActiveEmbeddedRuns();
   });

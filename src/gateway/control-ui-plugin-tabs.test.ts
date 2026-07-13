@@ -20,7 +20,10 @@ function activateDescriptors(
   entries: Array<{ pluginId: string; descriptor: PluginControlUiDescriptor }>,
 ): void {
   const registry = createTestRegistry([]);
-  registry.controlUiDescriptors = entries;
+  registry.controlUiDescriptors = entries.map((entry) => ({
+    ...entry,
+    source: `test:${entry.pluginId}`,
+  }));
   setActivePluginRegistry(registry);
 }
 

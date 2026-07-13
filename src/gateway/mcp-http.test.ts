@@ -2816,7 +2816,7 @@ describe("mcp loopback server", () => {
     const previousTimeout = process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
     process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = "2147483648";
     try {
-      server = await startMcpLoopbackServer(0);
+      server = await ensureMcpLoopbackServer(0);
       const runtime = getActiveMcpLoopbackRuntime();
       if (!runtime) {
         throw new Error("expected active MCP loopback runtime");

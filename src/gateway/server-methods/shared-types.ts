@@ -25,8 +25,10 @@ import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
-import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
-import type { StartChannelOptions } from "../server-channels.js";
+import type {
+  ChannelRuntimeSnapshot,
+  StartChannelOptions,
+} from "../server-channel-runtime.types.js";
 import type {
   BufferedAgentEvent,
   ChatAbortMarker,
