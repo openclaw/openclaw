@@ -912,7 +912,7 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
 
 Surface different features that extend the above defaults.
 
-The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. The **Messages** tab remains enabled for Slack DMs. The manifest also enables Slack assistant threads with `features.assistant_view`, `assistant:write`, `assistant_thread_started`, and `assistant_thread_context_changed`; assistant threads route to their own OpenClaw thread sessions and keep Slack-provided thread context available to the agent.
+The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. When single slash command mode is enabled, the command hint uses `channels.slack.slashCommand.name`; installations using native commands or no slash commands omit that hint. The **Messages** tab remains enabled for Slack DMs. The manifest also enables Slack assistant threads with `features.assistant_view`, `assistant:write`, `assistant_thread_started`, and `assistant_thread_context_changed`; assistant threads route to their own OpenClaw thread sessions and keep Slack-provided thread context available to the agent.
 
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
@@ -1203,7 +1203,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
         slack: {
           groupPolicy: "allowlist",
           channels: {
-            C12345678: { allow: true, requireMention: true },
+            C12345678: { enabled: true, requireMention: true },
           },
         },
       },
@@ -1218,7 +1218,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
         slack: {
           groupPolicy: "allowlist",
           channels: {
-            "#eng-my-channel": { allow: true, requireMention: true },
+            "#eng-my-channel": { enabled: true, requireMention: true },
           },
         },
       },
@@ -1413,10 +1413,10 @@ Opt in to Slack native progress task cards:
 
 Legacy keys:
 
-- `channels.slack.streamMode` (`replace | status_final | append`) is a legacy runtime alias for `channels.slack.streaming.mode`.
-- boolean `channels.slack.streaming` is a legacy runtime alias for `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
-- top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy runtime aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
-- Run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the canonical keys.
+- `channels.slack.streamMode` (`replace | status_final | append`) is a legacy alias for `channels.slack.streaming.mode`.
+- boolean `channels.slack.streaming` is a legacy alias for `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
+- top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
+- Legacy aliases are not read at runtime; run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the canonical keys.
 
 ## Typing reaction fallback
 
@@ -1546,12 +1546,13 @@ readers, notifications, session mirroring, and clients that cannot render the
 block. Standard presentation sends to other OpenClaw channels receive that same
 deterministic chart data as text unless they advertise native chart support. If
 Slack rejects the chart with `invalid_blocks` during a phased rollout, OpenClaw
-retries once with the text representation and no blocks.
+removes the rejected native data blocks, keeps any sibling controls, and sends
+the complete chart representation as visible text.
 
 Slack currently accepts up to two `data_visualization` blocks per message. When
-a presentation contains more than two valid charts, OpenClaw renders the first
-two natively and preserves each additional chart as deterministic visible text
-in the same message.
+a presentation contains more than two valid charts, OpenClaw keeps their order
+and continues native rendering in follow-up messages, with no more than two
+charts in each message.
 
 Slack's [developer launch](https://docs.slack.dev/changelog/2026/06/16/block-kit-data-visualization-block/)
 documents the block as an app-facing Block Kit feature and publishes no paid
@@ -1559,6 +1560,71 @@ plan restriction. The Business+/Enterprise eligibility language applies to
 Slackbot's automatic AI chart generation, which is separate from an app sending
 an already-structured Block Kit chart. Charts are message-only blocks, not App
 Home, modal, or Canvas content.
+
+## Native tables
+
+Slack's current [`data_table` Block Kit block](https://docs.slack.dev/reference/block-kit/blocks/data-table-block/)
+renders structured rows and columns in messages. OpenClaw maps an explicit
+portable `presentation` `table` block to `data_table`; it does not use Slack's
+legacy [`table` block](https://docs.slack.dev/reference/block-kit/blocks/table-block/).
+No additional OAuth scope or Slack configuration is required beyond normal
+`chat:write` message access.
+
+```json
+{
+  "blocks": [
+    {
+      "type": "table",
+      "caption": "Open pipeline",
+      "headers": ["Account", "Stage", "ARR"],
+      "rows": [
+        ["Acme", "Won", 125000],
+        ["Globex", "Review", 82000]
+      ],
+      "rowHeaderColumnIndex": 0
+    }
+  ]
+}
+```
+
+OpenClaw maps header and string cells to Slack `raw_text` cells. Numeric cells
+map to `raw_number`, with the finite numeric value preserved for native sorting
+and filtering. `rowHeaderColumnIndex`, when present, marks that zero-based
+column as Slack row headers.
+
+Slack's published `data_table` limits are enforced before native rendering:
+
+- 1-20 columns
+- 1-100 data rows, plus the header row
+- the same number of cells in every row
+- at most 10,000 aggregate characters across all table cells in one message
+
+Multiple valid table blocks can render natively while the message remains
+within the aggregate character limit. A table that cannot render within the
+native envelope becomes complete deterministic text instead of losing rows or
+cells. If that text exceeds one Slack message, sends and slash responses use
+ordered text chunks. Table edits fail with an explicit size error instead of
+silently truncating rows from an existing message.
+
+Every native table produced from portable presentation also carries a top-level
+text representation for screen readers, notifications, session mirroring, and
+clients that cannot render the block. Raw chart and table values stay literal
+in the fallback, so cell data such as `<@U123>` does not become a Slack mention.
+If Slack rejects native chart or table blocks with `invalid_blocks`, OpenClaw
+removes every native data block in one bounded recovery step, retains valid
+sibling blocks such as buttons and selects, and sends complete visible chart
+and table text with Slack formatting disabled. Slash-command delivery
+tracks Slack's five-call `response_url` budget across the command. Before each
+reply batch, it selects a complete plan that fits the remaining calls or fails
+before posting that batch.
+
+Only explicit `presentation` table blocks are promoted to native tables.
+Markdown pipe tables remain authored text; OpenClaw does not guess at table
+structure or cell types. Existing trusted Slack-native producers can continue
+to pass raw blocks through `channelData.slack.blocks`; OpenClaw derives fallback
+text from valid raw `data_table` cells, while malformed custom blocks may
+degrade to their caption or general Block Kit fallback. Portable agent, CLI,
+and plugin output should use `presentation`.
 
 ## Interactive replies
 

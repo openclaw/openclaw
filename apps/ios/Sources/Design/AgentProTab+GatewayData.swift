@@ -95,20 +95,26 @@ extension AgentProTab {
 
     @MainActor
     func refreshOverview(force: Bool) async {
-        guard self.scenePhase == .active else { return }
-        guard self.liveGatewayConnected else {
+        guard self.scenePhase == .active, self.liveGatewayConnected else {
+            _ = self.overviewRefreshGate.begin()
             self.overview = nil
             self.overviewErrorText = nil
             self.overviewLoading = false
             return
         }
-        if self.overviewLoading, force == false {
+        if self.overviewLoading, !force {
             return
         }
+        let generation = self.overviewRefreshGate.begin()
+        let requestContext = self.overviewTaskID
 
         self.overviewLoading = true
         self.overviewErrorText = nil
-        defer { self.overviewLoading = false }
+        defer {
+            if self.overviewRefreshGate.isCurrent(generation) {
+                self.overviewLoading = false
+            }
+        }
 
         let activeAgentID = self.activeAgentID
         let skillsParams = Self.agentScopedParams(agentId: activeAgentID)
@@ -148,11 +154,14 @@ extension AgentProTab {
             dreaming: loadedDreaming?.dreaming,
             dreamDiary: loadedDreamDiary,
             usage: loadedUsage,
-            activeAgentId: activeAgentID,
             agentSkillFilter: loadedSkills?.agentSkillFilter
-                ?? loadedConfig?.effectiveSkillFilter(agentId: activeAgentID),
-            loadedAt: Date())
+                ?? loadedConfig?.effectiveSkillFilter(agentId: activeAgentID))
 
+        guard self.overviewRefreshGate.isCurrent(generation),
+              self.overviewTaskID == requestContext
+        else {
+            return
+        }
         if snapshot.hasAnyLiveData {
             self.overview = snapshot
         } else {

@@ -2,12 +2,9 @@
 // registered Commander commands. Keep those user-facing descriptions aligned.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getCoreCliCommandDescriptors,
-  getCoreCliCommandNames,
-  registerCoreCliByName,
-} from "./command-registry-core.js";
+import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
+import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { getSubCliEntries, registerSubCliByName } from "./register.subclis.js";
 
 describe("root command descriptions", () => {

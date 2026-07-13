@@ -1,4 +1,4 @@
-export type ReplyOperationAdmissionSnapshot =
+type ReplyOperationAdmissionSnapshot =
   | { status: "owned" }
   | { status: "skipped"; reason: "active-run" | "aborted" | "lifecycle-invalidated" };
 

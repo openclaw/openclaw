@@ -177,6 +177,21 @@ describe("gateway restart handoff", () => {
     expect(readGatewayRestartHandoffSync(env)?.reason).toBe(handoff.reason);
   });
 
+  it("keeps persisted intent IDs free of lone surrogates", () => {
+    const env = createHandoffEnv();
+    const expectedIntentId = "a".repeat(119);
+    insertHandoffRow(env, {
+      intentId: ` ${expectedIntentId}😀tail `,
+      createdAt: 1_000,
+      expiresAt: 61_000,
+    });
+
+    const handoff = readGatewayRestartHandoffSync(env, 1_500);
+
+    expect(handoff?.intentId).toBe(expectedIntentId);
+    expect(Buffer.from(handoff?.intentId ?? "").toString()).toBe(handoff?.intentId);
+  });
+
   it("persists restart trace timing for supervised process handoff", () => {
     const env = createHandoffEnv();
 

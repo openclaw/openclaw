@@ -5,10 +5,10 @@ import {
   listSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
+import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../tasks/task-status-access.js";
 import type { Logger } from "./service/state.js";
 
@@ -65,9 +65,12 @@ export async function sweepCronRunSessions(params: {
     return { swept: false, pruned: 0 };
   }
 
+  // Throttle attempts, not only successful sweeps. A broken session store must
+  // not turn frequent timer ticks into an unbounded persistence-error loop.
+  lastSweepAtMsByStore.set(storePath, now);
+
   const retentionMs = resolveRetentionMs(params.cronConfig);
   if (retentionMs === null) {
-    lastSweepAtMsByStore.set(storePath, now);
     return { swept: false, pruned: 0 };
   }
 
@@ -81,14 +84,10 @@ export async function sweepCronRunSessions(params: {
         continue;
       }
       const continuation = entry.cronRunContinuation;
-      const activeContinuationOwner = isSessionWorkAdmissionActive(storePath, [
-        sessionKey,
-        entry.sessionId,
-      ]);
       const hasPendingMedia = Boolean(
         continuation && hasPendingGeneratedMediaTaskForSessionKey(sessionKey),
       );
-      if (continuation && (hasPendingMedia || activeContinuationOwner)) {
+      if (continuation && hasPendingMedia) {
         continue;
       }
       const updatedAt = entry.updatedAt ?? 0;
@@ -103,14 +102,24 @@ export async function sweepCronRunSessions(params: {
       }
     }
     if (removals.length > 0) {
+      // Archive-age cleanup follows the session maintenance retention knob:
+      // the reaper's cron retention decides which rows die, but archived
+      // transcript files are conversation history owned by the archive
+      // retention policy (null = keep until the disk budget evicts).
+      const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
       const result = await applySessionEntryLifecycleMutation({
         storePath,
         removals,
+        preserveActiveWork: true,
         restrictArchivedTranscriptsToStoreDir: true,
-        cleanupArchivedTranscripts: {
-          rules: [{ reason: "deleted", olderThanMs: retentionMs }],
-          nowMs: now,
-        },
+        ...(archiveRetentionMs == null
+          ? {}
+          : {
+              cleanupArchivedTranscripts: {
+                rules: [{ reason: "deleted", olderThanMs: archiveRetentionMs }],
+                nowMs: now,
+              },
+            }),
         captureArtifactCleanupError: true,
       });
       pruned = result.removedEntries;
@@ -120,8 +129,6 @@ export async function sweepCronRunSessions(params: {
     params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
     return { swept: false, pruned: 0 };
   }
-
-  lastSweepAtMsByStore.set(storePath, now);
 
   if (transcriptCleanupError) {
     params.log.warn(

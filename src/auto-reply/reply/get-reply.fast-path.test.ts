@@ -2,14 +2,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getSessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../../config/sessions/test-helpers.js";
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+  ModelSelectionLockedError,
+} from "../../sessions/model-overrides.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import {
@@ -119,11 +122,13 @@ async function seedFastPathSessionStore(
   storePath: string,
   entries: Record<string, Record<string, unknown>>,
 ): Promise<void> {
-  await writeSessionStoreForTestAsync(storePath, entries);
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await replaceSessionEntry({ storePath, sessionKey }, entry as SessionEntry);
+  }
 }
 
 function readFastPathSessionEntry(storePath: string, sessionKey: string): Record<string, unknown> {
-  return readSessionStoreForTest<Record<string, unknown>>(storePath)[sessionKey] ?? {};
+  return (loadSessionEntry({ storePath, sessionKey }) as Record<string, unknown> | undefined) ?? {};
 }
 
 describe("getReplyFromConfig fast test bootstrap", () => {
@@ -286,6 +291,30 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       sessionId: "rotated-session",
       storePath: "/tmp/custom-sessions.json",
     });
+  });
+
+  it("returns a clean rejection when session bootstrap rejects a locked reset", async () => {
+    vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
+    const sessionKey = "agent:main:telegram:123";
+    mocks.initSessionState.mockRejectedValueOnce(
+      new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE),
+    );
+
+    const result = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Body: "/reset openai/gpt-5.5 continue",
+        RawBody: "/reset openai/gpt-5.5 continue",
+        CommandBody: "/reset openai/gpt-5.5 continue",
+        CommandAuthorized: true,
+        SessionKey: sessionKey,
+      }),
+      undefined,
+      {} as OpenClawConfig,
+    );
+
+    expect(result).toEqual({ text: MODEL_SELECTION_LOCKED_RESET_MESSAGE });
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
   });
 
   it("marks configs through withFastReplyConfig()", async () => {
@@ -674,11 +703,14 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       { sessionKey: targetSessionKey, agentId: "main", reason: "command-metadata" },
     ]);
     expect(onSessionMetadataChanges.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(runPreparedReplyMock).mock.invocationCallOrder[0],
+      expectDefined(
+        vi.mocked(runPreparedReplyMock).mock.invocationCallOrder[0],
+        "vi.mocked(runPreparedReplyMock).mock.invocationCallOrder[0] test invariant",
+      ),
     );
-    expect(getSessionEntry({ storePath, sessionKey: targetSessionKey })?.goal?.objective).toBe(
-      "/status",
-    );
+    expect(
+      (readFastPathSessionEntry(storePath, targetSessionKey) as SessionEntry).goal?.objective,
+    ).toBe("/status");
     const preparedReplyParams = requirePreparedReplyParams();
     expect(preparedReplyParams.command.commandBodyNormalized).toBe(continuationPrompt);
     expect(preparedReplyParams.sessionCtx.BodyForAgent).toBe(continuationPrompt);
@@ -686,13 +718,14 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   });
 
   it("uses native command target session keys during fast bootstrap", () => {
+    const storePath = "/tmp/sessions.json";
     const result = initFastReplySessionState({
       ctx: buildGetReplyCtx({
         SessionKey: "telegram:slash:123",
         CommandSource: "native",
         CommandTargetSessionKey: "agent:main:main",
       }),
-      cfg: { session: { store: "/tmp/sessions.json" } } as OpenClawConfig,
+      cfg: { session: { store: storePath } } as OpenClawConfig,
       agentId: "main",
       commandAuthorized: true,
       workspaceDir: "/tmp/workspace",
@@ -700,6 +733,13 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     expect(result.sessionKey).toBe("agent:main:main");
     expect(result.sessionCtx.SessionKey).toBe("agent:main:main");
+    expect(result.sessionEntry.sessionFile).toBe(
+      formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: result.sessionId,
+        storePath,
+      }),
+    );
   });
 
   it("preserves usage footer mode during fast reset bootstrap", async () => {
@@ -731,6 +771,69 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.sessionEntry.responseUsage).toBe("full");
   });
 
+  it("rejects a fast reset bootstrap for a model-locked session", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-locked-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await seedFastPathSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "existing-fast-reset-locked",
+        updatedAt: Date.now(),
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    });
+
+    expect(() =>
+      initFastReplySessionState({
+        ctx: buildGetReplyCtx({
+          Body: "/reset",
+          RawBody: "/reset",
+          CommandBody: "/reset",
+          SessionKey: sessionKey,
+        }),
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        agentId: "main",
+        commandAuthorized: true,
+        workspaceDir: home,
+      }),
+    ).toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+    expect(readFastPathSessionEntry(storePath, sessionKey)).toMatchObject({
+      sessionId: "existing-fast-reset-locked",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    });
+  });
+
+  it("captures the initial SQLite session entry during fast bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-initial-entry-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await seedFastPathSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "existing-fast-initial",
+        updatedAt: Date.now(),
+        responseUsage: "tokens",
+      },
+    });
+
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        SessionKey: sessionKey,
+      }),
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: home,
+    });
+
+    expect(result.initialSessionEntry?.sessionId).toBe("existing-fast-initial");
+    expect(result.initialSessionEntry?.responseUsage).toBe("tokens");
+    expect(result.initialSessionEntry).not.toBe(result.sessionEntry);
+  });
   it("maps explicit gateway origin into command context", () => {
     const command = buildFastReplyCommandContext({
       ctx: buildGetReplyCtx({

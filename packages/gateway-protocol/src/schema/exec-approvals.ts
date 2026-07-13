@@ -1,3 +1,4 @@
+import type { Static } from "typebox";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
@@ -29,6 +30,28 @@ const ExecApprovalsPolicyFields = {
   askFallback: Type.Optional(Type.String()),
   autoAllowSkills: Type.Optional(Type.Boolean()),
 };
+
+const ExecSecuritySchema = Type.Union([
+  Type.Literal("deny"),
+  Type.Literal("allowlist"),
+  Type.Literal("full"),
+]);
+const ExecAskSchema = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("on-miss"),
+  Type.Literal("always"),
+]);
+
+/** Host-resolved default policy after applying persisted defaults and runtime fallbacks. */
+const ExecApprovalsResolvedDefaultsSchema = Type.Object(
+  {
+    security: ExecSecuritySchema,
+    ask: ExecAskSchema,
+    askFallback: ExecSecuritySchema,
+    autoAllowSkills: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
 
 /** Default exec approval policy shared by all agents unless overridden. */
 export const ExecApprovalsDefaultsSchema = Type.Object(ExecApprovalsPolicyFields, {
@@ -109,6 +132,7 @@ export const ExecApprovalsNodeSnapshotSchema = Type.Object(
     exists: Type.Optional(Type.Boolean()),
     hash: Type.Optional(Type.String()),
     file: Type.Optional(ExecApprovalsFileSchema),
+    resolvedDefaults: Type.Optional(ExecApprovalsResolvedDefaultsSchema),
     enabled: Type.Optional(Type.Boolean()),
     baseHash: Type.Optional(NonEmptyString),
     defaultAction: Type.Optional(NativeExecApprovalActionSchema),
@@ -140,6 +164,7 @@ export const ExecApprovalsNodeSnapshotSchema = Type.Object(
             { required: ["path"] },
             { required: ["exists"] },
             { required: ["file"] },
+            { required: ["resolvedDefaults"] },
             { required: ["message"] },
           ],
         },
@@ -153,6 +178,7 @@ export const ExecApprovalsNodeSnapshotSchema = Type.Object(
             { required: ["exists"] },
             { required: ["hash"] },
             { required: ["file"] },
+            { required: ["resolvedDefaults"] },
             { required: ["baseHash"] },
             { required: ["defaultAction"] },
             { required: ["rules"] },
@@ -222,6 +248,32 @@ export const ExecApprovalGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ExecApprovalPolicySecuritySchema = Type.Union([
+  Type.Literal("deny"),
+  Type.Literal("allowlist"),
+  Type.Literal("full"),
+]);
+
+const ExecApprovalPolicySnapshotSchema = Type.Object(
+  {
+    security: ExecApprovalPolicySecuritySchema,
+    ask: Type.Union([Type.Literal("off"), Type.Literal("on-miss"), Type.Literal("always")]),
+    askFallback: ExecApprovalPolicySecuritySchema,
+    autoAllowSkills: Type.Boolean(),
+    allowlistRules: Type.Array(
+      Type.Object(
+        {
+          pattern: Type.String(),
+          argPattern: Type.Optional(Type.String()),
+          source: Type.Optional(Type.Literal("allow-always")),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 /** Pending command execution approval request shown to reviewers. */
 export const ExecApprovalRequestParamsSchema = Type.Object(
   {
@@ -237,6 +289,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
           commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
           agentId: Type.Union([Type.String(), Type.Null()]),
           sessionKey: Type.Union([Type.String(), Type.Null()]),
+          policySnapshot: Type.Optional(ExecApprovalPolicySnapshotSchema),
           mutableFileOperand: Type.Optional(
             Type.Union([
               Type.Object(
@@ -314,3 +367,15 @@ export const ExecApprovalResolveParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Owner-local wire types derived directly from local schema consts so the
+// public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.
+export type ExecApprovalsGetParams = Static<typeof ExecApprovalsGetParamsSchema>;
+export type ExecApprovalsSetParams = Static<typeof ExecApprovalsSetParamsSchema>;
+export type ExecApprovalsNodeGetParams = Static<typeof ExecApprovalsNodeGetParamsSchema>;
+export type ExecApprovalsNodeSnapshot = Static<typeof ExecApprovalsNodeSnapshotSchema>;
+export type ExecApprovalsNodeSetParams = Static<typeof ExecApprovalsNodeSetParamsSchema>;
+export type ExecApprovalsSnapshot = Static<typeof ExecApprovalsSnapshotSchema>;
+export type ExecApprovalGetParams = Static<typeof ExecApprovalGetParamsSchema>;
+export type ExecApprovalRequestParams = Static<typeof ExecApprovalRequestParamsSchema>;
+export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsSchema>;

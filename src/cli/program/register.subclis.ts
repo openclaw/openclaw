@@ -21,12 +21,9 @@ import {
   type SubCliRegistrationContext,
 } from "./register.subclis-core.js";
 import {
-  getSubCliCommandsWithSubcommands,
   getSubCliEntries as getSubCliEntryDescriptors,
   type SubCliDescriptor,
 } from "./subcli-descriptors.js";
-
-export { getSubCliCommandsWithSubcommands };
 
 type SubCliRegistrar = (
   program: Command,

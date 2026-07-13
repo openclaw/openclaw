@@ -2,6 +2,7 @@
 
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionsSearchResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -12,6 +13,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { getWorkboardState } from "../../lib/workboard/index.ts";
 import type { SessionsRouteData } from "./sessions-page.ts";
+import type { TranscriptSearchState } from "./view.ts";
 import "./sessions-page.ts";
 
 type TestSessionsPage = HTMLElement & {
@@ -30,7 +32,11 @@ type TestSessionsPage = HTMLElement & {
   checkpointLoadingKey: string | null;
   checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
+  transcriptSearchQuery: string;
+  transcriptSearch: TranscriptSearchState;
   loadSessions: () => Promise<void>;
+  updateTranscriptSearchQuery: (query: string) => void;
+  runTranscriptSearch: () => Promise<void>;
   loadCheckpoint: (sessionKey: string) => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
@@ -50,6 +56,11 @@ type MutableGateway = {
   gateway: ApplicationContext["gateway"];
   emit: (patch: Partial<ApplicationGatewaySnapshot>) => void;
   setSessionKey: ReturnType<typeof vi.fn>;
+};
+
+type TestSessionMenu = HTMLElement & {
+  forkDisabled: boolean;
+  readonly updateComplete: Promise<boolean>;
 };
 
 function deferred<T>() {
@@ -134,7 +145,12 @@ function createContext(
     sessions,
     agents: { state: { agentsList: null }, subscribe },
     agentIdentity: { get: () => undefined, ensure: vi.fn(), subscribe },
-    agentSelection: { state: { selectedId: "main" }, subscribe },
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      set: () => undefined,
+      setScope: () => undefined,
+      subscribe,
+    },
     channels: { subscribe },
     runtimeConfig: { state: { configSnapshot: null }, subscribe },
     workboard: {
@@ -156,12 +172,251 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
   return page;
 }
 
+async function createRenderedPage(
+  context: ApplicationContext,
+  result: SessionsListResult,
+): Promise<TestSessionsPage> {
+  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
+  page.context = context;
+  page.routeData = {
+    gateway: context.gateway,
+    gatewaySnapshot: context.gateway.snapshot,
+    result,
+    error: null,
+    expandedSessionKey: null,
+    showArchived: false,
+  };
+  document.body.append(page);
+  await page.updateComplete;
+  return page;
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
 describe("sessions page lifecycle", () => {
+  it("submits one trimmed bounded transcript search and adopts its status", async () => {
+    const response = deferred<SessionsSearchResult>();
+    const request = vi.fn(() => response.promise);
+    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
+    page.result = {
+      count: 1,
+      sessions: [{ key: "agent:main:launch" }],
+    } as SessionsListResult;
+
+    page.updateTranscriptSearchQuery("  launch code  ");
+    const pending = page.runTranscriptSearch();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("sessions.search", {
+      agentId: "main",
+      sessionKeys: ["agent:main:launch"],
+      query: "launch code",
+      limit: 25,
+    });
+    expect(page.transcriptSearch).toEqual({ status: "loading" });
+
+    const result: SessionsSearchResult = {
+      results: [
+        {
+          sessionKey: "agent:main:launch",
+          sessionId: "launch",
+          messageId: "message-1",
+          role: "user",
+          timestamp: 42,
+          snippet: "launch code",
+          score: 1,
+        },
+      ],
+      indexing: true,
+      truncated: true,
+    };
+    response.resolve(result);
+    await pending;
+
+    expect(page.transcriptSearchQuery).toBe("launch code");
+    expect(page.transcriptSearch).toEqual({
+      status: "results",
+      results: result.results,
+      indexing: true,
+      truncated: true,
+    });
+  });
+
+  it("fans all-agent transcript search out by owning agent and merges ranked results", async () => {
+    const request = vi.fn(async (_method: string, params: { agentId: string }) => ({
+      results: [
+        {
+          sessionKey: `agent:${params.agentId}:one`,
+          sessionId: `${params.agentId}-one`,
+          messageId: `${params.agentId}-message`,
+          role: "assistant" as const,
+          timestamp: params.agentId === "writer" ? 2 : 1,
+          snippet: params.agentId,
+          score: params.agentId === "writer" ? 2 : 1,
+        },
+      ],
+    }));
+    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const context = createContext(mutableGateway.gateway, createSessions());
+    context.agentSelection.state.scopeId = null;
+    const page = await createPage(context);
+    page.result = {
+      count: 2,
+      sessions: [{ key: "agent:main:one" }, { key: "agent:writer:one" }],
+    } as SessionsListResult;
+
+    page.updateTranscriptSearchQuery("needle");
+    await page.runTranscriptSearch();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.search",
+      expect.objectContaining({ agentId: "main", sessionKeys: ["agent:main:one"] }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "sessions.search",
+      expect.objectContaining({ agentId: "writer", sessionKeys: ["agent:writer:one"] }),
+    );
+    expect(page.transcriptSearch.status).toBe("results");
+    if (page.transcriptSearch.status === "results") {
+      expect(page.transcriptSearch.results.map((result) => result.sessionKey)).toEqual([
+        "agent:writer:one",
+        "agent:main:one",
+      ]);
+    }
+  });
+
+  it("does not request empty or unadvertised transcript searches", async () => {
+    const request = vi.fn();
+    const page = await createPage(
+      createContext(
+        createGateway({ request } as unknown as GatewayBrowserClient).gateway,
+        createSessions(),
+      ),
+    );
+
+    page.updateTranscriptSearchQuery("   ");
+    await page.runTranscriptSearch();
+    page.updateTranscriptSearchQuery("not advertised");
+    await page.runTranscriptSearch();
+
+    expect(request).not.toHaveBeenCalled();
+    expect(page.transcriptSearch).toEqual({ status: "idle" });
+  });
+
+  it("drops a transcript result after the query changes while it is pending", async () => {
+    const response = deferred<SessionsSearchResult>();
+    const request = vi.fn(() => response.promise);
+    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
+    page.result = {
+      count: 1,
+      sessions: [{ key: "agent:main:stale" }],
+    } as SessionsListResult;
+
+    page.updateTranscriptSearchQuery("old query");
+    const pending = page.runTranscriptSearch();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    page.updateTranscriptSearchQuery("new query");
+    response.resolve({
+      results: [
+        {
+          sessionKey: "agent:main:stale",
+          sessionId: "stale",
+          messageId: "message-stale",
+          role: "assistant",
+          timestamp: 42,
+          snippet: "old query",
+          score: 1,
+        },
+      ],
+    });
+    await pending;
+
+    expect(page.transcriptSearchQuery).toBe("new query");
+    expect(page.transcriptSearch).toEqual({ status: "idle" });
+  });
+
+  it("drops transcript results and in-flight work when agent scope changes", async () => {
+    const response = deferred<SessionsSearchResult>();
+    const request = vi.fn(() => response.promise);
+    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const context = createContext(mutableGateway.gateway, createSessions());
+    let notifyScopeChange: Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0] = () =>
+      undefined;
+    context.agentSelection.subscribe = (listener) => {
+      notifyScopeChange = listener;
+      return () => undefined;
+    };
+    const page = await createPage(context);
+    page.result = {
+      count: 1,
+      sessions: [{ key: "agent:main:stale" }],
+    } as SessionsListResult;
+
+    page.updateTranscriptSearchQuery("needle");
+    const pending = page.runTranscriptSearch();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    context.agentSelection.state.scopeId = null;
+    notifyScopeChange(context.agentSelection.state);
+
+    expect(page.transcriptSearchQuery).toBe("needle");
+    expect(page.transcriptSearch).toEqual({ status: "idle" });
+
+    response.resolve({
+      results: [
+        {
+          sessionKey: "agent:main:stale",
+          sessionId: "stale",
+          messageId: "message-stale",
+          role: "assistant",
+          timestamp: 42,
+          snippet: "needle",
+          score: 1,
+        },
+      ],
+    });
+    await pending;
+    expect(page.transcriptSearch).toEqual({ status: "idle" });
+  });
+
+  it("disables Fork session for model-selection-locked rows", async () => {
+    const row = {
+      key: "agent:main:locked",
+      kind: "direct",
+      modelSelectionLocked: true,
+    } as GatewaySessionRow;
+    const result = { count: 1, sessions: [row] } as SessionsListResult;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(createContext(gateway, createSessions()), result);
+
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sessions page menu");
+    }
+    await menu.updateComplete;
+    expect(menu.forkDisabled).toBe(true);
+    expect(menu.querySelector<HTMLButtonElement>('[data-shortcut="f"]')?.disabled).toBe(true);
+  });
+
   it("rejects preloaded data after a same-client reconnect and loads the current epoch", async () => {
     const client = {} as GatewayBrowserClient;
     const mutableGateway = createGateway(client);
@@ -220,6 +475,21 @@ describe("sessions page lifecycle", () => {
     expect(page.loading).toBe(false);
     expect(page.checkpointItemsByKey).toEqual({});
     expect(page.checkpointLoadingKey).toBeNull();
+  });
+
+  it("scopes list requests while preserving an all-agents escape", async () => {
+    const sessions = createSessions();
+    const context = createContext(createGateway({} as GatewayBrowserClient).gateway, sessions);
+    const page = await createPage(context);
+
+    await page.loadSessions();
+    expect(sessions.list).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: "main" }));
+
+    context.agentSelection.state.scopeId = null;
+    await page.loadSessions();
+    expect(sessions.list).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ agentId: expect.anything() }),
+    );
   });
 
   it("invalidates checkpoint work and mutation locks on same-client disconnect", async () => {

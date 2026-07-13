@@ -114,17 +114,21 @@ export async function main(argv = process.argv.slice(2)) {
     {
       name: "typecheck",
       parallel: false,
-      commands: [
-        {
-          name: args.includeTestTypes ? "typecheck all" : "typecheck prod",
-          args: [args.includeTestTypes ? "tsgo:all" : "tsgo:prod"],
-        },
-      ],
+      commands: args.includeTestTypes
+        ? [{ name: "typecheck all", args: ["tsgo:all"] }]
+        : [
+            { name: "typecheck prod", args: ["tsgo:prod"] },
+            { name: "typecheck scripts", args: ["tsgo:scripts"] },
+            { name: "typecheck test root", args: ["tsgo:test:root"] },
+          ],
     },
     {
       name: "lint",
       parallel: false,
-      commands: [{ name: "lint", args: ["lint"] }],
+      commands: [
+        { name: "lint", args: ["lint"] },
+        { name: "format", args: ["format:check"] },
+      ],
     },
     {
       name: "policy guards",

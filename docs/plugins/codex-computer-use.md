@@ -97,7 +97,7 @@ Computer Use in and lets OpenClaw install or re-enable it before the turn:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-sol",
     },
   },
 }
@@ -117,18 +117,26 @@ MCP server available, the turn fails before the thread starts.
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
-On macOS managed stdio startup, OpenClaw prefers the signed desktop app
-bundle at `/Applications/ChatGPT.app/Contents/Resources/codex`, then falls
+On macOS, managed startup for Computer Use prefers the desktop app binary at
+`/Applications/ChatGPT.app/Contents/Resources/codex`, then falls
 back to `/Applications/Codex.app/Contents/Resources/codex` for legacy
-standalone installs.
-That keeps Computer Use under the app bundle that owns the local
-desktop-control permissions. If the desktop app is not installed, OpenClaw
-falls back to the managed Codex binary installed beside the plugin. If an
-installed desktop app initializes with an unsupported app-server version,
-OpenClaw closes that child and retries the next managed binary candidate
-instead of letting a stale desktop app shadow the plugin-local fallback.
-Explicit `appServer.command` config or `OPENCLAW_CODEX_APP_SERVER_BIN` still
-overrides this managed selection.
+standalone installs. This also applies to one-off Computer Use status and
+install commands that start their own client. It keeps desktop control under
+the app bundle that owns the local macOS permissions. If the desktop app is not
+installed, OpenClaw falls back to the managed Codex binary installed beside the
+plugin. Ordinary managed Codex turns with the default isolated agent home prefer
+that pinned package first so an older desktop app cannot shadow current model
+support. User-scoped homes stay desktop-first because they can load native
+Computer Use state. An isolated agent home whose effective Codex config enables
+Computer Use also stays desktop-first. Explicit
+`appServer.command` config or `OPENCLAW_CODEX_APP_SERVER_BIN` still overrides
+this managed selection.
+
+OpenClaw serializes native Codex config reads and Computer Use installation
+inside one running Gateway. A separate Codex process or another Gateway is not
+part of that fence. After changing native Codex plugin config outside the
+Gateway, restart the Gateway and start a new chat before relying on the new
+selection.
 
 ## Commands
 
@@ -156,6 +164,12 @@ server exposes tools. Because installation changes trusted host resources,
 only an owner or an `operator.admin` Gateway client can run `install`. Other
 authorized senders can continue to use the read-only `status` command,
 including with overrides.
+
+Older releases accepted one-off `--plugin`, `--server`, and `--mcp-server`
+identity overrides. Configure `computerUse.pluginName` and
+`computerUse.mcpServerName` persistently instead. When a legacy identity flag
+is used, the command identifies the exact setting to persist and repeats the
+requested action plus any supported marketplace flags in its migration guidance.
 
 ## Marketplace choices
 
@@ -208,6 +222,17 @@ If you use a nonstandard Codex app path, run `/codex computer-use install
 local marketplace file path. Use `--marketplace-path` only when you have the
 marketplace JSON file path, not the bundled marketplace root.
 
+### Shared plugin cache
+
+The default `pluginCacheMode: "independent"` leaves each Codex home and its
+plugin cache unmanaged. Set `pluginCacheMode: "shared"` to copy the bundled
+Computer Use plugin into the active Codex home's discoverable plugin cache
+before app-server startup. Shared mode preserves older cached versions because
+running Codex clients can still reference their versioned plugin directories; a
+failed replacement copy also preserves the active cache. Explicit
+`marketplaceName` or `marketplacePath` configuration disables this
+reconciliation so OpenClaw does not override that selection.
+
 ## Remote catalog limit
 
 Codex app-server can list and read remote-only catalog entries, but it does
@@ -231,6 +256,13 @@ remote install is unsupported, run install with a local source or path:
 | `enabled`                       | inferred       | Require Computer Use. Defaults to true when another Computer Use field is set. |
 | `autoInstall`                   | false          | Install or re-enable from already discovered marketplaces at turn start.       |
 | `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
+| `liveTestTimeoutMs`             | 60000          | Timeout for the temporary readiness thread and its cleanup requests.           |
+| `toolCallTimeoutMs`             | 60000          | Timeout for the Computer Use `list_apps` readiness tool call.                  |
+| `healthCheckEnabled`            | false          | Run periodic readiness probes while the owning app-server client is active.    |
+| `healthCheckIntervalMinutes`    | 60             | Probe cadence; accepted values are 30, 60, 120, or 240 minutes.                |
+| `pluginCacheMode`               | `independent`  | Use `shared` to refresh the Codex-home cache from the bundled desktop plugin.  |
+| `strictReadiness`               | false          | Stop startup on a failed live probe instead of continuing with a warning.      |
+| `autoRepair`                    | false          | Kill stale scoped Computer Use MCP children and retry a failed probe once.     |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
 | `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
 | `marketplaceName`               | unset          | Registered Codex marketplace name to select.                                   |
@@ -252,6 +284,13 @@ matching config key is unset:
 | `enabled`                       | `OPENCLAW_CODEX_COMPUTER_USE`                                  |
 | `autoInstall`                   | `OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL`                     |
 | `marketplaceDiscoveryTimeoutMs` | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS` |
+| `liveTestTimeoutMs`             | `OPENCLAW_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS`             |
+| `toolCallTimeoutMs`             | `OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS`             |
+| `healthCheckEnabled`            | `OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED`             |
+| `healthCheckIntervalMinutes`    | `OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES`    |
+| `pluginCacheMode`               | `OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE`                |
+| `strictReadiness`               | `OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS`                 |
+| `autoRepair`                    | `OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR`                      |
 | `marketplaceSource`             | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE`               |
 | `marketplacePath`               | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_PATH`                 |
 | `marketplaceName`               | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_NAME`                 |

@@ -255,7 +255,7 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 ### Message limits
 
 - `textChunkLimit` - outbound text chunk size (default: `4000` chars)
-- `chunkMode` - `"length"` (default) splits at the limit; `"newline"` prefers newline boundaries
+- `streaming.chunkMode` - `"length"` (default) splits at the limit; `"newline"` prefers newline boundaries
 - `mediaMaxMb` - media upload/download limit (default: `30` MB)
 
 ### Streaming
@@ -266,14 +266,16 @@ Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming
 {
   channels: {
     feishu: {
-      streaming: true, // enable streaming card output (default: true)
-      blockStreaming: true, // opt into completed-block streaming
+      streaming: {
+        mode: "partial", // streaming card output (default: "partial")
+        block: { enabled: true }, // opt into completed-block streaming
+      },
     },
   },
 }
 ```
 
-Set `streaming: false` to send the complete reply in one message; `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
+Set `streaming.mode: "off"` to send the complete reply in one message; `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
 
 ### Quota optimization
 
@@ -323,6 +325,10 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 | `tools.bitable` | `feishu_bitable_*` Bitable/Base operations    | `true`              |
 
 `tools.base` is an alias for `tools.bitable`; the explicit `bitable` value wins when both are set. Per-account gates live under `accounts.<id>.tools`.
+
+Grant `drive:drive.metadata:readonly` for direct `feishu_drive info` lookups outside the root
+directory, unless the app already has the full `drive:drive` scope. Without either scope, `info`
+keeps the legacy root-directory lookup available through `drive:drive:readonly`.
 
 ### ACP sessions
 
@@ -561,58 +567,57 @@ ls -la ~/.openclaw/workspace-*
 
 Full configuration: [Gateway configuration](/gateway/configuration)
 
-| Setting                                                     | Description                                                                          | Default                              |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------ |
-| `channels.feishu.enabled`                                   | Enable/disable the channel                                                           | `true`                               |
-| `channels.feishu.domain`                                    | API domain (`feishu`, `lark`, or an `https://` base URL)                             | `feishu`                             |
-| `channels.feishu.connectionMode`                            | Event transport (`websocket` or `webhook`)                                           | `websocket`                          |
-| `channels.feishu.defaultAccount`                            | Default account for outbound routing                                                 | `default`                            |
-| `channels.feishu.verificationToken`                         | Required for webhook mode                                                            | -                                    |
-| `channels.feishu.encryptKey`                                | Required for webhook mode                                                            | -                                    |
-| `channels.feishu.webhookPath`                               | Webhook route path                                                                   | `/feishu/events`                     |
-| `channels.feishu.webhookHost`                               | Webhook bind host                                                                    | `127.0.0.1`                          |
-| `channels.feishu.webhookPort`                               | Webhook bind port                                                                    | `3000`                               |
-| `channels.feishu.accounts.<id>.appId`                       | App ID                                                                               | -                                    |
-| `channels.feishu.accounts.<id>.appSecret`                   | App Secret                                                                           | -                                    |
-| `channels.feishu.accounts.<id>.domain`                      | Per-account domain override                                                          | `feishu`                             |
-| `channels.feishu.accounts.<id>.tts`                         | Per-account TTS override                                                             | `messages.tts`                       |
-| `channels.feishu.accounts.<id>.sendRateLimit.minIntervalMs` | Per-account outbound send interval override                                          | inherited                            |
-| `channels.feishu.dmPolicy`                                  | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
-| `channels.feishu.allowFrom`                                 | DM allowlist (open_id list)                                                          | -                                    |
-| `channels.feishu.groupPolicy`                               | Group policy (`open`, `allowlist`, `disabled`)                                       | `allowlist`                          |
-| `channels.feishu.groupAllowFrom`                            | Group allowlist                                                                      | -                                    |
-| `channels.feishu.groupSenderAllowFrom`                      | Sender allowlist applied to all groups                                               | -                                    |
-| `channels.feishu.requireMention`                            | Require @mention in groups                                                           | `true` (`false` when policy `open`)  |
-| `channels.feishu.groups.<chat_id>.requireMention`           | Per-group @mention override; explicit IDs also admit the group in allowlist mode     | inherited                            |
-| `channels.feishu.groups.<chat_id>.enabled`                  | Enable/disable a specific group                                                      | `true`                               |
-| `channels.feishu.groups.<chat_id>.allowFrom`                | Per-group sender allowlist (overrides `groupSenderAllowFrom`)                        | -                                    |
-| `channels.feishu.groupSessionScope`                         | Group session mapping (`group`, `group_sender`, `group_topic`, `group_topic_sender`) | `group`                              |
-| `channels.feishu.replyInThread`                             | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
-| `channels.feishu.reactionNotifications`                     | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
-| `channels.feishu.dynamicAgentCreation.enabled`              | Enable automatic per-user agent creation                                             | `false`                              |
-| `channels.feishu.dynamicAgentCreation.workspaceTemplate`    | Path template for dynamic agent workspaces                                           | `~/.openclaw/workspace-{agentId}`    |
-| `channels.feishu.dynamicAgentCreation.agentDirTemplate`     | Agent directory name template                                                        | `~/.openclaw/agents/{agentId}/agent` |
-| `channels.feishu.dynamicAgentCreation.maxAgents`            | Maximum number of dynamic agents to create                                           | unlimited                            |
-| `channels.feishu.textChunkLimit`                            | Message chunk size                                                                   | `4000`                               |
-| `channels.feishu.chunkMode`                                 | Chunk splitting (`length` or `newline`)                                              | `length`                             |
-| `channels.feishu.mediaMaxMb`                                | Media size limit                                                                     | `30`                                 |
-| `channels.feishu.renderMode`                                | Reply rendering (`auto`, `raw`, `card`)                                              | `auto`                               |
-| `channels.feishu.streaming`                                 | Streaming card output                                                                | `true`                               |
-| `channels.feishu.blockStreaming`                            | Completed-block reply streaming                                                      | `false`                              |
-| `channels.feishu.typingIndicator`                           | Send typing reactions                                                                | `true`                               |
-| `channels.feishu.resolveSenderNames`                        | Resolve sender display names                                                         | `true`                               |
-| `channels.feishu.sendRateLimit.minIntervalMs`               | Minimum delay between outbound message sends to the same Feishu target               | `0`                                  |
-| `channels.feishu.configWrites`                              | Allow channel-initiated config writes (needed by dynamic agents)                     | `true`                               |
-| `channels.feishu.tools.doc`                                 | Enable document tools                                                                | `true`                               |
-| `channels.feishu.tools.chat`                                | Enable chat info tools                                                               | `true`                               |
-| `channels.feishu.tools.wiki`                                | Enable knowledge base tools (requires `doc`)                                         | `true`                               |
-| `channels.feishu.tools.drive`                               | Enable cloud storage tools                                                           | `true`                               |
-| `channels.feishu.tools.perm`                                | Enable permission management tools                                                   | `false`                              |
-| `channels.feishu.tools.scopes`                              | Enable app scopes diagnostic tool                                                    | `true`                               |
-| `channels.feishu.tools.bitable`                             | Enable Bitable/Base tools                                                            | `true`                               |
-| `channels.feishu.tools.base`                                | Alias for `channels.feishu.tools.bitable`; explicit `bitable` wins when both set     | `true`                               |
-| `channels.feishu.accounts.<id>.tools.bitable`               | Per-account Bitable/Base tool gate                                                   | inherited                            |
-| `channels.feishu.accounts.<id>.tools.base`                  | Per-account alias for `tools.bitable`                                                | inherited                            |
+| Setting                                                  | Description                                                                          | Default                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------ |
+| `channels.feishu.enabled`                                | Enable/disable the channel                                                           | `true`                               |
+| `channels.feishu.domain`                                 | API domain (`feishu`, `lark`, or an `https://` base URL)                             | `feishu`                             |
+| `channels.feishu.connectionMode`                         | Event transport (`websocket` or `webhook`)                                           | `websocket`                          |
+| `channels.feishu.defaultAccount`                         | Default account for outbound routing                                                 | `default`                            |
+| `channels.feishu.verificationToken`                      | Required for webhook mode                                                            | -                                    |
+| `channels.feishu.encryptKey`                             | Required for webhook mode                                                            | -                                    |
+| `channels.feishu.webhookPath`                            | Webhook route path                                                                   | `/feishu/events`                     |
+| `channels.feishu.webhookHost`                            | Webhook bind host                                                                    | `127.0.0.1`                          |
+| `channels.feishu.webhookPort`                            | Webhook bind port                                                                    | `3000`                               |
+| `channels.feishu.accounts.<id>.appId`                    | App ID                                                                               | -                                    |
+| `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                           | -                                    |
+| `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                          | `feishu`                             |
+| `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `messages.tts`                       |
+| `channels.feishu.accounts.<id>.sendRateLimit.minIntervalMs` | Per-account outbound send interval override                                       | inherited                            |
+| `channels.feishu.dmPolicy`                               | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
+| `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                          | -                                    |
+| `channels.feishu.groupPolicy`                            | Group policy (`open`, `allowlist`, `disabled`)                                       | `allowlist`                          |
+| `channels.feishu.groupAllowFrom`                         | Group allowlist                                                                      | -                                    |
+| `channels.feishu.groupSenderAllowFrom`                   | Sender allowlist applied to all groups                                               | -                                    |
+| `channels.feishu.requireMention`                         | Require @mention in groups                                                           | `true` (`false` when policy `open`)  |
+| `channels.feishu.groups.<chat_id>.requireMention`        | Per-group @mention override; explicit IDs also admit the group in allowlist mode     | inherited                            |
+| `channels.feishu.groups.<chat_id>.enabled`               | Enable/disable a specific group                                                      | `true`                               |
+| `channels.feishu.groups.<chat_id>.allowFrom`             | Per-group sender allowlist (overrides `groupSenderAllowFrom`)                        | -                                    |
+| `channels.feishu.groupSessionScope`                      | Group session mapping (`group`, `group_sender`, `group_topic`, `group_topic_sender`) | `group`                              |
+| `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
+| `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
+| `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation                                             | `false`                              |
+| `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces                                           | `~/.openclaw/workspace-{agentId}`    |
+| `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template                                                        | `~/.openclaw/agents/{agentId}/agent` |
+| `channels.feishu.dynamicAgentCreation.maxAgents`         | Maximum number of dynamic agents to create                                           | unlimited                            |
+| `channels.feishu.textChunkLimit`                         | Message chunk size                                                                   | `4000`                               |
+| `channels.feishu.streaming.chunkMode`                    | Chunk splitting (`length` or `newline`)                                              | `length`                             |
+| `channels.feishu.mediaMaxMb`                             | Media size limit                                                                     | `30`                                 |
+| `channels.feishu.renderMode`                             | Reply rendering (`auto`, `raw`, `card`)                                              | `auto`                               |
+| `channels.feishu.streaming.mode`                         | Streaming card output (`partial` or `off`)                                           | `partial`                            |
+| `channels.feishu.streaming.block.enabled`                | Completed-block reply streaming                                                      | `false`                              |
+| `channels.feishu.typingIndicator`                        | Send typing reactions                                                                | `true`                               |
+| `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                         | `true`                               |
+| `channels.feishu.configWrites`                           | Allow channel-initiated config writes (needed by dynamic agents)                     | `true`                               |
+| `channels.feishu.tools.doc`                              | Enable document tools                                                                | `true`                               |
+| `channels.feishu.tools.chat`                             | Enable chat info tools                                                               | `true`                               |
+| `channels.feishu.tools.wiki`                             | Enable knowledge base tools (requires `doc`)                                         | `true`                               |
+| `channels.feishu.tools.drive`                            | Enable cloud storage tools                                                           | `true`                               |
+| `channels.feishu.tools.perm`                             | Enable permission management tools                                                   | `false`                              |
+| `channels.feishu.tools.scopes`                           | Enable app scopes diagnostic tool                                                    | `true`                               |
+| `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                            | `true`                               |
+| `channels.feishu.tools.base`                             | Alias for `channels.feishu.tools.bitable`; explicit `bitable` wins when both set     | `true`                               |
+| `channels.feishu.accounts.<id>.tools.bitable`            | Per-account Bitable/Base tool gate                                                   | inherited                            |
+| `channels.feishu.accounts.<id>.tools.base`               | Per-account alias for `tools.bitable`                                                | inherited                            |
 
 ## Supported message types
 

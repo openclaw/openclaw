@@ -2,12 +2,12 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
-import type { DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   formatDistinctCollapsedToolSummaryText,
@@ -24,6 +24,8 @@ import {
   resolveToolDisplay,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
+import { getToolCallTitle } from "../tool-titles.ts";
+import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
@@ -226,6 +228,27 @@ function renderPreviewFrame(params: {
   );
 }
 
+const loadMcpAppView = () => import("../../../components/mcp-app-view.ts");
+
+function renderMcpAppView(params: {
+  sessionKey: string;
+  viewId: string;
+  height: number;
+  title: string;
+}) {
+  // Insert the tag before its chunk arrives. Native custom-element upgrade
+  // preserves these bound fields, so the first preview initializes after registration.
+  void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch((error: unknown) => {
+    console.error("[openclaw] failed to load MCP App view", error);
+  });
+  return html`<mcp-app-view
+    .sessionKey=${params.sessionKey}
+    .viewId=${params.viewId}
+    .height=${params.height}
+    .title=${params.title}
+  ></mcp-app-view>`;
+}
+
 export function renderToolPreview(
   preview: ToolPreview | undefined,
   surface: "chat_tool" | "chat_message" | "sidebar",
@@ -235,12 +258,17 @@ export function renderToolPreview(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    sessionKey?: string;
   },
 ) {
   if (!preview) {
     return nothing;
   }
-  if (preview.kind !== "canvas" || surface === "chat_tool") {
+  if (
+    preview.kind !== "canvas" ||
+    surface === "chat_tool" ||
+    (preview.mcpApp && surface !== "chat_message")
+  ) {
     return nothing;
   }
   if (preview.surface !== "assistant_message") {
@@ -249,19 +277,28 @@ export function renderToolPreview(
   return html`
     <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
       <div class="chat-tool-card__preview-header">
-        <span class="chat-tool-card__preview-label">${preview.title?.trim() || "Canvas"}</span>
+        <span class="chat-tool-card__preview-label"
+          >${preview.title?.trim() || t("chat.toolCards.canvas")}</span
+        >
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
-        ${renderPreviewFrame({
-          title: preview.title?.trim() || "Canvas",
-          src: resolveCanvasIframeUrl(
-            preview.url,
-            options?.canvasPluginSurfaceUrl,
-            options?.allowExternalEmbedUrls ?? false,
-          ),
-          height: preview.preferredHeight,
-          sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
-        })}
+        ${preview.mcpApp
+          ? renderMcpAppView({
+              sessionKey: options?.sessionKey ?? "",
+              viewId: preview.mcpApp.viewId,
+              height: preview.preferredHeight ?? 600,
+              title: preview.title?.trim() || t("mcpApp.title"),
+            })
+          : renderPreviewFrame({
+              title: preview.title?.trim() || t("chat.toolCards.canvas"),
+              src: resolveCanvasIframeUrl(
+                preview.url,
+                options?.canvasPluginSurfaceUrl,
+                options?.allowExternalEmbedUrls ?? false,
+              ),
+              height: preview.preferredHeight,
+              sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
+            })}
       </div>
     </div>
   `;
@@ -402,19 +439,16 @@ function firstCommandLine(command: string): string {
   return truncateUtf16Safe(line, 120);
 }
 
-export function renderDiffStatChips(stat: DiffStat) {
-  if (stat.added === 0 && stat.removed === 0) {
-    return nothing;
-  }
-  return html`<span class="chat-diffstat">
-    ${stat.added > 0 ? html`<span class="chat-diffstat__add">+${stat.added}</span>` : nothing}
-    ${stat.removed > 0 ? html`<span class="chat-diffstat__del">-${stat.removed}</span>` : nothing}
-  </span>`;
-}
-
 function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
   if (view.kind === "command" && view.command) {
     const commandPreview = firstCommandLine(view.command);
+    const aiTitle = getToolCallTitle(card.name, card.args);
+    if (aiTitle) {
+      return html`
+        <span class="chat-tool-row__title">${aiTitle}</span>
+        <code class="chat-tool-row__cmd chat-tool-row__cmd--secondary">${commandPreview}</code>
+      `;
+    }
     return html`
       <span class="chat-tool-row__prompt" aria-hidden="true">$</span>
       <code class="chat-tool-row__cmd">${renderHighlightedCommand(commandPreview)}</code>
@@ -443,53 +477,18 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
   const displayName = formatDistinctCollapsedToolSummaryText(summary.name, displayLabel);
+  const aiTitle = getToolCallTitle(card.name, card.args);
+  if (aiTitle) {
+    return html`
+      <span class="chat-tool-row__title">${aiTitle}</span>
+      <span class="chat-tool-row__detail">${displayLabel}</span>
+    `;
+  }
   return html`
     <span class="chat-tool-msg-summary__label">${displayLabel}</span>
     ${displayName
       ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
       : nothing}
-  `;
-}
-
-export function renderDiffBlock(
-  lines: readonly DiffLine[],
-  outcome: ToolCardOutcome = "succeeded",
-) {
-  const hasLineNumbers = lines.some((line) => line.lineNo !== undefined);
-  return html`
-    <div
-      class="chat-diff"
-      role="figure"
-      aria-label=${t(
-        outcome === "succeeded" ? "chat.toolCards.fileChanges" : "chat.toolCards.attemptedChanges",
-      )}
-    >
-      ${lines.map((line) => {
-        if (line.kind === "skip") {
-          return html`<div class="chat-diff__row chat-diff__row--skip">
-            ${hasLineNumbers ? html`<span class="chat-diff__gutter"></span>` : nothing}
-            <span class="chat-diff__sign"></span>
-            <span class="chat-diff__text">⋯</span>
-          </div>`;
-        }
-        const kindClass =
-          line.kind === "add"
-            ? "chat-diff__row--add"
-            : line.kind === "del"
-              ? "chat-diff__row--del"
-              : line.kind === "file"
-                ? "chat-diff__row--file"
-                : "";
-        const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : "";
-        return html`<div class="chat-diff__row ${kindClass}">
-          ${hasLineNumbers
-            ? html`<span class="chat-diff__gutter">${line.lineNo ?? ""}</span>`
-            : nothing}
-          <span class="chat-diff__sign">${sign}</span>
-          <span class="chat-diff__text">${line.text || " "}</span>
-        </div>`;
-      })}
-    </div>
   `;
 }
 
@@ -506,10 +505,10 @@ function tokenizeCommand(command: string): CommandToken[] {
   let index = 0;
   let expectName = true;
   while (index < command.length) {
-    const char = command[index];
+    const char = command.charAt(index);
     if (/\s/.test(char)) {
       let end = index;
-      while (end < command.length && /\s/.test(command[end])) {
+      while (end < command.length && /\s/.test(command.charAt(end))) {
         end++;
       }
       tokens.push({ text: command.slice(index, end), cls: "ws" });
@@ -518,8 +517,8 @@ function tokenizeCommand(command: string): CommandToken[] {
     }
     if (char === "'" || char === '"') {
       let end = index + 1;
-      while (end < command.length && command[end] !== char) {
-        end += command[end] === "\\" ? 2 : 1;
+      while (end < command.length && command.charAt(end) !== char) {
+        end += command.charAt(end) === "\\" ? 2 : 1;
       }
       end = Math.min(end + 1, command.length);
       tokens.push({ text: command.slice(index, end), cls: "str" });
@@ -529,7 +528,7 @@ function tokenizeCommand(command: string): CommandToken[] {
     }
     if (COMMAND_OP_CHARS.has(char)) {
       let end = index;
-      while (end < command.length && COMMAND_OP_CHARS.has(command[end])) {
+      while (end < command.length && COMMAND_OP_CHARS.has(command.charAt(end))) {
         end++;
       }
       tokens.push({ text: command.slice(index, end), cls: "op" });
@@ -540,10 +539,10 @@ function tokenizeCommand(command: string): CommandToken[] {
     let end = index;
     while (
       end < command.length &&
-      !/\s/.test(command[end]) &&
-      !COMMAND_OP_CHARS.has(command[end]) &&
-      command[end] !== "'" &&
-      command[end] !== '"'
+      !/\s/.test(command.charAt(end)) &&
+      !COMMAND_OP_CHARS.has(command.charAt(end)) &&
+      command.charAt(end) !== "'" &&
+      command.charAt(end) !== '"'
     ) {
       end++;
     }
@@ -643,6 +642,39 @@ function extraArgsBeyondRowTarget(
   return Object.keys(extras).length > 0 ? extras : null;
 }
 
+function resolveToolWorkspaceFilePath(card: ToolCard, view: ToolCallView): string | null {
+  if (card.args && typeof card.args === "object" && !Array.isArray(card.args)) {
+    const args = card.args as Record<string, unknown>;
+    for (const key of ["path", "file_path", "filePath", "notebook_path"]) {
+      const value = args[key];
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+    }
+  }
+  const fallback = `${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}`;
+  return fallback.trim() || null;
+}
+
+function renderToolWorkspaceFilePath(
+  label: string,
+  path: string | null,
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+) {
+  return path && onOpenWorkspaceFile
+    ? html`
+        <button
+          class="chat-tool-card__detail chat-tool-card__detail-link"
+          type="button"
+          title=${t("chat.toolCards.openFile")}
+          @click=${() => onOpenWorkspaceFile({ path })}
+        >
+          ${label}
+        </button>
+      `
+    : html`<div class="chat-tool-card__detail">${label}</div>`;
+}
+
 function renderTerminalBlock(command: string, output: string | undefined, isError: boolean) {
   return html`
     <div class="chat-tool-term ${isError ? "chat-tool-term--error" : ""}">
@@ -722,6 +754,7 @@ export function renderToolCard(
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
+    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
@@ -775,6 +808,7 @@ export function renderToolCard(
                 opts.embedSandboxMode ?? "scripts",
                 opts.allowExternalEmbedUrls ?? false,
                 opts.runActive,
+                opts.onOpenWorkspaceFile,
               )}
             </div>
           `
@@ -791,6 +825,7 @@ export function renderExpandedToolCardContent(
   embedSandboxMode: EmbedSandboxMode = "scripts",
   allowExternalEmbedUrls = false,
   runActive?: boolean,
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
 ) {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args });
@@ -804,6 +839,10 @@ export function renderExpandedToolCardContent(
   const hasInput = Boolean(card.inputText?.trim());
   const isError = isToolCardError(card);
   const outcome = resolveToolCardOutcome(card, runActive);
+  const workspaceFilePath =
+    view.kind === "read" || view.kind === "edit" || view.kind === "write"
+      ? resolveToolWorkspaceFilePath(card, view)
+      : null;
   const canOpenSidebar = Boolean(onOpenSidebar);
   const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey);
   const previewSidebarContent =
@@ -823,17 +862,18 @@ export function renderExpandedToolCardContent(
         canvasPluginSurfaceUrl,
         embedSandboxMode,
         allowExternalEmbedUrls,
+        sessionKey,
       })
     : nothing;
   const sidebarAction = canOpenSidebar
     ? html`
         <div class="chat-tool-card__actions">
-          <openclaw-tooltip content="Open in the side panel">
+          <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
             <button
               class="chat-tool-card__action-btn"
               type="button"
               @click=${() => onOpenSidebar?.(sidebarActionContent)}
-              aria-label="Open tool details in side panel"
+              aria-label=${t("chat.toolCards.openDetails")}
             >
               <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
             </button>
@@ -872,9 +912,11 @@ export function renderExpandedToolCardContent(
     return html`
       <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__header">
-          <div class="chat-tool-card__detail">
-            ${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}
-          </div>
+          ${renderToolWorkspaceFilePath(
+            `${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}`,
+            workspaceFilePath,
+            onOpenWorkspaceFile,
+          )}
           ${sidebarAction}
         </div>
         ${renderDiffBlock(view.diff, outcome)}
@@ -901,7 +943,11 @@ export function renderExpandedToolCardContent(
       ${detail || canOpenSidebar
         ? html`
             <div class="chat-tool-card__header">
-              ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+              ${detail
+                ? view.kind === "read"
+                  ? renderToolWorkspaceFilePath(detail, workspaceFilePath, onOpenWorkspaceFile)
+                  : html`<div class="chat-tool-card__detail">${detail}</div>`
+                : nothing}
               ${sidebarAction}
             </div>
           `

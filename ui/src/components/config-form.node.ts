@@ -3,16 +3,19 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../api/types.ts";
 import { icons as sharedIcons } from "../components/icons.ts";
 import "../components/tooltip.ts";
+import { t } from "../i18n/index.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../lib/string-coerce.ts";
+  hasConfigSearchCriteria as hasSearchCriteria,
+  matchesNodeSearch,
+  matchesNodeSelf,
+  resolveConfigFieldMeta as resolveFieldMeta,
+  type ConfigSearchCriteria,
+} from "./config-form.search.ts";
 import {
   defaultValue,
   hasSensitiveConfigData,
   hintForPath,
-  humanize,
   pathKey,
   REDACTED_PLACEHOLDER,
   schemaType,
@@ -127,12 +130,6 @@ const icons = {
   `,
 };
 
-type FieldMeta = {
-  label: string;
-  help?: string;
-  tags: string[];
-};
-
 function isSecretRefObject(value: unknown): value is {
   source: string;
   id: string;
@@ -163,11 +160,6 @@ type SensitiveRenderState = {
   canReveal: boolean;
 };
 
-type ConfigSearchCriteria = {
-  text: string;
-  tags: string[];
-};
-
 function getSensitiveRenderState(params: SensitiveRenderParams): SensitiveRenderState {
   const isSensitive = hasSensitiveConfigData(params.value, params.path, params.hints);
   const isRevealed =
@@ -193,9 +185,9 @@ function renderSensitiveToggleButton(params: {
   }
   const label = state.canReveal
     ? state.isRevealed
-      ? "Hide value"
-      : "Reveal value"
-    : "Disable stream mode to reveal value";
+      ? t("configForm.hideValue")
+      : t("configForm.revealValue")
+    : t("configForm.disableStreamToReveal");
   return html`
     <openclaw-tooltip .content=${label}>
       <button
@@ -211,212 +203,6 @@ function renderSensitiveToggleButton(params: {
       </button>
     </openclaw-tooltip>
   `;
-}
-
-function hasSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
-  return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));
-}
-
-export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
-  const tags: string[] = [];
-  const seen = new Set<string>();
-  const raw = query.trim();
-  const stripped = raw.replace(/(^|\s)tag:([^\s]+)/gi, (_, leading: string, token: string) => {
-    const normalized = normalizeLowercaseStringOrEmpty(token);
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
-      tags.push(normalized);
-    }
-    return leading;
-  });
-  return {
-    text: normalizeLowercaseStringOrEmpty(stripped),
-    tags,
-  };
-}
-
-function normalizeTags(raw: unknown): string[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const tags: string[] = [];
-  for (const value of raw) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const tag = value.trim();
-    if (!tag) {
-      continue;
-    }
-    const key = normalizeLowercaseStringOrEmpty(tag);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    tags.push(tag);
-  }
-  return tags;
-}
-
-function resolveFieldMeta(
-  path: Array<string | number>,
-  schema: JsonSchema,
-  hints: ConfigUiHints,
-): FieldMeta {
-  const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
-  const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
-  const hintTags = normalizeTags(hint?.tags);
-  return {
-    label,
-    help,
-    tags: hintTags.length > 0 ? hintTags : schemaTags,
-  };
-}
-
-function matchesText(text: string, candidates: Array<string | undefined>): boolean {
-  if (!text) {
-    return true;
-  }
-  for (const candidate of candidates) {
-    if (normalizeOptionalLowercaseString(candidate)?.includes(text)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
-  if (filterTags.length === 0) {
-    return true;
-  }
-  const normalized = new Set(fieldTags.map((tag) => normalizeLowercaseStringOrEmpty(tag)));
-  return filterTags.every((tag) => normalized.has(tag));
-}
-
-function matchesNodeSelf(params: {
-  schema: JsonSchema;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  criteria: ConfigSearchCriteria;
-}): boolean {
-  const { schema, path, hints, criteria } = params;
-  if (!hasSearchCriteria(criteria)) {
-    return true;
-  }
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  if (!matchesTags(criteria.tags, tags)) {
-    return false;
-  }
-
-  if (!criteria.text) {
-    return true;
-  }
-
-  const pathLabel = path
-    .filter((segment): segment is string => typeof segment === "string")
-    .join(".");
-  const enumText =
-    schema.enum && schema.enum.length > 0
-      ? schema.enum.map((value) => String(value)).join(" ")
-      : "";
-
-  return matchesText(criteria.text, [
-    label,
-    help,
-    schema.title,
-    schema.description,
-    pathLabel,
-    enumText,
-  ]);
-}
-
-export function matchesNodeSearch(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  criteria: ConfigSearchCriteria;
-}): boolean {
-  const { schema, value, path, hints, criteria } = params;
-  if (!hasSearchCriteria(criteria)) {
-    return true;
-  }
-  if (matchesNodeSelf({ schema, path, hints, criteria })) {
-    return true;
-  }
-
-  const type = schemaType(schema);
-  if (type === "object") {
-    const fallback = value ?? schema.default;
-    const obj =
-      fallback && typeof fallback === "object" && !Array.isArray(fallback)
-        ? (fallback as Record<string, unknown>)
-        : {};
-    const props = schema.properties ?? {};
-    for (const [propKey, node] of Object.entries(props)) {
-      if (
-        matchesNodeSearch({
-          schema: node,
-          value: obj[propKey],
-          path: [...path, propKey],
-          hints,
-          criteria,
-        })
-      ) {
-        return true;
-      }
-    }
-    const additional = schema.additionalProperties;
-    if (additional && typeof additional === "object") {
-      const reserved = new Set(Object.keys(props));
-      for (const [entryKey, entryValue] of Object.entries(obj)) {
-        if (reserved.has(entryKey)) {
-          continue;
-        }
-        if (
-          matchesNodeSearch({
-            schema: additional,
-            value: entryValue,
-            path: [...path, entryKey],
-            hints,
-            criteria,
-          })
-        ) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  if (type === "array") {
-    const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
-    if (!itemsSchema) {
-      return false;
-    }
-    const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
-    if (arr.length === 0) {
-      return false;
-    }
-    for (let idx = 0; idx < arr.length; idx += 1) {
-      if (
-        matchesNodeSearch({
-          schema: itemsSchema,
-          value: arr[idx],
-          path: [...path, idx],
-          hints,
-          criteria,
-        })
-      ) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 function renderTags(tags: string[]): TemplateResult | typeof nothing {
@@ -453,7 +239,7 @@ export function renderNode(params: {
   if (unsupported.has(key)) {
     return html`<div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>
+      <div class="cfg-field__error">${t("configForm.unsupportedNode")}</div>
     </div>`;
   }
   if (
@@ -472,7 +258,8 @@ export function renderNode(params: {
     );
 
     if (nonNull.length === 1) {
-      return renderNode({ ...params, schema: nonNull[0] });
+      const selectedSchema = nonNull[0];
+      return selectedSchema ? renderNode({ ...params, schema: selectedSchema }) : nothing;
     }
 
     // Check if it's a set of literal values (enum-like)
@@ -644,7 +431,7 @@ export function renderNode(params: {
   return html`
     <div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported type: ${type}. Use Raw mode.</div>
+      <div class="cfg-field__error">${t("configForm.unsupportedType", { type: String(type) })}</div>
     </div>
   `;
 }
@@ -683,11 +470,13 @@ function renderTextInput(params: {
   const placeholder = effectiveRedacted
     ? isStructuredSecretRef
       ? rawAvailable
-        ? "Structured value (SecretRef) - use Raw mode to edit"
-        : "Structured value (SecretRef) - edit the config file directly"
+        ? t("configForm.structuredSecretRaw")
+        : t("configForm.structuredSecretFile")
       : REDACTED_PLACEHOLDER
     : (hint?.placeholder ??
-      (schema.default !== undefined ? `Default: ${formatUnknownText(schema.default)}` : ""));
+      (schema.default !== undefined
+        ? t("configForm.defaultValue", { value: formatUnknownText(schema.default) })
+        : ""));
   const displayValue = effectiveRedacted
     ? ""
     : isStructuredValue
@@ -750,11 +539,11 @@ function renderTextInput(params: {
             })}
         ${schema.default !== undefined
           ? html`
-              <openclaw-tooltip content="Reset to default">
+              <openclaw-tooltip .content=${t("configForm.resetToDefault")}>
                 <button
                   type="button"
                   class="cfg-input__reset"
-                  aria-label="Reset to default"
+                  aria-label=${t("configForm.resetToDefault")}
                   ?disabled=${disabled || effectiveRedacted}
                   @click=${() => onPatch(path, schema.default)}
                 >
@@ -854,7 +643,7 @@ function renderSelect(params: {
           onPatch(path, val === unset ? undefined : options[Number(val)]);
         }}
       >
-        <option value=${unset} ?selected=${currentIndex < 0}>Select...</option>
+        <option value=${unset} ?selected=${currentIndex < 0}>${t("configForm.select")}</option>
         ${options.map(
           (opt, idx) =>
             html` <option value=${String(idx)} ?selected=${idx === currentIndex}>
@@ -898,7 +687,9 @@ function renderJsonTextarea(params: {
       <div class="cfg-input-wrap">
         <textarea
           class="cfg-textarea${sensitiveState.isRedacted ? " cfg-textarea--redacted" : ""}"
-          placeholder=${sensitiveState.isRedacted ? REDACTED_PLACEHOLDER : "JSON value"}
+          placeholder=${sensitiveState.isRedacted
+            ? REDACTED_PLACEHOLDER
+            : t("configForm.jsonValue")}
           rows="3"
           .value=${displayValue}
           ?disabled=${disabled}
@@ -1098,7 +889,7 @@ function renderArray(params: {
     return html`
       <div class="cfg-field cfg-field--error">
         <div class="cfg-field__label">${label}</div>
-        <div class="cfg-field__error">Unsupported array schema. Use Raw mode.</div>
+        <div class="cfg-field__error">${t("configForm.unsupportedArray")}</div>
       </div>
     `;
   }
@@ -1112,7 +903,11 @@ function renderArray(params: {
           ${showLabel ? html`<span class="cfg-array__label">${label}</span>` : nothing}
           ${renderTags(tags)}
         </div>
-        <span class="cfg-array__count">${arr.length} item${arr.length !== 1 ? "s" : ""}</span>
+        <span class="cfg-array__count"
+          >${t(arr.length === 1 ? "configForm.itemCountOne" : "configForm.itemCount", {
+            count: String(arr.length),
+          })}</span
+        >
         <button
           type="button"
           class="cfg-array__add"
@@ -1123,12 +918,12 @@ function renderArray(params: {
           }}
         >
           <span class="cfg-array__add-icon">${icons.plus}</span>
-          Add
+          ${t("configForm.add")}
         </button>
       </div>
       ${help ? html`<div class="cfg-array__help">${help}</div>` : nothing}
       ${arr.length === 0
-        ? html` <div class="cfg-array__empty">No items yet. Click "Add" to create one.</div> `
+        ? html` <div class="cfg-array__empty">${t("configForm.noItems")}</div> `
         : html`
             <div class="cfg-array__items">
               ${arr.map(
@@ -1136,11 +931,11 @@ function renderArray(params: {
                   <div class="cfg-array__item">
                     <div class="cfg-array__item-header">
                       <span class="cfg-array__item-index">#${idx + 1}</span>
-                      <openclaw-tooltip content="Remove item">
+                      <openclaw-tooltip .content=${t("configForm.removeItem")}>
                         <button
                           type="button"
                           class="cfg-array__item-remove"
-                          aria-label="Remove item"
+                          aria-label=${t("configForm.removeItem")}
                           ?disabled=${disabled}
                           @click=${() => {
                             const next = [...arr];
@@ -1226,7 +1021,7 @@ function renderMapField(params: {
   return html`
     <div class="cfg-map">
       <div class="cfg-map__header">
-        <span class="cfg-map__label">Custom entries</span>
+        <span class="cfg-map__label">${t("configForm.customEntries")}</span>
         <button
           type="button"
           class="cfg-map__add"
@@ -1244,12 +1039,12 @@ function renderMapField(params: {
           }}
         >
           <span class="cfg-map__add-icon">${icons.plus}</span>
-          Add Entry
+          ${t("configForm.addEntry")}
         </button>
       </div>
 
       ${visibleEntries.length === 0
-        ? html` <div class="cfg-map__empty">No custom entries.</div> `
+        ? html` <div class="cfg-map__empty">${t("configForm.noCustomEntries")}</div> `
         : html`
             <div class="cfg-map__items">
               ${visibleEntries.map(([key, entryValue]) => {
@@ -1269,7 +1064,7 @@ function renderMapField(params: {
                         <input
                           type="text"
                           class="cfg-input cfg-input--sm"
-                          placeholder="Key"
+                          placeholder=${t("configForm.key")}
                           .value=${key}
                           ?disabled=${disabled}
                           @change=${(e: Event) => {
@@ -1287,11 +1082,11 @@ function renderMapField(params: {
                           }}
                         />
                       </div>
-                      <openclaw-tooltip content="Remove entry">
+                      <openclaw-tooltip .content=${t("configForm.removeEntry")}>
                         <button
                           type="button"
                           class="cfg-map__item-remove"
-                          aria-label="Remove entry"
+                          aria-label=${t("configForm.removeEntry")}
                           ?disabled=${disabled}
                           @click=${() => {
                             const next = { ...value };
@@ -1313,7 +1108,7 @@ function renderMapField(params: {
                                   : ""}"
                                 placeholder=${sensitiveState.isRedacted
                                   ? REDACTED_PLACEHOLDER
-                                  : "JSON value"}
+                                  : t("configForm.jsonValue")}
                                 rows="2"
                                 .value=${sensitiveState.isRedacted ? "" : fallback}
                                 ?disabled=${disabled}

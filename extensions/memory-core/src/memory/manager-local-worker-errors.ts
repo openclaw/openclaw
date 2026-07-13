@@ -5,10 +5,10 @@ export const LOCAL_EMBEDDING_WORKER_ERROR_CODES = {
   ipcError: "LOCAL_EMBEDDING_WORKER_IPC_ERROR",
 } as const;
 
-export type LocalEmbeddingWorkerFailureCode =
+type LocalEmbeddingWorkerFailureCode =
   (typeof LOCAL_EMBEDDING_WORKER_ERROR_CODES)[keyof typeof LOCAL_EMBEDDING_WORKER_ERROR_CODES];
 
-export type LocalEmbeddingWorkerFailureError = Error & {
+type LocalEmbeddingWorkerFailureError = Error & {
   code: LocalEmbeddingWorkerFailureCode;
 };
 

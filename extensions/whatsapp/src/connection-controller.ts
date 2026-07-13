@@ -1,14 +1,13 @@
 // Whatsapp plugin module implements connection controller behavior.
 import type { GroupMetadata, WASocket, WAMessageKey, proto } from "baileys";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import {
-  registerWhatsAppConnectionController,
-  unregisterWhatsAppConnectionController,
-} from "./connection-controller-registry.js";
+import { WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY } from "./connection-controller-runtime-context.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
 import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
 import { computeBackoff, sleepWithAbort, type ReconnectPolicy } from "./reconnect.js";
+import { getWhatsAppRuntime } from "./runtime.js";
 import {
   createWaSocket,
   formatError,
@@ -221,6 +220,37 @@ type WhatsAppLoginWaitResult =
       error: unknown;
     };
 
+type CredentialPersistenceFailure = { error: unknown };
+
+async function waitForLoginSocket(params: {
+  wait: () => Promise<void>;
+  credentialPersistenceFailure?: Promise<CredentialPersistenceFailure>;
+}): Promise<void> {
+  if (!params.credentialPersistenceFailure) {
+    await params.wait();
+    return;
+  }
+  const outcome = await Promise.race([
+    params.wait().then(() => ({ kind: "connected" }) as const),
+    params.credentialPersistenceFailure.then((failure) => ({
+      kind: "credential-persistence-failed" as const,
+      failure,
+    })),
+  ]);
+  if (outcome.kind === "credential-persistence-failed") {
+    throw outcome.failure.error;
+  }
+}
+
+function throwIfCredentialPersistenceFailed(
+  getFailure?: () => CredentialPersistenceFailure | null,
+): void {
+  const failure = getFailure?.();
+  if (failure) {
+    throw failure.error;
+  }
+}
+
 export async function waitForWhatsAppLoginResult(params: {
   sock: WaSocket;
   authDir: string;
@@ -232,6 +262,12 @@ export async function waitForWhatsAppLoginResult(params: {
   socketTiming?: WhatsAppSocketTimingOptions;
   onQr?: (qr: string) => void;
   onSocketReplaced?: (sock: WaSocket) => void;
+  beforeCredentialPersistence?: () => Promise<void>;
+  onCredentialPersistenceError?: (error: unknown) => void;
+  onCredentialPersistenceTask?: (task: Promise<unknown>) => void;
+  waitForCredentialPersistence?: () => Promise<void>;
+  credentialPersistenceFailure?: Promise<CredentialPersistenceFailure>;
+  getCredentialPersistenceFailure?: () => CredentialPersistenceFailure | null;
 }): Promise<WhatsAppLoginWaitResult> {
   const wait = params.waitForConnection ?? waitForWaConnection;
   const createSocket = params.createSocket ?? createWaSocket;
@@ -251,6 +287,9 @@ export async function waitForWhatsAppLoginResult(params: {
         authDir: params.authDir,
         ...params.socketTiming,
         onQr: params.onQr,
+        beforeCredentialPersistence: params.beforeCredentialPersistence,
+        onCredentialPersistenceError: params.onCredentialPersistenceError,
+        onCredentialPersistenceTask: params.onCredentialPersistenceTask,
       });
       params.onSocketReplaced?.(currentSock);
       return null;
@@ -266,9 +305,15 @@ export async function waitForWhatsAppLoginResult(params: {
 
   while (true) {
     try {
-      await wait(currentSock, { timeout: "none" });
+      await waitForLoginSocket({
+        wait: async () => await wait(currentSock, { timeout: "none" }),
+        credentialPersistenceFailure: params.credentialPersistenceFailure,
+      });
+      await params.waitForCredentialPersistence?.();
+      throwIfCredentialPersistenceFailed(params.getCredentialPersistenceFailure);
       // Socket open only proves in-memory auth; require persisted creds before success.
       const persistedAuth = await readWebAuthExistsForDecision(params.authDir);
+      throwIfCredentialPersistenceFailed(params.getCredentialPersistenceFailure);
       if (persistedAuth.outcome === "unstable") {
         return {
           outcome: "failed",
@@ -322,6 +367,7 @@ export async function waitForWhatsAppLoginResult(params: {
           authDir: params.authDir,
           isLegacyAuthDir: params.isLegacyAuthDir,
           runtime: params.runtime,
+          beforeCredentialPersistence: params.beforeCredentialPersistence,
         });
         if (!cleared) {
           const existingAuth = await readWebAuthExistsForDecision(params.authDir);
@@ -379,6 +425,7 @@ export class WhatsAppConnectionController {
   private readonly disconnectRetryController = new AbortController();
 
   private current: WhatsAppLiveConnection | null = null;
+  private runtimeContextLease: { dispose: () => void } | null = null;
   private reconnectAttempts = 0;
   private lastHandledInboundAt: number | null = null;
 
@@ -545,6 +592,7 @@ export class WhatsAppConnectionController {
         ...(params.cachedGroupMetadata ? { cachedGroupMetadata: params.cachedGroupMetadata } : {}),
       });
       await waitForWaConnection(sock, { timeoutMs: this.socketTiming.connectTimeoutMs });
+      const channelRuntime = getWhatsAppRuntime().channel;
 
       this.socketRef.current = sock;
       const placeholderListener = {} as ManagedWhatsAppListener;
@@ -558,7 +606,20 @@ export class WhatsAppConnectionController {
       connection.listener = listener;
       this.current = connection;
       connection.unregisterTransportActivity = this.attachTransportActivityListener(sock);
-      registerWhatsAppConnectionController(this.accountId, this);
+      const previousRuntimeContextLease = this.runtimeContextLease;
+      // Outbound adapters and agent tools read this context outside the gateway account task,
+      // so the plugin-injected runtime is the shared owner for this internal capability.
+      this.runtimeContextLease = registerChannelRuntimeContext({
+        channelRuntime,
+        channelId: "whatsapp",
+        accountId: this.accountId,
+        capability: WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY,
+        context: this,
+        abortSignal: this.abortSignal,
+      });
+      // Publish the ready replacement before releasing the old lease. Runtime-context
+      // lease tokens keep stale disposal from unregistering the replacement.
+      previousRuntimeContextLease?.dispose();
       this.startTimers(connection, {
         onHeartbeat: params.onHeartbeat,
         onWatchdogTimeout: params.onWatchdogTimeout,
@@ -744,7 +805,8 @@ export class WhatsAppConnectionController {
   async shutdown(): Promise<void> {
     this.stopDisconnectRetries();
     await this.closeCurrentConnection();
-    unregisterWhatsAppConnectionController(this.accountId, this);
+    this.runtimeContextLease?.dispose();
+    this.runtimeContextLease = null;
   }
 
   private startTimers(

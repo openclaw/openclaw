@@ -20,7 +20,7 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -37,7 +37,10 @@ import {
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
+import {
+  isRecoverableTerminalSessionStatus,
+  recoverTerminalSessionEntryForVisibleTurn,
+} from "../../config/sessions/terminal-status.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
@@ -61,16 +64,19 @@ import {
   isAcpSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+  ModelSelectionLockedError,
+} from "../../sessions/model-overrides.js";
 import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import {
-  normalizeDeliveryChannelRoute,
-  normalizeSessionDeliveryFields,
-} from "../../utils/delivery-context.shared.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -94,40 +100,18 @@ import {
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
+import {
+  stripThreadFromSessionRoute,
+  stripThreadIdFromDeliveryContext,
+  stripThreadIdFromOrigin,
+} from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
-
-function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
-  const normalized = normalizeDeliveryChannelRoute(route);
-  if (!normalized?.thread) {
-    return normalized;
-  }
-  const { thread: _drop, ...withoutThread } = normalized;
-  return Object.keys(withoutThread).length > 0 ? withoutThread : undefined;
-}
 
 type ReplySessionEndReason = Extract<
   PluginHookSessionEndReason,
   "new" | "reset" | "idle" | "daily" | "unknown"
 >;
-
-function stripThreadIdFromDeliveryContext(
-  context: SessionEntry["deliveryContext"],
-): SessionEntry["deliveryContext"] {
-  if (!context || context.threadId == null || context.threadId === "") {
-    return context;
-  }
-  const { threadId: _threadId, ...rest } = context;
-  return Object.keys(rest).length > 0 ? rest : undefined;
-}
-
-function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["origin"] {
-  if (!origin || origin.threadId == null || origin.threadId === "") {
-    return origin;
-  }
-  const { threadId: _threadId, ...rest } = origin;
-  return Object.keys(rest).length > 0 ? rest : undefined;
-}
 
 function resolveExplicitSessionEndReason(matchedResetTriggerLower?: string): ReplySessionEndReason {
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
@@ -168,21 +152,6 @@ function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   return Boolean(provider && getCliSessionBinding(entry, provider));
 }
 
-function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
-  return status === "failed" || status === "timeout" || status === "killed";
-}
-
-function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): SessionEntry {
-  return {
-    ...entry,
-    status: undefined,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    abortedLastRun: undefined,
-  };
-}
-
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
@@ -204,10 +173,13 @@ export type SessionInitResult = {
   triggerBodyNormalized: string;
 };
 
-export type InitSessionStateParams = {
+type InitSessionStateParams = {
+  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
   ctx: MsgContext;
+  expectedExistingSessionId?: string;
+  pinExpectedExistingSession?: boolean;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
@@ -254,6 +226,7 @@ function resolveSessionConversationBindingContext(
 function resolveBoundConversationSessionKey(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
+  touch?: boolean;
   bindingContext?: {
     channel: string;
     accountId: string;
@@ -279,12 +252,15 @@ function resolveBoundConversationSessionKey(params: {
   if (!binding?.targetSessionKey) {
     return undefined;
   }
-  getSessionBindingService().touch(binding.bindingId);
+  if (params.touch !== false) {
+    getSessionBindingService().touch(binding.bindingId);
+  }
   return binding.targetSessionKey;
 }
 
 function resolveInitSessionStateAttemptContext(
-  params: InitSessionStateParams,
+  params: Pick<InitSessionStateParams, "cfg" | "ctx">,
+  options?: { touchConversationBinding?: boolean },
 ): InitSessionStateAttemptContext {
   const { cfg, ctx } = params;
   // Automated system events must not reset sessions or retarget conversation bindings.
@@ -302,6 +278,7 @@ function resolveInitSessionStateAttemptContext(
       cfg,
       ctx,
       bindingContext: conversationBindingContext,
+      touch: options?.touchConversationBinding,
     });
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
@@ -318,6 +295,43 @@ function resolveInitSessionStateAttemptContext(
     isSystemEvent,
     sessionCtxForState,
     storePath: resolveStorePath(cfg.session?.store, { agentId }),
+  };
+}
+
+type ReplySessionPreprocessingState = {
+  sessionEntry?: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+};
+
+/** Resolves durable ownership before utility preprocessing can invoke another model. */
+export function resolveReplySessionPreprocessingState(
+  params: Pick<InitSessionStateParams, "cfg" | "ctx">,
+): ReplySessionPreprocessingState {
+  const attemptContext = resolveInitSessionStateAttemptContext(params, {
+    touchConversationBinding: false,
+  });
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg: params.cfg,
+    agentId: attemptContext.agentId,
+    sessionKey: resolveSessionKey(
+      params.cfg.session?.scope ?? "per-sender",
+      attemptContext.sessionCtxForState,
+      normalizeMainKey(params.cfg.session?.mainKey),
+    ),
+  });
+  const sessionEntry = loadReplySessionInitializationSnapshot({
+    storePath: attemptContext.storePath,
+    sessionKey,
+  }).currentEntry;
+  const contextError = resolveAgentHarnessSessionContextError(sessionKey, sessionEntry);
+  if (contextError) {
+    throw new Error(contextError);
+  }
+  return {
+    sessionEntry,
+    sessionKey,
+    storePath: attemptContext.storePath,
   };
 }
 
@@ -555,6 +569,11 @@ async function initSessionStateAttemptLocked(
   if (archivedSessionError) {
     throw new Error(archivedSessionError);
   }
+  // Locked model selection is coupled to the current native session id. Reject before
+  // lifecycle cleanup so a reset cannot detach the durable harness binding.
+  if (resetTriggered && isModelSelectionLocked(entry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+  }
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -581,6 +600,12 @@ async function initSessionStateAttemptLocked(
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
+  const expectedExistingSessionId = params.expectedExistingSessionId?.trim() || undefined;
+  if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
+    throw new Error(`session rebound for sessionKey: ${sessionKey}`);
+  }
+  const pinExpectedExistingSession =
+    params.pinExpectedExistingSession === true && expectedExistingSessionId !== undefined;
   const requestedSessionId = params.requestedSessionId?.trim() || undefined;
   const requestedCurrentSession = Boolean(
     requestedSessionId && entry?.sessionId && entry.sessionId === requestedSessionId,
@@ -589,7 +614,10 @@ async function initSessionStateAttemptLocked(
   // resume signal is allowed to suppress configured idle/daily rollover.
   const reconnectResumeRequested =
     params.resumeRequestedSession === true && requestedCurrentSession;
-  const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
+  // Implicit expiry must preserve the same identity for model-locked native sessions too.
+  const lockedModelSelection = isModelSelectionLocked(entry);
+  const skipImplicitExpiry =
+    lockedModelSelection || (hasProviderOwnedSession(entry) && resetPolicy.configured !== true);
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
@@ -638,8 +666,10 @@ async function initSessionStateAttemptLocked(
     (entryFreshness?.fresh ?? false) &&
     isRecoverableTerminalSessionStatus(entry?.status);
   const freshEntry =
+    (lockedModelSelection && canReuseExistingEntry) ||
     (isSystemEvent && canReuseExistingEntry) ||
-    (((reconnectResumeRequested && canReuseExistingEntry) ||
+    (((pinExpectedExistingSession && canReuseExistingEntry) ||
+      (reconnectResumeRequested && canReuseExistingEntry) ||
       recoverTerminalVisibleEntry ||
       (entryFreshness?.fresh ?? false) ||
       (softResetAllowed && canReuseExistingEntry)) &&
@@ -939,16 +969,9 @@ async function initSessionStateAttemptLocked(
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
-  const threadIdFromSessionKey = parseSessionThreadInfoFast(
-    sessionCtxForState.SessionKey ?? sessionKey,
-  ).threadId;
-  const fallbackSessionFile = !sessionEntry.sessionFile
-    ? resolveSessionTranscriptPath(
-        sessionEntry.sessionId,
-        agentId,
-        ctx.MessageThreadId ?? threadIdFromSessionKey,
-      )
-    : undefined;
+  if (params.abortSignal?.aborted === true) {
+    throw new Error("reply session initialization aborted");
+  }
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
@@ -993,7 +1016,6 @@ async function initSessionStateAttemptLocked(
     activeSessionKey: sessionKey,
     agentId,
     expectedRevision: initializationSnapshot.revision,
-    fallbackSessionFile,
     maintenanceConfig,
     onArchiveError: (error, sourcePath) => {
       log.warn(
@@ -1008,8 +1030,11 @@ async function initSessionStateAttemptLocked(
         entry: sessionEntry,
         warning,
       }),
-    prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) =>
-      await prepareReplySessionParentFork({
+    prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
+      if (params.abortSignal?.aborted === true) {
+        throw new Error("reply session initialization aborted");
+      }
+      return await prepareReplySessionParentFork({
         agentId,
         alreadyForked,
         parentSessionKey,
@@ -1018,7 +1043,8 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         storePath,
         warn: (message) => log.warn(message),
-      }),
+      });
+    },
     previousEntry: previousSessionEntry,
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,

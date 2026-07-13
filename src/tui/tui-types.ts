@@ -8,6 +8,7 @@ export type TuiOptions = {
   url?: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
   session?: string;
   deliver?: boolean;
   thinking?: string;
@@ -21,7 +22,7 @@ export type TuiOptions = {
   forceProcessExitOnReturn?: boolean;
 };
 
-export type TuiExitReason = "exit" | "return-to-crestodian";
+type TuiExitReason = "exit" | "return-to-crestodian";
 
 export type TuiResult = {
   exitReason: TuiExitReason;
@@ -111,9 +112,9 @@ export type AgentSummary = {
   name?: string;
 };
 
-export type QueuedMessageMode = "steer" | "followUp";
+type QueuedMessageMode = "steer" | "followUp";
 
-export type QueuedMessage = {
+type QueuedMessage = {
   runId: string;
   text: string;
   mode: QueuedMessageMode;

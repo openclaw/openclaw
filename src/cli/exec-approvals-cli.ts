@@ -1,5 +1,6 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
@@ -12,6 +13,7 @@ import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   collectExecPolicyScopeSnapshots,
+  SESSION_EXEC_OVERRIDES_NOTE,
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
@@ -20,6 +22,7 @@ import {
   readExecApprovalsSnapshot,
   updateExecApprovals,
   type ExecApprovalsAgent,
+  type ExecApprovalsDefaults,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -34,6 +37,7 @@ type FileExecApprovalsSnapshot = {
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
+  resolvedDefaults?: Required<ExecApprovalsDefaults>;
 };
 
 type NativeExecApprovalAction = "allow" | "deny" | "prompt";
@@ -339,7 +343,7 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
 function formatCliError(err: unknown): string {
   const msg = formatErrorMessage(err);
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
-  const safe = sanitizeForLog(firstLine);
+  const safe = sanitizeForLog(expectDefined(firstLine, "exec approvals cli first line"));
   return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
 }
 
@@ -372,6 +376,7 @@ function buildEffectivePolicyReport(params: {
   configLoad: ConfigLoadResult;
   source: ApprovalsTargetSource;
   approvals?: ExecApprovalsFile;
+  resolvedDefaults?: Required<ExecApprovalsDefaults>;
   hostPath: string;
   nativePolicy: boolean;
 }): EffectivePolicyReport {
@@ -396,13 +401,23 @@ function buildEffectivePolicyReport(params: {
           "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
       };
     }
+    if (!params.resolvedDefaults) {
+      return {
+        scopes: [],
+        note: "This node does not expose a complete resolved host policy, so Effective Policy is unavailable.",
+      };
+    }
     return {
       scopes: collectExecPolicyScopeSnapshots({
         cfg,
         approvals: params.approvals,
         hostPath: params.hostPath,
+        hostDefaults: params.resolvedDefaults,
+        hostDefaultSource: "node-reported resolved defaults",
       }),
-      note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+      note:
+        "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy. " +
+        SESSION_EXEC_OVERRIDES_NOTE,
     };
   }
   if (!cfg) {
@@ -417,7 +432,9 @@ function buildEffectivePolicyReport(params: {
       approvals: params.approvals,
       hostPath: params.hostPath,
     }),
-    note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+    note:
+      "Effective exec policy is the host approvals file intersected with requested tools.exec policy. " +
+      SESSION_EXEC_OVERRIDES_NOTE,
   };
 }
 
@@ -746,6 +763,7 @@ export function registerExecApprovalsCli(program: Command) {
           configLoad,
           source,
           approvals: fileSnapshot?.file,
+          resolvedDefaults: fileSnapshot?.resolvedDefaults,
           hostPath: fileSnapshot?.path ?? "",
           nativePolicy,
         });

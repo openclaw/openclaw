@@ -2,8 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import {
   openOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,
@@ -278,7 +279,7 @@ function seedCronJobs(db: DatabaseSync, count: number): void {
       job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at
     ) VALUES (
       ?, ?, ?, NULL, ?, NULL, ?, ?, ?, 'every', NULL, NULL, ?, ?, NULL, NULL,
-      'isolated', 'now', 'agentTurn', ?, 'openai/gpt-5.5', NULL, NULL, 60,
+      'isolated', 'now', 'agentTurn', ?, 'openai/gpt-5.6-luna', NULL, NULL, 60,
       0, NULL, 1, NULL, 'announce', 'telegram', ?, NULL, 'bench-account',
       1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
       NULL, NULL, NULL, ?, NULL, ?, 'completed', NULL, ?, 0, 0, 0, 'sent',
@@ -340,7 +341,7 @@ function seedCronRunLogs(db: DatabaseSync, count: number): void {
       ts,
       20 + (i % 1_000),
       ts + 60_000,
-      "openai/gpt-5.5",
+      "openai/gpt-5.6-luna",
       "openai",
       100 + (i % 2_000),
       JSON.stringify({ ts, jobId, action: "finished" }),
@@ -459,13 +460,13 @@ function percentile(values: number[], pct: number): number {
   }
   const sorted = values.toSorted((left, right) => left - right);
   const index = Math.min(sorted.length - 1, Math.ceil((pct / 100) * sorted.length) - 1);
-  return Number(sorted[index].toFixed(3));
+  return Number(expectDefined(sorted[index], `SQLite benchmark percentile ${pct}`).toFixed(3));
 }
 
 function runTimedQuery(
   db: DatabaseSync,
   query: string,
-  params: unknown[],
+  params: SQLInputValue[],
   runs: number,
 ): TimedQuery {
   const statement = db.prepare(query);

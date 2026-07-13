@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+/* oxlint-disable typescript/no-base-to-string -- fetch mocks normalize standard RequestInfo inputs exactly as the production fetch boundary does. */
 import {
   existsSync,
   mkdirSync,
@@ -29,6 +30,7 @@ const REPOSITORY = "openclaw/openclaw";
 const WORKFLOW_PATH = ".github/workflows/plugin-npm-release.yml";
 const ARTIFACT_NAME = "plugin-npm-package-meta-2026.7.1-beta.3";
 const PACKAGE_NAME = "@openclaw/meta-provider";
+const PRODUCER_JOB_NAME = `Preflight plugin npm package (${PACKAGE_NAME})`;
 const PACKAGE_VERSION = "2026.7.1-beta.3";
 const PACKAGE_DIR = "extensions/meta";
 const TARBALL_NAME = "openclaw-meta-provider-2026.7.1-beta.3.tgz";
@@ -365,9 +367,26 @@ function createFixture(
   const zipPath = path.join(root, "artifact.zip");
   const metadataPath = path.join(root, "artifact.json");
   const workflowRunPath = path.join(root, "run.json");
+  const workflowJobsPath = path.join(root, "jobs.json");
   writeFileSync(zipPath, zip);
   writeArtifactMetadata(metadataPath, zip);
   writeWorkflowRunMetadata(workflowRunPath);
+  writeFileSync(
+    workflowJobsPath,
+    `${JSON.stringify({
+      total_count: 1,
+      jobs: [
+        {
+          name: PRODUCER_JOB_NAME,
+          run_id: RUN_ID,
+          run_attempt: RUN_ATTEMPT,
+          head_sha: WORKFLOW_SHA,
+          status: "completed",
+          conclusion: "success",
+        },
+      ],
+    })}\n`,
+  );
   return {
     artifactDir,
     created,
@@ -378,6 +397,7 @@ function createFixture(
     root,
     tarball,
     workflowRunPath,
+    workflowJobsPath,
     zip,
     zipPath,
   };
@@ -697,6 +717,38 @@ describe("plugin publication artifact", () => {
     }
   });
 
+  it("accepts only the exact successful producer job for same-run publication", () => {
+    const fixture = createFixture();
+    const workflowRun = JSON.parse(readFileSync(fixture.workflowRunPath, "utf8"));
+    workflowRun.status = "in_progress";
+    workflowRun.conclusion = null;
+    writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
+
+    expect(
+      verifyFixture(fixture, {
+        consumerRunAttempt: RUN_ATTEMPT,
+        producerJobName: PRODUCER_JOB_NAME,
+        runStatePolicy: "same-run-producer-success",
+        workflowJobsMetadataPath: fixture.workflowJobsPath,
+      }),
+    ).toMatchObject({ producerRunAttempt: RUN_ATTEMPT, producerRunId: RUN_ID });
+
+    const jobs = JSON.parse(readFileSync(fixture.workflowJobsPath, "utf8"));
+    jobs.jobs[0].conclusion = "failure";
+    writeFileSync(fixture.workflowJobsPath, `${JSON.stringify(jobs)}\n`);
+    const failedFixture = createFixture();
+    writeFileSync(failedFixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
+    writeFileSync(failedFixture.workflowJobsPath, `${JSON.stringify(jobs)}\n`);
+    expect(() =>
+      verifyFixture(failedFixture, {
+        consumerRunAttempt: RUN_ATTEMPT,
+        producerJobName: PRODUCER_JOB_NAME,
+        runStatePolicy: "same-run-producer-success",
+        workflowJobsMetadataPath: failedFixture.workflowJobsPath,
+      }),
+    ).toThrow("producer job did not complete successfully");
+  });
+
   it("retries bounded metadata, attempt, and archive failures against the exact run attempt", async () => {
     const zip = createZip([{ bytes: Buffer.from("proof"), name: "proof.txt" }]);
     const artifactMetadata = {
@@ -743,7 +795,7 @@ describe("plugin publication artifact", () => {
         callCounts.archive += 1;
         return callCounts.archive === 1
           ? new Response("retry", { status: 502 })
-          : new Response(zip, {
+          : new Response(zip as unknown as BodyInit, {
               status: 200,
               headers: { "content-length": String(zip.length) },
             });
@@ -837,7 +889,7 @@ describe("plugin publication artifact", () => {
           return Response.json(workflowJobs);
         }
         if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}/zip`)) {
-          return new Response(zip, {
+          return new Response(zip as unknown as BodyInit, {
             status: 200,
             headers: { "content-length": String(zip.length) },
           });
@@ -913,7 +965,7 @@ describe("plugin publication artifact", () => {
 
     const tamperFixture = createFixture();
     const tampered = Buffer.from(tamperFixture.zip);
-    tampered[35] ^= 0xff;
+    tampered[35] = tampered.readUInt8(35) ^ 0xff;
     writeFileSync(tamperFixture.zipPath, tampered);
     expect(() => verifyFixture(tamperFixture)).toThrow(/digest/u);
   });
@@ -1038,7 +1090,7 @@ describe("plugin publication artifact", () => {
   it("caps publication JSON and tarball members before ZIP expansion", () => {
     const fixture = createFixture();
     const manifest = readFileSync(fixture.created.manifestPath);
-    const oversizedManifest = Buffer.alloc(2 * 1024 * 1024 + 1, 0x20);
+    const oversizedManifest = Buffer.alloc(4 * 1024 * 1024 + 1, 0x20);
 
     replaceArtifactZip(fixture, [
       { bytes: fixture.tarball, name: TARBALL_NAME },

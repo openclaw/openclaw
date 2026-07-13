@@ -3,11 +3,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
+import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/path-constants.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
-import { testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -23,6 +23,7 @@ const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
 
 let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
 let sharedTempRoot: string;
+let rateLimitEpochMs = Date.now();
 
 function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
   if (!startedServer) {
@@ -45,6 +46,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  vi.restoreAllMocks();
   if (!startedServer) {
     return;
   }
@@ -172,7 +174,8 @@ async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
 }
 
 beforeEach(() => {
-  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
+  rateLimitEpochMs += 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
 });
 
 describe("gateway config methods", () => {
@@ -400,6 +403,61 @@ describe("gateway config methods", () => {
     } finally {
       await fs.rm(configPath, { force: true });
       resetConfigRuntimeState();
+    }
+  });
+
+  it("round-trips prototype-like browser profile names through config.patch", async () => {
+    const original = await getCurrentConfigObject();
+    const profileNames = ["constructor", "prototype"] as const;
+
+    try {
+      const create = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({
+          browser: {
+            profiles: Object.fromEntries(
+              profileNames.map((name, index) => [
+                name,
+                {
+                  cdpPort: 18991 + index,
+                  color: "#0066CC",
+                  constructor: { polluted: true },
+                  prototype: { polluted: true },
+                },
+              ]),
+            ),
+          },
+        }),
+        baseHash: original.hash,
+      });
+      expect(create.ok).toBe(true);
+
+      const afterCreate = await getCurrentConfigObject();
+      const browser = requireConfigObject(afterCreate.config.browser, "browser");
+      const profiles = requireConfigObject(browser.profiles, "browser.profiles");
+      for (const [index, name] of profileNames.entries()) {
+        const profile = requireConfigObject(profiles[name], `browser.profiles.${name}`);
+        expect(profile.cdpPort).toBe(18991 + index);
+        expect(Object.hasOwn(profile, "constructor")).toBe(false);
+        expect(Object.hasOwn(profile, "prototype")).toBe(false);
+      }
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+
+      const remove = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({
+          browser: { profiles: { constructor: null, prototype: null } },
+        }),
+        baseHash: afterCreate.hash,
+      });
+      expect(remove.ok).toBe(true);
+
+      const afterRemove = await getCurrentConfigObject();
+      const afterBrowser = requireConfigObject(afterRemove.config.browser, "browser");
+      const afterProfiles = requireConfigObject(afterBrowser.profiles, "browser.profiles");
+      for (const name of profileNames) {
+        expect(Object.hasOwn(afterProfiles, name)).toBe(false);
+      }
+    } finally {
+      await restoreConfigFileForTest(original);
     }
   });
 
@@ -1057,11 +1115,9 @@ describe("gateway server sessions", () => {
     expect(patched.ok).toBe(true);
     expect(patched.payload?.key).toBe("agent:ops:work");
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      { thinkingLevel?: string }
-    >;
-    expect(stored["agent:ops:work"]?.thinkingLevel).toBe("medium");
-    expect(stored.main).toBeUndefined();
+    expect(
+      loadSessionEntry({ agentId: "ops", sessionKey: "agent:ops:work", storePath })?.thinkingLevel,
+    ).toBe("medium");
+    expect(loadSessionEntry({ agentId: "ops", sessionKey: "main", storePath })).toBeUndefined();
   });
 });

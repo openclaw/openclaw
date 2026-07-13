@@ -1,11 +1,12 @@
 // Message channel tests cover channel id normalization and routing helpers.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { NATIVE_APPROVAL_CHANNELS } from "./message-channel-constants.js";
 import {
-  NATIVE_APPROVAL_CHANNELS,
+  isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
   isNativeApprovalChannel,
@@ -60,6 +61,16 @@ describe("message-channel", () => {
     expect(resolveGatewayMessageChannel(" imsg ")).toBe("imessage");
     expect(resolveGatewayMessageChannel("web")).toBeUndefined();
     expect(resolveGatewayMessageChannel("nope")).toBeUndefined();
+  });
+
+  it("classifies ephemeral Gateway client modes", () => {
+    for (const mode of ["cli", "backend", "probe", " CLI "]) {
+      expect(isEphemeralGatewayClient({ mode })).toBe(true);
+    }
+    // "test" stays tracked: suites use test-mode clients as real-client stand-ins.
+    for (const mode of ["ui", "webchat", "node", "test", "unknown", undefined]) {
+      expect(isEphemeralGatewayClient({ mode })).toBe(false);
+    }
   });
 
   it("normalizes plugin aliases when registered", () => {

@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -29,13 +29,25 @@ import {
 } from "../infra/exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import { resolvePolicyTargetCandidatePath } from "../infra/exec-command-resolution.js";
-import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
-import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
+import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
+import {
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import type {
+  ExecApprovalFollowupFactory,
+  ExecApprovalFollowupOutcome,
+} from "./bash-tools.exec-types.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
 type SendExecApprovalFollowupResult =
   typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
+type BuildExecApprovalFollowupTarget =
+  typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalFollowupTarget;
+type ExecApprovalFollowupTarget = Parameters<BuildExecApprovalFollowupTarget>[0];
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type BuildExecApprovalFollowupTargetMock = (
   value: ExecApprovalFollowupTarget,
@@ -155,6 +167,7 @@ const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   ),
 );
 const runExecProcessMock = vi.hoisted(() => vi.fn());
+const markBackgroundedMock = vi.hoisted(() => vi.fn());
 const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
   vi.fn<SendExecApprovalFollowupResult>(async () => undefined),
 );
@@ -222,7 +235,8 @@ vi.mock("./bash-tools.exec-runtime.js", () => ({
 }));
 
 vi.mock("./bash-process-registry.js", () => ({
-  markBackgrounded: vi.fn(),
+  getActiveBackgroundExecSessionCount: vi.fn(() => 0),
+  markBackgrounded: markBackgroundedMock,
   tail: vi.fn((value) => value),
 }));
 
@@ -291,6 +305,7 @@ describe("processGatewayAllowlist", () => {
   });
 
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     resetDiagnosticEventsForTest();
     buildExecApprovalPendingToolResultMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReset();
@@ -341,6 +356,7 @@ describe("processGatewayAllowlist", () => {
       askFallback: "deny",
     });
     runExecProcessMock.mockReset();
+    markBackgroundedMock.mockReset();
     sendExecApprovalFollowupResultMock.mockReset();
     enforceStrictInlineEvalApprovalBoundaryMock.mockReset();
     enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation((value) => ({
@@ -365,6 +381,10 @@ describe("processGatewayAllowlist", () => {
       sentApproverDms: false,
       unavailableReason: null,
     });
+  });
+
+  afterEach(() => {
+    resetGatewayWorkAdmission();
   });
 
   function runGatewayAllowlist(
@@ -996,7 +1016,7 @@ describe("processGatewayAllowlist", () => {
     expect(runExecProcessMock).not.toHaveBeenCalled();
   });
 
-  it("rejects auto-review when the locked policy commit sees always-ask tightening", async () => {
+  it("binds auto-review to the evaluated snapshot before the locked policy commit", async () => {
     const command = "echo reviewed";
     await configurePlanBackedCommand({ command });
     commitExecAuthorizationMock.mockRejectedValueOnce(new Error("approval changed"));
@@ -1010,7 +1030,17 @@ describe("processGatewayAllowlist", () => {
     ).rejects.toThrow("approval changed");
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        authorization: expect.objectContaining({ source: "auto-review", ask: "on-miss" }),
+        authorization: expect.objectContaining({
+          source: "auto-review",
+          ask: "on-miss",
+          policySnapshot: {
+            security: "full",
+            ask: "off",
+            askFallback: "deny",
+            autoAllowSkills: false,
+            allowlistRules: [],
+          },
+        }),
       }),
     );
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
@@ -2000,6 +2030,136 @@ EOF`,
     },
   );
 
+  it("waits outside admission, then atomically hands an approved process to the registry", async () => {
+    let resolveApproval: (decision: ExecApprovalDecision) => void = () => {};
+    const approval = new Promise<ExecApprovalDecision>((resolve) => {
+      resolveApproval = resolve;
+    });
+    let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
+    const outcome = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
+      resolveOutcome = resolve;
+    });
+    let allowSpawn: () => void = () => {};
+    const spawnAllowed = new Promise<void>((resolve) => {
+      allowSpawn = resolve;
+    });
+    let announceSpawn: () => void = () => {};
+    const spawnStarted = new Promise<void>((resolve) => {
+      announceSpawn = resolve;
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockReturnValue(approval);
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    commitExecAuthorizationMock.mockImplementation(async () => {
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    });
+    runExecProcessMock.mockImplementation(async () => {
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      announceSpawn();
+      await spawnAllowed;
+      return { session: { id: "sess-atomic" }, promise: outcome };
+    });
+    markBackgroundedMock.mockImplementation(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "feishu",
+    });
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    resolveApproval("allow-once");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(markBackgroundedMock).not.toHaveBeenCalled();
+
+    suspension?.release();
+    await spawnStarted;
+    expect(
+      createSafeGatewayRestartPreflight({
+        getQueueSize: () => 0,
+        getPendingReplies: () => 0,
+        getEmbeddedRuns: () => 0,
+        getCronRuns: () => 0,
+        getBackgroundExecSessions: () => 0,
+        getActiveTasks: () => 0,
+        getTaskBlockers: () => [],
+      }),
+    ).toMatchObject({
+      safe: false,
+      counts: { rootRequests: 1, totalActive: 1 },
+      blockers: [{ kind: "root-request", count: 1 }],
+    });
+    allowSpawn();
+    await vi.waitFor(() => {
+      expect(markBackgroundedMock).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    expect(commitExecAuthorizationMock).toHaveBeenCalledOnce();
+    expect(runExecProcessMock).toHaveBeenCalledOnce();
+
+    resolveOutcome({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      aggregated: "done",
+    });
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("denies a detached approved process when restart drain wins admission", async () => {
+    let resolveApproval: (decision: ExecApprovalDecision) => void = () => {};
+    resolveApprovalDecisionOrUndefinedMock.mockReturnValue(
+      new Promise<ExecApprovalDecision>((resolve) => {
+        resolveApproval = resolve;
+      }),
+    );
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "feishu",
+    });
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
+    });
+
+    markGatewayRestartDraining();
+    resolveApproval("allow-once");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "Exec denied (gateway id=req-1, gateway-draining): find . -maxdepth 1",
+      );
+    });
+    expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
+    expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(markBackgroundedMock).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
   it("keeps the fire-and-forget path for channels without native approval clients", async () => {
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
     createExecApprovalDecisionStateMock.mockReturnValue({
@@ -2100,9 +2260,39 @@ EOF`,
 
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        authorization: expect.objectContaining({ source: "explicit-approval" }),
+        authorization: expect.objectContaining({
+          source: "explicit-approval",
+          policySnapshot: expect.any(Object),
+        }),
       }),
     );
+  });
+
+  it("rejects explicit foreground allow-once when the locked policy snapshot changed", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    commitExecAuthorizationMock.mockRejectedValueOnce(new Error("approval changed"));
+
+    await expect(
+      runGatewayAllowlist({
+        command: "pwd",
+        turnSourceChannel: "webchat",
+      }),
+    ).rejects.toThrow("approval changed");
+
+    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          source: "explicit-approval",
+          policySnapshot: expect.any(Object),
+        }),
+      }),
+    );
+    expect(runExecProcessMock).not.toHaveBeenCalled();
   });
 
   it("binds explicit allow-always persistence to its evaluated policy snapshot", async () => {
@@ -2162,7 +2352,7 @@ EOF`,
             ask: "off",
             askFallback: "deny",
             autoAllowSkills: false,
-            allowlistRuleKeys: [],
+            allowlistRules: [],
           },
           requireAutoAllowSkills: false,
           requireExactCommandApproval: false,

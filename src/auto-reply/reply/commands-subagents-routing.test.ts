@@ -10,13 +10,13 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import {
-  COMMAND,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
   stopWithText,
 } from "./commands-subagents-dispatch.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
+import { COMMAND } from "./commands-subagents/shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const listControlledSubagentRunsMock = vi.hoisted(() => vi.fn(() => []));
