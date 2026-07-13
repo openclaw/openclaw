@@ -303,6 +303,9 @@ async function requestCodexAppServerUsageLazy(options: {
       config: options.config,
       startOptions: options.startOptions,
       isolated: true,
+      // Keep isolated-client shutdown cheap so cleanup after a hung read cannot
+      // breach the usage deadline; the reserve below leaves room for it.
+      isolatedShutdown: CODEX_USAGE_ISOLATED_SHUTDOWN,
     },
     async (request) => {
       const rateLimits = await request({ method: "account/rateLimits/read" });
@@ -315,11 +318,19 @@ async function requestCodexAppServerUsageLazy(options: {
   );
 }
 
-// Cap the best-effort identity read, and always leave a margin before the
-// shared usage deadline so this read cannot convert a successful rate-limit
-// fetch into an outer timeout.
+// Isolated usage-read shutdown: a throwaway read-only child, so force-kill
+// quickly and wait only briefly for exit. Its total bounds the reserve below.
+const CODEX_USAGE_ISOLATED_SHUTDOWN = { forceKillDelayMs: 200, exitTimeoutMs: 300 } as const;
+
+// Cap the best-effort identity read, and reserve enough of the shared usage
+// deadline for the isolated-client shutdown plus a margin so this read cannot
+// convert a successful rate-limit fetch into an outer timeout.
 const CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS = 4_000;
 const CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS = 250;
+const CODEX_USAGE_DEADLINE_RESERVE_MS =
+  CODEX_USAGE_ISOLATED_SHUTDOWN.forceKillDelayMs +
+  CODEX_USAGE_ISOLATED_SHUTDOWN.exitTimeoutMs +
+  CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS;
 
 async function readCodexAccountEmailBestEffort(
   request: (params: { method: string; requestParams?: unknown }) => Promise<unknown>,
@@ -327,7 +338,7 @@ async function readCodexAccountEmailBestEffort(
 ): Promise<string | undefined> {
   const boundMs = Math.min(
     CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS,
-    deadline - Date.now() - CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS,
+    deadline - Date.now() - CODEX_USAGE_DEADLINE_RESERVE_MS,
   );
   // No usable budget left after the rate-limit read: keep the windows and skip
   // identity rather than risk tripping the outer timeout.

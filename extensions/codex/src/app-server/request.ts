@@ -133,6 +133,10 @@ export async function withCodexAppServerJsonClient<T>(
     sessionKey?: string;
     sessionId?: string;
     isolated?: boolean;
+    // Bounds the isolated-client shutdown. Callers on a tight result deadline
+    // pass a small budget so cleanup cannot breach the outer timeout; defaults
+    // to the conservative graceful/force-kill window used elsewhere.
+    isolatedShutdown?: { exitTimeoutMs?: number; forceKillDelayMs?: number };
   },
   run: (request: CodexAppServerScopedRequest) => Promise<T>,
 ): Promise<T> {
@@ -206,7 +210,10 @@ export async function withCodexAppServerJsonClient<T>(
               // The stdio bin shim does not always propagate stdin EOF to the
               // underlying codex binary, so the unref'd close() path can leave
               // the child running and keep the parent's event loop alive.
-              await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+              await client.closeAndWait({
+                exitTimeoutMs: params.isolatedShutdown?.exitTimeoutMs ?? 2_000,
+                forceKillDelayMs: params.isolatedShutdown?.forceKillDelayMs ?? 250,
+              });
             } else {
               releaseLeasedSharedCodexAppServerClient(client);
             }

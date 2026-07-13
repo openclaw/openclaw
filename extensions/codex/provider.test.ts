@@ -658,6 +658,7 @@ describe("codex provider", () => {
             args: ["app-server", "--listen", "stdio://"],
           }),
           isolated: true,
+          isolatedShutdown: { forceKillDelayMs: 200, exitTimeoutMs: 300 },
         }),
         expect.any(Function),
       );
@@ -729,7 +730,7 @@ describe("codex provider", () => {
         provider.fetchUsageSnapshot?.({
           provider: "openai",
           token: appServerMarkerToken(),
-          timeoutMs: 300,
+          timeoutMs: 900,
           config: {},
           env: {},
           fetchFn: fetch,
