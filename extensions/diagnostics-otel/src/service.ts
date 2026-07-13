@@ -2985,6 +2985,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.outcome": evt.outcome,
         };
         addRunAttrs(spanAttrs, evt);
+        if (otel?.sessionAttribute && evt.sessionKey) {
+          const hashed = crypto.createHash("sha256").update(evt.sessionKey).digest("hex");
+          spanAttrs["langfuse.session.id"] = hashed;
+          spanAttrs["session.id"] = hashed;
+          spanAttrs["gen_ai.conversation.id"] = hashed;
+        }
         if (evt.blockedBy) {
           spanAttrs["openclaw.blocked_by"] = lowCardinalityAttr(evt.blockedBy, "unknown");
         }
@@ -3078,6 +3084,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.harness.items.completed"] = evt.itemLifecycle.completedCount;
           spanAttrs["openclaw.harness.items.active"] = evt.itemLifecycle.activeCount;
         }
+        if (otel?.sessionAttribute && evt.sessionKey) {
+          const hashed = crypto.createHash("sha256").update(evt.sessionKey).digest("hex");
+          spanAttrs["langfuse.session.id"] = hashed;
+          spanAttrs["session.id"] = hashed;
+          spanAttrs["gen_ai.conversation.id"] = hashed;
+        }
         const trustedTrace = trustedTraceContext(evt, metadata);
         const trackedSpan = trustedTrace?.spanId
           ? activeTrustedSpans.get(trustedTrace.spanId)
@@ -3121,6 +3133,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "error.type": errorType,
           ...(evt.cleanupFailed ? { "openclaw.harness.cleanup_failed": true } : {}),
         };
+        if (otel?.sessionAttribute && evt.sessionKey) {
+          const hashed = crypto.createHash("sha256").update(evt.sessionKey).digest("hex");
+          spanAttrs["langfuse.session.id"] = hashed;
+          spanAttrs["session.id"] = hashed;
+          spanAttrs["gen_ai.conversation.id"] = hashed;
+        }
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
           spanWithDuration("openclaw.harness.run", spanAttrs, evt.durationMs, {
