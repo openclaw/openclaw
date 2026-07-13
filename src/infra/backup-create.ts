@@ -252,15 +252,6 @@ async function writeTarArchiveWithRetry(params: {
     : ` (after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`;
   throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
 }
-
-export const testApi = {
-  writeArchiveStreamToFile,
-  writeTarArchiveWithRetry,
-  isTarEofRaceError,
-  createBackupVolatileStatCache,
-};
-export { testApi as __test };
-
 async function resolveOutputPath(params: {
   output?: string;
   nowMs: number;
@@ -508,7 +499,7 @@ function normalizeBackupFilterPath(value: string): string {
   return value.replaceAll("\\", "/").replace(/\/+$/u, "");
 }
 
-export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean {
+function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean {
   const normalizedStateDir = normalizeBackupFilterPath(stateDir);
   const extensionsPrefix = `${normalizedStateDir}/extensions/`;
 

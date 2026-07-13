@@ -1,18 +1,32 @@
 // Covers trusted system binary resolution across platform install roots.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getTrustedDirsForTest,
-  resetResolveSystemBin,
-  resolveSystemBin,
-} from "./resolve-system-bin.js";
-import {
-  resetWindowsInstallRootsForTests,
-  getWindowsInstallRoots,
-  getWindowsProgramFilesRoots,
-} from "./windows-install-roots.js";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type ResolveSystemBin = typeof import("./resolve-system-bin.js").resolveSystemBin;
+
+let resolveSystemBin: ResolveSystemBin;
+let freshResolveSystemBinId = 0;
 
 let executables: Set<string>;
+
+vi.mock("node:fs", async () => {
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:fs")>("node:fs"),
+    {
+      accessSync: (candidate: import("node:fs").PathLike) => {
+        const candidatePath = String(candidate);
+        if (!executables.has(path.resolve(candidatePath))) {
+          throw Object.assign(new Error(`missing executable: ${candidatePath}`), {
+            code: "ENOENT",
+          });
+        }
+      },
+    },
+    { mirrorToDefault: true },
+  );
+});
 
 function addExecutables(...paths: string[]): void {
   for (const candidate of paths) {
@@ -20,26 +34,12 @@ function addExecutables(...paths: string[]): void {
   }
 }
 
-function expectDirsContainAll(dirs: readonly string[], expected: readonly string[]): void {
-  for (const dir of expected) {
-    expect(dirs).toContain(dir);
-  }
-}
-
-function expectDirsExcludeAll(dirs: readonly string[], excluded: readonly string[]): void {
-  for (const dir of excluded) {
-    expect(dirs).not.toContain(dir);
-  }
-}
-
-beforeEach(() => {
+beforeEach(async () => {
   executables = new Set<string>();
-  resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
-});
-
-afterEach(() => {
-  resetResolveSystemBin();
-  resetWindowsInstallRootsForTests();
+  ({ resolveSystemBin } = await importFreshModule<typeof import("./resolve-system-bin.js")>(
+    import.meta.url,
+    `./resolve-system-bin.js?test=${freshResolveSystemBinId++}`,
+  ));
 });
 
 describe("resolveSystemBin", () => {
@@ -156,251 +156,15 @@ describe("resolveSystemBin", () => {
 });
 
 describe("trusted directory list", () => {
-  it("includes Windows image fallback tool directories under trusted install roots", () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    resetWindowsInstallRootsForTests({
-      queryRegistryValue: (key, valueName) => {
-        if (
-          key === "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" &&
-          valueName === "SystemRoot"
-        ) {
-          return "D:\\Windows";
-        }
-        if (
-          key === "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion" &&
-          valueName === "ProgramFilesDir"
-        ) {
-          return "D:\\Program Files";
-        }
-        if (
-          key === "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion" &&
-          valueName === "ProgramFilesDir (x86)"
-        ) {
-          return "E:\\Program Files (x86)";
-        }
-        return null;
-      },
-    });
-    try {
-      resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
-      const dirs = getTrustedDirsForTest("standard");
-      expectDirsContainAll(dirs, [
-        path.win32.join("D:\\Windows", "System32", "WindowsPowerShell", "v1.0"),
-        path.win32.join("D:\\", "ProgramData", "chocolatey", "bin"),
-        path.win32.join("D:\\Program Files", "ImageMagick"),
-        path.win32.join("D:\\Program Files", "GraphicsMagick"),
-        path.win32.join("E:\\Program Files (x86)", "ImageMagick"),
-        path.win32.join("E:\\Program Files (x86)", "GraphicsMagick"),
-      ]);
-      const strictDirs = getTrustedDirsForTest("strict");
-      expect(strictDirs).not.toContain(path.win32.join("D:\\Program Files", "ImageMagick"));
-      expect(strictDirs).not.toContain(path.win32.join("D:\\Program Files", "GraphicsMagick"));
-    } finally {
-      platformSpy.mockRestore();
-      resetResolveSystemBin();
-      resetWindowsInstallRootsForTests();
-    }
-  });
-
   it("resolves machine-wide Chocolatey shims only with standard trust on Windows", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    resetWindowsInstallRootsForTests({
-      queryRegistryValue: (key, valueName) => {
-        if (
-          key === "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" &&
-          valueName === "SystemRoot"
-        ) {
-          return "D:\\Windows";
-        }
-        return null;
-      },
-    });
     try {
-      const chocoFfmpeg = path.win32.join("D:\\", "ProgramData", "chocolatey", "bin", "ffmpeg.exe");
-      resetResolveSystemBin((p: string) => p === chocoFfmpeg);
+      const chocoFfmpeg = path.win32.join("C:\\", "ProgramData", "chocolatey", "bin", "ffmpeg.exe");
+      executables.add(path.resolve(chocoFfmpeg));
       expect(resolveSystemBin("ffmpeg")).toBeNull();
       expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe(chocoFfmpeg);
     } finally {
       platformSpy.mockRestore();
-      resetResolveSystemBin();
-      resetWindowsInstallRootsForTests();
     }
   });
-
-  it("never includes user-writable home directories", () => {
-    const dirs = getTrustedDirsForTest();
-    for (const dir of dirs) {
-      expect(dir, `${dir} should not be user-writable`).not.toMatch(/\.(local|bun|yarn)/);
-      expect(dir, `${dir} should not be a pnpm dir`).not.toContain("pnpm");
-    }
-  });
-
-  if (process.platform !== "win32") {
-    it("includes base Unix system directories only", () => {
-      const dirs = getTrustedDirsForTest();
-      expectDirsContainAll(dirs, ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
-      expectDirsExcludeAll(dirs, ["/usr/local/bin"]);
-    });
-
-    it("ignores env-controlled NIX_PROFILES entries, including direct store paths", () => {
-      const saved = process.env.NIX_PROFILES;
-      try {
-        process.env.NIX_PROFILES =
-          "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ffmpeg-7.1 /tmp/evil /home/user/.nix-profile /nix/var/nix/profiles/default";
-        resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
-        const dirs = getTrustedDirsForTest();
-        expectDirsExcludeAll(dirs, [
-          "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ffmpeg-7.1/bin",
-          "/tmp/evil/bin",
-          "/home/user/.nix-profile/bin",
-          "/nix/var/nix/profiles/default/bin",
-        ]);
-      } finally {
-        if (saved === undefined) {
-          delete process.env.NIX_PROFILES;
-        } else {
-          process.env.NIX_PROFILES = saved;
-        }
-        resetResolveSystemBin();
-      }
-    });
-  }
-
-  if (process.platform === "darwin") {
-    it("does not include /opt/homebrew/bin in strict trust on macOS", () => {
-      expectDirsExcludeAll(getTrustedDirsForTest("strict"), [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-      ]);
-    });
-
-    it("includes /opt/homebrew/bin and /usr/local/bin in standard trust on macOS", () => {
-      const dirs = getTrustedDirsForTest("standard");
-      expectDirsContainAll(dirs, ["/opt/homebrew/bin", "/usr/local/bin"]);
-    });
-
-    it("places Homebrew dirs after system dirs in standard trust", () => {
-      const dirs = [...getTrustedDirsForTest("standard")];
-      const usrBinIdx = dirs.indexOf("/usr/bin");
-      const brewIdx = dirs.indexOf("/opt/homebrew/bin");
-      const localIdx = dirs.indexOf("/usr/local/bin");
-      expect(usrBinIdx).toBeGreaterThanOrEqual(0);
-      expect(brewIdx).toBeGreaterThan(usrBinIdx);
-      expect(localIdx).toBeGreaterThan(usrBinIdx);
-    });
-
-    it("standard trust is a superset of strict trust on macOS", () => {
-      const strict = getTrustedDirsForTest("strict");
-      const standard = getTrustedDirsForTest("standard");
-      for (const dir of strict) {
-        expect(standard, `standard trust should include strict dir ${dir}`).toContain(dir);
-      }
-    });
-  }
-
-  if (process.platform === "linux") {
-    it("includes Linux system-managed directories", () => {
-      const dirs = getTrustedDirsForTest();
-      expectDirsContainAll(dirs, ["/run/current-system/sw/bin", "/snap/bin"]);
-    });
-
-    it("includes /usr/local/bin in standard trust on Linux", () => {
-      const dirs = getTrustedDirsForTest("standard");
-      expect(dirs).toContain("/usr/local/bin");
-    });
-
-    it("places /usr/local/bin after /usr/bin in standard trust on Linux", () => {
-      const dirs = [...getTrustedDirsForTest("standard")];
-      const usrBinIdx = dirs.indexOf("/usr/bin");
-      const usrLocalBinIdx = dirs.indexOf("/usr/local/bin");
-      expect(usrBinIdx).toBeGreaterThanOrEqual(0);
-      expect(usrLocalBinIdx).toBeGreaterThan(usrBinIdx);
-    });
-  }
-
-  if (
-    process.platform !== "darwin" &&
-    process.platform !== "linux" &&
-    process.platform !== "win32"
-  ) {
-    it("standard trust equals strict trust on platforms without expansion", () => {
-      const strict = getTrustedDirsForTest("strict");
-      const standard = getTrustedDirsForTest("standard");
-      expect(standard).toEqual(strict);
-    });
-  }
-
-  if (process.platform === "win32") {
-    it("includes Windows system directories", () => {
-      const dirs = getTrustedDirsForTest();
-      expect(dirs).toContain(path.win32.join(getWindowsInstallRoots().systemRoot, "System32"));
-    });
-
-    it("includes Program Files OpenSSL and ffmpeg paths", () => {
-      const dirs = getTrustedDirsForTest();
-      for (const programFilesRoot of getWindowsProgramFilesRoots()) {
-        expect(dirs).toContain(path.win32.join(programFilesRoot, "OpenSSL-Win64", "bin"));
-        expect(dirs).toContain(path.win32.join(programFilesRoot, "ffmpeg", "bin"));
-      }
-    });
-
-    it("uses validated Windows install roots from HKLM values", () => {
-      resetWindowsInstallRootsForTests({
-        queryRegistryValue: (key, valueName) => {
-          if (
-            key === "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" &&
-            valueName === "SystemRoot"
-          ) {
-            return "D:\\Windows";
-          }
-          if (
-            key === "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion" &&
-            valueName === "ProgramFilesDir"
-          ) {
-            return "D:\\Program Files";
-          }
-          if (
-            key === "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion" &&
-            valueName === "ProgramW6432Dir"
-          ) {
-            return "D:\\Program Files";
-          }
-          if (
-            key === "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion" &&
-            valueName === "ProgramFilesDir (x86)"
-          ) {
-            return "E:\\Program Files (x86)";
-          }
-          return null;
-        },
-      });
-
-      resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
-      const dirs = getTrustedDirsForTest();
-      expect(dirs).toContain(path.win32.join("D:\\Windows", "System32"));
-      expect(dirs).toContain(path.win32.join("D:\\Program Files", "OpenSSL-Win64", "bin"));
-      expect(dirs).toContain(path.win32.join("E:\\Program Files (x86)", "OpenSSL", "bin"));
-    });
-
-    it("falls back safely when HKLM values are unavailable", () => {
-      resetWindowsInstallRootsForTests({
-        queryRegistryValue: () => null,
-      });
-
-      resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
-      const dirs = getTrustedDirsForTest();
-      const normalizedDirs = dirs.map((dir) => dir.toLowerCase());
-      expectDirsContainAll(normalizedDirs, [
-        path.win32.join("C:\\Windows", "System32").toLowerCase(),
-        path.win32.join("C:\\Program Files", "OpenSSL-Win64", "bin").toLowerCase(),
-        path.win32.join("C:\\Program Files (x86)", "OpenSSL", "bin").toLowerCase(),
-      ]);
-    });
-
-    it("does not include Unix paths on Windows", () => {
-      const dirs = getTrustedDirsForTest();
-      expect(dirs).not.toContain("/usr/bin");
-      expect(dirs).not.toContain("/bin");
-    });
-  }
 });

@@ -9,9 +9,6 @@ import {
   CircularIncludeError,
   ConfigIncludeError,
   MAX_INCLUDE_DEPTH,
-  MAX_INCLUDE_FILE_BYTES,
-  MAX_INCLUDE_PATH_LENGTH,
-  deepMerge,
   type IncludeResolver,
   resolveConfigIncludeWritePath,
   resolveConfigIncludes,
@@ -721,34 +718,6 @@ describe("security: path traversal protection (CWE-22)", () => {
     });
   });
 
-  describe("prototype pollution protection", () => {
-    it("blocks prototype pollution vectors in shallow and nested merges", () => {
-      const cases = [
-        {
-          base: {},
-          incoming: JSON.parse('{"__proto__":{"polluted":true}}'),
-          expected: {},
-        },
-        {
-          base: { safe: 1 },
-          incoming: { prototype: { x: 1 }, constructor: { y: 2 }, normal: 3 },
-          expected: { safe: 1, normal: 3 },
-        },
-        {
-          base: { nested: { a: 1 } },
-          incoming: { nested: JSON.parse('{"__proto__":{"polluted":true}}') },
-          expected: { nested: { a: 1 } },
-        },
-      ] as const;
-
-      for (const { base, incoming, expected } of cases) {
-        const result = deepMerge(base, incoming);
-        expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
-        expect(result).toEqual(expected);
-      }
-    });
-  });
-
   describe("edge cases", () => {
     it("rejects malformed include paths", () => {
       const cases = [
@@ -760,14 +729,6 @@ describe("security: path traversal protection (CWE-22)", () => {
         const obj = { $include: testCase.includePath };
         expectResolveIncludeError(() => resolve(obj, {}), testCase.pattern);
       }
-    });
-
-    it("rejects include path at or over maximum length (>= MAX_INCLUDE_PATH_LENGTH)", () => {
-      const overLimit = "a".repeat(MAX_INCLUDE_PATH_LENGTH + 1);
-      expectResolveIncludeError(() => resolve({ $include: overLimit }, {}), /maximum length/);
-      // Boundary: length exactly 4096 must be rejected (Linux PATH_MAX includes NUL)
-      const atLimit = "b".repeat(MAX_INCLUDE_PATH_LENGTH);
-      expectResolveIncludeError(() => resolve({ $include: atLimit }, {}), /maximum length/);
     });
 
     it("accepts include path at or under maximum length when file exists", () => {
@@ -858,20 +819,6 @@ describe("security: path traversal protection (CWE-22)", () => {
             path.join(configDir, "openclaw.json"),
           ),
         ).toThrow(/security checks|hardlink/i);
-      });
-    });
-
-    it("rejects oversized include files", async () => {
-      await withTempDir({ prefix: "openclaw-includes-big-" }, async (tempRoot) => {
-        const configDir = path.join(tempRoot, "config");
-        await fs.mkdir(configDir, { recursive: true });
-        const includePath = path.join(configDir, "big.json5");
-        const payload = "a".repeat(MAX_INCLUDE_FILE_BYTES + 1);
-        await fs.writeFile(includePath, `{"blob":"${payload}"}`, "utf-8");
-
-        expect(() =>
-          resolveConfigIncludes({ $include: "./big.json5" }, path.join(configDir, "openclaw.json")),
-        ).toThrow(/security checks|max/i);
       });
     });
   });

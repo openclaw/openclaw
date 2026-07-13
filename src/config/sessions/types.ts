@@ -3,8 +3,6 @@ import crypto from "node:crypto";
 import type {
   AcpSessionRuntimeOptions,
   SessionAcpIdentity,
-  SessionAcpIdentitySource,
-  SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
@@ -19,7 +17,7 @@ import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 
 export type SessionScope = "per-sender" | "global";
 
-export type SessionChannelId = ChannelId;
+type SessionChannelId = ChannelId;
 
 export type SessionChatType = ChatType;
 
@@ -36,13 +34,7 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
-export type {
-  AcpSessionRuntimeOptions,
-  SessionAcpIdentity,
-  SessionAcpIdentitySource,
-  SessionAcpIdentityState,
-  SessionAcpMeta,
-};
+export type { AcpSessionRuntimeOptions, SessionAcpIdentity, SessionAcpMeta };
 
 export type CliSessionReseedReceipt = {
   version: 1;
@@ -76,7 +68,7 @@ export type SessionCompactionCheckpointReason =
   | "overflow-retry"
   | "timeout-retry";
 
-export type SessionCompactionTranscriptReference = {
+type SessionCompactionTranscriptReference = {
   sessionId: string;
   sessionFile?: string;
   leafId?: string;
@@ -97,7 +89,7 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
-export type SessionContextBudgetStatusRoute =
+type SessionContextBudgetStatusRoute =
   | "fits"
   | "compact_only"
   | "truncate_tool_results_only"
@@ -131,7 +123,7 @@ export type AmbientTranscriptWatermark = {
   updatedAt: number;
 };
 
-export type SessionPluginDebugEntry = {
+type SessionPluginDebugEntry = {
   pluginId: string;
   lines: string[];
 };
@@ -144,7 +136,7 @@ export type SessionPluginJsonValue =
   | SessionPluginJsonValue[]
   | { [key: string]: SessionPluginJsonValue };
 
-export type SessionPluginNextTurnInjection = {
+type SessionPluginNextTurnInjection = {
   id: string;
   pluginId: string;
   pluginName?: string;
@@ -156,7 +148,7 @@ export type SessionPluginNextTurnInjection = {
   metadata?: SessionPluginJsonValue;
 };
 
-export type SubagentRecoveryState = {
+type SubagentRecoveryState = {
   /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
   automaticAttempts?: number;
   /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
@@ -169,7 +161,7 @@ export type SubagentRecoveryState = {
   wedgedReason?: string;
 };
 
-export type LaneExecutionState =
+type LaneExecutionState =
   | "active"
   | "draining"
   | "suspended"
@@ -177,7 +169,7 @@ export type LaneExecutionState =
   | "circuit_open"
   | "failed_handoff";
 
-export interface QuotaSuspension {
+interface QuotaSuspension {
   schemaVersion: 1;
   suspendedAt: number; // epoch ms
   reason: "quota_exhausted" | "manual" | "circuit_open";
@@ -597,7 +589,7 @@ export function setSessionRuntimeModel(
   return true;
 }
 
-export type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";
+type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";
 
 type MergeSessionEntryOptions = {
   policy?: SessionEntryMergePolicy;
@@ -625,7 +617,7 @@ function normalizeMergedUpdatedAt(value: number | undefined, now: number): numbe
   return Math.min(value, now);
 }
 
-export function mergeSessionEntryWithPolicy(
+function mergeSessionEntryWithPolicy(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
   options?: MergeSessionEntryOptions,

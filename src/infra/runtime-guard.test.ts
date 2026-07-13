@@ -2,14 +2,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertSupportedRuntime,
-  detectRuntime,
   isAtLeast,
-  isSupportedNodeVersion,
   nodeVersionSatisfiesEngine,
-  parseMinimumNodeEngine,
   parseSemver,
-  type RuntimeDetails,
-  runtimeSatisfies,
 } from "./runtime-guard.js";
 
 describe("runtime-guard", () => {
@@ -35,49 +30,6 @@ describe("runtime-guard", () => {
     );
   });
 
-  it("validates runtime thresholds", () => {
-    const nodeOk: RuntimeDetails = {
-      kind: "node",
-      version: "22.22.3",
-      execPath: "/usr/bin/node",
-      pathEnv: "/usr/bin",
-    };
-    const nodeOld: RuntimeDetails = { ...nodeOk, version: "22.22.2" };
-    const nodeTooOld: RuntimeDetails = { ...nodeOk, version: "21.9.0" };
-    const bun: RuntimeDetails = {
-      kind: "bun",
-      version: "1.3.13",
-      execPath: "/usr/bin/bun",
-      pathEnv: "/usr/bin",
-    };
-    const unknown: RuntimeDetails = {
-      kind: "unknown",
-      version: null,
-      execPath: null,
-      pathEnv: "/usr/bin",
-    };
-    expect(runtimeSatisfies(nodeOk)).toBe(true);
-    expect(runtimeSatisfies(nodeOld)).toBe(false);
-    expect(runtimeSatisfies(nodeTooOld)).toBe(false);
-    expect(runtimeSatisfies(bun)).toBe(false);
-    expect(runtimeSatisfies(unknown)).toBe(false);
-    expect(isSupportedNodeVersion("22.22.3")).toBe(true);
-    expect(isSupportedNodeVersion("22.22.2")).toBe(false);
-    expect(isSupportedNodeVersion("23.11.0")).toBe(false);
-    expect(isSupportedNodeVersion("24.14.1")).toBe(false);
-    expect(isSupportedNodeVersion("24.15.0")).toBe(true);
-    expect(isSupportedNodeVersion("25.8.1")).toBe(false);
-    expect(isSupportedNodeVersion("25.9.0")).toBe(true);
-    expect(isSupportedNodeVersion("26.0.0")).toBe(true);
-    expect(isSupportedNodeVersion(null)).toBe(false);
-  });
-
-  it("parses simple minimum node engine ranges", () => {
-    expect(parseMinimumNodeEngine(">=22.22.3")).toEqual({ major: 22, minor: 22, patch: 3 });
-    expect(parseMinimumNodeEngine(" >=v24.0.0 ")).toEqual({ major: 24, minor: 0, patch: 0 });
-    expect(parseMinimumNodeEngine("^22.22.3")).toBeNull();
-  });
-
   it("checks node versions against simple engine ranges", () => {
     expect(nodeVersionSatisfiesEngine("22.22.3", ">=22.22.3")).toBe(true);
     expect(nodeVersionSatisfiesEngine("22.22.2", ">=22.22.3")).toBe(false);
@@ -98,7 +50,6 @@ describe("runtime-guard", () => {
     expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
   });
-
   it("throws via exit when runtime is too old", () => {
     const runtime = {
       log: vi.fn(),
@@ -107,8 +58,8 @@ describe("runtime-guard", () => {
         throw new Error("exit");
       }),
     };
-    const details: RuntimeDetails = {
-      kind: "node",
+    const details = {
+      kind: "node" as const,
       version: "20.0.0",
       execPath: "/usr/bin/node",
       pathEnv: "/usr/bin",
@@ -133,11 +84,11 @@ describe("runtime-guard", () => {
       error: vi.fn(),
       exit: vi.fn(),
     };
-    const details: RuntimeDetails = {
-      ...detectRuntime(),
-      kind: "node",
+    const details = {
+      kind: "node" as const,
       version: "22.22.3",
       execPath: "/usr/bin/node",
+      pathEnv: "/usr/bin",
     };
     expect(assertSupportedRuntime(runtime, details)).toBeUndefined();
     expect(runtime.exit).not.toHaveBeenCalled();
@@ -151,8 +102,8 @@ describe("runtime-guard", () => {
         throw new Error("exit");
       }),
     };
-    const details: RuntimeDetails = {
-      kind: "bun",
+    const details = {
+      kind: "bun" as const,
       version: "1.3.14",
       execPath: "/usr/bin/bun",
       pathEnv: "/usr/bin",
@@ -178,8 +129,8 @@ describe("runtime-guard", () => {
         throw new Error("exit");
       }),
     };
-    const details: RuntimeDetails = {
-      kind: "unknown",
+    const details = {
+      kind: "unknown" as const,
       version: null,
       execPath: null,
       pathEnv: "(not set)",

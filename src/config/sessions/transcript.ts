@@ -83,20 +83,20 @@ export type SessionRecentConversationText = {
   sourceChannel?: string;
 };
 
-export type ReadRecentSessionConversationTextOptions = {
+type ReadRecentSessionConversationTextOptions = {
   beforeTimestampMs?: number;
   limit?: number;
   minTimestampMs?: number;
 };
 
-export type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
+type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
   agentId?: string;
   sessionKey: string;
   storePath?: string;
 };
 
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
-export type TailAssistantTranscriptText = AssistantTranscriptText;
+type TailAssistantTranscriptText = AssistantTranscriptText;
 
 export { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 
@@ -278,7 +278,7 @@ function resolveSessionConversationTranscriptTarget(params: {
   };
 }
 
-export async function readRecentUserAssistantTextFromSessionTranscript(
+async function readRecentUserAssistantTextFromSessionTranscript(
   sessionFile: string | undefined,
   options: ReadRecentSessionConversationTextOptions = {},
 ): Promise<SessionRecentConversationText[]> {

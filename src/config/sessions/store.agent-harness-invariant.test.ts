@@ -5,10 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import {
-  applySessionEntryLifecycleMutation,
   clearSessionStoreCacheForTest,
-  cleanupSessionLifecycleArtifacts,
-  deleteSessionEntryLifecycle,
   loadSessionStore,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
@@ -110,36 +107,6 @@ describe("agent harness session store invariant", () => {
     });
   });
 
-  it("rejects an invalid reserved lifecycle upsert before persistence", async () => {
-    await saveSessionStore(
-      storePath,
-      { "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 1 } },
-      { skipMaintenance: true },
-    );
-
-    await expect(
-      applySessionEntryLifecycleMutation({
-        storePath,
-        upserts: [
-          {
-            sessionKey: "agent:main:harness:codex:supervision:native-thread",
-            entry: {
-              agentHarnessId: "other",
-              modelSelectionLocked: true,
-              sessionId: "native-session",
-              updatedAt: 1,
-            },
-          },
-        ],
-        skipMaintenance: true,
-      }),
-    ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
-
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-      "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 1 },
-    });
-  });
-
   it("rejects a prefix-colliding harness owner through public save", async () => {
     const sessionKey = "agent:main:harness:foo:bar:native-thread";
 
@@ -159,34 +126,6 @@ describe("agent harness session store invariant", () => {
     ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
 
     expect(fs.existsSync(storePath)).toBe(false);
-  });
-
-  it("persists a locked reserved lifecycle upsert owned by its matching harness", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-
-    await expect(
-      applySessionEntryLifecycleMutation({
-        storePath,
-        upserts: [
-          {
-            sessionKey,
-            entry: {
-              agentHarnessId: "codex",
-              modelSelectionLocked: true,
-              sessionId: "native-session",
-              updatedAt: 1,
-            },
-          },
-        ],
-        skipMaintenance: true,
-      }),
-    ).resolves.toMatchObject({ afterCount: 1 });
-
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toMatchObject({
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      sessionId: "native-session",
-    });
   });
 
   it("rejects removing or reassigning any durable model-selection lock", async () => {

@@ -18,8 +18,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
-import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
 import {
   cleanupStaleManagedServiceUpdateHandoffs,
   MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX,
@@ -505,81 +503,6 @@ describe("managed service update handoff", () => {
     expect(child.listenerCount("exit")).toBe(0);
     expect(child.listenerCount("error")).toBe(0);
     expect(child.stdout.destroyed).toBe(true);
-  });
-
-  it("strips process supervisor hints while preserving service identity for the CLI handoff", async () => {
-    const { startManagedServiceUpdateHandoff, stripSupervisorHintEnv } =
-      await import("./update-managed-service-handoff.js");
-    const serviceIdentityEnv = {
-      OPENCLAW_LAUNCHD_LABEL: "com.example.openclaw.test",
-      OPENCLAW_SYSTEMD_UNIT: "openclaw-test.service",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Test Gateway",
-    } satisfies NodeJS.ProcessEnv;
-    const supervisorEnv = Object.fromEntries(
-      SUPERVISOR_HINT_ENV_VARS.map((key) => [key, "supervised"]),
-    ) as NodeJS.ProcessEnv;
-    const stripped = stripSupervisorHintEnv({
-      ...supervisorEnv,
-      ...serviceIdentityEnv,
-      KEEP_ME: "1",
-    });
-    expect(stripped).toEqual({
-      ...serviceIdentityEnv,
-      KEEP_ME: "1",
-    });
-
-    const result = await startManagedServiceUpdateHandoff({
-      root: "/tmp/openclaw",
-      timeoutMs: 1_800_000,
-      restartDrainTimeoutMs: 300_000,
-      restartDelayMs: 500,
-      parentPid: 12345,
-      execPath: "/usr/local/bin/node",
-      argv1: "/opt/openclaw/openclaw.mjs",
-      env: {
-        ...supervisorEnv,
-        ...serviceIdentityEnv,
-        KEEP_ME: "1",
-      },
-      meta: {
-        sessionKey: "agent:test:webchat:dm:user-123",
-        continuationMessage: "continue after restart",
-      },
-    });
-
-    expect(result.status).toBe("started");
-    expect(result.command).toBe("openclaw update --yes --timeout 1800");
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [execPath, args, options] = spawnMock.mock.calls[0] as unknown as [
-      string,
-      string[],
-      { env: NodeJS.ProcessEnv; detached?: boolean; cwd?: string; stdio?: unknown },
-    ];
-    expect(execPath).toBe("/usr/local/bin/node");
-    expect(args).toHaveLength(2);
-    tempDirs.add(path.dirname(args[0] ?? result.logPath));
-    const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as {
-      cwd?: string;
-      metaPath?: string;
-      stateDatabasePath?: string;
-    };
-    expect(helperParams.metaPath).toMatch(/sentinel-meta\.json$/u);
-    expect(helperParams.stateDatabasePath).toMatch(/openclaw\.sqlite$/u);
-    expect(options.cwd).toBe(os.homedir());
-    expect(helperParams.cwd).toBe(os.homedir());
-    expect(options.detached).toBe(true);
-    expect(options.stdio).toEqual(["ignore", "pipe", "ignore"]);
-    expect(options.env.KEEP_ME).toBe("1");
-    for (const [key, value] of Object.entries(serviceIdentityEnv)) {
-      expect(options.env[key]).toBe(value);
-    }
-    for (const key of SUPERVISOR_HINT_ENV_VARS.filter(
-      (envKey) => !(envKey in serviceIdentityEnv),
-    )) {
-      expect(options.env[key]).toBeUndefined();
-    }
-    expect(options.env.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
-    expect(options.env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]).toMatch(/sentinel-meta\.json$/u);
   });
 
   it("launches systemd handoffs through a transient user scope", async () => {

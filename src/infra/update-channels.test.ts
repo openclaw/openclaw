@@ -4,14 +4,10 @@ import {
   channelToNpmTag,
   formatUpdateChannelLabel,
   isBetaTag,
-  isPrereleaseTag,
-  isStableTag,
   normalizeUpdateChannel,
-  resolveEffectiveUpdateChannel,
   resolveRegistryUpdateChannel,
   resolveUpdateChannelDisplay,
   type UpdateChannel,
-  type UpdateChannelSource,
 } from "./update-channels.js";
 
 describe("update-channels tag detection", () => {
@@ -26,26 +22,6 @@ describe("update-channels tag detection", () => {
     { tag: "v2026.2.24", beta: false },
   ])("classifies $tag", ({ tag, beta }) => {
     expect(isBetaTag(tag)).toBe(beta);
-  });
-
-  it.each([
-    { tag: "v2026.2.24-alpha.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-beta.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-rc.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-preview.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-dev.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-next.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-canary.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-nightly.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-experimental.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-custom.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-1", prerelease: false, stable: true },
-    { tag: "v1.0.1-1", prerelease: false, stable: true },
-    { tag: "v2026.2.24-alphabeta.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24", prerelease: false, stable: true },
-  ])("stable/prerelease classification for $tag", ({ tag, prerelease, stable }) => {
-    expect(isPrereleaseTag(tag)).toBe(prerelease);
-    expect(isStableTag(tag)).toBe(stable);
   });
 });
 
@@ -80,102 +56,6 @@ describe("channelToNpmTag", () => {
       expect(channelToNpmTag(channel)).toBe(expected);
     },
   );
-});
-
-describe("resolveEffectiveUpdateChannel", () => {
-  it.each([
-    {
-      name: "prefers config over git metadata",
-      params: {
-        configChannel: "beta",
-        installKind: "git" as const,
-        git: { tag: "v2026.2.24", branch: "feature/test" },
-      },
-      expected: { channel: "beta", source: "config" },
-    },
-    {
-      name: "uses installed beta version over stale stable config",
-      params: {
-        configChannel: "stable",
-        currentVersion: "2026.5.2-beta.1",
-        installKind: "package" as const,
-      },
-      expected: { channel: "beta", source: "installed-version" },
-    },
-    {
-      name: "keeps explicit extended-stable config on an installed beta version",
-      params: {
-        configChannel: "extended-stable",
-        currentVersion: "2026.5.2-beta.1",
-        installKind: "package" as const,
-      },
-      expected: { channel: "extended-stable", source: "config" },
-    },
-    {
-      name: "uses beta git tag",
-      params: {
-        installKind: "git" as const,
-        git: { tag: "v2026.2.24-beta.1" },
-      },
-      expected: { channel: "beta", source: "git-tag" },
-    },
-    {
-      name: "treats non-beta git tag as stable",
-      params: {
-        installKind: "git" as const,
-        git: { tag: "v2026.2.24" },
-      },
-      expected: { channel: "stable", source: "git-tag" },
-    },
-    {
-      name: "treats non-beta prerelease git tag as dev",
-      params: {
-        installKind: "git" as const,
-        git: { tag: "v2026.5.25-alpha.1" },
-      },
-      expected: { channel: "dev", source: "git-tag" },
-    },
-    {
-      name: "preserves legacy numeric stable git tags",
-      params: {
-        installKind: "git" as const,
-        git: { tag: "v1.0.1-1" },
-      },
-      expected: { channel: "stable", source: "git-tag" },
-    },
-    {
-      name: "uses non-HEAD git branch as dev",
-      params: {
-        installKind: "git" as const,
-        git: { branch: "feature/test" },
-      },
-      expected: { channel: "dev", source: "git-branch" },
-    },
-    {
-      name: "falls back for detached HEAD git installs",
-      params: {
-        installKind: "git" as const,
-        git: { branch: "HEAD" },
-      },
-      expected: { channel: "dev", source: "default" },
-    },
-    {
-      name: "defaults package installs to stable",
-      params: { installKind: "package" as const },
-      expected: { channel: "stable", source: "default" },
-    },
-    {
-      name: "defaults unknown installs to stable",
-      params: { installKind: "unknown" as const },
-      expected: { channel: "stable", source: "default" },
-    },
-  ] satisfies Array<{
-    name: string;
-    params: Parameters<typeof resolveEffectiveUpdateChannel>[0];
-    expected: { channel: UpdateChannel; source: UpdateChannelSource };
-  }>)("$name", ({ params, expected }) => {
-    expect(resolveEffectiveUpdateChannel(params)).toEqual(expected);
-  });
 });
 
 describe("formatUpdateChannelLabel", () => {

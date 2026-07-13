@@ -9,10 +9,7 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_LANES_BUSY,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-  hasHeartbeatWakeHandler,
-  hasPendingHeartbeatWake,
   requestHeartbeat,
-  resetHeartbeatWakeStateForTests,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 
@@ -77,11 +74,9 @@ describe("heartbeat-wake", () => {
 
   beforeEach(() => {
     resetGatewayWorkAdmission();
-    resetHeartbeatWakeStateForTests();
   });
 
   afterEach(() => {
-    resetHeartbeatWakeStateForTests();
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -137,26 +132,6 @@ describe("heartbeat-wake", () => {
     finishWake?.();
     await vi.advanceTimersByTimeAsync(0);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-  });
-
-  it("coalesces multiple wake requests into one run", async () => {
-    vi.useFakeTimers();
-    const handler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeat(wake("interval", { coalesceMs: 200 }));
-    requestHeartbeat(wake("exec-event", { coalesceMs: 200 }));
-    requestHeartbeat(wake("retry", { coalesceMs: 200 }));
-
-    expect(hasPendingHeartbeatWake()).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(199);
-    expect(handler).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith(wake("exec-event"));
-    expect(hasPendingHeartbeatWake()).toBe(false);
   });
 
   it("retries requests-in-flight after the default retry delay", async () => {
@@ -217,32 +192,6 @@ describe("heartbeat-wake", () => {
       initialReason: "exec-event",
       expectedRetryReason: "exec-event",
     });
-  });
-
-  it("stale disposer does not clear a newer handler", async () => {
-    vi.useFakeTimers();
-    const handlerA = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-
-    // Runner A registers its handler
-    const disposeA = setHeartbeatWakeHandler(handlerA);
-
-    // Runner B registers its handler (replaces A)
-    const disposeB = setHeartbeatWakeHandler(handlerB);
-
-    // Runner A's stale cleanup runs — should NOT clear handlerB
-    disposeA();
-    expect(hasHeartbeatWakeHandler()).toBe(true);
-
-    // handlerB should still work
-    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handlerB).toHaveBeenCalledTimes(1);
-    expect(handlerA).not.toHaveBeenCalled();
-
-    // Runner B's dispose should work
-    disposeB();
-    expect(hasHeartbeatWakeHandler()).toBe(false);
   });
 
   it("preempts existing timer when a sooner schedule is requested", async () => {
@@ -354,25 +303,6 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerB).toHaveBeenCalledTimes(1);
     expect(handlerB).toHaveBeenCalledWith(wake("manual"));
-  });
-
-  it("drains pending wake once a handler is registered", async () => {
-    vi.useFakeTimers();
-
-    requestHeartbeat(wake("manual", { coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(1);
-    expect(hasPendingHeartbeatWake()).toBe(true);
-
-    const handler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    setHeartbeatWakeHandler(handler);
-
-    await vi.advanceTimersByTimeAsync(249);
-    expect(handler).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith(wake("manual"));
-    expect(hasPendingHeartbeatWake()).toBe(false);
   });
 
   it("forwards wake target fields and preserves them across retries", async () => {

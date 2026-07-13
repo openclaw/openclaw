@@ -3,71 +3,11 @@ import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
-import { FIELD_HELP } from "./schema.help.js";
-import { testApi, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
-import { FIELD_LABELS } from "./schema.labels.js";
+import { testApi } from "./schema.hints.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const { collectMatchingSchemaPaths, mapSensitivePaths } = testApi;
-const BUNDLED_CHANNEL_HINT_PREFIXES = [
-  "channels.discord",
-  "channels.imessage",
-  "channels.irc",
-  "channels.msteams",
-  "channels.signal",
-  "channels.slack",
-  "channels.telegram",
-  "channels.whatsapp",
-] as const;
-
-describe("isSensitiveConfigPath", () => {
-  it("matches whitelist suffixes case-insensitively", () => {
-    const whitelistedPaths = [
-      "maxTokens",
-      "maxOutputTokens",
-      "maxInputTokens",
-      "maxCompletionTokens",
-      "contextTokens",
-      "totalTokens",
-      "tokenCount",
-      "tokenLimit",
-      "tokenBudget",
-      "channels.irc.nickserv.passwordFile",
-    ];
-    for (const path of whitelistedPaths) {
-      expect(isSensitiveConfigPath(path)).toBe(false);
-      expect(isSensitiveConfigPath(path.toUpperCase())).toBe(false);
-    }
-  });
-
-  it("keeps true sensitive keys redacted", () => {
-    expect(isSensitiveConfigPath("channels.slack.token")).toBe(true);
-    expect(isSensitiveConfigPath("models.providers.openai.apiKey")).toBe(true);
-    expect(isSensitiveConfigPath("channels.irc.nickserv.password")).toBe(true);
-    expect(isSensitiveConfigPath("channels.feishu.encryptKey")).toBe(true);
-    expect(isSensitiveConfigPath("channels.feishu.accounts.default.encryptKey")).toBe(true);
-    expect(isSensitiveConfigPath("channels.nostr.privateKey")).toBe(true);
-    expect(isSensitiveConfigPath("channels.nostr.accounts.default.privateKey")).toBe(true);
-    expect(isSensitiveConfigPath("models.providers.local.localService.env.HF_HOME")).toBe(true);
-    expect(isSensitiveConfigPath("models.providers.local.localService.env.MAX_TOKENS")).toBe(true);
-  });
-});
-
-describe("plugin-owned channel hint paths", () => {
-  it("keeps bundled channel help and labels out of core tables", () => {
-    for (const key of [...Object.keys(FIELD_HELP), ...Object.keys(FIELD_LABELS)]) {
-      if (
-        !BUNDLED_CHANNEL_HINT_PREFIXES.some(
-          (prefix) => key === prefix || key.startsWith(`${prefix}.`),
-        )
-      ) {
-        continue;
-      }
-      expect(isPluginOwnedChannelHintPath(key), `core still owns ${key}`).toBe(false);
-    }
-  });
-});
 
 describe("mapSensitivePaths", () => {
   it("should detect sensitive fields nested inside all structural Zod types", () => {

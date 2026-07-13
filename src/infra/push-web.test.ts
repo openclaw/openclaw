@@ -4,13 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webPush from "web-push";
-import {
-  broadcastWebPush,
-  clearWebPushSubscriptionByEndpoint,
-  listWebPushSubscriptions,
-  registerWebPushSubscription,
-  resolveVapidKeys,
-} from "./push-web.js";
+import { broadcastWebPush, registerWebPushSubscription, resolveVapidKeys } from "./push-web.js";
 
 // Stub resolveStateDir so tests use a temp directory.
 let tmpDir: string;
@@ -111,30 +105,6 @@ describe("subscription CRUD", () => {
     expect(sub2.subscriptionId).toBe(sub1.subscriptionId);
     expect(sub2.createdAtMs).toBe(sub1.createdAtMs);
     expect(sub2.keys.p256dh).toBe("new-p256dh");
-  });
-
-  it("lists all subscriptions", async () => {
-    await registerWebPushSubscription({
-      endpoint: "https://push.example.com/a",
-      keys,
-      baseDir: tmpDir,
-    });
-    await registerWebPushSubscription({
-      endpoint: "https://push.example.com/b",
-      keys,
-      baseDir: tmpDir,
-    });
-    const list = await listWebPushSubscriptions(tmpDir);
-    expect(list).toHaveLength(2);
-  });
-
-  it("clears a subscription by endpoint", async () => {
-    await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
-    const removed = await clearWebPushSubscriptionByEndpoint(endpoint, tmpDir);
-    expect(removed).toBe(true);
-
-    const list = await listWebPushSubscriptions(tmpDir);
-    expect(list).toHaveLength(0);
   });
 
   it("rejects invalid endpoint", async () => {

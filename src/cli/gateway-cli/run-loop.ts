@@ -930,6 +930,7 @@ export async function runGatewayLoop(params: {
       resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetAllLanes();
       clearRuntimeConfigSnapshot();
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetGatewayRestartStateForInProcessRestart();
       reloadTaskRuntimeStateFromStore();
       markGatewayRestartTrace("restart.next-start");

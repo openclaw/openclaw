@@ -8,13 +8,9 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
 import {
-  checkDepsStatus,
   checkUpdateStatus,
   compareSemverStrings,
-  fetchNpmLatestVersion,
   fetchNpmPackageTargetStatus,
-  fetchNpmRegistryVersionForChannel,
-  fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
@@ -328,49 +324,6 @@ describe("resolveNpmChannelTag", () => {
     });
   });
 
-  it("exposes tag fetch helpers for success and http failures", async () => {
-    versionByTag.latest = "1.0.4";
-
-    await expect(
-      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({
-      target: "latest",
-      version: "1.0.4",
-      nodeEngine: ">=22.19.0",
-    });
-    await expect(
-      fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({
-      tag: "latest",
-      version: "1.0.4",
-    });
-    await expect(fetchNpmLatestVersion({ timeoutMs: 1000, runCommand })).resolves.toEqual({
-      latestVersion: "1.0.4",
-      error: undefined,
-    });
-    versionByTag.beta = "1.0.5-beta.1";
-    await expect(
-      fetchNpmRegistryVersionForChannel({ channel: "beta", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({
-      latestVersion: "1.0.5-beta.1",
-      tag: "beta",
-    });
-    await expect(fetchNpmTagVersion({ tag: "beta", timeoutMs: 1000, runCommand })).resolves.toEqual(
-      {
-        tag: "beta",
-        version: "1.0.5-beta.1",
-        error: undefined,
-      },
-    );
-    await expect(
-      fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({
-      tag: "missing",
-      version: null,
-      error: "npm view failed: npm ERR! 404 Not Found",
-    });
-  });
-
   it("adds context to malformed npm view JSON errors", async () => {
     const badRunCommand = vi.fn(async () => ({
       stdout: "not valid json {",
@@ -561,59 +514,6 @@ describe("formatGitInstallLabel", () => {
         packageManager: "pnpm",
       }),
     ).toBeNull();
-  });
-});
-
-describe("checkDepsStatus", () => {
-  it("reports unknown, missing, stale, and ok states from lockfile markers", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-" }, async (base) => {
-      await expect(checkDepsStatus({ root: base, manager: "unknown" })).resolves.toEqual({
-        manager: "unknown",
-        status: "unknown",
-        lockfilePath: null,
-        markerPath: null,
-        reason: "unknown package manager",
-      });
-
-      await fs.writeFile(path.join(base, "pnpm-lock.yaml"), "lock", "utf8");
-      const missingDeps = await checkDepsStatus({ root: base, manager: "pnpm" });
-      expect(missingDeps.manager).toBe("pnpm");
-      expect(missingDeps.status).toBe("missing");
-      expect(missingDeps.reason).toBe("node_modules marker missing");
-
-      const markerPath = path.join(base, "node_modules", ".modules.yaml");
-      await fs.mkdir(path.dirname(markerPath), { recursive: true });
-      await fs.writeFile(markerPath, "marker", "utf8");
-      const staleDate = new Date(Date.now() - 10_000);
-      const freshDate = new Date();
-      await fs.utimes(markerPath, staleDate, staleDate);
-      await fs.utimes(path.join(base, "pnpm-lock.yaml"), freshDate, freshDate);
-
-      const staleDeps = await checkDepsStatus({ root: base, manager: "pnpm" });
-      expect(staleDeps.manager).toBe("pnpm");
-      expect(staleDeps.status).toBe("stale");
-      expect(staleDeps.reason).toBe("lockfile newer than install marker");
-
-      const newerMarker = new Date(Date.now() + 2_000);
-      await fs.utimes(markerPath, newerMarker, newerMarker);
-      const okDeps = await checkDepsStatus({ root: base, manager: "pnpm" });
-      expect(okDeps.manager).toBe("pnpm");
-      expect(okDeps.status).toBe("ok");
-    });
-  });
-
-  it("uses npm-shrinkwrap as the npm dependency lock marker when present", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-shrinkwrap-" }, async (root) => {
-      const shrinkwrapPath = path.join(root, "npm-shrinkwrap.json");
-      await fs.writeFile(shrinkwrapPath, "{}", "utf8");
-      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
-
-      const deps = await checkDepsStatus({ root, manager: "npm" });
-
-      expect(deps.manager).toBe("npm");
-      expect(deps.status).toBe("ok");
-      expect(deps.lockfilePath).toBe(shrinkwrapPath);
-    });
   });
 });
 

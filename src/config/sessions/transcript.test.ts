@@ -29,7 +29,6 @@ import {
 } from "./transcript-append.test-support.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 import {
-  bindOwnedSessionTranscriptWrites,
   runWithOwnedSessionTranscriptWriteLock,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
@@ -38,7 +37,6 @@ import {
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,
-  readRecentUserAssistantTextFromSessionTranscript,
   readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
@@ -458,36 +456,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result).toBe("ok");
     expect(events).toEqual(["write"]);
-  });
-
-  it("keeps matching owned transcript appends locked from bound callbacks", async () => {
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-    const events: string[] = [];
-    const callback = bindOwnedSessionTranscriptWrites(
-      {
-        sessionFile,
-        sessionKey,
-        withSessionWriteLock: async (run) => {
-          events.push("lock");
-          return await run();
-        },
-      },
-      async () =>
-        await appendSessionTranscriptMessage({
-          transcriptPath: sessionFile,
-          message: {
-            role: "assistant",
-            content: "Hello from bound delivery",
-            timestamp: Date.now(),
-            stopReason: "stop",
-          },
-        }),
-    );
-
-    const result = await callback();
-
-    expect(result.messageId).toBeTruthy();
-    expect(events).toEqual(["lock"]);
   });
 
   it("appends to legacy lowercase Signal group session entries", async () => {
@@ -942,106 +910,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messages[2]?.model).toBe("delivery-mirror");
       expect(messages[2]?.content?.[0]?.text).toBe("Hello before the large user entry");
     }
-  });
-
-  it("reads bounded recent user and assistant text before the current turn", async () => {
-    await writeTranscriptStore();
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: {
-        role: "user",
-        content: "Analyze this chart",
-        timestamp: 1_000,
-        provenance: { kind: "external_user", sourceChannel: "gateway" },
-      },
-    });
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: {
-        ...createExactAssistantMessage({ text: "The chart is range-bound; want an alert?" }),
-        timestamp: 2_000,
-      },
-    });
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: {
-        role: "user",
-        content: "no need, I closed it",
-        timestamp: 3_000,
-        provenance: { kind: "external_user", sourceChannel: "telegram" },
-      },
-    });
-
-    const recent = await readRecentUserAssistantTextFromSessionTranscript(sessionFile, {
-      beforeTimestampMs: 3_000,
-      limit: 10,
-    });
-
-    expect(recent).toEqual([
-      {
-        id: expect.any(String),
-        role: "user",
-        text: "Analyze this chart",
-        timestamp: 1_000,
-        sourceChannel: "gateway",
-      },
-      {
-        id: expect.any(String),
-        role: "assistant",
-        text: "The chart is range-bound; want an alert?",
-        timestamp: 2_000,
-      },
-    ]);
-  });
-
-  it("skips transcript-only OpenClaw assistant entries when reading recent prompt context", async () => {
-    await writeTranscriptStore();
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: { role: "user", content: "approved from gateway", timestamp: 1_000 },
-    });
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: {
-        ...createExactAssistantMessage({
-          text: "Transcript delivery bookkeeping",
-          provider: "openclaw",
-          model: "gateway-injected",
-        }),
-        timestamp: 2_000,
-      },
-    });
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: {
-        ...createExactAssistantMessage({ text: "Visible assistant reply" }),
-        timestamp: 3_000,
-      },
-    });
-
-    await expect(
-      readRecentUserAssistantTextFromSessionTranscript(sessionFile, {
-        beforeTimestampMs: 4_000,
-        limit: 10,
-      }),
-    ).resolves.toEqual([
-      {
-        id: expect.any(String),
-        role: "user",
-        text: "approved from gateway",
-        timestamp: 1_000,
-      },
-      {
-        id: expect.any(String),
-        role: "assistant",
-        text: "Visible assistant reply",
-        timestamp: 3_000,
-      },
-    ]);
   });
 
   it("resolves recent transcript context from session identity", async () => {

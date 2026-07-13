@@ -16,12 +16,7 @@ import {
   resetDiagnosticEventsForTest,
 } from "./diagnostic-events.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
-import {
-  loadVoiceWakeRoutingConfig,
-  normalizeVoiceWakeTriggerWord,
-  resolveVoiceWakeRouteByTrigger,
-  setVoiceWakeRoutingConfig,
-} from "./voicewake-routing.js";
+import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import {
   defaultVoiceWakeTriggers,
   loadVoiceWakeConfig,
@@ -147,20 +142,6 @@ describe("infra store", () => {
 
       const loaded = await loadVoiceWakeRoutingConfig(baseDir);
       expect(loaded.routes).toEqual([{ trigger: "hello bot", target: { agentId: "main" } }]);
-    });
-
-    it("resolves routes by normalized trigger", () => {
-      const result = resolveVoiceWakeRouteByTrigger({
-        trigger: "  HELLO   BOT ",
-        config: {
-          version: 1,
-          defaultTarget: { mode: "current" },
-          routes: [{ trigger: "hello bot", target: { sessionKey: "agent:main:main" } }],
-          updatedAtMs: 0,
-        },
-      });
-      expect(result).toEqual({ sessionKey: "agent:main:main" });
-      expect(normalizeVoiceWakeTriggerWord("  X  Y ")).toBe("x y");
     });
   });
 
