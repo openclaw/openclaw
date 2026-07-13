@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BUNDLE_MCP_TEMP_PREFIX, sweepOrphanedBundleMcpTempDirs } from "./bundle-mcp-sweep.js";
+import {
+  BUNDLE_MCP_TEMP_PREFIX,
+  sweepOrphanedBundleMcpTempDirs,
+  writeBundleMcpOwnerMarker,
+} from "./bundle-mcp-sweep.js";
 
 const OLD_MTIME = new Date(Date.now() - 24 * 60 * 60 * 1000);
 // Kept in sync with the module-private marker name in bundle-mcp-sweep.ts.
@@ -11,12 +15,18 @@ const BUNDLE_MCP_OWNER_MARKER = ".owner.json";
 async function createTempConfigDir(
   root: string,
   suffix: string,
-  options?: { old?: boolean; owner?: { pid: number; bootId?: string } },
+  options?: {
+    old?: boolean;
+    owner?: { pid: number; bootId?: string };
+    corruptOwner?: boolean;
+  },
 ) {
   const dir = path.join(root, `${BUNDLE_MCP_TEMP_PREFIX}${suffix}`);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "mcp.json"), `{"mcpServers":{}}\n`, "utf-8");
-  if (options?.owner) {
+  if (options?.corruptOwner) {
+    await fs.writeFile(path.join(dir, BUNDLE_MCP_OWNER_MARKER), "{ not valid json", "utf-8");
+  } else if (options?.owner) {
     await fs.writeFile(
       path.join(dir, BUNDLE_MCP_OWNER_MARKER),
       `${JSON.stringify(options.owner)}\n`,
@@ -145,6 +155,63 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     });
     expect(result.removed).toEqual([]);
     expect(result.kept).toEqual([queued]);
+  });
+
+  it("reclaims a FRESH dead-owner dir despite the spawn grace window", async () => {
+    // A gateway that crashed moments ago leaves fresh debris; the one-shot
+    // startup sweep must reclaim it now, not leak it until the next restart.
+    const fresh = await createTempConfigDir(root, "fresh-dead", {
+      old: false,
+      owner: { pid: 4242 },
+    });
+    const result = await sweepOrphanedBundleMcpTempDirs({
+      tmpRoot: root,
+      listCommandLines: () => ["node /usr/bin/unrelated"],
+      isPidAlive: () => false, // owning gateway is gone
+    });
+    expect(result.removed).toEqual([fresh]);
+    await expect(fs.stat(fresh)).rejects.toThrow();
+  });
+
+  it("keeps a dir whose owner marker is unreadable/corrupt (unknown, fail-closed)", async () => {
+    const unknown = await createTempConfigDir(root, "corrupt-marker", { corruptOwner: true });
+    const result = await sweepOrphanedBundleMcpTempDirs({
+      tmpRoot: root,
+      listCommandLines: () => ["node /usr/bin/unrelated"],
+      isPidAlive: () => false,
+    });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([unknown]);
+    await expect(fs.stat(unknown)).resolves.toBeDefined();
+  });
+
+  it("keeps a removal candidate whose child spawns between the argv scan and removal", async () => {
+    const racing = await createTempConfigDir(root, "argv-race", { owner: { pid: 4242 } });
+    let scan = 0;
+    const result = await sweepOrphanedBundleMcpTempDirs({
+      tmpRoot: root,
+      // First scan: no reference (dead owner → removal candidate). Second scan
+      // (immediately before rm): the CLI child has now spawned and references it.
+      listCommandLines: () => {
+        scan += 1;
+        return scan === 1
+          ? ["node /usr/bin/unrelated"]
+          : [`claude --mcp-config ${path.join(racing, "mcp.json")}`];
+      },
+      isPidAlive: () => false,
+    });
+    expect(scan).toBe(2); // re-scan actually happened
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([racing]);
+    await expect(fs.stat(racing)).resolves.toBeDefined();
+  });
+
+  it("writeBundleMcpOwnerMarker rejects when ownership cannot be recorded (fail-loud)", async () => {
+    // A non-existent directory makes the marker write fail; the creator relies on
+    // this rejection to roll back and never queue an unowned config.
+    await expect(
+      writeBundleMcpOwnerMarker(path.join(root, "does-not-exist-dir")),
+    ).rejects.toThrow();
   });
 
   it("removes legacy empty dirs (mcp.json already gone) with no live reference", async () => {

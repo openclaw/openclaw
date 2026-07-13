@@ -76,64 +76,88 @@ function defaultIsPidAlive(pid: number): boolean {
 }
 
 /**
- * Persist the owning gateway's identity beside the rendered config. Best-effort:
- * a failed write leaves the dir unmarked, which the sweep treats as legacy
- * (age + liveness only), so a marker failure can never over-protect a leak.
+ * Persist the owning gateway's identity beside the rendered config. Fail-loud:
+ * a caller that cannot record ownership must not queue the run, because an
+ * unmarked dir aged past the grace window is reclaimable by a concurrent
+ * gateway's sweep — so a silent marker failure would reintroduce the very
+ * queued-run deletion this marker prevents. The creator rolls back (removes the
+ * temp dir) when this throws.
  */
 export async function writeBundleMcpOwnerMarker(dir: string): Promise<void> {
   const owner: BundleMcpOwner = { pid: process.pid, bootId: await readCurrentBootId() };
-  try {
-    await fs.writeFile(
-      path.join(dir, BUNDLE_MCP_OWNER_MARKER),
-      `${JSON.stringify(owner)}\n`,
-      "utf8",
-    );
-  } catch {
-    // Non-fatal: unmarked dirs fall back to the legacy age + liveness rule.
-  }
+  await fs.writeFile(path.join(dir, BUNDLE_MCP_OWNER_MARKER), `${JSON.stringify(owner)}\n`, "utf8");
 }
 
-async function readBundleMcpOwner(dir: string): Promise<BundleMcpOwner | undefined> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(path.join(dir, BUNDLE_MCP_OWNER_MARKER), "utf8");
-  } catch {
-    return undefined; // No marker: legacy dir (pre-ownership or a foreign leak).
-  }
-  try {
-    const parsed = JSON.parse(raw) as { pid?: unknown; bootId?: unknown };
-    if (typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0) {
-      return {
-        pid: parsed.pid,
-        bootId: typeof parsed.bootId === "string" ? parsed.bootId : undefined,
-      };
-    }
-  } catch {
-    // Corrupt marker — treat as unmarked (legacy handling).
-  }
-  return undefined;
-}
+/** Cap the marker read/parse so a corrupt local artifact cannot exhaust memory. */
+const MAX_OWNER_MARKER_BYTES = 4 * 1024;
 
 /**
- * Whether the gateway that created `dir` is still alive. An owned dir may be a
- * run still waiting in the serialization queue whose CLI child has not spawned
- * yet — no argv references it, but deleting it would make that run spawn with a
- * missing `--mcp-config`. Unmarked (legacy) dirs return false so their handling
- * is unchanged. A changed boot id means the host rebooted and the owner is gone.
+ * Resolved owner state for a temp dir. Read/parse ambiguity is preserved rather
+ * than collapsed to "no owner": only a definitively absent marker is `legacy`
+ * (eligible for the age + argv rule); anything unreadable, oversized, or
+ * malformed is `unknown` and kept (fail-closed), because an unreadable marker
+ * cannot prove the owner is gone.
  */
-async function isBundleMcpOwnerAlive(
+type BundleMcpOwnerMarker =
+  | { kind: "legacy" }
+  | { kind: "owned"; pid: number; bootId?: string }
+  | { kind: "unknown" };
+
+async function readBundleMcpOwner(dir: string): Promise<BundleMcpOwnerMarker> {
+  const markerPath = path.join(dir, BUNDLE_MCP_OWNER_MARKER);
+  let raw: string;
+  try {
+    const stat = await fs.stat(markerPath);
+    if (stat.size > MAX_OWNER_MARKER_BYTES) {
+      return { kind: "unknown" }; // Oversized artifact — do not read/parse.
+    }
+    raw = await fs.readFile(markerPath, "utf8");
+  } catch (err) {
+    // ENOENT is a true legacy dir; any other error (EACCES, EMFILE, transient
+    // I/O) leaves ownership unknown rather than assuming the owner is gone.
+    return (err as NodeJS.ErrnoException)?.code === "ENOENT"
+      ? { kind: "legacy" }
+      : { kind: "unknown" };
+  }
+  let parsed: { pid?: unknown; bootId?: unknown };
+  try {
+    parsed = JSON.parse(raw) as { pid?: unknown; bootId?: unknown };
+  } catch {
+    return { kind: "unknown" }; // Corrupt JSON is unknown, not legacy.
+  }
+  if (typeof parsed.pid !== "number" || !Number.isSafeInteger(parsed.pid) || parsed.pid <= 0) {
+    return { kind: "unknown" };
+  }
+  const bootId =
+    typeof parsed.bootId === "string" && parsed.bootId.length > 0 ? parsed.bootId : undefined;
+  return { kind: "owned", pid: parsed.pid, bootId };
+}
+
+/** Verdict on the gateway that created a dir, driving the sweep's keep/remove. */
+type BundleMcpOwnerVerdict = "legacy" | "alive" | "dead" | "unknown";
+
+/**
+ * Classify a dir by its owning gateway. An `alive` owner may be a run still
+ * waiting in the serialization queue whose CLI child has not spawned yet — no
+ * argv references it, but deleting it would make that run spawn with a missing
+ * `--mcp-config`. A `dead` owner (pid gone, or boot id changed by a reboot)
+ * means the queued run died with its gateway, so the dir is reclaimable
+ * regardless of age. `unknown` is kept (fail-closed); `legacy` follows the
+ * age + argv rule.
+ */
+async function resolveBundleMcpOwner(
   dir: string,
   currentBootId: string | undefined,
   isPidAlive: (pid: number) => boolean,
-): Promise<boolean> {
+): Promise<BundleMcpOwnerVerdict> {
   const owner = await readBundleMcpOwner(dir);
-  if (!owner) {
-    return false;
+  if (owner.kind !== "owned") {
+    return owner.kind; // "legacy" | "unknown"
   }
   if (owner.bootId !== undefined && currentBootId !== undefined && owner.bootId !== currentBootId) {
-    return false;
+    return "dead"; // Host rebooted since creation — the owning gateway is gone.
   }
-  return isPidAlive(owner.pid);
+  return isPidAlive(owner.pid) ? "alive" : "dead";
 }
 
 async function listPosixCommandLinesViaPs(): Promise<string[]> {
@@ -261,6 +285,10 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
 
   const currentBootId = params?.currentBootId ?? (await readCurrentBootId());
   const now = Date.now();
+
+  // Phase 1 — classify. A dir becomes a removal candidate only when nothing live
+  // references it AND its owning gateway is gone (or it is an aged legacy dir).
+  const candidates: string[] = [];
   for (const entry of entries) {
     const dir = path.join(tmpRoot, entry);
     let mtimeMs: number;
@@ -269,25 +297,45 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
     } catch {
       continue; // Raced away since readdir.
     }
-    if (now - mtimeMs < spawnGraceMs) {
-      // A run prepared moments ago may not have spawned its child yet, so the
-      // argv scan cannot see it. Leave recent dirs for the next sweep.
-      kept.push(dir);
-      continue;
-    }
     if (commandLines.some((line) => lineReferencesDir(line, dir))) {
       // A live CLI child (of this gateway, a concurrent gateway, or a
       // persistent live session) still references the config — keep (#73244).
       kept.push(dir);
       continue;
     }
-    if (await isBundleMcpOwnerAlive(dir, currentBootId, isPidAlive)) {
-      // The owning gateway is still alive, so this may be a run waiting in the
-      // serialization queue whose CLI child has not spawned yet — no argv
-      // references it, but deleting it would make that run spawn with a missing
-      // `--mcp-config`. The config is created at prepare time, before the run
-      // enters `enqueueCliRun`, so a serialized run can outlive the grace window
-      // without a child. Only reclaim once the owning gateway is gone.
+    const owner = await resolveBundleMcpOwner(dir, currentBootId, isPidAlive);
+    if (owner === "alive" || owner === "unknown") {
+      // "alive": a queued run of a live gateway whose child has not spawned yet
+      // (the config is created at prepare time, before `enqueueCliRun`).
+      // "unknown": an unreadable marker cannot prove the owner is gone. Keep both.
+      kept.push(dir);
+      continue;
+    }
+    if (owner === "legacy" && now - mtimeMs < spawnGraceMs) {
+      // A legacy dir prepared moments ago may not have written its marker or
+      // spawned its child yet; keep it inside the grace window. Owner-marked
+      // dirs skip the grace check on purpose: a dead owner's config is
+      // reclaimable at any age, which is what lets a prompt gateway restart
+      // reclaim its own fresh crash debris instead of leaking it until the next
+      // restart.
+      kept.push(dir);
+      continue;
+    }
+    candidates.push(dir); // "dead" (any age) or aged "legacy".
+  }
+
+  if (candidates.length === 0) {
+    return { removed, kept };
+  }
+
+  // Phase 2 — re-scan argv immediately before removing. A CLI child can spawn
+  // between the first snapshot and now (a queued run whose owner died just as
+  // its child started), so a fresh reference means keep. An unusable (empty)
+  // re-scan is treated as unknown and keeps every candidate (fail-closed).
+  const recheck = await (params?.listCommandLines ?? listProcessCommandLines)();
+  const recheckUsable = recheck.length > 0;
+  for (const dir of candidates) {
+    if (!recheckUsable || recheck.some((line) => lineReferencesDir(line, dir))) {
       kept.push(dir);
       continue;
     }

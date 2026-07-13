@@ -177,33 +177,44 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   }
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), BUNDLE_MCP_TEMP_PREFIX));
-  const mcpConfigPath = path.join(tempDir, "mcp.json");
-  const runtimeConfig = resolveOpenClawMcpEnvTemplates(
-    params.mergedConfig,
-    params.env,
-  ) as BundleMcpConfig;
-  await fs.writeFile(mcpConfigPath, `${JSON.stringify(runtimeConfig, null, 2)}\n`, "utf-8");
-  // Record the owning gateway so a concurrent gateway's startup sweep does not
-  // reclaim this dir while the run still waits in the serialization queue (its
-  // CLI child, which would put the path in argv, has not spawned yet).
-  await writeBundleMcpOwnerMarker(tempDir);
-  return {
-    backend: {
-      ...params.backend,
-      args: injectClaudeMcpConfigArgs(params.backend.args, mcpConfigPath),
-      resumeArgs: injectClaudeMcpConfigArgs(
-        params.backend.resumeArgs ?? params.backend.args ?? [],
-        mcpConfigPath,
-      ),
-    },
-    mcpConfigHash,
-    mcpResumeHash,
-    env: params.env,
-    cleanup: async () => {
-      // Claude config files are generated per run and should not survive cleanup.
-      await fs.rm(tempDir, { recursive: true, force: true });
-    },
-  };
+  try {
+    const mcpConfigPath = path.join(tempDir, "mcp.json");
+    const runtimeConfig = resolveOpenClawMcpEnvTemplates(
+      params.mergedConfig,
+      params.env,
+    ) as BundleMcpConfig;
+    await fs.writeFile(mcpConfigPath, `${JSON.stringify(runtimeConfig, null, 2)}\n`, "utf-8");
+    // Record the owning gateway before returning the prepared run. This is
+    // fail-loud: if ownership cannot be recorded the run must not proceed, since
+    // an unmarked dir aged past the grace window is reclaimable by a concurrent
+    // gateway's startup sweep (its CLI child, which would put the path in argv,
+    // has not spawned yet). The catch below rolls the temp dir back on any
+    // failure so no half-written or unowned config survives to be queued.
+    await writeBundleMcpOwnerMarker(tempDir);
+    return {
+      backend: {
+        ...params.backend,
+        args: injectClaudeMcpConfigArgs(params.backend.args, mcpConfigPath),
+        resumeArgs: injectClaudeMcpConfigArgs(
+          params.backend.resumeArgs ?? params.backend.args ?? [],
+          mcpConfigPath,
+        ),
+      },
+      mcpConfigHash,
+      mcpResumeHash,
+      env: params.env,
+      cleanup: async () => {
+        // Claude config files are generated per run and should not survive cleanup.
+        await fs.rm(tempDir, { recursive: true, force: true });
+      },
+    };
+  } catch (err) {
+    // Roll back so a partial config never leaks (the cleanup callback above is
+    // not registered until this function returns). Swallow a rollback failure so
+    // it cannot mask the original error.
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 /** Prepare backend args/env/cleanup for bundle MCP injection into a CLI run. */
