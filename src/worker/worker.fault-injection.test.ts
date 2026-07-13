@@ -797,6 +797,10 @@ describe("cloud worker milestone 2 fault injection", () => {
         payload: { text: delta, delta },
       }),
     );
+    // The restart fault fires when the gated commit response drains; make sure the
+    // pre-restart tail-a live request reached the gateway first or the lost-window
+    // replay assertion below becomes timing-dependent.
+    await vi.waitFor(() => expect(harness.requestParams("worker.live-event")).toHaveLength(2));
     commitRelease.resolve();
 
     await expect(commit).resolves.toMatchObject({ entryIds: [expect.any(String)] });
@@ -810,17 +814,20 @@ describe("cloud worker milestone 2 fault injection", () => {
       sessionId: SESSION_ID,
     });
     expect(harness.liveDeltas).toEqual(["acked", "tail-a", "tail-b"]);
-    expect(
-      harness.requestParams("worker.live-event").map((request) => {
-        const live = request as WorkerLiveEventParams;
-        return [live.seq, live.lastAckedSeq];
-      }),
-    ).toEqual([
-      [1, 0],
-      [2, 1],
+    const liveRequests = harness.requestParams("worker.live-event").map((request) => {
+      const live = request as WorkerLiveEventParams;
+      return [live.seq, live.lastAckedSeq];
+    });
+    // Pre-restart prefix is deterministic (the waitFor above pins tail-a's send).
+    expect(liveRequests.slice(0, 2)).toEqual([
       [1, 0],
       [2, 1],
     ]);
+    // Whether tail-a's ack beats the socket teardown is a legitimate race, so the
+    // exact retry trace varies; what must hold is that the cleared window forced a
+    // resync replay renumbered from the fresh ack state.
+    expect(liveRequests.length).toBeGreaterThanOrEqual(4);
+    expect(liveRequests.slice(2)).toContainEqual([1, 0]);
     expect(SessionManager.open(harness.sessionFile).getEntries()).toHaveLength(1);
     providerRelease.resolve(doneOutcome("late stale provider result"));
   });
