@@ -1,8 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
-import { pruneDismissals, type SidebarAttentionKind } from "./sidebar-attention-dismissals.ts";
+import {
+  addDismissal,
+  dismissalStoreKey,
+  pruneDismissals,
+  type SidebarAttentionKind,
+} from "./sidebar-attention-dismissals.ts";
 import { buildSidebarAttentionItems } from "./sidebar-attention.ts";
 
 const NOW = 1_750_000_000_000;
@@ -151,5 +156,38 @@ describe("pruneDismissals", () => {
 
   it("drops a dismissal once the underlying state clears", () => {
     expect(pruneDismissals({ cronFailed: "alpha" }, [])).toEqual({});
+  });
+});
+
+describe("addDismissal", () => {
+  function createStorageMock(): Storage {
+    const map = new Map<string, string>();
+    return {
+      get length() {
+        return map.size;
+      },
+      clear: () => map.clear(),
+      getItem: (key: string) => map.get(key) ?? null,
+      key: (index: number) => [...map.keys()][index] ?? null,
+      removeItem: (key: string) => void map.delete(key),
+      setItem: (key: string, value: string) => void map.set(key, String(value)),
+    };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("merges with the persisted map so another tab's dismissal survives", () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const key = dismissalStoreKey("ws://gateway.test");
+    // Another tab dismissed a cron chip after this tab last loaded.
+    localStorage.setItem(key, JSON.stringify({ cronFailed: "alpha" }));
+
+    const next = addDismissal("ws://gateway.test", "modelAuthExpired", "openai");
+
+    const expected = { cronFailed: "alpha", modelAuthExpired: "openai" };
+    expect(next).toEqual(expected);
+    expect(JSON.parse(localStorage.getItem(key) ?? "null")).toEqual(expected);
   });
 });

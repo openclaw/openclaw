@@ -17,6 +17,8 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons, type IconName } from "./icons.ts";
 import {
+  addDismissal,
+  dismissalStoreKey,
   loadDismissals,
   pruneDismissals,
   saveDismissals,
@@ -139,6 +141,17 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     },
   );
 
+  // Cross-tab sync: another tab's dismiss/prune fires "storage" here, so this
+  // tab re-reads instead of rendering (or later writing) a stale snapshot.
+  private readonly syncDismissalsFromStorage = (event: StorageEvent) => {
+    if (!this.dismissedScope) {
+      return;
+    }
+    if (event.key === null || event.key === dismissalStoreKey(this.dismissedScope)) {
+      this.dismissed = loadDismissals(this.dismissedScope);
+    }
+  };
+
   private readonly refreshIfStale = () => {
     if (document.visibilityState !== "visible") {
       return;
@@ -153,11 +166,13 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("visibilitychange", this.refreshIfStale);
+    globalThis.addEventListener("storage", this.syncDismissalsFromStorage);
     this.idleRefreshTimer = globalThis.setInterval(this.refreshIfStale, IDLE_REFRESH_INTERVAL_MS);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.refreshIfStale);
+    globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
     if (this.idleRefreshTimer !== null) {
       globalThis.clearInterval(this.idleRefreshTimer);
       this.idleRefreshTimer = null;
@@ -230,10 +245,15 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       modelAuthStatus: this.modelAuthStatus,
       now: Date.now(),
     });
-    const pruned = pruneDismissals(this.dismissed, items);
-    if (pruned !== this.dismissed) {
-      this.dismissed = pruned;
+    // Prune against the persisted map, not the in-memory snapshot, so a
+    // concurrent dismissal from another tab is not dropped by this write.
+    const stored = loadDismissals(this.dismissedScope);
+    const pruned = pruneDismissals(stored, items);
+    if (pruned !== stored) {
       saveDismissals(this.dismissedScope, pruned);
+    }
+    if (JSON.stringify(pruned) !== JSON.stringify(this.dismissed)) {
+      this.dismissed = pruned;
     }
   }
 
@@ -241,9 +261,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     if (!this.dismissedScope) {
       return;
     }
-    const next = { ...this.dismissed, [item.kind]: item.signature };
-    this.dismissed = next;
-    saveDismissals(this.dismissedScope, next);
+    this.dismissed = addDismissal(this.dismissedScope, item.kind, item.signature);
   }
 
   override render() {

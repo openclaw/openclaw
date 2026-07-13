@@ -20,7 +20,7 @@ type DismissableChip = { kind: SidebarAttentionKind; signature: string };
 
 const DISMISSED_STORE_PREFIX = "openclaw.control.sidebarAttention.v1:";
 
-function dismissedStoreKey(gatewayUrl: string): string {
+export function dismissalStoreKey(gatewayUrl: string): string {
   return `${DISMISSED_STORE_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
 }
 
@@ -30,7 +30,7 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
     return {};
   }
   try {
-    const parsed: unknown = JSON.parse(storage.getItem(dismissedStoreKey(gatewayUrl)) ?? "null");
+    const parsed: unknown = JSON.parse(storage.getItem(dismissalStoreKey(gatewayUrl)) ?? "null");
     if (!parsed || typeof parsed !== "object") {
       return {};
     }
@@ -54,13 +54,28 @@ export function saveDismissals(gatewayUrl: string, dismissals: SidebarAttentionD
   }
   try {
     if (Object.keys(dismissals).length === 0) {
-      storage.removeItem(dismissedStoreKey(gatewayUrl));
+      storage.removeItem(dismissalStoreKey(gatewayUrl));
     } else {
-      storage.setItem(dismissedStoreKey(gatewayUrl), JSON.stringify(dismissals));
+      storage.setItem(dismissalStoreKey(gatewayUrl), JSON.stringify(dismissals));
     }
   } catch {
     // Quota/privacy-mode failures just lose the snooze; chips reappear.
   }
+}
+
+/**
+ * Record one dismissal via read-merge-write against the persisted map, not a
+ * caller-held snapshot: another tab may have dismissed a different chip since
+ * this tab last loaded, and a blind write would drop that entry.
+ */
+export function addDismissal(
+  gatewayUrl: string,
+  kind: SidebarAttentionKind,
+  signature: string,
+): SidebarAttentionDismissals {
+  const next = { ...loadDismissals(gatewayUrl), [kind]: signature };
+  saveDismissals(gatewayUrl, next);
+  return next;
 }
 
 /**
