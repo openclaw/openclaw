@@ -55,6 +55,11 @@ import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-st
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
 
+type TrustedCatalogSessionTarget = {
+  model: string;
+  agentRuntime: string;
+};
+
 const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
 );
@@ -181,6 +186,8 @@ export async function createGatewaySession(params: {
   agentId?: string;
   label?: string;
   model?: string;
+  /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
+  catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
   spawnedCwd?: string;
   /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
@@ -209,6 +216,14 @@ export async function createGatewaySession(params: {
   const agentId = normalizeAgentId(
     normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
   );
+  const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
+  const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
+  if (params.catalogTarget && (!catalogModel || !catalogAgentRuntime)) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "invalid catalog session target"),
+    };
+  }
   if (requestedKey) {
     const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
     if (
@@ -350,6 +365,9 @@ export async function createGatewaySession(params: {
     params.emitCommandHooks === true &&
     !requestedKey &&
     params.resetMainWhenUnspecified === true &&
+    // Catalog targets need a fresh locked row; resetting main would return before
+    // the catalog-owned model/runtime pair is persisted.
+    !params.catalogTarget &&
     params.cfg.session?.dmScope === "main"
   ) {
     const parentAgentId = normalizeAgentId(
@@ -517,7 +535,7 @@ export async function createGatewaySession(params: {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
-            model: normalizeOptionalString(params.model),
+            model: catalogModel ?? normalizeOptionalString(params.model),
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,
@@ -554,8 +572,20 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        const catalogResolvedModel = params.catalogTarget
+          ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
+          : undefined;
         const initializedEntry: SessionEntry = {
           ...patched.entry,
+          ...(catalogResolvedModel && catalogAgentRuntime
+            ? {
+                providerOverride: catalogResolvedModel.provider,
+                modelOverride: catalogResolvedModel.model,
+                modelOverrideSource: "user" as const,
+                agentRuntimeOverride: catalogAgentRuntime,
+                modelSelectionLocked: true,
+              }
+            : {}),
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays
           // restricted to spawned subagent and ACP lineage.
           ...(spawnedCwd ? { spawnedCwd } : {}),
@@ -591,9 +621,10 @@ export async function createGatewaySession(params: {
         if (!canonicalParentSessionKey) {
           return initialized;
         }
-        const inheritedSelection = normalizeOptionalString(params.model)
-          ? {}
-          : inheritSessionSelection(currentParentSessionEntry);
+        const inheritedSelection =
+          catalogModel || normalizeOptionalString(params.model)
+            ? {}
+            : inheritSessionSelection(currentParentSessionEntry);
         const entry: SessionEntry = {
           ...initializedEntry,
           ...inheritedSelection,

@@ -142,8 +142,9 @@ describe("Claude session catalog", () => {
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
 
-    expect(provider?.resolveCreateSession?.()).toEqual({
+    expect(provider?.resolveCreateSession?.({})).toEqual({
       model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
     });
 
     await expect(
@@ -185,7 +186,7 @@ describe("Claude session catalog", () => {
 
     registerClaudeSessionCatalog(api);
 
-    expect(provider?.resolveCreateSession?.()).toBeUndefined();
+    expect(provider?.resolveCreateSession?.({})).toBeUndefined();
 
     config = {
       agents: {
@@ -196,12 +197,51 @@ describe("Claude session catalog", () => {
         },
       },
     };
-    expect(provider?.resolveCreateSession?.()).toEqual({
+    expect(provider?.resolveCreateSession?.({})).toEqual({
       model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
     });
 
     config = {};
-    expect(provider?.resolveCreateSession?.()).toBeUndefined();
+    expect(provider?.resolveCreateSession?.({})).toBeUndefined();
+  });
+
+  it("resolves creation against the requested agent's runtime policy", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "research",
+            models: {
+              "anthropic/claude-opus-4-8": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config,
+      runtime: { config: { current: () => config } },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+
+    registerClaudeSessionCatalog(api);
+
+    expect(provider?.resolveCreateSession?.({ agentId: "main" })).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
+    });
+    expect(provider?.resolveCreateSession?.({ agentId: "research" })).toBeUndefined();
   });
 
   it("does not advertise a Claude CLI route excluded by the model allowlist", () => {
@@ -234,7 +274,7 @@ describe("Claude session catalog", () => {
 
     registerClaudeSessionCatalog(api);
 
-    expect(provider?.resolveCreateSession?.()).toBeUndefined();
+    expect(provider?.resolveCreateSession?.({})).toBeUndefined();
   });
 
   it.each([

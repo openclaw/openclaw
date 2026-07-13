@@ -16,6 +16,13 @@ import { icons } from "./icons.ts";
 
 type SidebarSessionRow = SessionsListResult["sessions"][number];
 
+export type CatalogBackingSessionDisplay = {
+  label: string;
+  subtitle?: string;
+  meta: string;
+  title: string;
+};
+
 export function catalogOwnedOpenClawSessionKeys(catalogs: readonly SessionCatalog[]): Set<string> {
   return new Set(
     catalogs.flatMap((catalog) =>
@@ -56,6 +63,7 @@ type RenderSidebarSessionCatalogsParams = {
   routeSessionKey: string;
   newSessionAgentId: string;
   findBackingSession: (sessionKey: string) => SidebarSessionRow | undefined;
+  renderBackingSession: (row: SidebarSessionRow, display: CatalogBackingSessionDisplay) => unknown;
   formatTimestamp: (timestampMs: number | null | undefined) => string;
   shouldHandleNavigationClick: (event: MouseEvent) => boolean;
   onToggleSection: (sectionId: string) => void;
@@ -76,24 +84,6 @@ function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
   return hasUnread
     ? html`<span
         class="session-unread-dot"
-        role="img"
-        aria-label=${t("sessionsView.unread")}
-      ></span>`
-    : nothing;
-}
-
-function renderCatalogRowStatus(hasActiveRun: boolean, unread: boolean) {
-  if (hasActiveRun) {
-    return html`<span
-      class="session-run-spinner sidebar-recent-session__state"
-      role="img"
-      aria-label=${t("sessionsView.activeRun")}
-      title=${t("sessionsView.activeRun")}
-    ></span>`;
-  }
-  return unread
-    ? html`<span
-        class="session-unread-dot sidebar-recent-session__unread"
         role="img"
         aria-label=${t("sessionsView.unread")}
       ></span>`
@@ -125,13 +115,20 @@ function renderCatalogSession(
   const backingRow = session.openClawSessionKey
     ? params.findBackingSession(session.openClawSessionKey)
     : undefined;
-  const hasActiveRun = backingRow?.hasActiveRun === true;
-  const unread = backingRow?.unread === true;
+  const label = session.name || session.threadId;
+  const title = `${label} · ${host.label}`;
+  if (backingRow) {
+    return params.renderBackingSession(backingRow, {
+      label,
+      subtitle: hostSubtitle,
+      meta: params.formatTimestamp(timestamp),
+      title,
+    });
+  }
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
     visuallyActive ? "sidebar-recent-session--active" : "",
-    hasActiveRun ? "session-row-host--running" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -140,7 +137,7 @@ function renderCatalogSession(
       <a
         href=${href}
         class="sidebar-recent-session__link"
-        title=${`${session.name || session.threadId} · ${host.label}`}
+        title=${title}
         @click=${(event: MouseEvent) => {
           if (!params.shouldHandleNavigationClick(event)) {
             return;
@@ -149,11 +146,8 @@ function renderCatalogSession(
           params.onNavigate?.("chat", { search });
         }}
       >
-        ${renderCatalogRowStatus(hasActiveRun, unread)}
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name hover-marquee"
-            >${session.name || session.threadId}</span
-          >
+          <span class="sidebar-recent-session__name hover-marquee">${label}</span>
           ${hostSubtitle
             ? html`<span class="sidebar-recent-session__subtitle">${hostSubtitle}</span>`
             : nothing}

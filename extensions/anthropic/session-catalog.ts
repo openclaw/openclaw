@@ -1445,7 +1445,7 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   const provider: SessionCatalogProvider = {
     id: "claude",
     label: "Claude Code",
-    resolveCreateSession: () => resolveClaudeCatalogCreateSession(api),
+    resolveCreateSession: ({ agentId }) => resolveClaudeCatalogCreateSession(api, agentId),
     list: async (query) => {
       const adopted = listBoundClaudeSessions(api);
       const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });

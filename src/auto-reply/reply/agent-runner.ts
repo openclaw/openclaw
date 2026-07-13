@@ -13,10 +13,10 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
 import {
   hasCompletedSourceReplyDeliveryEvidence,
+  hasCompletedTerminalDeliveryEvidence,
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
-  resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import {
@@ -2011,8 +2011,6 @@ export async function runReplyAgent(params: {
     const committedMessagingToolSourceReplyDelivery =
       hasCommittedSourceReplyDeliveryEvidence(runResult);
     const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
-    const hasExplicitSourceReplyCompletion =
-      resolveExplicitFinalSourceReplyDeliveryEvidence(runResult) !== undefined;
     const visibleOutboundDelivery = hasVisibleOutboundDeliveryEvidence(runResult);
     const successfulSideEffectDelivery =
       successfulSourceReplyDelivery ||
@@ -2023,10 +2021,7 @@ export async function runReplyAgent(params: {
       hasSuccessfulTerminalSourceReplyDelivery({
         blockReplyPipeline,
         directlySentBlockPayloads,
-      }) ||
-      completedSourceReplyDelivery ||
-      (!hasExplicitSourceReplyCompletion && visibleOutboundDelivery) ||
-      runResult.didSendDeterministicApprovalPrompt === true;
+      }) || hasCompletedTerminalDeliveryEvidence(runResult);
     // Compaction notices are progress, not a terminal reply. Dispatcher-backed
     // delivery settles after this run returns, so it cannot prove turn completion here.
     const shouldDeliverTerminalFailure = Boolean(

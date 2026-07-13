@@ -44,12 +44,9 @@ import {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import {
-  asOptionalRecord as readRecord,
-  isRecord,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveAgentContextLimitValue } from "./agent-context-limits.js";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
@@ -1123,31 +1120,6 @@ function resolveCodexDynamicToolResultMaxChars(
   });
   return configured ?? DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
 }
-function resolveAgentContextLimitValue(params: {
-  config: EmbeddedRunAttemptParams["config"] | undefined;
-  agentId?: string;
-  key: string;
-}): number | undefined {
-  const agents = readRecord(params.config?.agents);
-  const defaults = readRecord(readRecord(agents?.defaults)?.contextLimits);
-  const defaultValue = readPositiveInteger(defaults?.[params.key]);
-  if (!params.agentId) {
-    return defaultValue;
-  }
-  const list = agents?.list;
-  if (!Array.isArray(list)) {
-    return defaultValue;
-  }
-  const normalizedAgentId = normalizeAgentId(params.agentId);
-  const agent = list.find((entry) => {
-    const entryId = readRecord(entry)?.id;
-    return typeof entryId === "string" && normalizeAgentId(entryId) === normalizedAgentId;
-  });
-  const agentValue = readPositiveInteger(
-    readRecord(readRecord(agent)?.contextLimits)?.[params.key],
-  );
-  return agentValue ?? defaultValue;
-}
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
   const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
   if (activeSignals.length === 0) {
@@ -1282,12 +1254,6 @@ function extractInternalSourceReplyPayload(
   return text || mediaUrls.length > 0 || payload.presentation || payload.interactive
     ? payload
     : undefined;
-}
-function readPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
 }
 function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
   if (isToolResultError(result)) {

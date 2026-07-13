@@ -639,6 +639,18 @@ describe("AppSidebar session catalog pagination", () => {
     ).toHaveLength(1);
     expect(sidebar.querySelectorAll(`[data-session-key="${backingSessionKey}"]`)).toHaveLength(1);
     const catalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+    const linkedRow = catalogSection?.querySelector<HTMLElement>(
+      `[data-session-key="${backingSessionKey}"]`,
+    );
+    expect(linkedRow?.getAttribute("draggable")).toBe("true");
+    expect(linkedRow?.querySelector('[data-sidebar-session-pin="true"]')).not.toBeNull();
+    expect(linkedRow?.querySelector('[data-session-menu="true"]')).not.toBeNull();
+    linkedRow?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    const linkedMenu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await linkedMenu?.updateComplete;
+    expect(linkedMenu?.querySelector('[data-shortcut="a"]')).not.toBeNull();
+    expect(linkedMenu?.querySelector('[data-shortcut="d"]')).not.toBeNull();
     expect(
       catalogSection?.querySelector(
         `[data-session-key="${backingSessionKey}"] .session-unread-dot`,

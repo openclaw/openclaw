@@ -423,6 +423,7 @@ export const en: TranslationMap = {
     start: "Start session",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
+    catalogUnavailable: "This session target is unavailable.",
   },
   sessionsView: {
     deletePreservedWorktrees:

@@ -2299,6 +2299,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           type: "file",
         },
       ]);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/02-reconnected-active.png`, fullPage: true });
+      }
       await expectRequestCountStable(gateway, "chat.send", 1);
       const requestsAfterReconnect = await gateway.getRequests("chat.send");
       await gateway.setHistoryMessages([
@@ -2318,7 +2323,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator("openclaw-connection-banner").waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/02-online-delivered.png`, fullPage: true });
+        await page.screenshot({ path: `${artifactDir}/03-online-delivered.png`, fullPage: true });
       }
       if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
         process.stdout.write(

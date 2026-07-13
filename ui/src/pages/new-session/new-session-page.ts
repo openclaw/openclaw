@@ -4,6 +4,7 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -65,6 +66,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private message = "";
   @state() private submitting = false;
   @state() private error: string | null = null;
+  @state() private catalogRetrying = false;
   @state() private browserOpen = false;
   @state() private browserLoading = false;
   @state() private browserError: string | null = null;
@@ -79,6 +81,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
+  private catalogRetryClient: GatewayBrowserClient | null = null;
+  private catalogRetryId = "";
 
   // Re-render when agents/sessions hydrate so the hero identity and the
   // recent-chats list appear without a route change.
@@ -195,6 +199,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   };
 
   override updated() {
+    this.maybeRetryCatalogTarget();
     const agentsReady = this.agents().length > 0;
     const openKey = catalog.routeKey(this.data);
     if (this.openedFor !== openKey) {
@@ -211,6 +216,48 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.adoptAgentDefaults();
     }
   }
+
+  private maybeRetryCatalogTarget() {
+    const catalogId = this.data?.catalogId ?? "";
+    const client = this.context?.gateway.snapshot.client ?? null;
+    if (
+      !catalogId ||
+      catalog.isTarget(this.data) ||
+      !client ||
+      (this.catalogRetryClient === client && this.catalogRetryId === catalogId)
+    ) {
+      return;
+    }
+    this.catalogRetryClient = client;
+    this.catalogRetryId = catalogId;
+    void this.retryCatalogTarget(client, catalogId);
+  }
+
+  private async retryCatalogTarget(client: GatewayBrowserClient, catalogId: string) {
+    if (this.catalogRetrying) {
+      return;
+    }
+    this.catalogRetrying = true;
+    try {
+      const target = await catalog.resolveCreateTarget(client, catalogId);
+      if (target && this.data?.catalogId === catalogId) {
+        this.data = { ...this.data, ...target };
+      }
+    } finally {
+      this.catalogRetrying = false;
+    }
+  }
+
+  private readonly handleCatalogRetry = () => {
+    const catalogId = this.data?.catalogId ?? "";
+    const client = this.context?.gateway.snapshot.client;
+    if (!catalogId || !client) {
+      return;
+    }
+    this.catalogRetryClient = client;
+    this.catalogRetryId = catalogId;
+    void this.retryCatalogTarget(client, catalogId);
+  };
 
   private agents() {
     return this.context?.agents.state.agentsList?.agents ?? [];
@@ -424,7 +471,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           cwd: this.folder,
           workspace: this.workspacePath(),
           execNode: this.execNode,
-          model: this.data?.model,
+          catalogId: this.data?.catalogId,
         }),
       );
       if (!result) {
@@ -1047,6 +1094,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       agentSelect: agents.length > 1 ? this.renderAgentSelect(agents) : nothing,
       folderSelect: this.renderFolderSelect(),
       whereSelect: this.renderWhereSelect(),
+      retrying: this.catalogRetrying,
+      onRetry: this.handleCatalogRetry,
     });
   }
 

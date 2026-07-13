@@ -1,15 +1,17 @@
 import { html, nothing } from "lit";
+import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
+import { t } from "../../i18n/index.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { NewSessionRouteData } from "./location.ts";
 
 export function routeKey(data?: NewSessionRouteData): string {
-  return JSON.stringify([
-    data?.agentId ?? "",
-    data?.catalogId ?? "",
-    data?.model ?? "",
-    data?.catalogLabel ?? "",
-  ]);
+  return JSON.stringify([data?.agentId ?? "", data?.catalogId ?? ""]);
+}
+
+export function isRequested(data?: NewSessionRouteData): boolean {
+  return Boolean(data?.catalogId);
 }
 
 export function isTarget(data?: NewSessionRouteData): boolean {
@@ -21,7 +23,7 @@ export function resolveAgentId(
   availableAgents: readonly { id: string }[],
   fallback: string,
 ): string {
-  if (isTarget(data)) {
+  if (isRequested(data)) {
     return normalizeAgentId(fallback);
   }
   const requested = normalizeAgentId(data?.agentId ?? "");
@@ -34,16 +36,38 @@ export function allowsSelectedAgent(
   data: NewSessionRouteData | undefined,
   selectedAgent: unknown,
 ): boolean {
-  return !isTarget(data) || Boolean(selectedAgent);
+  return !isRequested(data) || (isTarget(data) && Boolean(selectedAgent));
 }
 
-export function render(data?: NewSessionRouteData) {
-  if (!data?.catalogLabel) {
+export async function resolveCreateTarget(
+  client: GatewayBrowserClient,
+  catalogId: string,
+): Promise<Pick<NewSessionRouteData, "model" | "catalogLabel"> | undefined> {
+  try {
+    const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+      catalogId,
+      limitPerHost: 1,
+    });
+    const catalog = result.catalogs.find((candidate) => candidate.id === catalogId);
+    const model = catalog?.capabilities.createSession?.model.trim();
+    return catalog && model ? { model, catalogLabel: catalog.label } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function renderTarget(data?: NewSessionRouteData) {
+  if (!isRequested(data)) {
     return nothing;
   }
-  return html`<span class="new-session-page__trigger new-session-page__runtime" title=${data.model}>
+  const ready = isTarget(data);
+  const label = data?.catalogLabel || data?.catalogId || "";
+  return html`<span
+    class="new-session-page__trigger new-session-page__runtime"
+    title=${ready ? data?.model : t("newSession.catalogUnavailable")}
+  >
     <span class="new-session-page__target-icon" aria-hidden="true">${icons.terminal}</span>
-    <span>${data.catalogLabel}</span>
+    <span>${label}</span>
   </span>`;
 }
 
@@ -52,11 +76,27 @@ export function renderBar(params: {
   agentSelect: unknown;
   folderSelect: unknown;
   whereSelect: unknown;
+  retrying: boolean;
+  onRetry: () => void;
 }) {
+  const pending = isRequested(params.data) && !isTarget(params.data);
   return html`
     <div class="new-session-page__triggers">
-      ${render(params.data)} ${isTarget(params.data) ? nothing : params.agentSelect}
+      ${renderTarget(params.data)} ${isRequested(params.data) ? nothing : params.agentSelect}
       ${params.folderSelect} ${params.whereSelect}
+      ${pending
+        ? html`<span class="new-session-page__catalog-unavailable">
+            ${t("newSession.catalogUnavailable")}
+            <button
+              class="btn btn--sm"
+              type="button"
+              ?disabled=${params.retrying}
+              @click=${params.onRetry}
+            >
+              ${params.retrying ? t("common.loading") : t("lazyView.retry")}
+            </button>
+          </span>`
+        : nothing}
     </div>
   `;
 }

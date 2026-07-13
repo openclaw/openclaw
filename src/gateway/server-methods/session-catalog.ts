@@ -12,7 +12,10 @@ import {
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
-import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import type {
+  SessionCatalogCreateTarget,
+  SessionCatalogProvider,
+} from "../../plugins/session-catalog.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -31,6 +34,41 @@ function providers(): SessionCatalogProvider[] {
   return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? [])
     .map((entry) => entry.provider)
     .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+type SessionCatalogCreateTargetResolution =
+  | { ok: true; target: SessionCatalogCreateTarget }
+  | { ok: false; message: string; unknownCatalog?: true };
+
+function resolveProviderCreateTarget(
+  provider: SessionCatalogProvider,
+  agentId?: string,
+): SessionCatalogCreateTargetResolution {
+  try {
+    const target = provider.resolveCreateSession?.({ agentId });
+    const model = target?.model.trim();
+    const agentRuntime = target?.agentRuntime.trim();
+    return model && agentRuntime
+      ? { ok: true, target: { model, agentRuntime } }
+      : { ok: false, message: `session catalog ${provider.id} cannot create sessions` };
+  } catch (error) {
+    return { ok: false, message: catalogError(error).message };
+  }
+}
+
+/** Resolves a catalog-owned create target at the start of sessions.create. */
+export function resolveSessionCatalogCreateTarget(
+  catalogId: string,
+  agentId: string,
+): SessionCatalogCreateTargetResolution {
+  const provider = providers().find((candidate) => candidate.id === catalogId);
+  return provider
+    ? resolveProviderCreateTarget(provider, agentId)
+    : {
+        ok: false,
+        message: `unknown session catalog: ${catalogId}`,
+        unknownCatalog: true,
+      };
 }
 
 function providerOrRespond(
@@ -95,6 +133,8 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
+        const createTarget = resolveProviderCreateTarget(provider);
+        const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
         try {
           const hosts = await provider.list({
             search: request.search,
@@ -102,9 +142,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             hostIds: request.hostIds,
             ...("cursors" in request ? { cursors: request.cursors } : {}),
           });
-          return catalogResult(provider, hosts, undefined, provider.resolveCreateSession?.());
+          return catalogResult(provider, hosts, undefined, createSession);
         } catch (error) {
-          return catalogResult(provider, [], catalogError(error));
+          return catalogResult(provider, [], catalogError(error), createSession);
         }
       }),
     );

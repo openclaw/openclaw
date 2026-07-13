@@ -158,6 +158,7 @@ import {
   hasVisibleActiveSessionRun,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
+import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -1396,6 +1397,45 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
+    const catalogId = normalizeOptionalString(p.catalogId);
+    if (catalogId && p.model) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create catalogId cannot include model"),
+      );
+      return;
+    }
+    const catalogRequestedKey = normalizeOptionalString(p.key) ?? "global";
+    const catalogAgentId = catalogId
+      ? normalizeAgentId(
+          normalizeOptionalString(p.agentId) ??
+            parseAgentSessionKey(catalogRequestedKey)?.agentId ??
+            resolveDefaultAgentId(cfg),
+        )
+      : undefined;
+    const catalogRequestedAgent = catalogAgentId
+      ? resolveRequestedGlobalAgentId(cfg, catalogRequestedKey, catalogAgentId)
+      : undefined;
+    if (catalogRequestedAgent && !catalogRequestedAgent.ok) {
+      respond(false, undefined, catalogRequestedAgent.error);
+      return;
+    }
+    const catalogTarget =
+      catalogId && catalogAgentId
+        ? resolveSessionCatalogCreateTarget(catalogId, catalogAgentId)
+        : undefined;
+    if (catalogTarget && !catalogTarget.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          catalogTarget.unknownCatalog ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+          catalogTarget.message,
+        ),
+      );
+      return;
+    }
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     const requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
@@ -1444,7 +1484,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     let sessionKey = p.key;
-    let sessionAgentId = p.agentId;
+    let sessionAgentId = catalogAgentId ?? p.agentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd: string | undefined;
@@ -1591,7 +1631,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
-      model: p.model,
+      ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       parentSessionKey: p.parentSessionKey,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree

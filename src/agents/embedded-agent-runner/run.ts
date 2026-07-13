@@ -4317,7 +4317,6 @@ async function runEmbeddedAgentInternal(
           };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(attemptAssistant);
           const finalAssistantRawText = resolveFinalAssistantRawText(attemptAssistant);
-
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,

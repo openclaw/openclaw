@@ -59,9 +59,10 @@ export function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, str
 
 export function resolveClaudeCatalogCreateSession(
   api: OpenClawPluginApi,
-): { model: string } | undefined {
+  requestedAgentId?: string,
+): { model: string; agentRuntime: string } | undefined {
   const config = currentClaudeSessionCatalogConfig(api);
-  const agentId = resolveDefaultAgentId(config);
+  const agentId = requestedAgentId ?? resolveDefaultAgentId(config);
   const policy = resolveModelRuntimePolicy({
     config,
     provider: "anthropic",
@@ -79,5 +80,10 @@ export function resolveClaudeCatalogCreateSession(
     defaultProvider: defaultModel.provider,
     defaultModel: defaultModel.model,
   });
-  return "error" in allowed ? undefined : { model: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF };
+  return "error" in allowed
+    ? undefined
+    : {
+        model: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+        agentRuntime: CLAUDE_CLI_BACKEND_ID,
+      };
 }

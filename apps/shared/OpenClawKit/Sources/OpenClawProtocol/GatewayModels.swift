@@ -3892,6 +3892,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let agentid: String?
     public let label: String?
     public let model: String?
+    public let catalogid: String?
     public let parentsessionkey: String?
     public let fork: Bool?
     public let emitcommandhooks: Bool?
@@ -3908,6 +3909,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         agentid: String? = nil,
         label: String? = nil,
         model: String? = nil,
+        catalogid: String? = nil,
         parentsessionkey: String? = nil,
         fork: Bool? = nil,
         emitcommandhooks: Bool? = nil,
@@ -3923,6 +3925,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.agentid = agentid
         self.label = label
         self.model = model
+        self.catalogid = catalogid
         self.parentsessionkey = parentsessionkey
         self.fork = fork
         self.emitcommandhooks = emitcommandhooks
@@ -3940,6 +3943,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case agentid = "agentId"
         case label
         case model
+        case catalogid = "catalogId"
         case parentsessionkey = "parentSessionKey"
         case fork
         case emitcommandhooks = "emitCommandHooks"

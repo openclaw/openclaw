@@ -1,9 +1,9 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
-import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { resolveCreateTarget } from "./catalog-target.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 
 async function connectedGatewayClient(
@@ -56,21 +56,10 @@ async function loadNewSessionData(
   }
   const client = await connectedGatewayClient(context);
   if (!client) {
-    return { ...plain, catalogId: "" };
+    return plain;
   }
-  try {
-    const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-      catalogId: location.catalogId,
-      limitPerHost: 1,
-    });
-    const catalog = result.catalogs.find((candidate) => candidate.id === location.catalogId);
-    const model = catalog?.capabilities.createSession?.model.trim();
-    return catalog && model
-      ? { ...location, model, catalogLabel: catalog.label }
-      : { ...plain, catalogId: "" };
-  } catch {
-    return { ...plain, catalogId: "" };
-  }
+  const target = await resolveCreateTarget(client, location.catalogId);
+  return target ? { ...location, ...target } : plain;
 }
 
 export const page = definePage({

@@ -97,6 +97,7 @@ import {
   catalogOwnedOpenClawSessionKeys,
   findCatalogBackingSessionRow,
   renderSidebarSessionCatalogs,
+  type CatalogBackingSessionDisplay,
 } from "./app-sidebar-session-catalog.ts";
 import { icons } from "./icons.ts";
 import {
@@ -2301,7 +2302,17 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     });
   }
 
-  private renderRecentSession(session: SidebarRecentSession) {
+  private renderRecentSession(
+    session: SidebarRecentSession,
+    display?: CatalogBackingSessionDisplay,
+  ) {
+    const label = display?.label ?? session.label;
+    const subtitle = display
+      ? display.subtitle
+      : session.subtitle && session.workSession && session.subtitle !== session.label
+        ? session.subtitle
+        : undefined;
+    const meta = display?.meta ?? session.meta;
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
@@ -2339,7 +2350,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           href=${session.href}
           class="sidebar-recent-session__link"
           draggable="false"
-          title=${`${session.label} · ${session.key}`}
+          title=${display?.title ?? `${session.label} · ${session.key}`}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
           ${session.hasActiveRun
@@ -2357,9 +2368,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 ></span>`
               : nothing}
           <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
-            ${session.subtitle && session.workSession && session.subtitle !== session.label
-              ? html`<span class="sidebar-recent-session__subtitle">${session.subtitle}</span>`
+            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+            ${subtitle
+              ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
           ${session.worktreeId || session.hasAutomation
@@ -2386,7 +2397,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             : nothing}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
-          <span class="session-row-trail">${session.meta}</span>
+          <span class="session-row-trail">${meta}</span>
           <span class="session-row-actions">
             <button
               class="session-action session-action--pin"
@@ -2740,6 +2751,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   // flex-squeezes under the shell body's overflow clip and paints rows over
   // the following section.
   private renderSessionCatalogs() {
+    const navigationState = this.getSessionNavigationState();
     return renderSidebarSessionCatalogs({
       catalogs: this.sessionCatalogs,
       collapsedSections: this.collapsedSessionSections,
@@ -2755,6 +2767,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           this.sessionsResult?.sessions ?? [],
           this.sessionRowsByAgent,
         ),
+      renderBackingSession: (row, display) =>
+        this.renderRecentSession(navigationState.toSidebarSession(row), display),
       formatTimestamp: formatSidebarTimestamp,
       shouldHandleNavigationClick,
       onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),

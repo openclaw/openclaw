@@ -5,11 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { computeTwilioSignature, parseTwilioFormBody } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
-import {
-  createSmsWebhookHandler,
-  createSmsWebhookReplayGuard,
-  resetSmsWebhookReplayGuardsForTest,
-} from "./webhook.js";
+import { createSmsWebhookHandler, testing } from "./webhook.js";
+
+const { createSmsWebhookReplayGuard, resetSmsWebhookReplayGuardsForTest } = testing;
 
 const dispatchSmsInboundEvent = vi.hoisted(() => vi.fn(async () => undefined));
 

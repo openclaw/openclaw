@@ -16,18 +16,18 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "hello" });
   });
 
-  it("preselects a catalog-provided model", () => {
+  it("submits the catalog target for server-side resolution", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "start coding",
         worktree: false,
-        model: "anthropic/claude-opus-4-8",
+        catalogId: "claude",
       }),
     ).toEqual({
       agentId: "main",
       message: "start coding",
-      model: "anthropic/claude-opus-4-8",
+      catalogId: "claude",
     });
   });
 

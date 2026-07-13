@@ -8,7 +8,8 @@ vi.mock("../../plugins/runtime-state.js", () => ({
   getPluginRegistryState: () => ({ activeRegistry }),
 }));
 
-const { sessionCatalogHandlers } = await import("./session-catalog.js");
+const { resolveSessionCatalogCreateTarget, sessionCatalogHandlers } =
+  await import("./session-catalog.js");
 
 function provider(
   id: string,
@@ -59,8 +60,9 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("refreshes a provider's core new-session target when listing", async () => {
-    let createSession: { model: string } | undefined = {
+    let createSession: { model: string; agentRuntime: string } | undefined = {
       model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
     };
     activeRegistry.sessionCatalogs = [
       {
@@ -97,6 +99,63 @@ describe("session catalog Gateway methods", () => {
           },
         }),
       ],
+    });
+  });
+
+  it("keeps creation available when catalog history listing fails", async () => {
+    activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("claude", {
+          resolveCreateSession: () => ({
+            model: "anthropic/claude-opus-4-8",
+            agentRuntime: "claude-cli",
+          }),
+          list: vi.fn(async () => {
+            throw new Error("history unavailable");
+          }),
+        }),
+      },
+    ];
+
+    const respond = await call("sessions.catalog.list", {});
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          capabilities: {
+            continueSession: false,
+            archive: false,
+            createSession: { model: "anthropic/claude-opus-4-8" },
+          },
+          error: { code: "catalog_error", message: "history unavailable" },
+        }),
+      ],
+    });
+  });
+
+  it("resolves the private runtime target separately from the public capability", () => {
+    activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("claude", {
+          resolveCreateSession: () => ({
+            model: "anthropic/claude-opus-4-8",
+            agentRuntime: "claude-cli",
+          }),
+        }),
+      },
+    ];
+
+    expect(resolveSessionCatalogCreateTarget("claude", "research")).toEqual({
+      ok: true,
+      target: {
+        model: "anthropic/claude-opus-4-8",
+        agentRuntime: "claude-cli",
+      },
+    });
+    expect(resolveSessionCatalogCreateTarget("missing", "research")).toEqual({
+      ok: false,
+      message: "unknown session catalog: missing",
+      unknownCatalog: true,
     });
   });
 

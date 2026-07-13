@@ -367,6 +367,7 @@ export const SessionsCreateParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
+    catalogId: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
     fork: Type.Optional(
       Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),

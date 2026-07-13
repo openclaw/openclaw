@@ -339,8 +339,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(create.params).toMatchObject({
         agentId: "main",
         message: "use Claude Code",
-        model,
+        catalogId: "claude",
       });
+      expect(create.params).not.toHaveProperty("model");
     } finally {
       await context.close();
     }

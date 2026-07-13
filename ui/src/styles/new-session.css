@@ -99,6 +99,14 @@ openclaw-new-session-page {
   cursor: default;
 }
 
+.new-session-page__catalog-unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .new-session-page__trigger-label {
   max-width: min(40vw, 260px);
   overflow: hidden;

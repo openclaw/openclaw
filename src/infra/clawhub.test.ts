@@ -222,7 +222,7 @@ describe("clawhub helpers", () => {
     ).toBe("1.2.2");
   });
 
-  it("checks plugin api ranges without semver dependency", () => {
+  it("checks plugin api ranges with semver precedence", () => {
     expect(satisfiesPluginApiRange("1.2.3", "^1.2.0")).toBe(true);
     expect(satisfiesPluginApiRange("1.9.0", ">=1.2.0 <2.0.0")).toBe(true);
     expect(satisfiesPluginApiRange("2.0.0", "^1.2.0")).toBe(false);
