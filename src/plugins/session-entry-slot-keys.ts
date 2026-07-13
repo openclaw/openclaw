@@ -146,7 +146,19 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "quotaSuspension",
 ] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
 
-const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<string>(SESSION_ENTRY_RESERVED_SLOT_KEY_LIST);
+type ReservedSessionEntrySlotKey = Extract<
+  (typeof SESSION_ENTRY_RESERVED_SLOT_KEY_LIST)[number],
+  keyof SessionEntry
+>;
+type MissingSessionEntryReservedSlotKey = Exclude<keyof SessionEntry, ReservedSessionEntrySlotKey>;
+type SessionEntryReservedSlotSetValue = [MissingSessionEntryReservedSlotKey] extends [never]
+  ? string
+  : never;
+
+// Keep the value type impossible if a new SessionEntry field is missing from the reserved list.
+const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValue>(
+  SESSION_ENTRY_RESERVED_SLOT_KEY_LIST,
+);
 const OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS = new Set<string>([
   "prototype",
   ...Object.getOwnPropertyNames(Object.prototype),
