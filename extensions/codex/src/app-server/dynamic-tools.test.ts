@@ -1318,7 +1318,28 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("requires final=true before a delivered message-tool-only source reply terminates", async () => {
+  it("marks delivered message-tool-only source replies as terminal when final is omitted", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { messageId: "imessage-6264" }),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
+      sourceReplyFinal: true,
+    });
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("requires explicit final=false to keep a delivered message-tool-only source reply non-terminal", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", { messageId: "imessage-6264" }),
@@ -1383,7 +1404,6 @@ describe("createCodexDynamicToolBridge", () => {
     const result = await handleMessageToolCall(bridge, {
       action: "send",
       message: "visible reply",
-      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1435,7 +1455,6 @@ describe("createCodexDynamicToolBridge", () => {
       messageId: "853",
       message: "visible reply",
       buttons: [],
-      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1482,7 +1501,6 @@ describe("createCodexDynamicToolBridge", () => {
       target: "+1 (206) 910-6512",
       messageId: "853",
       message: "visible reply",
-      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1522,7 +1540,6 @@ describe("createCodexDynamicToolBridge", () => {
       messageId: "857",
       message: "visible reply",
       buttons: [],
-      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1559,7 +1576,6 @@ describe("createCodexDynamicToolBridge", () => {
       messageId: "861",
       message: "visible reply",
       buttons: [],
-      final: true,
     });
 
     expect(result).toEqual(expectInputText(receiptText));
@@ -1640,7 +1656,6 @@ describe("createCodexDynamicToolBridge", () => {
       messageId: "863",
       message: "visible reply",
       buttons: [],
-      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1662,7 +1677,6 @@ describe("createCodexDynamicToolBridge", () => {
       messageId: "865",
       message: "visible reply",
       buttons: [],
-      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1756,7 +1770,6 @@ describe("createCodexDynamicToolBridge", () => {
     const firstResult = await handleMessageToolCall(bridge, {
       action: "send",
       message: "visible reply",
-      final: true,
     });
     const secondResult = await bridge.handleToolCall({
       threadId: "thread-1",

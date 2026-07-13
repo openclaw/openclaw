@@ -1676,15 +1676,18 @@ describe("Codex app-server dynamic tool build", () => {
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
-    const messageTool = {
-      ...createRuntimeDynamicTool("message"),
-      parameters: {
-        type: "object",
-        properties: { message: { type: "string" } },
-        additionalProperties: false,
+    // Mirror production createOpenClawCodingTools: attempt-fresh tool instances
+    // per build, never a shared object reused across delivery modes.
+    setOpenClawCodingToolsFactoryForTests(() => [
+      {
+        ...createRuntimeDynamicTool("message"),
+        parameters: {
+          type: "object",
+          properties: { message: { type: "string" } },
+          additionalProperties: false,
+        },
       },
-    };
-    setOpenClawCodingToolsFactoryForTests(() => [messageTool]);
+    ]);
 
     params.sourceReplyDeliveryMode = "message_tool_only";
     const sourceReplyTools = await buildDynamicToolsForTest(params, workspaceDir);

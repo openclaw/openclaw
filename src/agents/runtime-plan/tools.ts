@@ -74,16 +74,6 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   copyToolTerminalPresentation(source as never, target as never);
 }
 
-/** Clone a runtime tool with a projected schema while preserving WeakMap-backed ownership data. */
-export function cloneAgentRuntimeToolWithParameters<TTool extends AgentTool>(
-  source: TTool,
-  parameters: TTool["parameters"],
-): TTool {
-  const target = { ...source, parameters } as TTool;
-  copyRuntimeToolMetadata(source, target);
-  return target;
-}
-
 // Duplicate names cannot be matched by map lookup alone, so same-index matches
 // take precedence and unique-name fallback covers cloned arrays.
 function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TResult = unknown>(

@@ -6,7 +6,6 @@
 import {
   buildAgentHookContextChannelFields,
   buildEmbeddedAttemptToolRunContext,
-  cloneAgentRuntimeToolWithParameters,
   embeddedAgentLog,
   filterProviderNormalizableTools,
   isHostScopedAgentToolActive,
@@ -947,15 +946,17 @@ function addCodexMessageToolOnlyFinalControl(
   if (sourceReplyDeliveryMode !== "message_tool_only") {
     return tools;
   }
-  return tools.map((tool) => {
+  // allTools is attempt-fresh from createOpenClawCodingTools inside
+  // buildDynamicTools — never a shared/cached instance across attempts or
+  // delivery modes. Project the Codex-only `final` property in place so
+  // WeakMap ownership metadata stays attached without a public SDK clone helper.
+  for (const tool of tools) {
     if (normalizeCodexDynamicToolName(tool.name) !== "message") {
-      return tool;
+      continue;
     }
-    return cloneAgentRuntimeToolWithParameters(
-      tool,
-      addCodexMessageToolOnlyFinalParameter(tool.parameters),
-    );
-  });
+    tool.parameters = addCodexMessageToolOnlyFinalParameter(tool.parameters);
+  }
+  return tools;
 }
 
 function addCodexMessageToolOnlyFinalParameter(parameters: OpenClawDynamicTool["parameters"]) {
