@@ -4801,7 +4801,6 @@ describe("embedded attempt session lock lifecycle", () => {
         }),
       },
     };
-
     installPromptSubmissionLockRelease({
       session,
       waitForSessionEvents: (sessionToDrain) => controller.waitForSessionEvents(sessionToDrain),
@@ -4818,6 +4817,58 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.hasSessionTakeover()).toBe(false);
     await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain(
       "mirrored message-tool delivery",
+    );
+  });
+
+  it("preserves provider quota errors after prompt-stream error transcript writes (#85103)", async () => {
+    const sessionFile = await createTempSessionFile();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: {
+        ...lockOptions,
+        sessionFile,
+        timeoutMs: 1_000,
+      },
+    });
+    const quotaError = Object.assign(new Error("429 The usage limit has been reached"), {
+      status: 429,
+      type: "usage_limit_reached",
+    });
+    const session = {
+      agent: {
+        streamFn: vi.fn(async (..._args: unknown[]) => {
+          await appendSessionTranscriptMessage({
+            transcriptPath: sessionFile,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "429 The usage limit has been reached" }],
+            },
+          });
+          throw quotaError;
+        }),
+      },
+    };
+    const streamFn = session.agent.streamFn;
+
+    installPromptSubmissionLockRelease({
+      session,
+      waitForSessionEvents: (sessionToDrain) => controller.waitForSessionEvents(sessionToDrain),
+      releaseForPrompt: () => controller.releaseForPrompt(),
+      reacquireAfterPrompt: () => controller.reacquireAfterPrompt(),
+      sessionFile,
+      withSessionWriteLock: (run) => controller.withSessionWriteLock(run),
+    });
+
+    await expect(session.agent.streamFn("openai-codex/gpt-5.5", "context")).rejects.toBe(
+      quotaError,
+    );
+    const cleanupLock = await controller.acquireForCleanup({ session });
+    await cleanupLock.release();
+
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(streamFn).toHaveBeenCalledWith("openai-codex/gpt-5.5", "context");
+    await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain(
+      "429 The usage limit has been reached",
     );
   });
 
