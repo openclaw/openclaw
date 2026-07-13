@@ -156,7 +156,7 @@ extension OpenClawChatViewModel {
     /// contract changes. Bare aliases cannot safely identify an inactive row.
     private func inactiveSettingsStateKey(for target: ModelPatchTarget) -> String? {
         if target.agentID != nil || target.sessionRoutingContract != nil {
-            guard Self.agentID(fromSessionKey: target.canonicalSessionKey) != nil else { return nil }
+            guard OpenClawChatSessionKey.agentID(from: target.canonicalSessionKey) != nil else { return nil }
         }
         return target.canonicalSessionKey
     }
