@@ -68,18 +68,23 @@ type CodexModelLister = (options: {
   sharedClient?: boolean;
 }) => Promise<CodexAppServerModelListResult>;
 
-type CodexRateLimitReader = (options: {
+type CodexUsageRead = {
+  rateLimits: unknown;
+  accountEmail?: string;
+};
+
+type CodexUsageReader = (options: {
   timeoutMs: number;
   agentDir?: string;
   authProfileId?: string;
-  config?: Parameters<typeof requestCodexAppServerRateLimitsLazy>[0]["config"];
+  config?: Parameters<typeof requestCodexAppServerUsageLazy>[0]["config"];
   startOptions?: CodexAppServerStartOptions;
-}) => Promise<unknown>;
+}) => Promise<CodexUsageRead>;
 
 type BuildCodexProviderOptions = {
   pluginConfig?: unknown;
   listModels?: CodexModelLister;
-  readRateLimits?: CodexRateLimitReader;
+  readUsage?: CodexUsageReader;
 };
 
 type BuildCatalogOptions = {
@@ -148,15 +153,16 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);
       const pluginConfig = runtimePluginConfig ?? (ctx.config ? undefined : options.pluginConfig);
       const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-      const rateLimits = await (options.readRateLimits ?? requestCodexAppServerRateLimitsLazy)({
+      const usage = await (options.readUsage ?? requestCodexAppServerUsageLazy)({
         timeoutMs: ctx.timeoutMs,
         agentDir: ctx.agentDir,
         ...(ctx.authProfileId ? { authProfileId: ctx.authProfileId } : {}),
         config: ctx.config,
         startOptions: appServer.start,
       });
-      const snapshot = buildCodexAppServerUsageSnapshot(rateLimits);
-      return ctx.email && !snapshot.error ? { ...snapshot, accountEmail: ctx.email } : snapshot;
+      const snapshot = buildCodexAppServerUsageSnapshot(usage.rateLimits);
+      const accountEmail = ctx.email ?? usage.accountEmail;
+      return accountEmail && !snapshot.error ? { ...snapshot, accountEmail } : snapshot;
     },
     resolveThinkingProfile: ({ modelId, compat }) => {
       const efforts = resolveCodexThinkingEfforts({
@@ -260,7 +266,20 @@ async function listCodexAppServerModelsLazy(options: {
   return listCodexAppServerModels(options);
 }
 
-async function requestCodexAppServerRateLimitsLazy(options: {
+function extractCodexAccountEmail(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as { account?: unknown; email?: unknown; accountEmail?: unknown };
+  const account =
+    record.account && typeof record.account === "object"
+      ? (record.account as { email?: unknown; accountEmail?: unknown })
+      : record;
+  const email = account.email ?? account.accountEmail;
+  return typeof email === "string" && email.trim() ? email.trim() : undefined;
+}
+
+async function requestCodexAppServerUsageLazy(options: {
   timeoutMs: number;
   agentDir?: string;
   authProfileId?: string;
@@ -268,17 +287,30 @@ async function requestCodexAppServerRateLimitsLazy(options: {
     typeof import("./src/app-server/request.js").requestCodexAppServerJson
   >[0]["config"];
   startOptions?: CodexAppServerStartOptions;
-}): Promise<unknown> {
-  const { requestCodexAppServerJson } = await import("./src/app-server/request.js");
-  return await requestCodexAppServerJson({
-    method: "account/rateLimits/read",
-    timeoutMs: options.timeoutMs,
-    agentDir: options.agentDir,
-    ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
-    config: options.config,
-    startOptions: options.startOptions,
-    isolated: true,
-  });
+}): Promise<{ rateLimits: unknown; accountEmail?: string }> {
+  const { withCodexAppServerJsonClient } = await import("./src/app-server/request.js");
+  // One session serves both reads so the identity is guaranteed to belong to
+  // the same account the rate limits describe.
+  return await withCodexAppServerJsonClient(
+    {
+      timeoutMs: options.timeoutMs,
+      timeoutMessage: "codex app-server usage read timed out",
+      agentDir: options.agentDir,
+      ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
+      config: options.config,
+      startOptions: options.startOptions,
+      isolated: true,
+    },
+    async (request) => {
+      const rateLimits = await request({ method: "account/rateLimits/read" });
+      // Identity is best-effort: rate limits stay useful without it.
+      const accountEmail = await request({ method: "account/read" }).then(
+        (account) => extractCodexAccountEmail(account),
+        () => undefined,
+      );
+      return { rateLimits, ...(accountEmail ? { accountEmail } : {}) };
+    },
+  );
 }
 
 function normalizeTimeoutMs(value: unknown): number {

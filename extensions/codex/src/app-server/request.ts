@@ -93,6 +93,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   sessionId?: string;
   isolated?: boolean;
 }): Promise<T> {
+  // Fail closed before spawning or leasing a client for a guard-blocked method.
   const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
     method: params.method,
     requestParams: params.requestParams,
@@ -103,8 +104,40 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   if (sandboxBlock) {
     throw new Error(sandboxBlock);
   }
+  return await withCodexAppServerJsonClient(
+    { ...params, timeoutMessage: `codex app-server ${params.method} timed out` },
+    async (request) =>
+      await request<T>({ method: params.method, requestParams: params.requestParams }),
+  );
+}
+
+type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
+  method: string;
+  requestParams?: unknown;
+}) => Promise<T>;
+
+/**
+ * Runs several guarded requests over one acquired client (shared lease or
+ * isolated child) so related reads see the same app-server session. The whole
+ * callback re-runs once when the client's start selection changed underneath it.
+ */
+export async function withCodexAppServerJsonClient<T>(
+  params: {
+    timeoutMs?: number;
+    timeoutMessage?: string;
+    pluginConfig?: unknown;
+    startOptions?: CodexAppServerStartOptions;
+    authProfileId?: string | null;
+    agentDir?: string;
+    config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+    sessionKey?: string;
+    sessionId?: string;
+    isolated?: boolean;
+  },
+  run: (request: CodexAppServerScopedRequest) => Promise<T>,
+): Promise<T> {
   const timeoutMs = params.timeoutMs ?? 60_000;
-  const timeoutMessage = `codex app-server ${params.method} timed out`;
+  const timeoutMessage = params.timeoutMessage ?? "codex app-server request timed out";
   const timeoutController = new AbortController();
   const deadline = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
   const isPastDeadline = () => deadline !== undefined && Date.now() >= deadline;
@@ -137,10 +170,27 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
           });
           try {
             throwIfAbandoned();
-            return await client.request<T>(params.method, params.requestParams, {
-              timeoutMs: remainingTimeoutMs(),
-              signal: timeoutController.signal,
-            });
+            const scopedRequest: CodexAppServerScopedRequest = async <T>(request: {
+              method: string;
+              requestParams?: unknown;
+            }) => {
+              const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
+                method: request.method,
+                requestParams: request.requestParams,
+                config: params.config,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+              });
+              if (sandboxBlock) {
+                throw new Error(sandboxBlock);
+              }
+              throwIfAbandoned();
+              return await client.request<T>(request.method, request.requestParams, {
+                timeoutMs: remainingTimeoutMs(),
+                signal: timeoutController.signal,
+              });
+            };
+            return await run(scopedRequest);
           } catch (error) {
             if (!isCodexAppServerStartSelectionChangedError(error) || attempt > 0) {
               throw error;
