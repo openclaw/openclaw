@@ -29,22 +29,6 @@ export function parseStrictPositiveIntOption(value: string, flag: string): numbe
   return parsed;
 }
 
-/** Return positional args captured by a Commander action command. */
-export function resolveActionArgs(actionCommand?: Command): string[] {
-  if (!actionCommand) {
-    return [];
-  }
-  const args = (actionCommand as Command & { args?: string[] }).args;
-  return Array.isArray(args) ? args : [];
-}
-
-function isDefaultOptionValue(command: Command, name: string): boolean {
-  if (typeof command.getOptionValueSource !== "function") {
-    return false;
-  }
-  return command.getOptionValueSource(name) === "default";
-}
-
 function appendOptionValue(out: string[], flag: string, value: unknown): void {
   if (value === undefined) {
     return;
@@ -79,14 +63,11 @@ function stringifyOptionValue(value: unknown): string | undefined {
 }
 
 /** Reconstruct explicit option tokens from a Commander command for lazy reparsing. */
-export function resolveCommandOptionArgs(command?: Command): string[] {
-  if (!command) {
-    return [];
-  }
+export function resolveCommandOptionArgs(command: Command): string[] {
   const out: string[] = [];
   for (const option of command.options) {
     const name = option.attributeName();
-    if (isDefaultOptionValue(command, name)) {
+    if (command.getOptionValueSource(name) === "default") {
       continue;
     }
     const flag = option.long ?? option.short;

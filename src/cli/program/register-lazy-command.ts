@@ -12,7 +12,7 @@ type RegisterLazyCommandParams = {
     flags: string;
     description: string;
   }[];
-  removeNames?: string[];
+  removeNames?: readonly string[];
   register: () => Promise<void> | void;
 };
 
@@ -29,18 +29,12 @@ export function registerLazyCommand({
   for (const option of options ?? []) {
     placeholder.option(option.flags, option.description);
   }
-  placeholder.allowUnknownOption(true);
-  placeholder.allowExcessArguments(true);
+  placeholder.allowUnknownOption(true).allowExcessArguments(true);
   placeholder.action(async (...actionArgs) => {
-    const actionCommand = actionArgs.at(-1) as (Command & { args?: string[] }) | undefined;
-    if (actionCommand) {
-      // Commander separates option values from positional args on placeholders; restore them
-      // before reparsing so the real command sees the original token order.
-      actionCommand.args = [
-        ...resolveCommandOptionArgs(actionCommand),
-        ...(actionCommand.args ?? []),
-      ];
-    }
+    const actionCommand = actionArgs.at(-1) as Command;
+    // Commander separates option values from positional args on placeholders; restore them
+    // before reparsing so the real command sees the original token order.
+    actionCommand.args = [...resolveCommandOptionArgs(actionCommand), ...actionCommand.args];
     for (const commandName of new Set(removeNames ?? [name])) {
       removeCommandByName(program, commandName);
     }
