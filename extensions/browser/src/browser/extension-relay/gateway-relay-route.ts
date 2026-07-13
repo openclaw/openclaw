@@ -35,7 +35,7 @@ import {
 const log = createSubsystemLogger("browser").child("extension-relay-gateway");
 
 /** Path the browser plugin registers on the gateway (ends in /extension so the pairing parser accepts it). */
-export const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
+const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
 
 // Single noServer WebSocketServer for all gateway-hosted extension upgrades.
 let wss: WebSocketServer | null = null;

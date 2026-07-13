@@ -198,7 +198,7 @@ function createLease(actor: ProfileLifecycleActor): () => void {
 }
 
 /** Create the single lifecycle owner for one resolved Browser profile. */
-export function createProfileRuntimeState(profile: ResolvedBrowserProfile): ProfileRuntimeState {
+function createProfileRuntimeState(profile: ResolvedBrowserProfile): ProfileRuntimeState {
   const runtime: ProfileRuntimeState = {
     profile,
     running: null,
