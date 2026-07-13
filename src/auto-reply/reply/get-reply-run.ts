@@ -106,7 +106,7 @@ import {
 } from "./prompt-session-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
-import { withQueuedReplyCleanup } from "./queued-followup-cleanup.js";
+import { withQueuedReplyCleanup } from "./reply-cleanup.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   abortReplyRunBySessionId,

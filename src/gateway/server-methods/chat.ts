@@ -41,7 +41,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
-import { withQueuedReplyCleanup } from "../../auto-reply/reply/queued-followup-cleanup.js";
+import { withQueuedReplyCleanup } from "../../auto-reply/reply/reply-cleanup.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { isReplyRunAbortableForSignal } from "../../auto-reply/reply/reply-run-registry.js";
 import type { MsgContext } from "../../auto-reply/templating.js";

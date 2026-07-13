@@ -64,6 +64,7 @@ import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
+import { runWithReplyCleanup } from "./reply-cleanup.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
@@ -122,10 +123,6 @@ const commandsCoreRuntimeLoader = createLazyImportLoader(
 
 function loadSessionResetModelRuntime() {
   return sessionResetModelRuntimeLoader.load();
-}
-
-function loadStageSandboxMediaRuntime() {
-  return stageSandboxMediaRuntimeLoader.load();
 }
 
 function loadMediaUnderstandingApplyRuntime() {
@@ -1069,10 +1066,9 @@ export async function getReplyFromConfig(
     }
   }
 
-  // chat.send prestages media before responding; MediaStaged prevents a duplicate pass.
   let cleanupStagedMedia: (() => Promise<void>) | undefined;
   if (!useFastTestBootstrap && sessionKey && !ctx.MediaStaged && hasInboundMedia(ctx)) {
-    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
+    const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
     const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
         ctx,
@@ -1086,58 +1082,62 @@ export async function getReplyFromConfig(
   }
 
   logResolverTiming("milestone", "before_run_prepared_reply");
-  const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
-    runPreparedReply({
-      ctx,
-      sessionCtx,
-      cfg,
-      agentId,
-      agentDir,
-      agentCfg,
-      sessionCfg,
-      commandAuthorized,
-      command,
-      commandSource,
-      allowTextCommands,
-      directives,
-      defaultActivation,
-      resolvedThinkLevel,
-      resolvedFastMode,
-      resolvedFastModeAutoOnSeconds,
-      resolvedFastModeOverride,
-      resolvedFastModeAutoOnSecondsOverride,
-      resolvedVerboseLevel,
-      resolvedReasoningLevel,
-      resolvedElevatedLevel,
-      execOverrides,
-      elevatedEnabled,
-      elevatedAllowed,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
-      modelState: runModelState,
-      provider: runProvider,
-      model: runModel,
-      perMessageQueueMode,
-      perMessageQueueOptions,
-      typing,
-      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
-      defaultModel,
-      timeoutMs,
-      isNewSession,
-      resetTriggered,
-      systemSent,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      sessionId,
-      storePath,
-      workspaceDir,
-      abortedLastRun,
-      autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
-      queuedFollowupCleanup: cleanupStagedMedia,
-    }),
-  ).finally(() => cleanupStagedMedia?.());
+  const replyResult = await runWithReplyCleanup(
+    () =>
+      traceGetReplyPhase("reply.run_prepared_reply", () =>
+        runPreparedReply({
+          ctx,
+          sessionCtx,
+          cfg,
+          agentId,
+          agentDir,
+          agentCfg,
+          sessionCfg,
+          commandAuthorized,
+          command,
+          commandSource,
+          allowTextCommands,
+          directives,
+          defaultActivation,
+          resolvedThinkLevel,
+          resolvedFastMode,
+          resolvedFastModeAutoOnSeconds,
+          resolvedFastModeOverride,
+          resolvedFastModeAutoOnSecondsOverride,
+          resolvedVerboseLevel,
+          resolvedReasoningLevel,
+          resolvedElevatedLevel,
+          execOverrides,
+          elevatedEnabled,
+          elevatedAllowed,
+          blockStreamingEnabled,
+          blockReplyChunking,
+          resolvedBlockStreamingBreak,
+          modelState: runModelState,
+          provider: runProvider,
+          model: runModel,
+          perMessageQueueMode,
+          perMessageQueueOptions,
+          typing,
+          opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
+          defaultModel,
+          timeoutMs,
+          isNewSession,
+          resetTriggered,
+          systemSent,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          sessionId,
+          storePath,
+          workspaceDir,
+          abortedLastRun,
+          autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
+          queuedFollowupCleanup: cleanupStagedMedia,
+        }),
+      ),
+    cleanupStagedMedia,
+  );
   logResolverTiming("completed", "prepared_reply");
   return replyResult;
 }
