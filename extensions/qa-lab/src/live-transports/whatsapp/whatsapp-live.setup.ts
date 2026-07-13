@@ -1,12 +1,10 @@
 // QA Lab WhatsApp auth archive and channel readiness setup.
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WhatsAppQaGateway } from "./whatsapp-live.contracts.js";
 
-const execFileAsync = promisify(execFile);
 const WHATSAPP_QA_READY_TIMEOUT_MS = 150_000;
 const WHATSAPP_QA_READY_STABILITY_MS = 20_000;
 const WHATSAPP_QA_SIGNAL_SESSION_FILE_RE = /^session-[^/\\]+\.json$/u;
@@ -116,9 +114,7 @@ export async function waitForWhatsAppChannelStable(gateway: WhatsAppQaGateway, a
 }
 
 async function listTarEntries(archivePath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync("tar", ["-tzf", archivePath], {
-    maxBuffer: 1024 * 1024,
-  });
+  const { stdout } = await runExec("tar", ["-tzf", archivePath], { logOutput: false });
   return normalizeStringEntries(stdout.split("\n"));
 }
 
@@ -145,7 +141,7 @@ export async function unpackWhatsAppAuthArchive(params: {
   await fs.writeFile(archivePath, Buffer.from(params.archiveBase64, "base64"), { mode: 0o600 });
   const entries = await listTarEntries(archivePath);
   assertSafeArchiveEntries(entries);
-  await execFileAsync("tar", ["-xzf", archivePath, "-C", authDir], { maxBuffer: 1024 * 1024 });
+  await runExec("tar", ["-xzf", archivePath, "-C", authDir], { logOutput: false });
   await fs.rm(archivePath, { force: true });
   if (params.clearSignalSessions === true) {
     await clearWhatsAppAuthSignalSessions(authDir);

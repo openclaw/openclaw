@@ -851,13 +851,8 @@ export {
   formatCost,
   formatDayLabel,
   formatFullDate,
-  buildUsageMosaicStats,
-  formatHourLabel,
   formatIsoDate,
   formatTokens,
-  getHourAndWeekdayForUtcQuarterBucket,
-  getZonedHour,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
-  setToHourEnd,
 };

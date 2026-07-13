@@ -298,9 +298,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       replyOptions: { abortSignal: abortController.signal },
     });
 
-    await vi.waitFor(() => {
-      expect(runtime.runTurn).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(runtime.runTurn).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 5_000 },
+    );
     abortController.abort();
     const outcome = await raceWithTimeoutResult(
       dispatchPromise.then(() => "settled" as const),

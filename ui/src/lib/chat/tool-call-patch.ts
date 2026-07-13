@@ -29,7 +29,7 @@ type HunkState = {
   newLeft?: number;
 };
 
-export type PatchViewData = {
+type PatchViewData = {
   paths: string[];
   lines: DiffLine[];
   stat: DiffStat;

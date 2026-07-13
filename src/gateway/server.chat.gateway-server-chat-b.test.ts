@@ -20,7 +20,6 @@ import {
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
-import { appendSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -6750,43 +6749,36 @@ describe("gateway server chat", () => {
       if (!storePath) {
         throw new Error("session store path was not initialized");
       }
-      await appendSqliteTranscriptEvents(
-        {
-          agentId: "main",
-          sessionId: "sess-before-reset",
-          sessionKey: "agent:main:main",
-          storePath,
+      const archivedScope = {
+        agentId: "main",
+        sessionId: "sess-before-reset",
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      await appendTranscriptMessage(archivedScope, {
+        eventId: "archived-1",
+        parentId: null,
+        message: {
+          role: "user",
+          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+          content: "before anchor",
+          timestamp: currentSessionStartedAt - 2_000,
         },
-        [
-          {
-            type: "message",
-            id: "archived-1",
-            parentId: null,
-            message: {
-              role: "user",
-              provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-              content: "before anchor",
-              timestamp: currentSessionStartedAt - 2_000,
-            },
-          },
-          {
-            type: "message",
-            id: "archived-2",
-            parentId: "archived-1",
-            message: {
-              role: "assistant",
-              content: "matching anchor",
-              timestamp: currentSessionStartedAt - 1_000,
-            },
-          },
-          {
-            type: "message",
-            id: "archived-3",
-            parentId: "archived-2",
-            message: { role: "user", content: "after anchor" },
-          },
-        ],
-      );
+      });
+      await appendTranscriptMessage(archivedScope, {
+        eventId: "archived-2",
+        parentId: "archived-1",
+        message: {
+          role: "assistant",
+          content: "matching anchor",
+          timestamp: currentSessionStartedAt - 1_000,
+        },
+      });
+      await appendTranscriptMessage(archivedScope, {
+        eventId: "archived-3",
+        parentId: "archived-2",
+        message: { role: "user", content: "after anchor" },
+      });
 
       const history = await rpcReq<{
         messages?: Array<{ content?: string }>;

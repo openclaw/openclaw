@@ -426,10 +426,6 @@ export function buildFallbackSlashCommands(): SlashCommandDef[] {
 
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();
 
-export function resetSlashCommandsForTest(): void {
-  replaceSlashCommands(buildFallbackSlashCommands());
-}
-
 const CATEGORY_ORDER: SlashCommandCategory[] = ["session", "model", "tools", "agents"];
 
 export function getSlashCommandCategoryLabel(category: SlashCommandCategory): string {
