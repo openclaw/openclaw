@@ -80,8 +80,7 @@ function createLazyBrowserTool(opts?: {
   };
 }): AnyAgentTool {
   const sessionKey = normalizeLowercaseStringOrEmpty(opts?.agentSessionKey);
-  const ownerClaim =
-    sessionKey && opts?.runId ? claimBrowserSessionOwner(sessionKey, opts.runId) : undefined;
+  let ownerClaim: number | undefined;
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -91,14 +90,23 @@ function createLazyBrowserTool(opts?: {
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
+      ownerClaim ??=
+        sessionKey && opts?.runId ? claimBrowserSessionOwner(sessionKey, opts.runId) : undefined;
+      let hasTrackedTabs = () => false;
       const releaseSessionAccess = sessionKey
-        ? await acquireBrowserSessionAccess(sessionKey, () => true)
+        ? await acquireBrowserSessionAccess(sessionKey, () => hasTrackedTabs())
         : () => {};
       try {
         signal?.throwIfAborted();
-        const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
+        const { createBrowserTool, hasTrackedBrowserSessionTabs } =
+          await loadBrowserRegistrationRuntimeModule();
+        hasTrackedTabs = () => hasTrackedBrowserSessionTabs(sessionKey);
         signal?.throwIfAborted();
-        const tool = createBrowserTool({ ...opts, ownerClaim, sessionAccessAlreadyHeld: true });
+        const tool = createBrowserTool({
+          ...opts,
+          ...(ownerClaim !== undefined ? { ownerClaim } : {}),
+          sessionAccessAlreadyHeld: true,
+        });
         return await tool.execute(toolCallId, args, signal, onUpdate);
       } finally {
         releaseSessionAccess();

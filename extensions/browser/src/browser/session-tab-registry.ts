@@ -39,6 +39,10 @@ type TrackedSessionBrowserTabIdentity = Omit<TrackedSessionBrowserTab, "trackedA
 
 const trackedTabsBySession = new Map<string, Map<string, TrackedSessionBrowserTab>>();
 
+export function hasTrackedBrowserSessionTabs(sessionKey: string): boolean {
+  return trackedTabsBySession.has(normalizeSessionKey(sessionKey));
+}
+
 function normalizeSessionKey(raw: string): string {
   return normalizeOptionalLowercaseString(raw) ?? "";
 }
