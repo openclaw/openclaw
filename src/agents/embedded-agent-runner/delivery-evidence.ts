@@ -47,6 +47,45 @@ type SourceReplyDeliveryEvidence = {
   messagingToolSourceReplyPayloads?: unknown;
 };
 
+type ExplicitFinalSourceReplyEvidence = {
+  messagingToolSentTargets?: unknown;
+  messagingToolSourceReplyPayloads?: unknown;
+};
+
+function collectSourceReplyFinalMarkers(value: unknown): boolean[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const marker = (entry as { sourceReplyFinal?: unknown }).sourceReplyFinal;
+    return typeof marker === "boolean" ? [marker] : [];
+  });
+}
+
+/** Resolve explicit progress/final evidence, or undefined for legacy runtimes. */
+export function resolveExplicitFinalSourceReplyDeliveryEvidence(
+  result: ExplicitFinalSourceReplyEvidence,
+): boolean | undefined {
+  const markers = [
+    ...collectSourceReplyFinalMarkers(result.messagingToolSentTargets),
+    ...collectSourceReplyFinalMarkers(result.messagingToolSourceReplyPayloads),
+  ];
+  return markers.length > 0 ? markers.some(Boolean) : undefined;
+}
+
+/** Preserve legacy completion semantics unless the runtime emitted progress/final markers. */
+export function hasCompletedSourceReplyDeliveryEvidence(
+  result: SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
+): boolean {
+  return (
+    resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
+    hasCommittedSourceReplyDeliveryEvidence(result)
+  );
+}
+
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }

@@ -458,18 +458,17 @@ async function compactResolvedContextEngine(
   let preparedHarnessRuntime = selectedHarnessRuntime;
   let preparedParams = params;
   try {
-    if (attemptNativeHarnessCompaction) {
-      await ensureSelectedAgentHarnessPlugin({
-        config: params.config,
-        provider: ceProvider,
-        modelId: ceModelId,
-        agentId: runtimePolicyAgentId,
-        sessionKey: runtimePolicySessionKey,
-        agentHarnessId: params.agentHarnessId,
-        agentHarnessRuntimeOverride: selectedHarnessRuntime,
-        workspaceDir: resolvedWorkspaceDir,
-      });
-    }
+    // Ensure the policy-selected harness plugin so selection can pick implicit codex.
+    await ensureSelectedAgentHarnessPlugin({
+      config: params.config,
+      provider: ceProvider,
+      modelId: ceModelId,
+      agentId: runtimePolicyAgentId,
+      sessionKey: runtimePolicySessionKey,
+      agentHarnessId: params.agentHarnessId,
+      agentHarnessRuntimeOverride: selectedHarnessRuntime,
+      workspaceDir: resolvedWorkspaceDir,
+    });
     const {
       model: ceModel,
       authStorage,
@@ -493,7 +492,8 @@ async function compactResolvedContextEngine(
       })
         ? providedRuntimeAuthPlan
         : undefined;
-    const compactionHarnessRuntimeOverride = selectedHarnessRuntime ?? "openclaw";
+    // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
+    // selection can pick the credential-owning harness (codex for ChatGPT OAuth).
     const selectHarnessForPreparedAttempts = (
       attempts: readonly PreparedAgentRuntimeAuthAttempt[],
     ) =>
@@ -511,7 +511,7 @@ async function compactResolvedContextEngine(
         agentId: runtimePolicyAgentId,
         sessionKey: runtimePolicySessionKey,
         agentHarnessId: params.agentHarnessId,
-        agentHarnessRuntimeOverride: compactionHarnessRuntimeOverride,
+        agentHarnessRuntimeOverride: selectedHarnessRuntime,
       });
     const initialHarness = reusableRuntimeAuthPlan
       ? undefined
@@ -523,7 +523,7 @@ async function compactResolvedContextEngine(
           agentId: runtimePolicyAgentId,
           sessionKey: runtimePolicySessionKey,
           agentHarnessId: params.agentHarnessId,
-          agentHarnessRuntimeOverride: compactionHarnessRuntimeOverride,
+          agentHarnessRuntimeOverride: selectedHarnessRuntime,
         });
     const prepareRuntimeAuth = (harness: ReturnType<typeof selectAgentHarness>) =>
       prepareAgentRuntimeAuth({
