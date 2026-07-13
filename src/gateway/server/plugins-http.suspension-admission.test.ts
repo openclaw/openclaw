@@ -14,7 +14,6 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
-import { testing as controlPlaneRateLimitTesting } from "../control-plane-rate-limit.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
@@ -24,6 +23,7 @@ import {
 } from "./plugins-http.js";
 
 const ROUTE_PATH = "/plugin/suspension-proof";
+let rateLimitEpochMs = Date.now();
 
 function deferred() {
   let resolve = () => {};
@@ -113,13 +113,14 @@ function createUpgradeHandler(routes: PluginHttpRouteRegistration[]) {
 }
 
 beforeEach(() => {
-  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
+  rateLimitEpochMs += 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
   resetGatewaySuspendCoordinatorForTest();
   resetGatewayWorkAdmission();
 });
 
 afterEach(() => {
-  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
+  vi.restoreAllMocks();
   resetGatewaySuspendCoordinatorForTest();
   resetGatewayWorkAdmission();
 });
