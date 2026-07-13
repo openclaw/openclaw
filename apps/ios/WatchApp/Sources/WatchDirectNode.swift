@@ -485,7 +485,7 @@ final class WatchDirectNode {
             ["bootstrapToken": AnyCodable(token)]
         }
         return ConnectParams(
-            minprotocol: GATEWAY_MIN_PROTOCOL_VERSION,
+            minprotocol: GATEWAY_MIN_NODE_PROTOCOL_VERSION,
             maxprotocol: GATEWAY_PROTOCOL_VERSION,
             client: client,
             caps: [],
