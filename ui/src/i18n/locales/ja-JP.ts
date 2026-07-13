@@ -3590,14 +3590,6 @@ export const ja_JP: TranslationMap = {
       more: "その他の操作",
     },
     runNotStarted: {
-      notDue: "この自動化はまだ実行予定時刻に達していません。",
-      alreadyRunning: "この自動化はすでに実行中です。",
-      recoveryPending: "スケジューラーの復旧はまだ進行中です。",
-      invalidSpec: "この自動化のスケジュールまたはペイロードが無効です。",
-      stopped: "スケジューラーは停止しています。",
-      unknown: "この自動化を開始できませんでした。",
-    },
-    runNotStarted: {
       notDue: "この自動化はまだ実行時刻になっていません。",
       alreadyRunning: "この自動化はすでに実行中です。",
       recoveryPending: "スケジューラの復旧処理がまだ進行中です。",

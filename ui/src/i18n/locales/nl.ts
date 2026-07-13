@@ -3601,14 +3601,6 @@ export const nl: TranslationMap = {
       stopped: "De planner is gestopt.",
       unknown: "Deze automatisering kon niet worden gestart.",
     },
-    runNotStarted: {
-      notDue: "Deze automatisering hoeft nog niet te worden uitgevoerd.",
-      alreadyRunning: "Deze automatisering wordt al uitgevoerd.",
-      recoveryPending: "Het herstel van de planner is nog bezig.",
-      invalidSpec: "Deze automatisering heeft een ongeldig schema of een ongeldige payload.",
-      stopped: "De planner is gestopt.",
-      unknown: "Deze automatisering kon niet worden gestart.",
-    },
     jobs: {
       schedule: "Schema",
       lastRun: "Laatste run",
