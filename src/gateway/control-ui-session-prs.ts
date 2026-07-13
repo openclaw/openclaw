@@ -205,7 +205,8 @@ async function untrackedStats(root: string): Promise<{ additions: number; files:
  * Working-tree diff counts vs the merge base with the remote default branch,
  * untracked files included: the size the PR would have if the current work
  * were committed and pushed; changedFiles decides row visibility for
- * unpushed branches.
+ * unpushed branches. Unlike bare `git diff`, diffing against an explicit
+ * base counts unmerged (conflict) paths, so conflict-only trees still show.
  */
 async function loadBranchDiffStats(
   root: string,
