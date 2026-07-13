@@ -13,6 +13,8 @@ async function loadNewSessionData(
   if (!requestedLocation.catalogId) {
     return { ...requestedLocation, model: "", catalogLabel: "" };
   }
+  // ensureList is fail-closed: offline and request-error paths return cached
+  // data or null, allowing the unresolved catalog page to mount and retry.
   const agentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
   const availableAgents =
     agentsList?.agents ?? (requestedLocation.agentId ? [{ id: requestedLocation.agentId }] : []);
