@@ -29,6 +29,14 @@ function gateway(request: ReturnType<typeof vi.fn>): ApplicationGateway {
   } as unknown as ApplicationGateway;
 }
 
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("Skill Workshop history scan controller", () => {
   it("loads status and starts with the newest window", async () => {
     const request = vi
@@ -64,10 +72,14 @@ describe("Skill Workshop history scan controller", () => {
     });
   });
 
-  it("latches a failed status load until an explicit retry", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("status unavailable");
-    });
+  it("retries a failed status load before choosing the scan direction", async () => {
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("status unavailable");
+      })
+      .mockResolvedValueOnce(result({ hasScanned: true, hasMore: false }))
+      .mockResolvedValueOnce(result({ hasScanned: true, hasMore: false }));
     const state = createSkillWorkshopHistoryScanState();
     const appGateway = gateway(request);
 
@@ -75,16 +87,38 @@ describe("Skill Workshop history scan controller", () => {
     expect(state.loaded).toBe(true);
     expect(state.error).toBe("status unavailable");
 
-    await loadSkillWorkshopHistoryScanStatus({ agentId: "main", gateway: appGateway, state });
-    expect(request).toHaveBeenCalledTimes(1);
-
-    await loadSkillWorkshopHistoryScanStatus({
+    await expect(
+      runSkillWorkshopHistoryScan({ agentId: "main", gateway: appGateway, state }),
+    ).resolves.toBe(true);
+    expect(request).toHaveBeenNthCalledWith(2, "skills.proposals.historyStatus", {
       agentId: "main",
-      gateway: appGateway,
-      state,
-      force: true,
     });
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(3, "skills.proposals.historyScan", {
+      agentId: "main",
+      direction: "newer",
+    });
+  });
+
+  it("uses the current gateway client after a status retry", async () => {
+    const status = deferred<SkillWorkshopHistoryScanResult>();
+    const oldRequest = vi.fn(() => status.promise);
+    const newRequest = vi.fn().mockResolvedValue(result({ hasScanned: true, hasMore: true }));
+    const state = createSkillWorkshopHistoryScanState();
+    state.loaded = true;
+    const appGateway = gateway(oldRequest);
+
+    const scan = runSkillWorkshopHistoryScan({ agentId: "main", gateway: appGateway, state });
+    await vi.waitFor(() => expect(oldRequest).toHaveBeenCalledTimes(1));
+    (appGateway.snapshot as { client: { request: typeof newRequest } }).client = {
+      request: newRequest,
+    };
+    status.resolve(result());
+
+    await expect(scan).resolves.toBe(true);
+    expect(newRequest).toHaveBeenCalledWith("skills.proposals.historyScan", {
+      agentId: "main",
+      direction: "older",
+    });
   });
 
   it("does not race a scan against status loading", async () => {
@@ -111,6 +145,46 @@ describe("Skill Workshop history scan controller", () => {
     resolveStatus?.(result());
     await statusLoad;
     expect(state.loaded).toBe(true);
+  });
+
+  it("queues another forced status read during a follow-up read", async () => {
+    const first = deferred<SkillWorkshopHistoryScanResult>();
+    const second = deferred<SkillWorkshopHistoryScanResult>();
+    const third = deferred<SkillWorkshopHistoryScanResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(third.promise);
+    const state = createSkillWorkshopHistoryScanState();
+    const appGateway = gateway(request);
+
+    const initial = loadSkillWorkshopHistoryScanStatus({
+      agentId: "main",
+      gateway: appGateway,
+      state,
+    });
+    const firstForce = loadSkillWorkshopHistoryScanStatus({
+      agentId: "main",
+      gateway: appGateway,
+      state,
+      force: true,
+    });
+    first.resolve(result());
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    const secondForce = loadSkillWorkshopHistoryScanStatus({
+      agentId: "main",
+      gateway: appGateway,
+      state,
+      force: true,
+    });
+    second.resolve(result({ hasScanned: true, reviewedSessions: 4 }));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    third.resolve(result({ hasScanned: true, reviewedSessions: 9 }));
+
+    await Promise.all([initial, firstForce, secondForce]);
+    expect(state.result?.reviewedSessions).toBe(9);
   });
 
   it("reloads committed coverage after a scan returns an error", async () => {

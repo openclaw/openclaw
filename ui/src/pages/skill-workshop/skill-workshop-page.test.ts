@@ -427,6 +427,80 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(callsFor(oldRequest, "skills.proposals.list")).toHaveLength(1);
   });
 
+  it("reloads history when an agent is reselected during a scan", async () => {
+    const scan = deferred<unknown>();
+    const scanStatus = {
+      schema: "openclaw.skill-workshop.history-scan.v1",
+      hasScanned: false,
+      reviewedSessions: 0,
+      ideasFound: 0,
+      hasMore: false,
+      lastScanReviewed: 0,
+      lastScanIdeas: 0,
+    } as const;
+    const firstRequest = vi.fn((method: string) =>
+      method === "skills.proposals.historyScan"
+        ? scan.promise
+        : Promise.resolve(
+            method === "skills.proposals.historyStatus"
+              ? scanStatus
+              : {
+                  schema: "openclaw.skill-workshop.proposals-manifest.v1",
+                  updatedAt: "2026-07-13T00:00:00.000Z",
+                  proposals: [],
+                },
+          ),
+    );
+    const page = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    page.context = createContext(firstRequest);
+    document.body.append(page);
+    await page.updateComplete;
+    await vi.waitFor(() => expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true));
+
+    page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
+    await vi.waitFor(() =>
+      expect(firstRequest).toHaveBeenCalledWith("skills.proposals.historyScan", {
+        agentId: "research",
+        direction: "older",
+      }),
+    );
+
+    const otherContext = createContext(vi.fn(async () => scanStatus));
+    otherContext.agentSelection.state.selectedId = "writer";
+    page.context = otherContext;
+    page.requestUpdate();
+    await page.updateComplete;
+
+    const firstReturnedStatus = deferred<unknown>();
+    const returnedRequest = vi.fn((method: string) =>
+      method === "skills.proposals.historyStatus"
+        ? callsFor(returnedRequest, "skills.proposals.historyStatus").length === 1
+          ? firstReturnedStatus.promise
+          : Promise.resolve({ ...scanStatus, hasScanned: true, reviewedSessions: 8 })
+        : Promise.resolve({
+            schema: "openclaw.skill-workshop.proposals-manifest.v1",
+            updatedAt: "2026-07-13T00:00:00.000Z",
+            proposals: [],
+          }),
+    );
+    page.context = createContext(returnedRequest);
+    page.requestUpdate();
+    await page.updateComplete;
+    await vi.waitFor(() =>
+      expect(callsFor(returnedRequest, "skills.proposals.historyStatus")).toHaveLength(1),
+    );
+
+    scan.resolve({ ...scanStatus, hasScanned: true, reviewedSessions: 8 });
+    await Promise.resolve();
+    firstReturnedStatus.resolve(scanStatus);
+    await vi.waitFor(() =>
+      expect(callsFor(returnedRequest, "skills.proposals.historyStatus")).toHaveLength(2),
+    );
+    expect(page.state?.skillWorkshopHistoryScan.result?.reviewedSessions).toBe(8);
+  });
+
   it("refreshes proposals after a history scan fails", async () => {
     const scanStatus = {
       schema: "openclaw.skill-workshop.history-scan.v1",

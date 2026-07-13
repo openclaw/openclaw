@@ -37,36 +37,84 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function loadSkillWorkshopHistoryScanStatus(params: {
+type SkillWorkshopHistoryStatusLoadParams = {
   agentId: string;
   gateway: ApplicationGateway;
   state: SkillWorkshopHistoryScanState;
   force?: boolean;
-}): Promise<void> {
+};
+
+type SkillWorkshopHistoryStatusLoadQueue = {
+  pending: SkillWorkshopHistoryStatusLoadParams | null;
+  promise: Promise<void>;
+};
+
+const statusLoadQueues = new WeakMap<
+  SkillWorkshopHistoryScanState,
+  SkillWorkshopHistoryStatusLoadQueue
+>();
+
+export async function loadSkillWorkshopHistoryScanStatus(
+  params: SkillWorkshopHistoryStatusLoadParams,
+): Promise<void> {
   const client = params.gateway.snapshot.client;
+  const currentQueue = statusLoadQueues.get(params.state);
+  if (currentQueue) {
+    if (params.force) {
+      currentQueue.pending = params;
+    }
+    await currentQueue.promise;
+    return;
+  }
   if (
     !client ||
     !params.gateway.snapshot.connected ||
-    params.state.loading ||
     params.state.running ||
     (params.state.loaded && !params.force)
   ) {
     return;
   }
   params.state.loading = true;
-  params.state.error = null;
-  try {
-    params.state.result = await client.request<SkillWorkshopHistoryScanResult>(
-      "skills.proposals.historyStatus",
-      { agentId: params.agentId },
-    );
-    params.state.loaded = true;
-  } catch (error) {
-    params.state.error = getErrorMessage(error);
-    params.state.loaded = true;
-  } finally {
-    params.state.loading = false;
-  }
+  const queue: SkillWorkshopHistoryStatusLoadQueue = {
+    pending: null,
+    promise: Promise.resolve(),
+  };
+  queue.promise = Promise.resolve().then(async () => {
+    try {
+      let next: SkillWorkshopHistoryStatusLoadParams | null = params;
+      while (next) {
+        const current = next;
+        const pendingBeforeRequest = queue.pending;
+        queue.pending = null;
+        const currentClient = current.gateway.snapshot.client;
+        if (currentClient && current.gateway.snapshot.connected && !current.state.running) {
+          current.state.error = null;
+          try {
+            current.state.result = await currentClient.request<SkillWorkshopHistoryScanResult>(
+              "skills.proposals.historyStatus",
+              { agentId: current.agentId },
+            );
+            current.state.loaded = true;
+          } catch (error) {
+            current.state.error = getErrorMessage(error);
+            // Loaded means this scope attempted a read. A scan action can still
+            // force a retry because the result remains absent.
+            current.state.loaded = true;
+          }
+        }
+        const pendingAfterRequest = queue.pending;
+        queue.pending = null;
+        next = pendingAfterRequest ?? pendingBeforeRequest;
+      }
+    } finally {
+      // Keep the last pending check and queue removal in one synchronous
+      // continuation so a forced refresh cannot land between them.
+      params.state.loading = false;
+      statusLoadQueues.delete(params.state);
+    }
+  });
+  statusLoadQueues.set(params.state, queue);
+  await queue.promise;
 }
 
 export async function runSkillWorkshopHistoryScan(params: {
@@ -74,17 +122,26 @@ export async function runSkillWorkshopHistoryScan(params: {
   gateway: ApplicationGateway;
   state: SkillWorkshopHistoryScanState;
 }): Promise<boolean> {
-  const client = params.gateway.snapshot.client;
+  let client = params.gateway.snapshot.client;
   if (
     !client ||
     !params.gateway.snapshot.connected ||
     params.state.running ||
-    params.state.loading ||
-    !params.state.loaded
+    params.state.loading
   ) {
     return false;
   }
-  const direction = params.state.result?.hasScanned
+  if (!params.state.result) {
+    await loadSkillWorkshopHistoryScanStatus({ ...params, force: true });
+    if (!params.state.result) {
+      return false;
+    }
+    client = params.gateway.snapshot.client;
+    if (!client || !params.gateway.snapshot.connected) {
+      return false;
+    }
+  }
+  const direction = params.state.result.hasScanned
     ? params.state.result.hasMore
       ? "older"
       : "newer"

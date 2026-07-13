@@ -627,20 +627,32 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       return;
     }
     const agentId = resolveSkillWorkshopAgentId(scope.context);
+    const historyState = scope.state.skillWorkshopHistoryScan;
     void runSkillWorkshopHistoryScan({
       agentId,
       gateway: scope.gateway,
-      state: scope.state.skillWorkshopHistoryScan,
+      state: historyState,
     })
       .then(() => {
-        if (
-          !this.isCurrentSourceScope(scope) ||
-          !this.context ||
-          resolveSkillWorkshopAgentId(this.context) !== agentId
-        ) {
+        const state = this.state;
+        const context = this.context;
+        if (!state || !context || resolveSkillWorkshopAgentId(context) !== agentId) {
           return;
         }
-        return loadSkillWorkshopProposals(scope.state, scope.context, { force: true });
+        const refreshes: Promise<void>[] = [
+          loadSkillWorkshopProposals(state, context, { force: true }),
+        ];
+        if (state.skillWorkshopHistoryScan !== historyState) {
+          refreshes.push(
+            loadSkillWorkshopHistoryScanStatus({
+              agentId,
+              gateway: context.gateway,
+              state: state.skillWorkshopHistoryScan,
+              force: true,
+            }),
+          );
+        }
+        return Promise.all(refreshes).then(() => undefined);
       })
       .finally(this.requestPageUpdate);
     this.requestPageUpdate();
