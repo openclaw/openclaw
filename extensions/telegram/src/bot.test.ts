@@ -4214,9 +4214,17 @@ describe("createTelegramBot", () => {
     ) as {
       MediaPath?: string;
       MediaPaths?: string[];
+      MediaType?: string;
+      MediaTypes?: string[];
       ReplyToBody?: string;
     };
     expect(payload.ReplyToBody).toBe("<media:image>");
+    expect(payload.MediaPath).toBeTypeOf("string");
+    expect(payload.MediaPath).toContain("/media/inbound/");
+    expect(payload.MediaPaths).toHaveLength(1);
+    expect(payload.MediaPaths?.[0]).toBe(payload.MediaPath);
+    expect(payload.MediaType).toBe("image/png");
+    expect(payload.MediaTypes).toEqual(["image/png"]);
     expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
     expect(replyGetFileSignal?.aborted).toBe(true);
     expect(botShutdown.signal.aborted).toBe(false);

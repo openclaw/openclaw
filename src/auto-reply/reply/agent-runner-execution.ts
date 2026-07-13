@@ -1600,14 +1600,22 @@ async function runAgentTurnWithFallbackInternal(
           requesterSenderE164: params.followupRun.run.senderE164,
         }),
       );
-    currentTurnImages = await agentTurnTiming.measure("current_turn_images", () =>
-      resolveCurrentTurnImages({
-        ctx: params.sessionCtx,
-        cfg: runtimeConfig,
-        images: params.followupRun.images ?? params.opts?.images,
-        imageOrder: params.followupRun.imageOrder ?? params.opts?.imageOrder,
-      }),
-    );
+    const preparedTurnImages = params.followupRun.images ?? params.opts?.images;
+    const preparedTurnImageOrder = params.followupRun.imageOrder ?? params.opts?.imageOrder;
+    currentTurnImages =
+      preparedTurnImages && preparedTurnImages.length > 0
+        ? {
+            images: preparedTurnImages,
+            imageOrder: preparedTurnImageOrder,
+          }
+        : await agentTurnTiming.measure("current_turn_images", () =>
+            resolveCurrentTurnImages({
+              ctx: params.sessionCtx,
+              cfg: runtimeConfig,
+              images: preparedTurnImages,
+              imageOrder: preparedTurnImageOrder,
+            }),
+          );
   } catch (error) {
     clearAgentRunContext(runId, lifecycleGeneration);
     throw error;

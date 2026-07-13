@@ -1845,6 +1845,39 @@ describe("runAgentTurnWithFallback", () => {
     await runPromise;
   });
 
+  it("does not rehydrate stale session media when the followup run already has current images", async () => {
+    const currentImage = { type: "image" as const, data: "current", mimeType: "image/png" };
+    const followupRun = createFollowupRun();
+    followupRun.images = [currentImage];
+    followupRun.imageOrder = ["inline"];
+    state.resolveCurrentTurnImagesMock.mockImplementationOnce(async () => {
+      throw new Error("stale session media should not be rehydrated");
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "telegram",
+          MessageSid: "msg",
+          MediaPaths: ["/tmp/stale.png"],
+          MediaTypes: ["image/png"],
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(state.resolveCurrentTurnImagesMock).not.toHaveBeenCalled();
+    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
+      images: [currentImage],
+      imageOrder: ["inline"],
+    });
+  });
+
   it("clears run ownership when image preflight fails", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const clearAgentRunContext = vi.mocked(agentEvents.clearAgentRunContext);
