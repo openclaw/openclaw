@@ -1,16 +1,20 @@
 // Control UI helper converts picked avatar images into compact data URLs.
 import { AVATAR_MAX_BYTES } from "../../../../src/shared/avatar-limits.js";
 
-/** Downscale bound keeps identity avatars small: the value is persisted into
-    openclaw.json and IDENTITY.md as a data URL, so raw camera images must not
-    pass through at full size. */
-const AVATAR_TARGET_SIZE = 256;
+/** Uploaded avatars also mirror into prompt-injected IDENTITY.md. Keep their
+    encoded form below the per-file bootstrap limit with room for identity text. */
+const AVATAR_TARGET_SIZE = 96;
+const AVATAR_EDITOR_MAX_DATA_URL_CHARS = 16_000;
+
+function boundAvatarDataUrl(value: string | null): string | null {
+  return value && value.length <= AVATAR_EDITOR_MAX_DATA_URL_CHARS ? value : null;
+}
 
 function readFileAsDataUrl(file: File): Promise<string | null> {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.addEventListener("load", () =>
-      resolve(typeof reader.result === "string" ? reader.result : null),
+      resolve(boundAvatarDataUrl(typeof reader.result === "string" ? reader.result : null)),
     );
     reader.addEventListener("error", () => resolve(null));
     reader.readAsDataURL(file);
@@ -38,8 +42,10 @@ export async function fileToAvatarDataUrl(file: File): Promise<string | null> {
     context.drawImage(bitmap, 0, 0, width, height);
     bitmap.close();
     // toDataURL silently falls back to PNG when WebP is unsupported.
-    const encoded = canvas.toDataURL("image/webp", 0.85);
-    return encoded.startsWith("data:image/webp") ? encoded : canvas.toDataURL("image/png");
+    const encoded = canvas.toDataURL("image/webp", 0.8);
+    return boundAvatarDataUrl(
+      encoded.startsWith("data:image/webp") ? encoded : canvas.toDataURL("image/png"),
+    );
   } catch {
     // Non-rasterizable images (e.g. SVG without intrinsic size) pass through
     // unscaled; the size gate above still bounds the persisted payload.
