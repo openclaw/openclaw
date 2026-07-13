@@ -41,7 +41,13 @@ import {
 } from "../gateway/worker-environments/store.js";
 import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-store.js";
 import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/transcript-commit.js";
-import { onAgentRuntimeEvent } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentEventLifecycleGeneration,
+  getAgentRunContext,
+  onAgentRuntimeEvent,
+} from "../infra/agent-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import {
@@ -918,6 +924,43 @@ describe("cloud worker milestone 2 fault injection", () => {
     ).rejects.toMatchObject({ name: "WorkerTranscriptCommitError" });
     expect(harness.requestParams("worker.transcript.commit")).toHaveLength(2);
     expect(SessionManager.open(harness.sessionFile).getEntries()).toHaveLength(1);
+  });
+
+  it("advances a worker live stream whose run context is dispatch-owned and visible", async () => {
+    const current = harness.createClients();
+    clients.push(current);
+    // A visible turn's run context is claimed by the gateway dispatch before the
+    // turn hands off to the worker. The worker's first live event must adopt that
+    // dispatch-owned context (seq advances from 1) and keep the run visible.
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext(RUN_ID, {
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      isControlUiVisible: true,
+      lifecycleGeneration,
+    });
+    try {
+      await current.connection.start();
+
+      await expect(
+        Promise.all(
+          ["one", "two"].map((delta) =>
+            current.live.emit(RUN_ID, { kind: "assistant", payload: { text: delta, delta } }),
+          ),
+        ),
+      ).resolves.toHaveLength(2);
+
+      expect(harness.liveDeltas).toEqual(["one", "two"]);
+      expect(
+        harness
+          .requestParams("worker.live-event")
+          .map((request) => (request as WorkerLiveEventParams).seq),
+      ).toEqual([1, 2]);
+      expect(getAgentRunContext(RUN_ID)?.isControlUiVisible).toBe(true);
+    } finally {
+      clearAgentRunContext(RUN_ID);
+    }
   });
 
   it("settles stop during an in-flight commit without retrying or spinning", async () => {

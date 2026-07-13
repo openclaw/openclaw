@@ -2182,6 +2182,26 @@ openclaw-session-menu[popover] {
   height: 6px;
 }
 
+.sidebar-agent-menu__agent-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sidebar-agent-menu__agent-switch {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sidebar-agent-menu__new {
+  margin-inline-end: 4px;
+}
+
+.sidebar-agent-menu__new:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
 /* The docs row is the menu's only real hyperlink; keep it looking like a row. */
 .sidebar-agent-menu a.sidebar-customize-menu__item {
   color: inherit;
@@ -2736,26 +2756,6 @@ openclaw-session-menu[popover] {
   gap: 20px;
 }
 
-.grid-cols-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.grid-cols-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.stat-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-
-.note-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
 .row {
   display: flex;
   gap: 12px;
@@ -2791,20 +2791,10 @@ openclaw-session-menu[popover] {
       "content";
   }
 
-  .grid-cols-2,
-  .grid-cols-3 {
-    grid-template-columns: 1fr;
-  }
-
   .topbar {
     position: static;
     padding: 6px 12px;
     gap: 10px;
-  }
-
-  .table-head,
-  .table-row {
-    grid-template-columns: 1fr;
   }
 
   .list-item {

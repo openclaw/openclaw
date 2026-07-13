@@ -7,6 +7,7 @@ import {
   listCoreGatewayMethodNames,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-descriptors.js";
+import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
@@ -38,6 +39,10 @@ describe("listGatewayMethods", () => {
   it("advertises unified approval lookup and resolution", () => {
     expect(listGatewayMethods()).toContain("approval.get");
     expect(listGatewayMethods()).toContain("approval.resolve");
+  });
+
+  it("appends model probing without shifting older method indices", () => {
+    expect(listGatewayMethods().at(-1)).toBe("models.probe");
   });
 
   it("advertises ClawHub skill trust methods", () => {
@@ -85,7 +90,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-5)).toEqual([
+    expect(coreMethods.slice(-6, -1)).toEqual([
       "sessions.catalog.archive",
       "approval.get",
       "approval.resolve",
@@ -132,13 +137,15 @@ describe("listGatewayMethods", () => {
     }
   });
 
-  it("wires a dispatchable handler for every terminal.* descriptor", () => {
+  it("wires a dispatchable handler for every core descriptor", () => {
     // A descriptor without a matching entry in the lazy handler routing table
     // advertises a method that then dispatches as "unknown method" — exactly
-    // how terminal.attach/list/text first shipped broken. (Approval methods
-    // are excluded: they are injected per-request via extraHandlers.)
+    // how terminal.attach/list/text and later sessions.dispatch first shipped
+    // broken. Aux methods are injected at server construction; assistant media
+    // is served by the control-ui handler.
+    const injectedElsewhere = new Set<string>([...GATEWAY_AUX_METHODS, "assistant.media.get"]);
     const missing = listCoreGatewayMethodNames()
-      .filter((method) => method.startsWith("terminal."))
+      .filter((method) => !injectedElsewhere.has(method))
       .filter((method) => typeof coreGatewayHandlers[method] !== "function");
     expect(missing).toEqual([]);
   });

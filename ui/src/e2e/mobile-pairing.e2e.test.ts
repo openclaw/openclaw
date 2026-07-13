@@ -144,7 +144,7 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       const settingsResponse = await page.goto(`${server.baseUrl}config`);
       expect(settingsResponse?.status()).toBe(200);
       const quickSettingsPairingButton = page
-        .locator(".qs-card--security")
+        .locator("#settings-general-security")
         .getByRole("button", { name: "Pair mobile device" });
       await quickSettingsPairingButton.waitFor();
       const setupRequestsBeforeQuickSettings = (await gateway.getRequests("device.pair.setupCode"))

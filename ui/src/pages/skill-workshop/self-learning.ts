@@ -1,5 +1,6 @@
 // Self-learning (skills.workshop.autonomous.enabled) surface for the Workshop
 // tab: config read/patch plumbing plus the toggle, pitch, and error renderers.
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import {
@@ -12,12 +13,6 @@ export type SkillWorkshopSelfLearning = {
   busy: boolean;
   error: string | null;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 // Mirrors the gateway default for skills.workshop.autonomous.enabled: absent
 // config means self-learning is off. Snapshot sourceConfig/resolved are both

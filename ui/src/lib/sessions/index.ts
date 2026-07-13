@@ -50,9 +50,8 @@ export {
   requestSessionUsageTimeSeries,
   requestSessionsUsage,
 } from "./usage.ts";
-export type { SessionUsageQuery } from "./usage.ts";
 
-export type SessionState = {
+type SessionState = {
   result: SessionsListResult | null;
   agentId: string | null;
   modelOverrides: Readonly<Record<string, string | null>>;
@@ -116,7 +115,7 @@ type SessionDeleteTarget = {
 };
 
 /** Dirty/unpushed checkouts survive session deletion; callers surface them. */
-export type SessionDeleteOutcome = {
+type SessionDeleteOutcome = {
   deleted: boolean;
   worktreePreserved?: { id: string; branch: string; path: string };
 };
@@ -140,11 +139,11 @@ type SessionSteerResult = {
   status?: unknown;
 };
 
-export type SessionResetOptions = {
+type SessionResetOptions = {
   agentId?: string | null;
 };
 
-export type SessionResetResult = "completed" | "not-started" | "uncertain";
+type SessionResetResult = "completed" | "not-started" | "uncertain";
 
 type SessionGateway = {
   readonly snapshot: {
@@ -253,7 +252,6 @@ export type SessionCapability = {
 };
 
 export { requestSessionCreate } from "./create.ts";
-export type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
 export {
   compareSessionRowsByUpdatedAt,
@@ -268,11 +266,7 @@ export {
   searchForSession,
   visibleSessionMatches,
 } from "./navigation.ts";
-export { reconcileSessionHistory } from "./reconcile.ts";
-export type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
 export type {
-  SessionNavigation,
-  SessionNavigationInput,
   SessionRefreshTarget,
   SessionScopeHost,
   SessionScopeHostWithKey,

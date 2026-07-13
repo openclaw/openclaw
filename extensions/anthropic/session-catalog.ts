@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -23,6 +23,11 @@ import {
   adoptedSourceKey,
   CLAUDE_LOCAL_SESSION_HOST_ID,
 } from "./session-catalog-adoption.js";
+import {
+  currentClaudeSessionCatalogConfig,
+  listBoundClaudeSessions,
+  resolveClaudeCatalogCreateSession,
+} from "./session-catalog-runtime.js";
 import {
   collectTranscriptText,
   parseTranscriptLine,
@@ -1064,37 +1069,6 @@ async function readClaudeSessionTranscript(params: {
   };
 }
 
-function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
-}
-
-function listAdoptedClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
-  const config = currentConfig(api);
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const agentIds = [
-    defaultAgentId,
-    ...listAgentIds(config).filter((agentId) => agentId !== defaultAgentId),
-  ];
-  const adopted = new Map<string, string>();
-  for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
-    api.runtime.agent.session.listSessionEntries({ agentId }),
-  )) {
-    const marker = entry.pluginExtensions?.anthropic?.sessionCatalog;
-    if (
-      entry.pluginOwnerId !== api.id ||
-      entry.modelSelectionLocked !== true ||
-      !isRecord(marker) ||
-      typeof marker.sourceThreadId !== "string"
-    ) {
-      continue;
-    }
-    const sourceHostId =
-      typeof marker.sourceHostId === "string" ? marker.sourceHostId : CLAUDE_LOCAL_SESSION_HOST_ID;
-    adopted.set(adoptedSourceKey(sourceHostId, marker.sourceThreadId), sessionKey);
-  }
-  return adopted;
-}
-
 async function readBoundedClaudeHistory(params: {
   runtime: PluginRuntime;
   hostId: string;
@@ -1229,7 +1203,7 @@ async function continueClaudeSession(
   threadId: string,
 ): Promise<{ sessionKey: string }> {
   const sourceKey = adoptedSourceKey(hostId, threadId);
-  const existing = listAdoptedClaudeSessions(api).get(sourceKey);
+  const existing = listBoundClaudeSessions(api).get(sourceKey);
   if (existing) {
     return { sessionKey: existing };
   }
@@ -1279,7 +1253,7 @@ async function continueClaudeSession(
       }
     }
     const history = await readBoundedClaudeHistory({ runtime: api.runtime, hostId, threadId });
-    const config = currentConfig(api);
+    const config = currentClaudeSessionCatalogConfig(api);
     const model = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
     const marker = {
       sourceThreadId: threadId,
@@ -1321,7 +1295,7 @@ async function continueClaudeSession(
       });
       return { sessionKey: created.key };
     } catch (error) {
-      const raced = listAdoptedClaudeSessions(api).get(sourceKey);
+      const raced = listBoundClaudeSessions(api).get(sourceKey);
       if (raced) {
         return { sessionKey: raced };
       }
@@ -1411,8 +1385,9 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   const provider: SessionCatalogProvider = {
     id: "claude",
     label: "Claude Code",
+    resolveCreateSession: ({ agentId }) => resolveClaudeCatalogCreateSession(api, agentId),
     list: async (query) => {
-      const adopted = listAdoptedClaudeSessions(api);
+      const adopted = listBoundClaudeSessions(api);
       const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });
       return result.hosts.map((host) => toGenericClaudeHost(host, adopted));
     },

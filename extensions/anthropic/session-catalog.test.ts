@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { adoptedSourceKey } from "./session-catalog-adoption.js";
 import { createClaudeSessionNodeHostCommands } from "./session-catalog-node-commands.js";
+import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
@@ -91,6 +94,55 @@ afterEach(async () => {
 });
 
 describe("Claude session catalog", () => {
+  it.each([
+    {
+      label: "catalog marker",
+      nodeEntry: {
+        pluginOwnerId: "anthropic",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          anthropic: {
+            sessionCatalog: { sourceHostId: "node:node-a", sourceThreadId: "shared-thread" },
+          },
+        },
+      },
+    },
+    { label: "exec binding", nodeEntry: { execHost: "node", execNode: "node-a" } },
+  ])("keeps local and paired-node bindings distinct via $label", ({ nodeEntry }) => {
+    const threadId = "shared-thread";
+    const api = {
+      id: "anthropic",
+      config: {},
+      runtime: {
+        config: { current: () => ({}) },
+        agent: {
+          session: {
+            listSessionEntries: () => [
+              {
+                sessionKey: "agent:main:local",
+                entry: { cliSessionBindings: { "claude-cli": { sessionId: threadId } } },
+              },
+              {
+                sessionKey: "agent:main:node",
+                entry: {
+                  cliSessionBindings: { "claude-cli": { sessionId: threadId } },
+                  ...nodeEntry,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawPluginApi;
+
+    expect(listBoundClaudeSessions(api)).toEqual(
+      new Map([
+        [adoptedSourceKey("gateway:local", threadId), "agent:main:local"],
+        [adoptedSourceKey("node:node-a", threadId), "agent:main:node"],
+      ]),
+    );
+  });
+
   it("adopts a local CLI row with a locked one-shot fork binding", async () => {
     const home = await createHome();
     process.env.HOME = home;
@@ -118,7 +170,17 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config: {},
       runtime: {
-        config: { current: () => ({}) },
+        config: {
+          current: () => ({
+            agents: {
+              defaults: {
+                models: {
+                  "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+                },
+              },
+            },
+          }),
+        },
         agent: {
           session: {
             listSessionEntries: () => [],
@@ -131,6 +193,11 @@ describe("Claude session catalog", () => {
       },
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
+
+    expect(provider?.resolveCreateSession?.({})).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
+    });
 
     await expect(
       provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
@@ -153,6 +220,172 @@ describe("Claude session catalog", () => {
         }),
       }),
     );
+  });
+
+  it("does not advertise creation without a configured Claude CLI route", () => {
+    let config: OpenClawConfig = {};
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config: {},
+      runtime: {
+        config: { current: () => config },
+      },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+
+    registerClaudeSessionCatalog(api);
+
+    expect(provider?.resolveCreateSession?.({})).toBeUndefined();
+
+    config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    expect(provider?.resolveCreateSession?.({})).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
+    });
+
+    config = {};
+    expect(provider?.resolveCreateSession?.({})).toBeUndefined();
+  });
+
+  it("resolves creation against the requested agent's runtime policy", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "research",
+            models: {
+              "anthropic/claude-opus-4-8": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config,
+      runtime: { config: { current: () => config } },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+
+    registerClaudeSessionCatalog(api);
+
+    expect(provider?.resolveCreateSession?.({ agentId: "main" })).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
+    });
+    expect(provider?.resolveCreateSession?.({ agentId: "research" })).toBeUndefined();
+  });
+
+  it("does not advertise a Claude CLI route excluded by the model allowlist", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-8" },
+          models: { "anthropic/claude-sonnet-4-8": {} },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            agentRuntime: { id: "claude-cli" },
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config,
+      runtime: { config: { current: () => config } },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+
+    registerClaudeSessionCatalog(api);
+
+    expect(provider?.resolveCreateSession?.({})).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "CLI binding",
+      entry: (sessionId: string) => ({
+        cliSessionBindings: { "claude-cli": { sessionId } },
+      }),
+    },
+    {
+      label: "catalog marker when the CLI binding is empty",
+      entry: (sessionId: string) => ({
+        cliSessionBindings: { "claude-cli": { sessionId: "" } },
+        pluginOwnerId: "anthropic",
+        modelSelectionLocked: true,
+        pluginExtensions: { anthropic: { sessionCatalog: { sourceThreadId: sessionId } } },
+      }),
+    },
+  ])("links a catalog row to an existing OpenClaw session via $label", async ({ entry }) => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "claude-bound-session";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          summary: "Bound session",
+          projectPath: "/work/source",
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "source prompt", 1)] },
+    });
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config: {},
+      runtime: {
+        config: { current: () => ({}) },
+        agent: {
+          session: {
+            listSessionEntries: () => [
+              {
+                sessionKey: "agent:main:claude-bound",
+                entry: entry(sessionId),
+              },
+            ],
+          },
+        },
+      },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+    registerClaudeSessionCatalog(api);
+
+    const hosts = await provider?.list({});
+    expect(hosts?.[0]?.sessions[0]?.openClawSessionKey).toBe("agent:main:claude-bound");
   });
 
   it("continues a local Desktop-app row and lists it as continuable", async () => {

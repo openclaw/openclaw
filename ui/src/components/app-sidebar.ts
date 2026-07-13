@@ -4,8 +4,6 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type {
   SessionCatalog,
-  SessionCatalogHost,
-  SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -84,6 +82,7 @@ import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
 import {
   isSidebarRouteActive,
@@ -96,8 +95,15 @@ import {
   sidebarPluginTabs,
 } from "./app-sidebar-nav-menus.ts";
 import {
+  mergeCatalogSessionRows,
+  mergeSessionCatalogPage,
+  preserveExpandedCatalogHost,
+  sessionCatalogRequestError,
+} from "./app-sidebar-session-catalog-state.ts";
+import {
   adoptedCatalogSessionKeys,
   bindAdoptedCatalogSession,
+  type CatalogBackingSessionDisplay,
   formatSidebarTimestamp,
   renderSessionCatalogGroups,
 } from "./app-sidebar-session-catalogs.ts";
@@ -232,31 +238,6 @@ function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;
 }
 
-function mergeCatalogSessionRows(
-  first: readonly SessionCatalogSession[],
-  second: readonly SessionCatalogSession[],
-): SessionCatalogSession[] {
-  const seen = new Set(first.map((session) => session.threadId));
-  return [...first, ...second.filter((session) => !seen.has(session.threadId))];
-}
-
-function preserveExpandedCatalogHost(
-  freshHost: SessionCatalogHost,
-  previous: SessionCatalogHost | undefined,
-): SessionCatalogHost {
-  if (!previous) {
-    return freshHost;
-  }
-  const { sessions, nextCursor, ...previousDetails } = previous;
-  const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
-  return {
-    ...previousDetails,
-    ...freshDetails,
-    sessions,
-    ...(nextCursor !== undefined ? { nextCursor } : {}),
-  };
-}
-
 class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
@@ -279,7 +260,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
-  @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
+  @property({ attribute: false }) onOpenNewSession?: (
+    agentId: string,
+    target?: NewSessionTarget,
+  ) => void;
   /** Agent id of the in-flight new-session draft; renders the draft row. */
   @property({ attribute: false }) draftSessionAgentId = "";
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
@@ -345,6 +329,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private sessionsScrollElement: HTMLElement | null = null;
   private sessionsScrollResizeObserver: ResizeObserver | null = null;
   private sessionCatalogTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private sessionCatalogAgentId: string | null = null;
   private sessionCatalogGeneration = 0;
   private sessionCatalogRevision = 0;
   private sessionCatalogRequestGeneration: number | null = null;
@@ -423,6 +408,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   override updated() {
     this.syncSessionsScrollObserver();
     const snapshot = this.context?.gateway.snapshot;
+    if (this.context) {
+      this.synchronizeSessionCatalogAgent(this.expandedAgentId());
+    }
     if (
       !snapshot?.connected ||
       !snapshot.client ||
@@ -433,6 +421,26 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     void this.refreshSessionCatalogs();
+  }
+
+  private synchronizeSessionCatalogAgent(agentId: string) {
+    if (agentId === this.sessionCatalogAgentId) {
+      return;
+    }
+    this.sessionCatalogAgentId = agentId;
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogRevision += 1;
+    this.loadingMoreSessionCatalogIds = new Set();
+    if (this.sessionCatalogTimer) {
+      globalThis.clearTimeout(this.sessionCatalogTimer);
+      this.sessionCatalogTimer = null;
+    }
+    if (this.sessionCatalogs.some((catalog) => catalog.capabilities.createSession)) {
+      this.sessionCatalogs = this.sessionCatalogs.map((catalog) => {
+        const { createSession: _createSession, ...capabilities } = catalog.capabilities;
+        return { ...catalog, capabilities };
+      });
+    }
   }
 
   private readonly handleCatalogSessionContinued = (
@@ -459,12 +467,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     const generation = this.sessionCatalogGeneration;
     const revision = this.sessionCatalogRevision;
+    const agentId = this.sessionCatalogAgentId ?? this.expandedAgentId();
     if (this.sessionCatalogRequestGeneration === generation) {
       return;
     }
     this.sessionCatalogRequestGeneration = generation;
     try {
       const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId,
         limitPerHost: 40,
       });
       if (generation !== this.sessionCatalogGeneration || client !== this.gatewayClient) {
@@ -474,6 +484,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         catalogs: result.catalogs,
         client,
         generation,
+        agentId,
       });
       if (
         generation !== this.sessionCatalogGeneration ||
@@ -517,6 +528,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     catalogs: SessionCatalog[];
     client: GatewayBrowserClient;
     generation: number;
+    agentId: string;
   }): Promise<SessionCatalog[]> {
     const previousCatalogs = new Map(this.sessionCatalogs.map((catalog) => [catalog.id, catalog]));
     return Promise.all(
@@ -543,7 +555,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               try {
                 result = await params.client.request<SessionsCatalogListResult>(
                   "sessions.catalog.list",
-                  { catalogId: catalog.id, cursors: { [host.hostId]: nextCursor } },
+                  {
+                    agentId: params.agentId,
+                    catalogId: catalog.id,
+                    cursors: { [host.hostId]: nextCursor },
+                  },
                 );
               } catch {
                 return previous ?? host;
@@ -601,10 +617,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     const generation = this.sessionCatalogGeneration;
+    const agentId = this.sessionCatalogAgentId ?? this.expandedAgentId();
     const revision = this.sessionCatalogRevisions.get(catalogId) ?? 0;
     this.loadingMoreSessionCatalogIds = new Set([...this.loadingMoreSessionCatalogIds, catalogId]);
     try {
       const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId,
         catalogId,
         cursors,
       });
@@ -619,49 +637,37 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       if (!page) {
         return;
       }
-      const pageHosts = new Map(page.hosts.map((host) => [host.hostId, host]));
-      const requestedHosts = new Set(Object.keys(cursors));
-      let updated = false;
-      const catalogs = this.sessionCatalogs.map((currentCatalog) => {
-        if (currentCatalog.id !== catalogId) {
-          return currentCatalog;
-        }
-        return {
-          ...currentCatalog,
-          hosts: currentCatalog.hosts.map((host) => {
-            const pageHost = pageHosts.get(host.hostId);
-            if (
-              !requestedHosts.has(host.hostId) ||
-              host.nextCursor !== cursors[host.hostId] ||
-              !pageHost ||
-              pageHost.error
-            ) {
-              return host;
-            }
-            updated = true;
-            const key = sessionCatalogHostKey(catalogId, host.hostId);
-            this.sessionCatalogPageDepths.set(
-              key,
-              (this.sessionCatalogPageDepths.get(key) ?? 0) + 1,
-            );
-            const { nextCursor, sessions, ...pageHostDetails } = pageHost;
-            const { nextCursor: _currentCursor, ...currentHost } = host;
-            return {
-              ...currentHost,
-              ...pageHostDetails,
-              sessions: mergeCatalogSessionRows(host.sessions, sessions),
-              ...(nextCursor ? { nextCursor } : {}),
-            };
-          }),
-        };
-      });
-      if (updated) {
-        this.sessionCatalogs = catalogs;
-        this.sessionCatalogRevisions.set(catalogId, revision + 1);
-        this.sessionCatalogRevision += 1;
+      const current = this.sessionCatalogs.find((candidate) => candidate.id === catalogId);
+      if (!current) {
+        return;
       }
-    } catch {
-      // Keep the current cursor so the user can retry the same page.
+      const merged = mergeSessionCatalogPage({ current, page, cursors });
+      for (const hostId of merged.advancedHostIds) {
+        const key = sessionCatalogHostKey(catalogId, hostId);
+        this.sessionCatalogPageDepths.set(key, (this.sessionCatalogPageDepths.get(key) ?? 0) + 1);
+      }
+      this.sessionCatalogs = this.sessionCatalogs.map((candidate) =>
+        candidate.id === catalogId ? merged.catalog : candidate,
+      );
+      this.sessionCatalogRevisions.set(catalogId, revision + 1);
+      this.sessionCatalogRevision += 1;
+    } catch (error) {
+      if (
+        generation !== this.sessionCatalogGeneration ||
+        revision !== (this.sessionCatalogRevisions.get(catalogId) ?? 0) ||
+        client !== this.gatewayClient
+      ) {
+        return;
+      }
+      // Preserve rows and cursors: the visible error explains that retrying
+      // Load More will request the same page rather than advancing past it.
+      this.sessionCatalogs = this.sessionCatalogs.map((candidate) =>
+        candidate.id === catalogId
+          ? { ...candidate, error: sessionCatalogRequestError(error) }
+          : candidate,
+      );
+      this.sessionCatalogRevisions.set(catalogId, revision + 1);
+      this.sessionCatalogRevision += 1;
     } finally {
       if (generation === this.sessionCatalogGeneration) {
         const loading = new Set(this.loadingMoreSessionCatalogIds);
@@ -2180,6 +2186,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       },
       onSwitchAgent: (agentId) => this.switchChipAgent(agentId),
       onAskCapabilities: (agentId) => this.askAgentCapabilities(agentId),
+      onOpenNewSession: (agentId) => this.onOpenNewSession?.(agentId),
       onClose: () => this.closeAgentMenu(),
       onNavigate: (routeId, options) => this.onNavigate?.(routeId, options),
       onPairMobile: () => this.onPairMobile?.(),
@@ -2447,7 +2454,17 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     });
   }
 
-  private renderRecentSession(session: SidebarRecentSession) {
+  private renderRecentSession(
+    session: SidebarRecentSession,
+    display?: CatalogBackingSessionDisplay,
+  ) {
+    const label = display?.label ?? session.label;
+    const subtitle = display
+      ? display.subtitle
+      : session.subtitle && session.workSession && session.subtitle !== session.label
+        ? session.subtitle
+        : undefined;
+    const meta = display?.meta ?? session.meta;
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
@@ -2485,7 +2502,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           href=${session.href}
           class="sidebar-recent-session__link"
           draggable="false"
-          title=${`${session.label} · ${session.key}`}
+          title=${display?.title ?? `${session.label} · ${session.key}`}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
           ${session.hasActiveRun
@@ -2503,9 +2520,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 ></span>`
               : nothing}
           <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
-            ${session.subtitle && session.workSession && session.subtitle !== session.label
-              ? html`<span class="sidebar-recent-session__subtitle">${session.subtitle}</span>`
+            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+            ${subtitle
+              ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
           ${session.worktreeId || session.hasAutomation
@@ -2532,7 +2549,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             : nothing}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
-          <span class="session-row-trail">${session.meta}</span>
+          <span class="session-row-trail">${meta}</span>
           <span class="session-row-actions">
             <button
               class="session-action session-action--pin"
@@ -2917,18 +2934,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   ) {
     return renderSessionCatalogGroups({
       catalogs: this.sessionCatalogs,
+      connected: this.connected,
       basePath: this.basePath,
       routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+      newSessionAgentId: this.expandedAgentId(),
       collapsedSections: this.collapsedSessionSections,
       loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
       liveRows: [
         ...(this.sessionsResult?.sessions ?? []),
         ...Object.values(this.sessionRowsByAgent).flat(),
       ],
-      renderLiveRow: (row) => this.renderRecentSession(navigationState.toSidebarSession(row)),
+      renderLiveRow: (row, display) =>
+        this.renderRecentSession(navigationState.toSidebarSession(row), display),
       onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),
       onLoadMore: (catalogId) => void this.loadMoreSessionCatalog(catalogId),
-      onNavigate: (search) => this.onNavigate?.("chat", { search }),
+      onOpenNewSession: this.onOpenNewSession,
+      onNavigate: this.onNavigate,
     });
   }
 

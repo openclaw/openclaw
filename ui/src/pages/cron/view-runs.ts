@@ -148,6 +148,7 @@ export function renderRunsSection(props: CronRunsSectionProps) {
           <span class="cron-search-box__icon" aria-hidden="true">${icon("search")}</span>
           <input
             type="search"
+            class="settings-input"
             .value=${props.runsQuery}
             aria-label=${t("cron.runs.searchRuns")}
             placeholder=${t("cron.runs.searchPlaceholder")}
@@ -281,22 +282,18 @@ function renderRun(
         : null;
   const bodySource = entry.summary || entry.error || t("cron.runEntry.noSummary");
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
+  const facts = [delivery, entry.model, entry.provider, usageSummary].filter(Boolean);
   return html`
-    <div class="list-item cron-run-entry">
+    <div class="cron-run-entry">
       <div class="cron-run-entry__header">
-        <div class="list-main cron-run-entry__main">
-          <div class="list-title cron-run-entry__title">
+        <div class="cron-run-entry__main">
+          <div class="cron-run-entry__title">
             ${entry.jobName ?? entry.jobId}
             <span class="muted"> · ${status}</span>
           </div>
-          <div class="chip-row" style="margin-top: 4px;">
-            <span class="chip">${delivery}</span>
-            ${entry.model ? html`<span class="chip">${entry.model}</span>` : nothing}
-            ${entry.provider ? html`<span class="chip">${entry.provider}</span>` : nothing}
-            ${usageSummary ? html`<span class="chip">${usageSummary}</span>` : nothing}
-          </div>
+          <div class="cron-run-entry__facts muted">${facts.join(" · ")}</div>
         </div>
-        <div class="list-meta cron-run-entry__meta">
+        <div class="cron-run-entry__meta">
           <div>${formatMs(entry.ts)}</div>
           ${typeof entry.runAtMs === "number"
             ? html`<div class="muted">${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}</div>`

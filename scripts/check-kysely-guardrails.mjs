@@ -54,6 +54,7 @@ const rawSqliteAllowPathGroups = {
     "src/commands/status.scan.shared.ts",
   ],
   "doctor SQLite maintenance and legacy state migration": [
+    "src/commands/doctor/cron/legacy-run-log-migration.ts",
     "src/commands/doctor/cron/migration-ledger.ts",
     "src/commands/doctor-sqlite-compact.ts",
     "src/commands/doctor-session-sqlite.ts",
@@ -61,14 +62,13 @@ const rawSqliteAllowPathGroups = {
     "src/commands/doctor-session-sqlite-recover-report.ts",
     "src/commands/doctor-state-sqlite-compact.ts",
     "src/infra/state-migrations.storage.ts",
+    "src/infra/state-migrations.cron-run-logs.ts",
     "src/infra/state-migrations.debug-proxy.ts",
   ],
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
     "src/agents/subagent-registry.store.ts",
-    "src/cron/run-log.ts",
-    "src/cron/run-log/sqlite-store.ts",
     "src/cron/store.ts",
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",

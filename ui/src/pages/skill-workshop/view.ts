@@ -3,7 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
-import "../../components/file-preview-modal.ts";
+import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -303,7 +303,7 @@ function renderLifecycleTabs(props: SkillWorkshopProps) {
             class="sw-lifecycle-tab ${isActive ? "is-active" : ""}"
             @click=${() => props.onStatusFilterChange(status)}
           >
-            ${t(STATUS_LABEL[status])} <span class="sw-lifecycle-tab__count">${count}</span>
+            ${t(STATUS_LABEL[status])} <span class="settings-count">${count}</span>
           </button>
         `;
       })}
@@ -335,7 +335,7 @@ function renderQueue(
               (group) => html`
                 <div class="sw-queue__group">
                   ${t(group.label)}
-                  <span class="sw-queue__group-pill">${group.items.length}</span>
+                  <span class="settings-count">${group.items.length}</span>
                 </div>
                 ${group.items.map((proposal) => renderRow(props, proposal, selected))}
               `,

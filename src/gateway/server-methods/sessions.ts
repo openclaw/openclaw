@@ -71,6 +71,7 @@ import {
   loadTranscriptEvents,
   preflightSessionTranscriptForManualCompact,
   resolveSessionTranscriptRuntimeTarget,
+  rollbackPluginOwnedSessionEntryLifecycle,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
@@ -85,7 +86,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
+import {
+  isAgentHarnessSessionKey,
+  resolveMissingAgentHarnessSessionError,
+} from "../../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import {
   interruptSessionWorkAdmissions,
@@ -166,6 +170,7 @@ import {
   hasVisibleActiveSessionRun,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
+import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -1505,6 +1510,53 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
+    const catalogId = normalizeOptionalString(p.catalogId);
+    if (catalogId && p.model) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create catalogId cannot include model"),
+      );
+      return;
+    }
+    if (catalogId && p.key) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create catalogId cannot include key"),
+      );
+      return;
+    }
+    const catalogRequestedKey = normalizeOptionalString(p.key) ?? "global";
+    const catalogAgentId = catalogId
+      ? normalizeAgentId(
+          normalizeOptionalString(p.agentId) ??
+            parseAgentSessionKey(catalogRequestedKey)?.agentId ??
+            resolveDefaultAgentId(cfg),
+        )
+      : undefined;
+    const catalogRequestedAgent = catalogAgentId
+      ? resolveRequestedGlobalAgentId(cfg, catalogRequestedKey, catalogAgentId)
+      : undefined;
+    if (catalogRequestedAgent && !catalogRequestedAgent.ok) {
+      respond(false, undefined, catalogRequestedAgent.error);
+      return;
+    }
+    const catalogTarget =
+      catalogId && catalogAgentId
+        ? resolveSessionCatalogCreateTarget(catalogId, catalogAgentId)
+        : undefined;
+    if (catalogTarget && !catalogTarget.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          catalogTarget.unknownCatalog ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+          catalogTarget.message,
+        ),
+      );
+      return;
+    }
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     const requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
@@ -1553,7 +1605,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     let sessionKey = p.key;
-    let sessionAgentId = p.agentId;
+    let sessionAgentId = catalogAgentId ?? p.agentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd: string | undefined;
@@ -1700,7 +1752,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
-      model: p.model,
+      ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       parentSessionKey: p.parentSessionKey,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
@@ -3014,8 +3066,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const initialDeleteEntry = loadSessionEntry(key, {
       agentId: requestedAgentId,
     }).entry;
-    const rejectModelSelectionLockedDelete = (entry: SessionEntry | undefined): boolean => {
+    const rejectModelSelectionLockedDelete = (
+      entry: SessionEntry | undefined,
+      sessionKey: string,
+    ): boolean => {
       if (!isModelSelectionLocked(entry)) {
+        return false;
+      }
+      const deletablePluginOwnedSession =
+        normalizeOptionalString(entry?.pluginOwnerId) !== undefined &&
+        entry?.agentHarnessId === undefined &&
+        !isAgentHarnessSessionKey(sessionKey);
+      if (deletablePluginOwnedSession) {
         return false;
       }
       respond(
@@ -3028,7 +3090,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return true;
     };
-    if (rejectModelSelectionLockedDelete(initialDeleteEntry)) {
+    if (rejectModelSelectionLockedDelete(initialDeleteEntry, target.canonicalKey)) {
       return;
     }
     // archivedOnly is the archive-then-delete contract: the dispatcher grants
@@ -3143,7 +3205,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       identities: deleteLifecycleIdentities,
       prepare: async () => {
         const preparedEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
-        deleteBlockedByModelLock = rejectModelSelectionLockedDelete(preparedEntry);
+        deleteBlockedByModelLock = rejectModelSelectionLockedDelete(
+          preparedEntry,
+          target.canonicalKey,
+        );
         if (deleteBlockedByModelLock) {
           return;
         }
@@ -3187,7 +3252,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
           agentId: requestedAgentId,
         });
-        if (rejectModelSelectionLockedDelete(entry)) {
+        if (rejectModelSelectionLockedDelete(entry, canonicalKey ?? target.canonicalKey)) {
           return undefined;
         }
         if (rejectExpectedSessionMismatch(entry)) {
@@ -3229,9 +3294,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           respond(false, undefined, mutationCleanupError);
           return undefined;
         }
-        const postCleanupEntry = loadSessionEntry(key, {
-          agentId: requestedAgentId,
-        }).entry;
+        const postCleanupTarget = loadAccessorSessionEntryForGatewayTarget({
+          key,
+          cfg,
+          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+        });
+        const postCleanupEntry = postCleanupTarget.entry;
         if (
           !expectedLifecycleRevisionMatches(postCleanupEntry) ||
           !expectedSessionIdMatches(postCleanupEntry)
@@ -3239,7 +3307,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           respondSessionChanged();
           return undefined;
         }
-        const result = await deleteSessionEntryLifecycle({
+        const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
+        const deletionParams = {
           agentId: target.agentId,
           archiveTranscript: deleteTranscript,
           expectedEntry: postCleanupEntry,
@@ -3251,7 +3320,21 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             canonicalKey: target.canonicalKey,
             storeKeys: target.storeKeys,
           },
-        });
+        };
+        // Catalog and other plugin-owned sessions keep model selection locked,
+        // so deletion must use the exact-row owner-validated lifecycle seam.
+        const result =
+          postCleanupEntry && pluginOwnerId && isModelSelectionLocked(postCleanupEntry)
+            ? await rollbackPluginOwnedSessionEntryLifecycle({
+                ...deletionParams,
+                expectedEntry: postCleanupEntry,
+                expectedPluginOwnerId: pluginOwnerId,
+                target: {
+                  canonicalKey: postCleanupTarget.target.canonicalKey,
+                  storeKeys: postCleanupTarget.target.storeKeys,
+                },
+              })
+            : await deleteSessionEntryLifecycle(deletionParams);
         if (result.expectedEntryMismatch) {
           respondSessionChanged();
           return undefined;

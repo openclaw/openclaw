@@ -10,7 +10,6 @@ export {
 export { migrateLegacyAgentDir } from "./state-migrations.legacy-sessions.js";
 export {
   migrateOrphanedSessionKeys,
-  sessionStoreTextMayNeedCanonicalization,
 } from "./state-migrations.session-store.js";
 export {
   autoMigrateLegacyStateDir,

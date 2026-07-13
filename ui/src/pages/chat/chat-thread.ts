@@ -1,4 +1,5 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -42,7 +43,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
-export type BuildChatItemsProps = {
+type BuildChatItemsProps = {
   sessionKey: string;
   /** Invalidates cached display copy when the active UI language changes. */
   locale?: string;
@@ -129,12 +130,6 @@ function appendCanvasBlockToAssistantMessage(
       },
     ],
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
@@ -1258,7 +1253,7 @@ function expandHistoryStartForPersistedPreviews(messages: unknown[], historyStar
   return expandedStart;
 }
 
-export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
+function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const historyRenderLimit = resolveHistoryRenderLimit(
     props.historyRenderLimit,
@@ -1732,7 +1727,7 @@ export function coalesceStreamRuns(
 }
 
 /** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
-export type WorkGroupRenderItem = {
+type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
   groups: MessageGroup[];

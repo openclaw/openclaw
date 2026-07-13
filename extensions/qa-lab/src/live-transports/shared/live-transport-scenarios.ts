@@ -8,9 +8,7 @@ import {
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 
 export {
-  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   collectLiveTransportStandardScenarioCoverage,
-  findMissingLiveTransportStandardScenarios,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
@@ -120,7 +118,7 @@ export async function loadNonYamlScenarioRefs() {
   return [
     ...refs(
       "extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts",
-      discord.listDiscordQaScenarioCatalog(),
+      discord.discordQaLiveRuntime.listScenarioCatalog(),
     ),
     ...refs(
       "extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts",

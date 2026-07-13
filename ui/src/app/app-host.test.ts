@@ -7,12 +7,13 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
-import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./app-host.ts";
+import "./app-host.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
+import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 
 type AppLifecycleState = {
   loginToken: string;
@@ -540,18 +541,16 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 describe("OpenClaw shell update affordance", () => {
   it("renders a floating card only while desktop navigation is collapsed", () => {
     const container = document.createElement("div");
-    const updateAvailable = {
-      currentVersion: "2026.7.1",
-      latestVersion: "2026.7.2",
-      channel: "stable",
-    };
     const shared = {
       onboarding: false,
-      updateAvailable,
+      updateAvailable: {
+        currentVersion: "2026.7.1",
+        latestVersion: "2026.7.2",
+        channel: "stable" as const,
+      },
       updateRunning: false,
       onUpdate: vi.fn(),
     };
-
     const collapsed = navigationSurfaceIsHidden({
       navCollapsed: true,
       navDrawerOpen: false,
@@ -569,7 +568,7 @@ describe("OpenClaw shell update affordance", () => {
     expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
   });
 
-  it("treats the mobile navigation surface as hidden while its drawer is closed", () => {
+  it("treats a closed mobile drawer as hidden navigation", () => {
     expect(
       navigationSurfaceIsHidden({
         navCollapsed: false,

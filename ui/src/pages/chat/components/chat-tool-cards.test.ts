@@ -7,7 +7,6 @@ import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
-  isToolErrorOutput,
 } from "../../../lib/chat/tool-cards.ts";
 import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
 
@@ -745,67 +744,6 @@ describe("tool-cards", () => {
     expect(sidebar.kind).toBe("canvas");
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
-  });
-  describe("isToolErrorOutput", () => {
-    it("flags JSON payloads that carry a top-level error string", () => {
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            error: "missing_brave_api_key",
-            message: "BRAVE_API_KEY is not configured",
-            provider: "brave",
-          }),
-        ),
-      ).toBe(true);
-    });
-
-    it("flags JSON payloads that carry a top-level isError flag", () => {
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            isError: true,
-            content: [{ type: "text", text: "Tool error: boom" }],
-          }),
-        ),
-      ).toBe(true);
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            is_error: true,
-            content: [{ type: "text", text: "Tool error: boom" }],
-          }),
-        ),
-      ).toBe(true);
-    });
-
-    it("flags 'Tool not found' bodies regardless of trailing punctuation or case", () => {
-      expect(isToolErrorOutput("Tool not found")).toBe(true);
-      expect(isToolErrorOutput("  tool not found.  ")).toBe(true);
-      expect(isToolErrorOutput("TOOL NOT FOUND")).toBe(true);
-    });
-
-    it("flags JSON payloads with top-level failure statuses", () => {
-      expect(isToolErrorOutput(JSON.stringify({ status: "error" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "failed" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "timeout" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "completed" }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ status: "ok" }))).toBe(false);
-    });
-
-    it("does not flag successful payloads or strings without a tool error signal", () => {
-      expect(isToolErrorOutput(undefined)).toBe(false);
-      expect(isToolErrorOutput("")).toBe(false);
-      expect(isToolErrorOutput("Opened page")).toBe(false);
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({ isError: false, result: "ok", error: "no validation errors" }),
-        ),
-      ).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: null }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: "" }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok" }))).toBe(false);
-      expect(isToolErrorOutput("{ not really json }")).toBe(false);
-    });
   });
 
   it("renders an error summary without a redundant Error badge", () => {

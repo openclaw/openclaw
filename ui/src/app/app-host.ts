@@ -8,7 +8,7 @@ import "../components/app-topbar.ts";
 import "../components/connection-banner.ts";
 import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
-import "../components/github-link-hovercard.ts";
+import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
 import "../components/resizable-divider.ts";
@@ -39,8 +39,9 @@ import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts"
 import { searchForSession } from "../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import "../pages/approval/approval-page.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
+import "../pages/approval/approval-page-registration.ts";
+import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
@@ -58,6 +59,7 @@ import {
   readNativeHistoryState,
   type NativeHistoryState,
 } from "./native-web-chrome.ts";
+import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
@@ -90,7 +92,7 @@ const COMMAND_PALETTE_ELEMENT = {
 const TERMINAL_PANEL_ELEMENT = {
   tagName: "openclaw-terminal-panel",
   label: "terminal panel",
-  loadModule: () => import("../components/terminal/terminal-panel.ts"),
+  loadModule: () => import("../components/terminal/terminal-panel-registration.ts"),
 } satisfies OptionalCustomElement;
 
 const BROWSER_PANEL_ELEMENT = {
@@ -243,32 +245,6 @@ function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapsh
 
 function isMobileNavLayout(): boolean {
   return globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false;
-}
-
-export function navigationSurfaceIsHidden(params: {
-  navCollapsed: boolean;
-  navDrawerOpen: boolean;
-  mobileNavLayout: boolean;
-}): boolean {
-  return params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed;
-}
-
-export function renderFloatingUpdateCard(params: {
-  navigationSurfaceHidden: boolean;
-  onboarding: boolean;
-  updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
-  updateRunning: boolean;
-  onUpdate: () => void;
-}) {
-  if (!params.navigationSurfaceHidden || params.onboarding) {
-    return nothing;
-  }
-  return html`<openclaw-sidebar-update-card
-    class="sidebar-update-card--floating"
-    .updateAvailable=${params.updateAvailable}
-    .updateRunning=${params.updateRunning}
-    .onUpdate=${params.onUpdate}
-  ></openclaw-sidebar-update-card>`;
 }
 
 class OpenClawApp extends OpenClawLightDomElement {
@@ -1296,10 +1272,9 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
-                .onOpenNewSession=${(agentId: string) => {
-                  this.navigate("new-session", {
-                    search: agentId ? `?agent=${encodeURIComponent(agentId)}` : "",
-                  });
+                .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
+                  const search = newSessionSearch(agentId, target);
+                  this.navigate("new-session", { search });
                 }}
                 .draftSessionAgentId=${this.draftSessionAgentId()}
                 .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>

@@ -200,7 +200,7 @@ const WhatsAppAccountObjectSchema = z
   })
   .strict();
 
-export const WhatsAppAccountSchema = z.preprocess(
+const WhatsAppAccountSchema = z.preprocess(
   stripDeprecatedWhatsAppNoopKeys,
   WhatsAppAccountObjectSchema,
 );

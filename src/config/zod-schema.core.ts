@@ -250,17 +250,12 @@ const ModelCompatSchema = z
   })
   .strict()
   .optional();
-
-type AssertAssignable<_T extends U, U> = true;
-export type _ModelCompatSchemaAssignableToType = AssertAssignable<
-  z.infer<typeof ModelCompatSchema>,
-  ModelCompatConfig | undefined
->;
-export type _ModelCompatTypeAssignableToSchema = AssertAssignable<
-  ModelCompatConfig | undefined,
-  z.infer<typeof ModelCompatSchema>
->;
-
+type AssertAssignable<_Left extends _Right, _Right> = true;
+const modelCompatSchemaContract: [
+  AssertAssignable<z.infer<typeof ModelCompatSchema>, ModelCompatConfig | undefined>,
+  AssertAssignable<ModelCompatConfig | undefined, z.infer<typeof ModelCompatSchema>>,
+] = [] as never;
+void modelCompatSchemaContract;
 const ConfiguredProviderRequestTlsSchema = z
   .object({
     ca: SecretInputSchema.optional().register(sensitive),
@@ -603,7 +598,7 @@ export const VisibleRepliesSchema = z
     return value;
   });
 
-export const MentionPatternsModeSchema = z.union([z.literal("allow"), z.literal("deny")]);
+const MentionPatternsModeSchema = z.union([z.literal("allow"), z.literal("deny")]);
 
 export const MentionPatternsPolicySchema = z
   .object({
@@ -714,7 +709,7 @@ export const BlockStreamingChunkSchema = z
   })
   .strict();
 
-export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "block"]);
+const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "block"]);
 
 export const MarkdownConfigSchema = z
   .object({
@@ -888,7 +883,7 @@ function readAllowFromValidationEntry(entry: unknown): string | number | undefin
   return typeof number === "string" || typeof number === "number" ? number : undefined;
 }
 
-export const normalizeAllowFrom = (values?: readonly unknown[]): string[] =>
+const normalizeAllowFrom = (values?: readonly unknown[]): string[] =>
   normalizeStringEntries(
     (values ?? []).flatMap((entry) => readAllowFromValidationEntry(entry) ?? []),
   );
@@ -1128,17 +1123,18 @@ export const ToolsMediaSchema = z
   })
   .strict()
   .optional();
-
 type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
-export type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
-  ToolsMediaConfigFromSchema["asyncCompletion"],
-  MediaToolsConfig["asyncCompletion"]
->;
-export type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
-  MediaToolsConfig["asyncCompletion"],
-  ToolsMediaConfigFromSchema["asyncCompletion"]
->;
-
+const toolsMediaAsyncCompletionSchemaContract: [
+  AssertAssignable<
+    ToolsMediaConfigFromSchema["asyncCompletion"],
+    MediaToolsConfig["asyncCompletion"]
+  >,
+  AssertAssignable<
+    MediaToolsConfig["asyncCompletion"],
+    ToolsMediaConfigFromSchema["asyncCompletion"]
+  >,
+] = [] as never;
+void toolsMediaAsyncCompletionSchemaContract;
 const LinkModelSchema = z
   .object({
     type: z.literal("cli").optional(),

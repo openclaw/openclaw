@@ -38,6 +38,17 @@ async function captureToolActivityProof(page: import("playwright").Page, name: s
   await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
 }
 
+async function expandCompletedWorkGroups(page: import("playwright").Page) {
+  const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
+  await workSummaries.first().waitFor();
+  for (let index = 0; index < (await workSummaries.count()); index += 1) {
+    const summary = workSummaries.nth(index);
+    if ((await summary.getAttribute("aria-expanded")) !== "true") {
+      await summary.click();
+    }
+  }
+}
+
 describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
   beforeAll(async () => {
     server = await startControlUiE2eServer();
@@ -73,6 +84,7 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
 
     await page.goto(`${server.baseUrl}chat`);
     await page.getByText("Recovered on the next autonomous turn.", { exact: true }).waitFor();
+    await expandCompletedWorkGroups(page);
 
     expect(await page.locator(".chat-tool-msg-summary__label").allTextContents()).toEqual([
       "Tool error",
@@ -141,7 +153,8 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
     });
 
     await page.goto(`${server.baseUrl}chat`);
-    const activity = page.locator(".chat-activity-group__summary");
+    await expandCompletedWorkGroups(page);
+    const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
     expect(await activity.textContent()).toContain("Read a file, edited 2 files");
     if ((await activity.getAttribute("aria-expanded")) !== "true") {

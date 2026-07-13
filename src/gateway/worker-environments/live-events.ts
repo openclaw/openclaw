@@ -569,16 +569,19 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const existingContext = getAgentRunContext(runId);
-    // Turn placement owns wider visibility; otherwise scope to this session.
-    const controlUiVisible = false;
+    // A dispatch-owned turn context (e.g. a worker-routed turn) owns the run's
+    // Control UI visibility; adopt it so worker live events keep reaching the
+    // visible clients that started the turn. Identity still has to match, so a
+    // foreign run is rejected; only the visibility preference is inherited. With
+    // no pre-existing turn context we scope live events to this session.
+    const controlUiVisible = existingContext?.isControlUiVisible ?? false;
     const adoptExistingUnowned = existingContext !== undefined;
     if (
       existingContext &&
       (existingContext.sessionId !== window.sessionId ||
         existingContext.sessionKey !== window.target.sessionKey ||
         existingContext.agentId !== window.target.agentId ||
-        existingContext.lifecycleGeneration !== lifecycleGeneration ||
-        existingContext.isControlUiVisible !== controlUiVisible)
+        existingContext.lifecycleGeneration !== lifecycleGeneration)
     ) {
       return invalidEvent();
     }

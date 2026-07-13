@@ -25,7 +25,20 @@ private actor DashboardRouteAuthGate {
         self.token = token
     }
 
-    func probes() -> Int { self.probeCount }
+    func probes() -> Int {
+        self.probeCount
+    }
+}
+
+@MainActor
+private final class DashboardBrowserImportGate {
+    var isOnboarded = false
+    private(set) var requestCount = 0
+
+    func request() -> Bool {
+        self.requestCount += 1
+        return self.isOnboarded
+    }
 }
 
 @Suite(.serialized)
@@ -83,10 +96,136 @@ struct DashboardWindowSmokeTests {
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
 
-        controller._testOpenLinkBrowser(try #require(URL(string: "https://docs.openclaw.ai/")))
+        try controller._testOpenLinkBrowser(#require(URL(string: "https://docs.openclaw.ai/")))
         let linkWebView = try #require(controller._testLinkBrowserWebViewIdentity)
         #expect(controller._testFocusLinkBrowser())
         #expect(controller._testNavigationWebViewIdentity == linkWebView)
+    }
+
+    @Test func `browser import offer retries until the first completed inline browser request`() async throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        var requestCount = 0
+        var firstRequestContinuation: CheckedContinuation<Bool, Never>?
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            requestBrowserProfileImportOffer: { _ in
+                requestCount += 1
+                if requestCount == 1 {
+                    return await withCheckedContinuation { continuation in
+                        firstRequestContinuation = continuation
+                    }
+                }
+                return true
+            })
+        defer { controller.closeDashboard() }
+
+        controller.show()
+        #expect(requestCount == 0)
+
+        let link = try #require(URL(string: "https://docs.openclaw.ai/"))
+        controller._testOpenLinkBrowser(link)
+        controller.update(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        #expect(requestCount == 0)
+
+        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        for _ in 0..<200 where firstRequestContinuation == nil {
+            await Task.yield()
+        }
+        #expect(requestCount == 1)
+
+        controller.update(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        firstRequestContinuation?.resume(returning: false)
+        firstRequestContinuation = nil
+        for _ in 0..<200 where requestCount == 1 {
+            await Task.yield()
+        }
+        #expect(requestCount == 2)
+
+        controller._testCloseLinkBrowser()
+        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(requestCount == 2)
+    }
+
+    @Test func `browser import offer retries when onboarding completes with browser open`() async throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let gate = DashboardBrowserImportGate()
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            requestBrowserProfileImportOffer: { _ in gate.request() })
+        defer { controller.closeDashboard() }
+        let manager = DashboardManager._testMake()
+        manager._testSetController(controller)
+
+        let link = try #require(URL(string: "https://docs.openclaw.ai/"))
+        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        for _ in 0..<200 where gate.requestCount == 0 {
+            await Task.yield()
+        }
+        #expect(gate.requestCount == 1)
+
+        gate.isOnboarded = true
+        manager.handleOnboardingCompletion()
+        for _ in 0..<200 where gate.requestCount == 1 {
+            await Task.yield()
+        }
+        #expect(gate.requestCount == 2)
+
+        manager.handleOnboardingCompletion()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(gate.requestCount == 2)
+    }
+
+    @Test func `closing inline browser invalidates an in-flight import offer`() async throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        var requestCount = 0
+        var firstRequestContinuation: CheckedContinuation<Void, Never>?
+        var firstRequestApplied: Bool?
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            requestBrowserProfileImportOffer: { shouldApply in
+                requestCount += 1
+                if requestCount == 1 {
+                    await withCheckedContinuation { continuation in
+                        firstRequestContinuation = continuation
+                    }
+                    firstRequestApplied = shouldApply()
+                    return firstRequestApplied == true
+                }
+                return shouldApply()
+            })
+        defer { controller.closeDashboard() }
+
+        let link = try #require(URL(string: "https://docs.openclaw.ai/"))
+        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        for _ in 0..<200 where firstRequestContinuation == nil {
+            await Task.yield()
+        }
+        #expect(requestCount == 1)
+
+        controller._testCloseLinkBrowser()
+        firstRequestContinuation?.resume()
+        for _ in 0..<200 where firstRequestApplied == nil {
+            await Task.yield()
+        }
+        #expect(firstRequestApplied == false)
+
+        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        for _ in 0..<200 where requestCount == 1 {
+            await Task.yield()
+        }
+        #expect(requestCount == 2)
     }
 
     @Test func `dashboard parses only bounded native link requests`() throws {
@@ -651,9 +790,9 @@ struct DashboardWindowSmokeTests {
         manager._testSetController(controller)
         defer { manager._testController()?.closeDashboard() }
 
-        await manager.handleEndpointState(.ready(
+        try await manager.handleEndpointState(.ready(
             mode: .remote,
-            url: try #require(URL(string: "ws://127.0.0.1:60001")),
+            url: #require(URL(string: "ws://127.0.0.1:60001")),
             token: nil,
             password: nil,
             routeRevision: 2))
