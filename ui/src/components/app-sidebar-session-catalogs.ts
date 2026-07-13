@@ -91,9 +91,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const sectionId = `catalog:${catalog.id}`;
     const collapsed = params.collapsedSections.has(sectionId);
     const hosts = catalog.hosts;
-    const rows = hosts.flatMap((host) =>
-      host.sessions.map((session) => ({ host, session })),
-    );
+    const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
     const hasMore = hosts.some((host) => Boolean(host.nextCursor));
     const errorMessages = [
