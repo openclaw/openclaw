@@ -15,21 +15,6 @@ import type { Session } from "./session/session.js";
 export { err, ok } from "@openclaw/normalization-core/result";
 export type { Result } from "@openclaw/normalization-core/result";
 
-/** Normalize unknown thrown values into Error instances before using them as typed error causes. */
-export function toError(error: unknown): Error {
-  if (error instanceof Error) {
-    return error;
-  }
-  if (typeof error === "string") {
-    return new Error(error);
-  }
-  try {
-    return new Error(JSON.stringify(error));
-  } catch {
-    return new Error(String(error));
-  }
-}
-
 /**
  * Skill loaded from a `SKILL.md` file or provided by an application.
  *
