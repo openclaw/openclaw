@@ -238,7 +238,9 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
 
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
     expect(payload.text).not.toContain("♾️ Allow Always");
-    expect(payload.text).toContain("Allow Always is unavailable because the effective policy requires approval every time.");
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because the effective policy requires approval every time.",
+    );
     expect(
       payload.text?.trim().endsWith("Reply with: /approve exec-approval-123 allow-once|deny"),
     ).toBe(true);

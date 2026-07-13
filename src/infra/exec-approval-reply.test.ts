@@ -386,7 +386,9 @@ describe("exec approval reply helpers", () => {
     });
     expect(payload.text).toContain("```txt\n/approve slug-always allow-once\n```");
     expect(payload.text).not.toContain("allow-always");
-    expect(payload.text).toContain("The effective approval policy requires approval every time, so Allow Always is unavailable.");
+    expect(payload.text).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
     expect(payload.presentation).toEqual({
       blocks: [
         {
