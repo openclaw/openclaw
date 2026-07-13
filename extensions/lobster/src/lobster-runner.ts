@@ -274,7 +274,10 @@ async function withTimeout<T>(
 }
 
 async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime> {
-  const coreSpecifier = ["@clawdbot", "lobster", "core"].join("/");
+  // Keep this plugin-owned runtime import computed so host bundlers leave it external.
+  // The package literal also anchors extension runtime dependency validation.
+  const runtimePackage = "@clawdbot/lobster";
+  const coreSpecifier = [runtimePackage, "core"].join("/");
   return (await import(coreSpecifier)) as EmbeddedToolRuntime;
 }
 
