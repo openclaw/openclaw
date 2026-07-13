@@ -30,6 +30,9 @@ export type ChangedTestTargetOptions = {
   cwd?: string;
   env?: Record<string, string | undefined>;
   broad?: boolean;
+  combineSiblingWithImportGraph?: boolean;
+  forceFullImportGraph?: boolean;
+  includeExtensionImpact?: boolean;
 };
 
 export type ChangedTestTargetPlan = {
