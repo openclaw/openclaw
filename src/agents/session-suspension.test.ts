@@ -116,10 +116,12 @@ describe("session suspension", () => {
     await suspendLane(Number.MAX_SAFE_INTEGER, {} as OpenClawConfig, CommandLane.Main);
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    const buildPatch = sessionAccessorMocks.patchSessionEntry.mock.calls[0]?.[1] as () => {
+    const buildPatch = sessionAccessorMocks.patchSessionEntry.mock.calls[0]?.[1] as (_entry: {
+      quotaSuspension?: unknown;
+    }) => {
       quotaSuspension?: { expectedResumeBy?: number };
     };
-    const patch = buildPatch();
+    const patch = buildPatch({});
     expect(patch.quotaSuspension?.expectedResumeBy).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
   });
 
@@ -247,13 +249,36 @@ describe("session suspension", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const { clearSessionSuspensionTimers } = await import("./session-suspension.js");
+    const previousQuotaSuspension = {
+      schemaVersion: 1,
+      suspendedAt: 500,
+      reason: "circuit_open",
+      failedProvider: "openai",
+      failedModel: "gpt-5.5",
+      laneId: CommandLane.Main,
+      expectedResumeBy: 2_000,
+      state: "suspended",
+    };
     let resolvePatch: (() => void) | undefined;
-    sessionAccessorMocks.patchSessionEntry.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolvePatch = resolve;
-        }),
-    );
+    let writtenQuotaSuspension:
+      | {
+          suspendedAt: number;
+          reason: string;
+          failedProvider: string;
+          failedModel: string;
+          laneId?: string;
+        }
+      | undefined;
+    sessionAccessorMocks.patchSessionEntry.mockImplementationOnce(async (_scope, update) => {
+      await new Promise<void>((resolve) => {
+        resolvePatch = resolve;
+      });
+      const patch = update({ quotaSuspension: previousQuotaSuspension }) as {
+        quotaSuspension?: typeof writtenQuotaSuspension;
+      };
+      writtenQuotaSuspension = patch.quotaSuspension;
+      return patch;
+    });
 
     const suspension = suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
     await vi.waitFor(() => {
@@ -275,6 +300,11 @@ describe("session suspension", () => {
         laneId?: string;
       };
     }) => unknown;
+    expect(
+      cleanupPatch({
+        quotaSuspension: writtenQuotaSuspension,
+      }),
+    ).toEqual({ quotaSuspension: previousQuotaSuspension });
     expect(
       cleanupPatch({
         quotaSuspension: {

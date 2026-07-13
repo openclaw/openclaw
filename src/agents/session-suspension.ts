@@ -8,6 +8,7 @@ import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import type { QuotaSuspension } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
@@ -233,23 +234,27 @@ export async function suspendSession(params: SessionSuspensionParams) {
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
   const state = getSessionSuspensionState();
   const suspensionGeneration = state.cleanupGeneration;
+  let previousQuotaSuspension: QuotaSuspension | undefined;
 
   try {
     await patchSessionEntry(
       { storePath, sessionKey },
-      () => ({
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now,
-          reason: params.reason,
-          failedProvider: params.failedProvider,
-          failedModel: params.failedModel,
-          summary: params.summary,
-          laneId: params.laneId,
-          expectedResumeBy,
-          state: "suspended",
-        },
-      }),
+      (entry) => {
+        previousQuotaSuspension = entry.quotaSuspension;
+        return {
+          quotaSuspension: {
+            schemaVersion: 1,
+            suspendedAt: now,
+            reason: params.reason,
+            failedProvider: params.failedProvider,
+            failedModel: params.failedModel,
+            summary: params.summary,
+            laneId: params.laneId,
+            expectedResumeBy,
+            state: "suspended",
+          },
+        };
+      },
       { skipMaintenance: true, takeCacheOwnership: true },
     );
   } catch (err) {
@@ -272,7 +277,7 @@ export async function suspendSession(params: SessionSuspensionParams) {
           entry.quotaSuspension.failedProvider === params.failedProvider &&
           entry.quotaSuspension.failedModel === params.failedModel &&
           entry.quotaSuspension.laneId === params.laneId
-            ? { quotaSuspension: undefined }
+            ? { quotaSuspension: previousQuotaSuspension }
             : null,
         {
           skipMaintenance: true,
