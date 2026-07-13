@@ -7,12 +7,21 @@
 // the real `probeMSTeams()` code path with a stalled-token injection and
 // asserts that the call returns within the bounded deadline instead of
 // hanging on the naked await.
+//
+// Test design: drive `withTimeout`'s internal `setTimeout` via
+// `vi.useFakeTimers()` so each stalled case resolves in milliseconds instead
+// of waiting 30 production seconds. `withTimeout` (from
+// `@openclaw/fs-safe/dist/timing.js`) uses `setTimeout` + `clearTimeout`,
+// which `vi.useFakeTimers()` mocks globally. A separate case asserts the
+// production default deadline is exactly `MSTEAMS_REQUEST_TIMEOUT_MS = 30_000`
+// so the production contract is not silently weakened.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
 
 const hostMockState = vi.hoisted(() => ({
   stallTokens: false as boolean,
   stallMode: "bot" as "bot" | "graph" | "both",
+  observedTimeouts: [] as number[],
 }));
 
 vi.mock("@microsoft/teams.apps", () => ({
@@ -50,6 +59,23 @@ vi.mock("@microsoft/teams.api", () => ({
   }),
 }));
 
+// Capture the timeoutMs value used by the production `withTimeout` helper so we
+// can assert the production default is the documented 30 seconds. We mock the
+// public helper rather than `withTimeout` itself so the real deadline-then-race
+// logic still runs under fake timers.
+vi.mock("openclaw/plugin-sdk/text-utility-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-utility-runtime")>(
+    "openclaw/plugin-sdk/text-utility-runtime",
+  );
+  return {
+    ...actual,
+    withTimeout: async <T>(promise: Promise<T>, timeoutMs: number, label?: string): Promise<T> => {
+      hostMockState.observedTimeouts.push(timeoutMs);
+      return actual.withTimeout(promise, timeoutMs, label);
+    },
+  };
+});
+
 import { probeMSTeams } from "./probe.js";
 
 const VALID_CFG = {
@@ -59,10 +85,13 @@ const VALID_CFG = {
   tenantId: "tenant",
 } as unknown as MSTeamsConfig;
 
+const PRODUCTION_DEADLINE_MS = 30_000;
+
 describe("msteams probe request-deadline", () => {
   beforeEach(() => {
     hostMockState.stallTokens = false;
     hostMockState.stallMode = "both";
+    hostMockState.observedTimeouts.length = 0;
     vi.stubEnv("MSTEAMS_APP_ID", "");
     vi.stubEnv("MSTEAMS_APP_PASSWORD", "");
     vi.stubEnv("MSTEAMS_TENANT_ID", "");
@@ -70,55 +99,70 @@ describe("msteams probe request-deadline", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
-  // Mirrors the pattern in error-body-boundary.test.ts: race the real probe
-  // against a proof budget. If the probe wraps the SDK call with
-  // withMSTeamsRequestDeadline (default MSTEAMS_REQUEST_TIMEOUT_MS = 30_000)
-  // the race resolves inside the budget. If the await is naked the race hits
-  // the budget and the test reports the elapsed wall-clock.
-  async function probeWithBudget(
-    mode: "bot" | "graph" | "both",
-    proofBudgetMs: number,
-  ): Promise<{ status: "resolved" | "budget-exceeded"; result: unknown; elapsedMs: number }> {
+  // Drives the real `withMSTeamsRequestDeadline` under fake timers so the
+  // stalled SDK promise rejects via the 30s deadline instead of waiting 30
+  // wall-clock seconds per case. `vi.advanceTimersByTimeAsync(PRODUCTION_DEADLINE_MS + 1_000)`
+  // trips the inner `setTimeout` from `withTimeout`, which causes the
+  // `Promise.race` to settle with the deadline-rejection error.
+  async function probeStalled(mode: "bot" | "graph" | "both"): Promise<unknown> {
     hostMockState.stallTokens = true;
     hostMockState.stallMode = mode;
-    const start = Date.now();
-    const winner = await Promise.race<{ kind: "ok"; result: unknown } | { kind: "budget" }>([
-      probeMSTeams(VALID_CFG).then((r) => ({ kind: "ok" as const, result: r })),
-      new Promise<void>((resolve) => {
-        setTimeout(() => resolve(), proofBudgetMs);
-      }).then(() => ({ kind: "budget" as const })),
-    ]);
-    const elapsed = Date.now() - start;
-    if (winner.kind === "ok") {
-      return { status: "resolved", result: winner.result, elapsedMs: elapsed };
-    }
-    return { status: "budget-exceeded", result: null, elapsedMs: elapsed };
+    vi.useFakeTimers();
+    const probePromise = probeMSTeams(VALID_CFG);
+    // Let the synchronous portion of probeMSTeams (App construction +
+    // tokenProvider wiring + withMSTeamsRequestDeadline race registration)
+    // complete on the microtask queue before advancing fake time.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(PRODUCTION_DEADLINE_MS + 1_000);
+    return await probePromise;
   }
 
-  it("returns within the operation deadline when the bot token stalls", async () => {
-    const out = await probeWithBudget("bot", 45_000);
-    // The probe should be bounded by MSTEAMS_REQUEST_TIMEOUT_MS (30_000) plus
-    // some setup overhead. After the fix, this is well under 45s.
-    expect(out.status).toBe("resolved");
-    expect(out.elapsedMs).toBeLessThan(45_000);
+  it("returns a bounded probe result when the bot token stalls", async () => {
+    const result = (await probeStalled("bot")) as { ok: boolean; error?: string };
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/MS Teams Bot Framework probe token/);
+    expect(result.error).toMatch(/timed out after 30000ms/);
   });
 
-  it("returns within the operation deadline when the graph token stalls", async () => {
-    const out = await probeWithBudget("graph", 45_000);
-    expect(out.status).toBe("resolved");
-    expect(out.elapsedMs).toBeLessThan(45_000);
+  it("returns a bounded probe result when the graph token stalls", async () => {
+    const result = (await probeStalled("graph")) as {
+      ok: boolean;
+      error?: string;
+      graph?: { ok: boolean; error?: string };
+    };
+    // Outer probe is `ok: true` (bot succeeded); graph field carries the bounded failure.
+    expect(result.ok).toBe(true);
+    expect(result.graph?.ok).toBe(false);
+    expect(result.graph?.error).toMatch(/MS Teams Graph probe token/);
+    expect(result.graph?.error).toMatch(/timed out after 30000ms/);
   });
 
-  it("returns within the operation deadline when both tokens stall", async () => {
-    const out = await probeWithBudget("both", 60_000);
-    expect(out.status).toBe("resolved");
-    expect(out.elapsedMs).toBeLessThan(60_000);
+  it("returns a bounded probe result when both tokens stall", async () => {
+    const result = (await probeStalled("both")) as { ok: boolean; error?: string };
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/MS Teams Bot Framework probe token/);
+    expect(result.error).toMatch(/timed out after 30000ms/);
   });
 
   it("returns ok=true for a normal (non-stalled) probe", async () => {
+    hostMockState.stallTokens = false;
     const result = await probeMSTeams(VALID_CFG);
     expect(result.ok).toBe(true);
+  });
+
+  it("uses the documented 30s production default deadline for both token acquisitions", async () => {
+    // Run a normal probe and observe the two `withTimeout` calls. Both must use
+    // the production default — not a weakened test value. The probe calls
+    // `withMSTeamsRequestDeadline` twice in series (bot then graph); we expect
+    // exactly two observed timeouts, both 30_000.
+    hostMockState.stallTokens = false;
+    await probeMSTeams(VALID_CFG);
+    expect(hostMockState.observedTimeouts).toEqual([
+      PRODUCTION_DEADLINE_MS,
+      PRODUCTION_DEADLINE_MS,
+    ]);
   });
 });
