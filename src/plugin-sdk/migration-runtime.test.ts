@@ -2,9 +2,9 @@
  * Tests plugin SDK migration runtime facades and migration helper behavior.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   copyMemoryMigrationFileItem,
   copyMigrationFileItem,
@@ -13,6 +13,8 @@ import {
 } from "./migration-runtime.js";
 import { createMigrationItem } from "./migration.js";
 import type { MigrationProviderContext } from "./plugin-entry.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function writeFile(filePath: string, contents: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -108,7 +110,7 @@ describe("copyMigrationFileItem", () => {
 
   it("uses unique backup paths for same-basename targets in the same millisecond", async () => {
     vi.spyOn(Date, "now").mockReturnValue(123);
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migration-runtime-"));
+    const root = tempDirs.make("openclaw-migration-runtime-");
     const reportDir = path.join(root, "report");
     const sourceOne = path.join(root, "source-one", "AGENTS.md");
     const sourceTwo = path.join(root, "source-two", "AGENTS.md");
@@ -163,7 +165,7 @@ describe("copyMemoryMigrationFileItem", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-copy-"));
+    const root = tempDirs.make("openclaw-memory-copy-");
     const workspaceDir = path.join(root, "workspace");
     const outsideDir = path.join(root, "outside");
     const source = path.join(root, "source", "MEMORY.md");
@@ -192,7 +194,7 @@ describe("copyMemoryMigrationFileItem", () => {
   });
 
   it("backs up and replaces an existing memory file within the workspace root", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-copy-"));
+    const root = tempDirs.make("openclaw-memory-copy-");
     const workspaceDir = path.join(root, "workspace");
     const source = path.join(root, "source", "MEMORY.md");
     const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
@@ -224,7 +226,7 @@ describe("copyMemoryMigrationFileItem", () => {
   });
 
   it("does not clobber an existing memory file when replacement is disabled", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-copy-"));
+    const root = tempDirs.make("openclaw-memory-copy-");
     const workspaceDir = path.join(root, "workspace");
     const source = path.join(root, "source", "MEMORY.md");
     const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
@@ -250,7 +252,7 @@ describe("copyMemoryMigrationFileItem", () => {
 
 describe("writeMigrationReport", () => {
   it("redacts nested secret-looking config values in JSON reports", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migration-report-"));
+    const root = tempDirs.make("openclaw-migration-report-");
     const reportDir = path.join(root, "report");
 
     await writeMigrationReport({
