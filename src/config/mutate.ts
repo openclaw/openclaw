@@ -30,6 +30,7 @@ import {
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
 import {
   createConfigIO,
+  hasJSON5Comments,
   readConfigFileSnapshotForWrite,
   restoreEnvChangesIfUnchanged,
   resolveConfigSnapshotHash,
@@ -556,6 +557,8 @@ async function writeRootBoundJsonFile(params: {
   rootSnapshot: ConfigFileSnapshot;
   assertConfigPathForWrite: () => void;
   preCommitRuntimePreflight?: () => Promise<unknown>;
+  /** Called after a successful atomic write with the previous raw content. */
+  onCommitted?: (previousRaw: string | null) => void;
 }): Promise<void> {
   params.assertConfigPathForWrite();
   const targetBeforeBackup = await resolveExpectedRootBoundIncludeFile({
@@ -605,6 +608,7 @@ async function writeRootBoundJsonFile(params: {
     });
     throw error;
   }
+  params.onCommitted?.(currentRaw);
 }
 
 async function tryWriteSingleTopLevelIncludeMutation(params: {
@@ -803,6 +807,20 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
             await callerPreCommit?.(runtimeConfigToWrite);
           }
         : undefined,
+    onCommitted: (previousRaw) => {
+      if (previousRaw === null) return;
+      if (params.writeOptions?.skipOutputLogs) return;
+      if (!hasJSON5Comments(previousRaw)) return;
+      const writeEnv = params.io?.env ?? process.env;
+      const isVitest = writeEnv.VITEST === "true";
+      const shouldLogInVitest = writeEnv.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
+      if (isVitest && !shouldLogInVitest) return;
+      console.warn(
+        `Config write removed JSON5 comments from ${expectedIncludeTarget}. ` +
+          `A pre-write backup was saved to the config directory; ` +
+          `diff it against the current file to recover commented-out settings.`,
+      );
+    },
   });
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;

@@ -2552,4 +2552,85 @@ describe("config mutate helpers", () => {
       setRuntimeConfigSnapshotRefreshHandler(null);
     }
   });
+
+  it("warns when a single-file $include write removes JSON5 comments", async () => {
+    const home = await suiteRootTracker.make("include-comment-loss");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
+    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    // Write the include file with JSON5 comments
+    const commentedRaw =
+      [
+        "// Plugin entries managed by setup wizard",
+        "{",
+        '  "entries": { "demo": { "enabled": true } }',
+        "}",
+      ].join("\n") + "\n";
+    await fs.writeFile(pluginsPath, commentedRaw, "utf-8");
+
+    const snapshot: ConfigFileSnapshot = {
+      ...createSnapshot({
+        hash: "hash-include-comment-loss",
+        path: configPath,
+        parsed: { plugins: { $include: "./config/plugins.json5" } },
+        sourceConfig: { plugins: { entries: { demo: { enabled: true } } } },
+      }),
+      raw: `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
+    };
+    const includeHash = hashConfigIncludeRaw(commentedRaw);
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: configPath,
+          includeFileHashesForWrite: { [pluginsPath]: includeHash },
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+      })
+      .mockResolvedValueOnce({
+        snapshot: createSnapshot({
+          hash: "hash-include-comment-loss-refreshed",
+          path: configPath,
+          parsed: { plugins: { $include: "./config/plugins.json5" } },
+          sourceConfig: {
+            plugins: { entries: { demo: { enabled: true }, extra: { enabled: true } } },
+          },
+        }),
+        writeOptions: { expectedConfigPath: configPath },
+      });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const prevLog = process.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG;
+    process.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG = "1";
+    try {
+      await replaceConfigFile({
+        baseHash: snapshot.hash,
+        nextConfig: {
+          plugins: {
+            entries: { demo: { enabled: true }, extra: { enabled: true } },
+          },
+        },
+        io: {
+          readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+          writeConfigFile: ioMocks.writeConfigFile,
+        },
+      });
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("removed JSON5 comments"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(pluginsPath));
+    } finally {
+      if (prevLog === undefined) {
+        delete process.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG;
+      } else {
+        process.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG = prevLog;
+      }
+      warn.mockRestore();
+    }
+  });
 });
