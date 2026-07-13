@@ -1590,7 +1590,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/flows/doctor-health-contributions.ts: resolveDoctorHealthContributions",
   "src/flows/doctor-health-contributions.ts: shouldSkipLegacyUpdateDoctorConfigWrite",
   "src/flows/health-check-adapter.ts: defineSplitHealthCheck",
-  "src/gateway/server-methods/chat-send-user-turn.ts: ChatSendManagedMediaFields",
   "src/hooks/bundled/session-memory/transcript.ts: getRecentSessionContent",
   "src/hooks/bundled/session-memory/transcript.ts: sanitizeSessionMemoryTranscriptText",
   "src/hooks/gmail-setup-utils.ts: resetGmailSetupUtilsCachesForTest",

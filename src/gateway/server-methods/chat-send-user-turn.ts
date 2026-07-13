@@ -28,7 +28,7 @@ type ChatSendUserTurnInputController = {
   setInputPromise: (input: Promise<UserTurnInput>) => void;
 };
 
-export type ChatSendManagedMediaFields = Partial<
+type ChatSendManagedMediaFields = Partial<
   Pick<MsgContext, "MediaPath" | "MediaPaths" | "MediaType" | "MediaTypes">
 >;
 
