@@ -444,17 +444,10 @@ export function archiveSessionTranscriptsDetailed(opts: {
   }
   // Legacy global sessions directory is always a valid containment root.
   containmentRoots.push(canonicalizePathForComparison(path.join(home, ".openclaw", "sessions")));
-  // When storePath is undefined without agentId the resolver returns the raw
-  // sessionFile path directly. Preserve this explicit custom path by adding its
-  // parent directory as a containment root so valid user-specified transcripts
-  // are not filtered out. Only .jsonl paths are accepted — non-transcript
-  // extensions (e.g. a poisoned /etc/passwd) are rejected by containment.
-  if (opts.sessionFile && !opts.storePath && !opts.agentId) {
-    const resolvedSessionFile = path.resolve(opts.sessionFile);
-    if (resolvedSessionFile.endsWith(".jsonl")) {
-      containmentRoots.push(canonicalizePathForComparison(path.dirname(resolvedSessionFile)));
-    }
-  }
+  // When storePath and agentId are both absent, there is no independently trusted
+  // session root to validate against. Without trusted roots, a custom sessionFile
+  // candidate that falls outside the legacy sessions directory is rejected.
+  // This prevents an arbitrary external .jsonl path from authorizing itself.
 
   for (const candidate of resolveSessionTranscriptCandidates(
     opts.sessionId,

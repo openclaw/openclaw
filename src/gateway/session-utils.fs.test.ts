@@ -2529,7 +2529,7 @@ describe("archiveSessionTranscripts", () => {
       transcriptFileName: "custom-transcript.jsonl",
       buildArgs: () => ({
         sessionId: "sess-archive-2",
-        storePath: undefined,
+        storePath,
         sessionFile: path.join(tmpDir, "custom-transcript.jsonl"),
         reason: "reset" as const,
       }),
@@ -2617,7 +2617,8 @@ describe("archiveSessionTranscripts", () => {
 
   test("rejects poisoned non-jsonl sessionFile without storePath", () => {
     // When storePath is undefined and no agentId, the resolver returns the raw
-    // sessionFile path. The containment boundary should reject non-.jsonl paths.
+    // sessionFile path. Without a custom path containment root, arbitrary system
+    // paths are rejected by containment regardless of extension.
     withArchiveHome(() => {
       const archived = archiveSessionTranscripts({
         sessionId: "sess-poisoned",
@@ -2628,6 +2629,32 @@ describe("archiveSessionTranscripts", () => {
 
       expect(archived).toStrictEqual([]);
     });
+  });
+
+  test("rejects external .jsonl sessionFile without storePath or agentId", () => {
+    // When storePath and agentId are both absent, there is no independently trusted
+    // containment root. An arbitrary external .jsonl path must not be archived.
+    const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-external-jsonl-"));
+    try {
+      const maliciousPath = path.join(externalDir, "malicious.jsonl");
+      fs.writeFileSync(maliciousPath, '{"type":"session"}\n', "utf-8");
+
+      withArchiveHome(() => {
+        const archived = archiveSessionTranscripts({
+          sessionId: "sess-external-jsonl",
+          storePath: undefined,
+          sessionFile: maliciousPath,
+          reason: "deleted",
+        });
+
+        // External .jsonl path should be rejected by containment.
+        expect(archived).toStrictEqual([]);
+        // File must still exist (never renamed/archived).
+        expect(fs.existsSync(maliciousPath)).toBe(true);
+      });
+    } finally {
+      fs.rmSync(externalDir, { recursive: true, force: true });
+    }
   });
 
   test("rejects poisoned sessionFile outside storePath containment boundary", () => {
