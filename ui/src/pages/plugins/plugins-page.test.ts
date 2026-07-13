@@ -211,10 +211,8 @@ function deferred<T>() {
 }
 
 async function clickRowAction(page: TestPluginsPage, pluginSelector: string, label: string) {
-  const button = [
-    ...page.querySelectorAll<HTMLButtonElement>(`${pluginSelector} button`),
-  ].find((element) =>
-    (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
+  const button = [...page.querySelectorAll<HTMLButtonElement>(`${pluginSelector} button`)].find(
+    (element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
   );
   button?.click();
   await page.updateComplete;
