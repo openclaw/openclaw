@@ -122,13 +122,13 @@ export function parseWorkspaceBindingShorthand(value: string): [string, Workspac
     return [id, { source: "stream", event, ...(pointer !== undefined ? { pointer } : {}) }];
   }
   if (body.startsWith("computed:")) {
-    const value = parseJson(body.slice("computed:".length), "computed");
-    if (!isRecord(value)) {
+    const computed = parseJson(body.slice("computed:".length), "computed");
+    if (!isRecord(computed)) {
       throw new Error("computed binding must be a JSON object");
     }
-    const op = value.op;
-    const inputs = value.inputs;
-    const arg = value.arg;
+    const op = computed.op;
+    const inputs = computed.inputs;
+    const arg = computed.arg;
     if (typeof op !== "string" || !COMPUTED_OPS.includes(op as ComputedOp)) {
       throw new Error("computed binding op is invalid");
     }
