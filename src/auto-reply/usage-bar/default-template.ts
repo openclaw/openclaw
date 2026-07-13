@@ -37,6 +37,18 @@ export const DEFAULT_USAGE_BAR_TEMPLATE: UsageBarTemplate = {
       { when: "cost.turn_usd", text: "\u00A0💰{cost.turn_usd|fixed:4}" },
     ],
     surfaces: {
+      webchat: [
+        { text: "{model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
+        { map: "model.is_fallback", cases: { true: "🔄" } },
+        { map: "model.is_override", cases: { true: "📌" } },
+        { when: "model.reasoning", text: "{model.reasoning|alias:reasoning}" },
+        { map: "state.fast_mode", cases: { true: "⚡️", false: "🐌" } },
+        {
+          when: "context.max_tokens",
+          text: "\u00A0| 📚[{context.pct_used|meter:5:block}]{context.max_tokens|num}",
+        },
+        { when: "cost.turn_usd", text: "\u00A0💰{cost.turn_usd|fixed:4}" },
+      ],
       discord: [
         { text: "-# -\n" },
         { text: "-# {model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
