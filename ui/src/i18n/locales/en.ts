@@ -3558,6 +3558,14 @@ export const en: TranslationMap = {
       more: "More actions",
       history: "History",
     },
+    runNotStarted: {
+      notDue: "This automation is not due yet.",
+      alreadyRunning: "This automation is already running.",
+      recoveryPending: "Scheduler recovery is still in progress.",
+      invalidSpec: "This automation has an invalid schedule or payload.",
+      stopped: "The scheduler is stopped.",
+      unknown: "This automation could not be started.",
+    },
     jobs: {
       schedule: "Schedule",
       lastRun: "Last run",
