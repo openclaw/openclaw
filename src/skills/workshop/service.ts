@@ -51,7 +51,6 @@ import {
 export {
   getSkillProposalRunProgress,
   inspectSkillProposal,
-  listSkillProposalIdsForRun,
   listSkillProposals,
   resolvePendingSkillProposal,
 } from "./service-query.js";

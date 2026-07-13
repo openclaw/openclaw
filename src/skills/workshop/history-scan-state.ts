@@ -8,7 +8,7 @@ import {
 } from "../../plugin-state/plugin-state-store.js";
 import type { SkillWorkshopProposalReviewProgress } from "./types.js";
 
-export const HISTORY_SCAN_SCHEMA = "openclaw.skill-workshop.history-scan.v1";
+const HISTORY_SCAN_SCHEMA = "openclaw.skill-workshop.history-scan.v1";
 
 export type SkillHistoryScanDirection = "older" | "newer";
 
@@ -96,7 +96,7 @@ export function isStoredHistoryScanState(value: unknown): value is StoredSkillHi
   );
 }
 
-export function loadHistoryScanState(params: Omit<SkillHistoryScanScope, "direction">) {
+function loadHistoryScanState(params: Omit<SkillHistoryScanScope, "direction">) {
   const storePath = resolveStorePath(params.config.session?.store, {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),

@@ -6,26 +6,31 @@ import type {
   SessionEntrySummary,
   SessionTranscriptInstance,
 } from "../../config/sessions/session-accessor.js";
-import { buildSkillHistoryScanPrompt } from "./history-scan-prompt.js";
 import {
-  collectSkillHistoryScanBatch,
   compareSkillHistoryScanCandidates,
-  formatSkillHistoryScanTranscript,
-  getSkillHistoryScanStatus,
-  hasLegacyHookTranscriptContent,
-  isSkillHistoryScanLocalTranscriptSizeEligible,
   isSkillHistoryScanSessionEligible,
-  prepareSkillHistoryScanReviewMessages,
+} from "./history-scan-candidate-rules.js";
+import { selectSkillHistoryScanCandidates } from "./history-scan-candidates.js";
+import {
   reconcileSkillHistoryScanProgress,
   resolveSkillHistoryScanHasMore,
+} from "./history-scan-progress.js";
+import { buildSkillHistoryScanPrompt } from "./history-scan-prompt.js";
+import {
   resolveSkillHistoryScanReviewOutcome,
   resolveSkillHistoryScanRunFailure,
+} from "./history-scan-review-outcome.js";
+import { getSkillHistoryScanStatus, type SkillHistoryScanResult } from "./history-scan-state.js";
+import {
+  formatSkillHistoryScanTranscript,
+  isSkillHistoryScanLocalTranscriptSizeEligible,
+  prepareSkillHistoryScanReviewMessages,
+} from "./history-scan-transcript-content.js";
+import {
+  collectSkillHistoryScanBatch,
   resolveSkillHistoryScanTranscriptBudget,
-  runSkillHistoryScan,
-  selectSkillHistoryScanReviewMessages,
-  selectSkillHistoryScanCandidates,
-  type SkillHistoryScanResult,
-} from "./history-scan.js";
+} from "./history-scan-transcript.js";
+import { runSkillHistoryScan } from "./history-scan.js";
 
 function summary(sessionKey: string, overrides: Partial<SessionEntrySummary["entry"]> = {}) {
   return {
@@ -114,23 +119,27 @@ describe("Skill Workshop history scan", () => {
       '<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
     ].join("\n");
 
-    expect(hasLegacyHookTranscriptContent([{ role: "user", content: wrapped }])).toBe(true);
+    expect(prepareSkillHistoryScanReviewMessages([{ role: "user", content: wrapped }])).toBe(
+      undefined,
+    );
     expect(
-      hasLegacyHookTranscriptContent([
+      prepareSkillHistoryScanReviewMessages([
         { role: "user", content: wrapped.replaceAll(' id="deadbeefdeadbeef"', "") },
       ]),
-    ).toBe(true);
-    expect(hasLegacyHookTranscriptContent([{ role: "toolResult", content: wrapped }])).toBe(false);
+    ).toBeUndefined();
     expect(
-      hasLegacyHookTranscriptContent([
+      prepareSkillHistoryScanReviewMessages([{ role: "toolResult", content: wrapped }]),
+    ).toBeDefined();
+    expect(
+      prepareSkillHistoryScanReviewMessages([
         { role: "user", content: wrapped.replace("Source: Webhook", "Source: Web Fetch") },
       ]),
-    ).toBe(false);
+    ).toBeDefined();
     expect(
-      hasLegacyHookTranscriptContent([
+      prepareSkillHistoryScanReviewMessages([
         { role: "user", content: "[cron:job-1 Incoming webhook] unwrapped payload" },
       ]),
-    ).toBe(true);
+    ).toBeUndefined();
   });
 
   it("finds a legacy hook turn outside the provider-facing window", () => {
@@ -149,7 +158,7 @@ describe("Skill Workshop history scan", () => {
       })),
     ];
 
-    expect(selectSkillHistoryScanReviewMessages(messages)).toBeUndefined();
+    expect(prepareSkillHistoryScanReviewMessages(messages)).toBeUndefined();
   });
 
   it("removes shared-session heartbeat work before bounding the review window", () => {
@@ -166,7 +175,7 @@ describe("Skill Workshop history scan", () => {
       })),
     ];
 
-    expect(selectSkillHistoryScanReviewMessages(messages)).toEqual(interactive);
+    expect(prepareSkillHistoryScanReviewMessages(messages)?.messages).toEqual(interactive);
   });
 
   it("removes heartbeat turns that use the configured agent prompt", () => {
@@ -181,7 +190,9 @@ describe("Skill Workshop history scan", () => {
       { role: "assistant", content: "Scheduled check output" },
     ];
 
-    expect(selectSkillHistoryScanReviewMessages(messages, heartbeatPrompt)).toEqual(interactive);
+    expect(prepareSkillHistoryScanReviewMessages(messages, heartbeatPrompt)?.messages).toEqual(
+      interactive,
+    );
   });
 
   it("counts substantial model work before taking the provider-facing tail", () => {

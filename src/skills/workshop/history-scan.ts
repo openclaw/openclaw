@@ -6,17 +6,17 @@ import { resolveDefaultModelForAgent } from "../../agents/model-selection-config
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
-  candidateOlderThanCursor,
   listHistoryScanCandidates,
   selectSkillHistoryScanCandidates,
   type SkillHistoryScanCandidate,
 } from "./history-scan-candidates.js";
-import type { SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
 import {
-  HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS,
-  HISTORY_SCAN_SESSION_SEGMENT,
-  runSkillHistoryScanReview,
-} from "./history-scan-review.js";
+  reconcileSkillHistoryScanProgress,
+  resolveSkillHistoryScanHasMore,
+} from "./history-scan-progress.js";
+import type { SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
+import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./history-scan-review-outcome.js";
+import { HISTORY_SCAN_SESSION_SEGMENT, runSkillHistoryScanReview } from "./history-scan-review.js";
 import {
   emptyHistoryScanResult,
   historyScanStateKey,
@@ -39,34 +39,6 @@ import {
   resolveSkillHistoryScanTranscriptBudget,
 } from "./history-scan-transcript.js";
 import { getSkillProposalRunProgress } from "./service.js";
-import type { SkillWorkshopProposalReviewProgress } from "./types.js";
-
-export {
-  compareSkillHistoryScanCandidates,
-  isSkillHistoryScanSessionEligible,
-  selectSkillHistoryScanCandidates,
-  type SkillHistoryScanCandidate,
-} from "./history-scan-candidates.js";
-export {
-  resolveSkillHistoryScanReviewOutcome,
-  resolveSkillHistoryScanRunFailure,
-  runSkillHistoryScanReview,
-} from "./history-scan-review.js";
-export {
-  getSkillHistoryScanStatus,
-  type SkillHistoryScanCursor,
-  type SkillHistoryScanDirection,
-  type SkillHistoryScanResult,
-} from "./history-scan-state.js";
-export {
-  collectSkillHistoryScanBatch,
-  formatSkillHistoryScanTranscript,
-  hasLegacyHookTranscriptContent,
-  isSkillHistoryScanLocalTranscriptSizeEligible,
-  prepareSkillHistoryScanReviewMessages,
-  resolveSkillHistoryScanTranscriptBudget,
-  selectSkillHistoryScanReviewMessages,
-} from "./history-scan-transcript.js";
 
 type ActiveSkillHistoryScan = {
   direction: SkillHistoryScanDirection;
@@ -74,37 +46,6 @@ type ActiveSkillHistoryScan = {
 };
 
 const historyScansInFlight = new Map<string, ActiveSkillHistoryScan>();
-
-export function resolveSkillHistoryScanHasMore(params: {
-  direction: SkillHistoryScanDirection;
-  oldestCursor?: { instanceId: string; updatedAtMs: number };
-  candidates: readonly SkillHistoryScanCandidate[];
-}): boolean {
-  // A cursorless newer scan follows an empty first scan. Its candidates are
-  // new work, not evidence that an older page remains.
-  if (params.direction === "newer" && !params.oldestCursor) {
-    return false;
-  }
-  const oldestCursor = params.oldestCursor;
-  return oldestCursor
-    ? params.candidates.some((candidate) => candidateOlderThanCursor(candidate, oldestCursor))
-    : params.candidates.length > 0;
-}
-
-export function reconcileSkillHistoryScanProgress(params: {
-  durableMutationCount: number;
-  durableProposalIds: readonly string[];
-}): SkillWorkshopProposalReviewProgress {
-  // Proposal records are the recovery authority. The checkpoint can include a
-  // failed reservation or miss a write that landed immediately before a crash.
-  const proposalIds = [...new Set(params.durableProposalIds)];
-  const remaining = Math.max(0, HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS - params.durableMutationCount);
-  return {
-    proposalIds,
-    remaining,
-    successfulMutations: params.durableMutationCount,
-  };
-}
 
 function finalizeUnreplayableSkillHistoryScan(
   previous: StoredSkillHistoryScanSnapshot,

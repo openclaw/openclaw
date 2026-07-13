@@ -30,6 +30,21 @@ describe("Control UI build chunking", () => {
     expect(controlUiManualChunk("/repo/ui/src/app/app-host.ts")).toBeUndefined();
   });
 
+  it("keeps static startup dependencies together without pulling in lazy routes", () => {
+    const modules = new Map([
+      ["/repo/ui/index.html", { importers: [], isEntry: true }],
+      ["/repo/ui/src/main.ts", { importers: ["/repo/ui/index.html"], isEntry: false }],
+      ["/repo/ui/src/app/app-host.ts", { importers: ["/repo/ui/src/main.ts"], isEntry: false }],
+      ["/repo/src/shared.ts", { importers: ["/repo/ui/src/main.ts"], isEntry: false }],
+      ["/repo/ui/src/pages/lazy.ts", { importers: [], isEntry: false }],
+    ]);
+    const graph = { getModuleInfo: (id: string) => modules.get(id) ?? null };
+
+    expect(controlUiManualChunk("/repo/ui/src/app/app-host.ts", graph)).toBe("control-ui-core");
+    expect(controlUiManualChunk("/repo/src/shared.ts", graph)).toBe("control-ui-foundation");
+    expect(controlUiManualChunk("/repo/ui/src/pages/lazy.ts", graph)).toBeUndefined();
+  });
+
   it("normalizes Windows module paths before package matching", () => {
     expect(controlUiManualChunk(String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`)).toBe(
       "markdown-runtime",

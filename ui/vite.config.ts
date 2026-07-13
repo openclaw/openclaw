@@ -423,6 +423,7 @@ export default function controlUiViteConfig(): UserConfig {
       rollupOptions: {
         output: {
           manualChunks: controlUiManualChunk,
+          onlyExplicitManualChunks: true,
         },
       },
       // Keep CI/onboard logs clean; the app chunk is split into stable runtime buckets above.

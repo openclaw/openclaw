@@ -8,7 +8,7 @@ import {
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { formatSkillExperienceReviewTranscript } from "./experience-review-prompt.js";
 import type { SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
-import { runSkillHistoryScanReview } from "./history-scan.js";
+import { runSkillHistoryScanReview } from "./history-scan-review.js";
 import { listSkillProposals } from "./service.js";
 
 const LIVE =

@@ -4,11 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
 import "../../components/tooltip.ts";
@@ -35,15 +31,10 @@ import {
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
-  type SkillWorkshopContext,
   type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
-import {
-  resolveSelfLearning,
-  setSelfLearningEnabled,
-  type SkillWorkshopSelfLearning,
-} from "./self-learning.ts";
+import { resolveSelfLearning, setSelfLearningEnabled } from "./self-learning.ts";
 import {
   captureSkillWorkshopSourceScope,
   isCurrentSkillWorkshopSourceScope,

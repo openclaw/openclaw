@@ -1,11 +1,9 @@
 import {
   validateSkillsProposalHistoryScanParams,
   validateSkillsProposalHistoryStatusParams,
-} from "../../../packages/gateway-protocol/src/index.js";
-import {
-  getSkillHistoryScanStatus,
-  runSkillHistoryScan,
-} from "../../skills/workshop/history-scan.js";
+} from "../../../packages/gateway-protocol/src/schema/skill-history.js";
+import { getSkillHistoryScanStatus } from "../../skills/workshop/history-scan-state.js";
+import { runSkillHistoryScan } from "../../skills/workshop/history-scan.js";
 import { runSkillsProposalWorkspaceHandler } from "./skills-workspace-handler.js";
 import type { GatewayRequestHandlers } from "./types.js";
 

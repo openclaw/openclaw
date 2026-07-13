@@ -2,6 +2,11 @@
 import { formatByteSize } from "@openclaw/normalization-core";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../../lib/sessions/session-key.ts";
 import type {
   SkillWorkshopAction,
   SkillWorkshopActionNotice,
@@ -10,12 +15,6 @@ import type {
   SkillWorkshopProposalStatus,
   SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
-import { loadedSkillWorkshopAgentParams, skillWorkshopAgentParams } from "./agent-scope.ts";
-import {
-  createSkillWorkshopHistoryScanState,
-  type SkillWorkshopHistoryScanState,
-} from "./history-scan.ts";
-export { resolveSkillWorkshopAgentId } from "./agent-scope.ts";
 
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
 
@@ -41,6 +40,37 @@ type SkillProposalManifest = {
   updatedAt: string;
   proposals: SkillProposalManifestEntry[];
 };
+
+export type SkillWorkshopHistoryScanResult = {
+  schema: "openclaw.skill-workshop.history-scan.v1";
+  hasScanned: boolean;
+  reviewedSessions: number;
+  ideasFound: number;
+  hasMore: boolean;
+  lastScanReviewed: number;
+  lastScanIdeas: number;
+  lastScanAt?: string;
+  oldestReviewedAt?: string;
+  newestReviewedAt?: string;
+};
+
+export type SkillWorkshopHistoryScanState = {
+  loading: boolean;
+  loaded: boolean;
+  running: boolean;
+  error: string | null;
+  result: SkillWorkshopHistoryScanResult | null;
+};
+
+function createSkillWorkshopHistoryScanState(): SkillWorkshopHistoryScanState {
+  return {
+    loading: false,
+    loaded: false,
+    running: false,
+    error: null,
+    result: null,
+  };
+}
 
 type SkillProposalSupportFileRecord = {
   path: string;
@@ -123,6 +153,7 @@ export type SkillWorkshopRouteData = Pick<
   | "skillWorkshopActionNotice"
   | "skillWorkshopRevisionKey"
   | "skillWorkshopRevisionDraft"
+  | "skillWorkshopHistoryScan"
 >;
 
 export function createSkillWorkshopState(data?: SkillWorkshopRouteData): SkillWorkshopState {
@@ -146,7 +177,8 @@ export function createSkillWorkshopState(data?: SkillWorkshopRouteData): SkillWo
     skillWorkshopQueueWidth: 360,
     skillWorkshopMode: "today",
     skillWorkshopUseCurrentChatForRevisions: false,
-    skillWorkshopHistoryScan: createSkillWorkshopHistoryScanState(),
+    skillWorkshopHistoryScan:
+      data?.skillWorkshopHistoryScan ?? createSkillWorkshopHistoryScanState(),
   };
 }
 
@@ -163,11 +195,38 @@ export function skillWorkshopRouteData(state: SkillWorkshopState): SkillWorkshop
     skillWorkshopActionNotice: state.skillWorkshopActionNotice,
     skillWorkshopRevisionKey: state.skillWorkshopRevisionKey,
     skillWorkshopRevisionDraft: state.skillWorkshopRevisionDraft,
+    skillWorkshopHistoryScan: state.skillWorkshopHistoryScan,
   };
 }
 
 function getErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: string } {
+  const snapshot = context.gateway.snapshot;
+  const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
+  const selectedAgentId = context.agentSelection.state.selectedId;
+  return {
+    agentId: sessionAgentId
+      ? normalizeAgentId(sessionAgentId)
+      : selectedAgentId
+        ? normalizeAgentId(selectedAgentId)
+        : resolveUiSelectedGlobalAgentId(snapshot),
+  };
+}
+
+export function resolveSkillWorkshopAgentId(context: SkillWorkshopContext): string {
+  return skillWorkshopAgentParams(context).agentId;
+}
+
+function loadedSkillWorkshopAgentParams(
+  state: SkillWorkshopState,
+  context: SkillWorkshopContext,
+): { agentId: string } {
+  return {
+    agentId: state.skillWorkshopAgentId ?? skillWorkshopAgentParams(context).agentId,
+  };
 }
 
 function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string): void {

@@ -12,7 +12,6 @@ import "../../styles/skill-workshop.css";
 import {
   filterSkillWorkshopProposals,
   type SkillWorkshopActionNotice,
-  type SkillWorkshopMode,
   type SkillWorkshopProposal,
   type SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";

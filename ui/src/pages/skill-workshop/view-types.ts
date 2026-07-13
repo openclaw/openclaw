@@ -5,7 +5,7 @@ import type {
   SkillWorkshopProposal,
   SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
-import type { SkillWorkshopHistoryScanState } from "./history-scan.ts";
+import type { SkillWorkshopHistoryScanState } from "./proposals.ts";
 import type { SkillWorkshopSelfLearning } from "./self-learning.ts";
 
 export type SkillWorkshopProps = {

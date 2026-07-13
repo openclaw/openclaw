@@ -15,7 +15,7 @@ import type {
   SkillProposalRecord,
 } from "./types.js";
 
-export type SkillProposalScopeOptions = {
+type SkillProposalScopeOptions = {
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
 };
@@ -50,12 +50,6 @@ export async function listSkillProposals(
     }
   }
   return { ...manifest, proposals };
-}
-
-export async function listSkillProposalIdsForRun(
-  options: SkillProposalScopeOptions & { runId: string },
-): Promise<string[]> {
-  return (await getSkillProposalRunProgress(options)).proposalIds;
 }
 
 export async function getSkillProposalRunProgress(

@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationGateway } from "../../app/context.ts";
-import {
-  createSkillWorkshopHistoryScanState,
-  loadSkillWorkshopHistoryScanStatus,
-  runSkillWorkshopHistoryScan,
-  type SkillWorkshopHistoryScanResult,
-} from "./history-scan.ts";
+import { loadSkillWorkshopHistoryScanStatus, runSkillWorkshopHistoryScan } from "./history-scan.ts";
+import { createSkillWorkshopState, type SkillWorkshopHistoryScanResult } from "./proposals.ts";
+
+function createSkillWorkshopHistoryScanState() {
+  return createSkillWorkshopState().skillWorkshopHistoryScan;
+}
 
 function result(overrides: Partial<SkillWorkshopHistoryScanResult> = {}) {
   return {

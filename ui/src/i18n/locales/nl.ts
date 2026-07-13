@@ -2122,6 +2122,21 @@ export const nl: TranslationMap = {
       enabling: "Inschakelen…",
       updateError: "De instelling voor zelfleren kon niet worden bijgewerkt.",
     },
+    history: {
+      eyebrow: "Eerder werk",
+      title: "Herbruikbare workflows vinden",
+      body: "Bekijk uitgebreide sessies van nieuw naar oud. Alleen sterke herstelpatronen of workflows die herhaalde toolaanroepen besparen, worden voorstellen die nog moeten worden beoordeeld.",
+      findIdeas: "Ideeën voor Skills vinden",
+      scanEarlier: "Eerder werk scannen",
+      scanNew: "Nieuw werk scannen",
+      scanning: "Sessies beoordelen…",
+      loading: "Geschiedenis laden…",
+      pendingOnly: "Alleen openstaande voorstellen · gebruikt je geconfigureerde model",
+      reviewed: "{count} sessies beoordeeld",
+      found: "{count} ideeën gevonden",
+      noSessions: "Geen uitgebreide sessies gevonden in dit tijdsvenster.",
+      today: "vandaag",
+    },
     today: {
       emptyTitle: "Vandaag niets in wachtrij",
       emptyBody:

@@ -1,37 +1,7 @@
 import { html, nothing } from "lit";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-
-export type SkillWorkshopHistoryScanResult = {
-  schema: "openclaw.skill-workshop.history-scan.v1";
-  hasScanned: boolean;
-  reviewedSessions: number;
-  ideasFound: number;
-  hasMore: boolean;
-  lastScanReviewed: number;
-  lastScanIdeas: number;
-  lastScanAt?: string;
-  oldestReviewedAt?: string;
-  newestReviewedAt?: string;
-};
-
-export type SkillWorkshopHistoryScanState = {
-  loading: boolean;
-  loaded: boolean;
-  running: boolean;
-  error: string | null;
-  result: SkillWorkshopHistoryScanResult | null;
-};
-
-export function createSkillWorkshopHistoryScanState(): SkillWorkshopHistoryScanState {
-  return {
-    loading: false,
-    loaded: false,
-    running: false,
-    error: null,
-    result: null,
-  };
-}
+import type { SkillWorkshopHistoryScanResult, SkillWorkshopHistoryScanState } from "./proposals.ts";
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

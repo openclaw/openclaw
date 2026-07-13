@@ -2156,6 +2156,21 @@ export const fr: TranslationMap = {
       enabling: "Activation…",
       updateError: "Impossible de mettre à jour le paramètre d’auto-apprentissage.",
     },
+    history: {
+      eyebrow: "Travaux précédents",
+      title: "Trouver des workflows réutilisables",
+      body: "Examinez les sessions importantes de la plus récente à la plus ancienne. Seuls les schémas de récupération efficaces ou les workflows permettant d’éviter des appels d’outils répétés deviennent des propositions en attente.",
+      findIdeas: "Trouver des idées de Skills",
+      scanEarlier: "Analyser les travaux précédents",
+      scanNew: "Analyser les nouveaux travaux",
+      scanning: "Examen des sessions…",
+      loading: "Chargement de l’historique…",
+      pendingOnly: "Propositions en attente uniquement · utilise votre modèle configuré",
+      reviewed: "{count} sessions examinées",
+      found: "{count} idées trouvées",
+      noSessions: "Aucune session importante trouvée dans cette période.",
+      today: "aujourd’hui",
+    },
     today: {
       emptyTitle: "Rien en attente aujourd'hui",
       emptyBody:

@@ -18,7 +18,6 @@ import {
   applySkillProposal,
   getSkillProposalRunProgress,
   inspectSkillProposal,
-  listSkillProposalIdsForRun,
   listSkillProposals,
   proposeCreateSkill,
   proposeUpdateSkill,
@@ -442,9 +441,6 @@ describe("skill workshop proposals", () => {
       "revision-run",
       "later-run",
     ]);
-    await expect(
-      listSkillProposalIdsForRun({ workspaceDir, runId: "revision-run" }),
-    ).resolves.toEqual([proposal.record.id]);
     await expect(
       getSkillProposalRunProgress({ workspaceDir, runId: "revision-run" }),
     ).resolves.toEqual({ mutationCount: 2, proposalIds: [proposal.record.id] });

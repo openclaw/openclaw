@@ -9439,6 +9439,88 @@ public struct SkillsProposalsListResult: Codable, Sendable {
     }
 }
 
+public struct SkillsProposalHistoryStatusParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String? = nil)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct SkillsProposalHistoryScanParams: Codable, Sendable {
+    public let agentid: String?
+    public let direction: AnyCodable?
+
+    public init(
+        agentid: String? = nil,
+        direction: AnyCodable? = nil)
+    {
+        self.agentid = agentid
+        self.direction = direction
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case direction
+    }
+}
+
+public struct SkillsProposalHistoryScanResult: Codable, Sendable {
+    public let schema: String
+    public let hasscanned: Bool
+    public let reviewedsessions: Int
+    public let ideasfound: Int
+    public let hasmore: Bool
+    public let lastscanreviewed: Int
+    public let lastscanideas: Int
+    public let lastscanat: String?
+    public let oldestreviewedat: String?
+    public let newestreviewedat: String?
+
+    public init(
+        schema: String,
+        hasscanned: Bool,
+        reviewedsessions: Int,
+        ideasfound: Int,
+        hasmore: Bool,
+        lastscanreviewed: Int,
+        lastscanideas: Int,
+        lastscanat: String? = nil,
+        oldestreviewedat: String? = nil,
+        newestreviewedat: String? = nil)
+    {
+        self.schema = schema
+        self.hasscanned = hasscanned
+        self.reviewedsessions = reviewedsessions
+        self.ideasfound = ideasfound
+        self.hasmore = hasmore
+        self.lastscanreviewed = lastscanreviewed
+        self.lastscanideas = lastscanideas
+        self.lastscanat = lastscanat
+        self.oldestreviewedat = oldestreviewedat
+        self.newestreviewedat = newestreviewedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schema
+        case hasscanned = "hasScanned"
+        case reviewedsessions = "reviewedSessions"
+        case ideasfound = "ideasFound"
+        case hasmore = "hasMore"
+        case lastscanreviewed = "lastScanReviewed"
+        case lastscanideas = "lastScanIdeas"
+        case lastscanat = "lastScanAt"
+        case oldestreviewedat = "oldestReviewedAt"
+        case newestreviewedat = "newestReviewedAt"
+    }
+}
+
 public struct SkillsProposalInspectParams: Codable, Sendable {
     public let agentid: String?
     public let proposalid: String
