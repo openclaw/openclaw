@@ -1,23 +1,29 @@
 /**
  * Regression coverage for toolSearch `limit` schema tightening.
  *
- * Covers Type.Number → Type.Integer + minimum:1 conversion:
- * - valid integers accepted
+ * Validates against the actual production `tool_search` parameter schema
+ * from `createToolSearchTools`, not a standalone copy.
+ *
+ * Covers Type.Integer({ minimum: 1 }) conversion:
+ * - valid positive integers accepted
  * - floats rejected at schema layer
  * - zero/negative rejected by minimum:1
  * - omitted limit accepted (optional)
  */
-import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { createToolSearchTools, TOOL_SEARCH_RAW_TOOL_NAME } from "./tool-search.js";
 
-const schema = Type.Object({
-  query: Type.String(),
-  limit: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum number of results." })),
-});
+// Minimal context: only what's needed for schema availability.
+// Runtime execution (ToolSearchRuntime) is not exercised.
+const tools = createToolSearchTools({} as any);
+const searchTool = tools.find((t) => t.name === TOOL_SEARCH_RAW_TOOL_NAME)!;
+const schema = searchTool.parameters;
 
-describe("toolSearch limit schema", () => {
-  it("accepts valid positive integer", () => {
+const validInput = { query: "test", limit: 5 };
+
+describe("toolSearch limit schema (production)", () => {
+  it("accepts valid positive integer limit", () => {
     expect(Value.Check(schema, { query: "test", limit: 5 })).toBe(true);
   });
 
@@ -43,5 +49,9 @@ describe("toolSearch limit schema", () => {
 
   it("accepts omitted limit (optional)", () => {
     expect(Value.Check(schema, { query: "test" })).toBe(true);
+  });
+
+  it("rejects missing required query", () => {
+    expect(Value.Check(schema, { limit: 5 })).toBe(false);
   });
 });
