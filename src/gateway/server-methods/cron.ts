@@ -60,11 +60,13 @@ import {
   type CronCallerScope,
 } from "./cron-caller-scope.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
+import { cronRunLogPageFilters, filterCronRunLogJobsByAgent } from "./cron-run-log-filters.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
 
 type CronRunsRequestParams = CronJobIdParams & {
+  agentId?: string;
   scope?: "job" | "all";
   runId?: string;
   limit?: number;
@@ -288,20 +290,6 @@ function respondInvalidCronParams(respond: RespondFn, method: string, reason: st
 
 function respondMissingCronJobId(respond: RespondFn, method: string): void {
   respondInvalidCronParams(respond, method, "missing id");
-}
-
-function cronRunLogPageFilters(params: CronRunsRequestParams) {
-  return {
-    limit: params.limit,
-    offset: params.offset,
-    statuses: params.statuses,
-    status: params.status,
-    runId: params.runId,
-    deliveryStatuses: params.deliveryStatuses,
-    deliveryStatus: params.deliveryStatus,
-    query: params.query,
-    sortDir: params.sortDir,
-  };
 }
 
 /** Gateway request handlers for cron jobs and cron run-log access. */
@@ -942,7 +930,11 @@ export const cronHandlers: GatewayRequestHandlers = {
         respondInvalidCronParams(respond, "cron.runs", "scope all is not allowed by caller scope");
         return;
       }
-      const jobs = await context.cron.list({ includeDisabled: true });
+      const jobs = filterCronRunLogJobsByAgent(
+        await context.cron.list({ includeDisabled: true }),
+        p.agentId,
+        context.cron.getDefaultAgentId(),
+      );
       const jobNameById = Object.fromEntries(
         jobs
           .filter((job) => typeof job.id === "string" && typeof job.name === "string")
@@ -951,13 +943,18 @@ export const cronHandlers: GatewayRequestHandlers = {
       const page = await readCronRunLogEntriesPageAll({
         storePath: context.cronStorePath,
         ...cronRunLogPageFilters(p),
+        ...(p.agentId ? { jobIds: jobs.map((job) => job.id) } : {}),
         jobNameById,
       });
       respond(true, page, undefined);
       return;
     }
     try {
-      const jobs = await context.cron.list({ includeDisabled: true });
+      const jobs = filterCronRunLogJobsByAgent(
+        await context.cron.list({ includeDisabled: true }),
+        p.agentId,
+        context.cron.getDefaultAgentId(),
+      );
       const matchedJob = jobs.find(
         (job) =>
           job.id === jobId &&
@@ -967,7 +964,7 @@ export const cronHandlers: GatewayRequestHandlers = {
             defaultAgentId: context.cron.getDefaultAgentId(),
           }),
       );
-      if (callerScope && !matchedJob) {
+      if ((callerScope || p.agentId) && !matchedJob) {
         respondInvalidCronParams(respond, "cron.runs", "id not found");
         return;
       }
