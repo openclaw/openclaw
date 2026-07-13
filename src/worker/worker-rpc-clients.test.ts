@@ -20,7 +20,6 @@ import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
-  WorkerTranscriptCommitError,
 } from "./worker-rpc-clients.js";
 
 const HELLO: WorkerHelloOk = {
@@ -228,8 +227,9 @@ describe("worker transcript commit client", () => {
       (cause: unknown) => cause,
     );
 
-    expect(error).toBeInstanceOf(WorkerTranscriptCommitError);
+    expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({
+      name: "WorkerTranscriptCommitError",
       message:
         "Worker transcript base changed; uncommitted messages were not committed; relaunch required.",
       reason: "stale-base-leaf",

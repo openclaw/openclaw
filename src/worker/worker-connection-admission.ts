@@ -68,7 +68,7 @@ export function isRetryableWorkerCloseReason(reason: WorkerProtocolCloseReason):
   return RETRYABLE_CLOSE_REASONS.has(reason);
 }
 
-export function workerSocketUrl(socketPath: string): string {
+function workerSocketUrl(socketPath: string): string {
   if (!socketPath.startsWith("/")) {
     throw new Error("worker gateway socket path must be absolute");
   }

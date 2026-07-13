@@ -11,7 +11,7 @@ import { fenceForOwnershipError, isTerminalConnection } from "./worker-rpc-clien
 
 const TRANSCRIPT_SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
 
-export class WorkerTranscriptCommitError extends Error {
+class WorkerTranscriptCommitError extends Error {
   constructor(
     readonly response: TranscriptResponseError,
     message = response.message,
@@ -25,7 +25,7 @@ export class WorkerTranscriptCommitError extends Error {
   }
 }
 
-export type WorkerTranscriptCommitClientOptions = {
+type WorkerTranscriptCommitClientOptions = {
   runEpoch: number;
   baseLeafId: string | null;
   initialSeq?: number;

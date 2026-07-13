@@ -42,28 +42,28 @@ function toError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
 }
 
-export type WorkerEmbeddedInferenceRequest = {
+type WorkerEmbeddedInferenceRequest = {
   modelRef: WorkerInferenceModelRef;
   context: WorkerInferenceContext;
   options: WorkerInferenceOptions;
   signal?: AbortSignal;
 };
 
-export type WorkerEmbeddedInferenceClient = {
+type WorkerEmbeddedInferenceClient = {
   stream: (
     request: WorkerEmbeddedInferenceRequest,
   ) => AssistantMessageEventStreamLike | Promise<AssistantMessageEventStreamLike>;
 };
 
-export type WorkerEmbeddedTranscriptClient = {
+type WorkerEmbeddedTranscriptClient = {
   commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
 };
 
-export type WorkerEmbeddedLiveClient = {
+type WorkerEmbeddedLiveClient = {
   emit: (event: WorkerLiveEvent) => Promise<void>;
 };
 
-export type RunWorkerEmbeddedTurnParams = {
+type RunWorkerEmbeddedTurnParams = {
   cwd: string;
   stateDir: string;
   sessionId: string;
@@ -80,7 +80,7 @@ export type RunWorkerEmbeddedTurnParams = {
   signal?: AbortSignal;
 };
 
-export type RunWorkerEmbeddedTurnResult = {
+type RunWorkerEmbeddedTurnResult = {
   messages: WorkerTranscriptMessage[];
 };
 

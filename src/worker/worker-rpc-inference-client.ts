@@ -15,7 +15,7 @@ import {
 import type { InferenceResponseError } from "./worker-rpc-client-shared.js";
 import { fenceForOwnershipError } from "./worker-rpc-client-shared.js";
 
-export class WorkerInferenceProxyError extends Error {
+class WorkerInferenceProxyError extends Error {
   constructor(readonly response: InferenceResponseError) {
     super(response.message);
     this.name = "WorkerInferenceProxyError";
@@ -26,7 +26,7 @@ export class WorkerInferenceProxyError extends Error {
   }
 }
 
-export type WorkerInferenceHandlers = {
+type WorkerInferenceHandlers = {
   onEvent?: (event: WorkerInferenceEventParams) => void;
   onStreamGap?: (gap: { expectedSeq: number; receivedSeq: number }) => void;
 };

@@ -34,16 +34,12 @@ import {
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { rawDataToString } from "../infra/ws.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
-import {
-  createWorkerConnection,
-  WorkerAdmissionDeadlineExceededError,
-  WorkerConnectionStoppedError,
-} from "./worker-connection.js";
+import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
+import { createWorkerConnection, WorkerConnectionStoppedError } from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
-  WorkerTranscriptCommitError,
 } from "./worker-rpc-clients.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -793,8 +789,9 @@ describe("worker runtime", () => {
       (error: unknown) => error,
     );
 
-    expect(failure).toBeInstanceOf(WorkerTranscriptCommitError);
+    expect(failure).toBeInstanceOf(Error);
     expect(failure).toMatchObject({
+      name: "WorkerTranscriptCommitError",
       message:
         "Worker transcript base changed; uncommitted messages were not committed; relaunch required.",
       reason: "stale-base-leaf",

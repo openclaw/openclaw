@@ -20,7 +20,7 @@ import type { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
 
 type StreamingToolCall = ToolCall & { partialJson?: string };
 
-export type WorkerInferenceStreamAdapterOptions = {
+type WorkerInferenceStreamAdapterOptions = {
   client: WorkerInferenceProxyClient;
   sessionId: string;
   runEpoch: number;
@@ -29,7 +29,7 @@ export type WorkerInferenceStreamAdapterOptions = {
   modelRef: WorkerInferenceModelRef;
 };
 
-export type WorkerInferenceStreamRequest = {
+type WorkerInferenceStreamRequest = {
   modelRef: WorkerInferenceModelRef;
   context: WorkerInferenceContext;
   options: WorkerInferenceOptions;

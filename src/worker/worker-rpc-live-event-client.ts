@@ -11,7 +11,7 @@ import {
 import type { LiveResponseError } from "./worker-rpc-client-shared.js";
 import { fenceForOwnershipError, isTerminalConnection } from "./worker-rpc-client-shared.js";
 
-export class WorkerLiveEventError extends Error {
+class WorkerLiveEventError extends Error {
   constructor(readonly response: LiveResponseError) {
     super(response.message);
     this.name = "WorkerLiveEventError";
@@ -22,7 +22,7 @@ export class WorkerLiveEventError extends Error {
   }
 }
 
-export type WorkerLiveEventClientOptions = {
+type WorkerLiveEventClientOptions = {
   runEpoch: number;
   initialAckedSeq?: number;
   maxBufferedEvents?: number;

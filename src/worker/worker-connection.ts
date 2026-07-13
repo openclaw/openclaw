@@ -39,20 +39,12 @@ import {
 } from "./worker-connection-contract.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 
-export { workerSocketUrl } from "./worker-connection-admission.js";
 export {
-  WorkerAdmissionDeadlineExceededError,
-  WorkerAdmissionError,
   WorkerConnectionInterruptedError,
   WorkerConnectionStoppedError,
   WorkerFencedError,
 } from "./worker-connection-contract.js";
-export type {
-  WorkerConnectionExit,
-  WorkerConnectionOptions,
-  WorkerConnectionState,
-  WorkerFencedReason,
-} from "./worker-connection-contract.js";
+export type { WorkerConnectionState } from "./worker-connection-contract.js";
 
 const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
   initialMs: 250,
@@ -353,8 +345,8 @@ export class WorkerConnection {
       });
       if (response.ok) {
         if (response.payload.ownerEpoch !== this.options.connectParams.admission.ownerEpoch) {
+          // Fenced: state is now terminal, so the trailing kind==="ready" guard skips re-arming.
           this.finishFenced("owner-epoch-mismatch");
-          return;
         }
       } else if (isFencedCloseReason(response.error.details.reason)) {
         this.finishFenced(response.error.details.reason);

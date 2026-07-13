@@ -27,7 +27,7 @@ import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 
 const LAUNCH_VERSION = 1;
 
-export type WorkerLaunchAssignment = {
+type WorkerLaunchAssignment = {
   runId: string;
   turnId: string;
   prompt: string;
@@ -46,7 +46,7 @@ export type WorkerLaunchAssignment = {
   };
 };
 
-export type WorkerLaunchAdmission = WorkerConnectParams["admission"] & {
+type WorkerLaunchAdmission = WorkerConnectParams["admission"] & {
   sessionId: string;
 };
 

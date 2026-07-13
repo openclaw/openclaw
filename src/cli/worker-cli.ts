@@ -6,7 +6,7 @@ export function registerWorkerCli(program: Command): void {
     .command("worker")
     .description("Run the restricted cloud worker runtime")
     .action(async () => {
-      const { runWorkerCommand } = await import("../worker/worker.runtime.js");
+      const { runWorkerCommand } = await import("../worker/worker-command.runtime.js");
       await runWorkerCommand({
         input: process.stdin,
         output: process.stdout,
