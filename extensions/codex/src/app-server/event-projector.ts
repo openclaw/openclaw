@@ -1968,7 +1968,6 @@ export class CodexAppServerEventProjector {
     this.emitToolResultMessage({
       itemId,
       text: formatToolSummary(toolName, meta),
-      progressChrome: this.params.verboseLevel !== "on" && this.params.verboseLevel !== "full",
     });
   }
 
@@ -2004,8 +2003,6 @@ export class CodexAppServerEventProjector {
     text: string;
     finalOutput?: boolean;
     isError?: boolean;
-    /** Only transient automatic summaries may be typed as progress chrome. */
-    progressChrome?: boolean;
   }): void {
     const rawText = params.text.trim();
     const text = truncateToolTranscriptText(rawText);
@@ -2020,10 +2017,6 @@ export class CodexAppServerEventProjector {
       void Promise.resolve(
         this.params.onToolResult?.({
           text,
-          // Automatic non-verbose summaries only; final/error/output always post.
-          ...(params.progressChrome === true
-            ? { channelData: { openclawProgressKind: "tool-progress" } }
-            : {}),
           ...(params.isError === true ? { isError: true } : {}),
         }),
       ).catch(() => {
@@ -2250,7 +2243,6 @@ export class CodexAppServerEventProjector {
     this.emitToolResultMessage({
       itemId: params.id,
       text: formatToolSummary(params.name, meta),
-      progressChrome: this.params.verboseLevel !== "on" && this.params.verboseLevel !== "full",
     });
   }
 

@@ -821,12 +821,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;
   }): string | undefined => {
-    const plannedThreadTs = params.forcedThreadTs ? undefined : replyPlan.peekThreadTs();
-    return (
-      params.forcedThreadTs ??
-      plannedThreadTs ??
-      (params.kind === "block" ? usedBlockReplyThreadTs : undefined)
-    );
+    return params.forcedThreadTs ?? replyPlan.peekThreadTs() ?? (params.kind === "block" ? usedBlockReplyThreadTs : undefined);
   };
   const rememberDeliveredThreadTs = (
     kind: ReplyDispatchKind,
@@ -899,13 +894,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         deferMessageSentHooks: true,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
       });
-      if (!result) {
-        emitFailedPendingStreamedDeliveries("suppressed Slack fallback delivery");
-        logVerbose(
-          `slack-stream: suppressed fallback delivery after ${fallbackError.slackCode}; not marking stream delivery state`,
-        );
-        return false;
-      }
+      // eslint-disable-next-line curly
+      if (!result || result.suppressed) return false;
       markSlackStreamFallbackDelivered(session);
       if (!session.stopped) {
         try {
@@ -980,10 +970,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ...messageSentDeliveryHookContext,
       ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
     });
-    if (!result) {
-      logVerbose("slack: suppressed normal delivery without marking reply state");
-      return undefined;
-    }
+    // eslint-disable-next-line curly
+    if (!result || result.suppressed) return undefined;
     observedReplyDelivery = true;
     if (params.kind === "final") {
       observedFinalReplyDelivery = true;

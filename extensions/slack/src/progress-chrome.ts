@@ -22,9 +22,6 @@ const PROGRESS_CHROME_REACTION_BY_UNICODE_EMOJI = new Map<string, string>([
   ["💾", "floppy_disk"],
 ]);
 
-/** Private channelData kind for automatic tool-progress chrome (not a public SDK export). */
-const SLACK_TOOL_PROGRESS_KIND = "tool-progress";
-
 function hasSlackPlatformError(err: unknown, code: string): boolean {
   if (!err || typeof err !== "object") {
     return false;
@@ -49,7 +46,6 @@ function detectSlackProgressChromeReaction(
   if (!reaction || !body) {
     return undefined;
   }
-
   if (!opts.progressChrome) {
     return undefined;
   }
@@ -99,57 +95,6 @@ function detectSlackProgressChromeReaction(
     return reaction;
   }
   return undefined;
-}
-
-function isSlackProgressChromePayload(payload: { channelData?: unknown }): boolean {
-  const channelData = payload.channelData;
-  const slackData =
-    channelData && typeof channelData === "object" && !Array.isArray(channelData)
-      ? (channelData as { slack?: unknown }).slack
-      : undefined;
-  // Fast-mode uses openclawProgressKind === "fast-mode-auto"; tool progress uses private kind.
-  const openclawProgressKind =
-    channelData && typeof channelData === "object" && !Array.isArray(channelData)
-      ? (channelData as { openclawProgressKind?: unknown }).openclawProgressKind
-      : undefined;
-  return (
-    openclawProgressKind === "fast-mode-auto" ||
-    openclawProgressKind === SLACK_TOOL_PROGRESS_KIND ||
-    (Boolean(slackData) &&
-      typeof slackData === "object" &&
-      !Array.isArray(slackData) &&
-      (slackData as { progressChrome?: unknown }).progressChrome === true)
-  );
-}
-
-function resolveSlackProgressChromeReaction(payload: {
-  channelData?: unknown;
-}): string | undefined {
-  const channelData = payload.channelData;
-  const openclawProgressKind =
-    channelData && typeof channelData === "object" && !Array.isArray(channelData)
-      ? (channelData as { openclawProgressKind?: unknown }).openclawProgressKind
-      : undefined;
-  return openclawProgressKind === "fast-mode-auto" ? "dash" : undefined;
-}
-
-type SlackProgressChromeSendOpts = {
-  progressChrome?: true;
-  progressChromeReaction?: string;
-};
-
-/** Build optional progressChrome fields for sendMessageSlack. */
-export function buildSlackProgressChromeSendOpts(payload: {
-  channelData?: unknown;
-}): SlackProgressChromeSendOpts {
-  if (!isSlackProgressChromePayload(payload)) {
-    return {};
-  }
-  const reaction = resolveSlackProgressChromeReaction(payload);
-  return {
-    progressChrome: true,
-    ...(reaction ? { progressChromeReaction: reaction } : {}),
-  };
 }
 
 type SlackProgressChromeSuppressInput = {
@@ -216,15 +161,4 @@ export async function maybeSuppressSlackProgressChrome(
 
 export function isSuppressedSlackSendResult(result: { suppressed?: true } | undefined): boolean {
   return result?.suppressed === true;
-}
-
-/** Track suppressed progress-chrome deliveries without treating them as chat posts. */
-export function markSlackProgressSuppressedResult<T extends { suppressed?: true } | undefined>(
-  result: T,
-  state: { suppressedOnly: boolean },
-): T {
-  if (isSuppressedSlackSendResult(result)) {
-    state.suppressedOnly = true;
-  }
-  return result;
 }

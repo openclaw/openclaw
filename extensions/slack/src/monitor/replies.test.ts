@@ -4,8 +4,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const sendMock = vi.fn();
 vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
-  isSuppressedSlackSendResult: (result: { suppressed?: boolean } | undefined) =>
-    result?.suppressed === true,
 }));
 
 const triggerInternalHook = vi.hoisted(() => vi.fn(async () => {}));
