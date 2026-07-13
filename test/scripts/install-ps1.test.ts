@@ -127,6 +127,15 @@ describe("install.ps1 failure handling", () => {
         ].join("\n"),
       },
       {
+        name: "node-sqlite-runtime",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "if (-not (Test-NodeSqliteSupported)) { throw 'Bundled SQLite runtime was rejected' }",
+          "",
+        ].join("\n"),
+      },
+      {
         name: "native-arm64-git",
         source: [
           scriptWithoutEntryPoint,
@@ -436,6 +445,8 @@ describe("install.ps1 failure handling", () => {
     expect(versionBody).toContain("$minor -ge 9");
     expect(versionBody).toContain("$major -gt 25");
     expect(sqliteBody).toContain("SELECT sqlite_version() AS version");
+    expect(sqliteBody).toContain("$probe | & node -");
+    expect(sqliteBody).not.toContain("& node -e");
     expect(sqliteBody).toContain("patch >= 3");
     expect(checkNodeBody).toContain("Test-NodeVersionSupported -Version $nodeVersion");
     expect(checkNodeBody).toContain("Test-NodeSqliteSupported");
@@ -444,6 +455,7 @@ describe("install.ps1 failure handling", () => {
 
   runIfPowerShell("accepts only supported Node versions", () => {
     expectBatchedPowerShellCase("node-versions");
+    expectBatchedPowerShellCase("node-sqlite-runtime");
   });
 
   runIfPowerShell("upgrades and validates Node installed by Windows package managers", () => {

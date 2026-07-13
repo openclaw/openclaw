@@ -32,7 +32,6 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
     execApprovalsSelectedAgent: null,
     execApprovalsTarget: "gateway",
     execApprovalsTargetNodeId: null,
-    onRefresh: () => undefined,
     onDevicePairSetupOpen: () => undefined,
     onDeviceApprove: () => undefined,
     onDeviceReject: () => undefined,
@@ -64,7 +63,7 @@ function renderNodesContainer(overrides: Partial<NodesProps>): HTMLDivElement {
 
 function getInventoryCard(container: Element): Element {
   const card = Array.from(container.querySelectorAll(".card")).find(
-    (candidate) => candidate.querySelector(".card-title")?.textContent?.trim() === "Devices",
+    (candidate) => candidate.querySelector(".card-title")?.textContent?.trim() === "Paired devices",
   );
   expect(card).toBeInstanceOf(Element);
   if (!(card instanceof Element)) {
