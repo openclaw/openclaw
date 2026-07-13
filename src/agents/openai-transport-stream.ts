@@ -4803,7 +4803,16 @@ export function buildOpenAICompletionsParams(
     if (
       compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
       clampedMaxTokens !== undefined &&
-      effectiveContextTokens !== undefined
+      effectiveContextTokens !== undefined &&
+      // Only apply the char-estimate remaining-context clamp when the
+      // configured completion cap itself already meets or exceeds the
+      // effective context window. That is the misconfiguration #85889
+      // targets (strict OpenAI-compatible servers rejecting prompt+output
+      // > context). When the configured cap is safely under context, trust
+      // it: the character-based estimate is only a coarse fallback and can
+      // wildly over-count large tool schemas or system prompts, silently
+      // collapsing a valid request to `max_completion_tokens=1` (#105729).
+      clampedMaxTokens >= effectiveContextTokens
     ) {
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
       const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
