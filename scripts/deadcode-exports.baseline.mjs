@@ -979,7 +979,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/cli/ports.ts: parseLsofOutput",
   "src/cli/ports.ts: PortProcess",
   "src/cli/ports.ts: probePortFree",
-  "src/cli/precomputed-help.ts: resolvePrecomputedSubcommandHelpCommand",
   "src/cli/startup-metadata.ts: testing",
   "src/cli/tagline.ts: DEFAULT_TAGLINE",
   "src/cli/update-cli/progress.ts: inferUpdateFailureHints",
