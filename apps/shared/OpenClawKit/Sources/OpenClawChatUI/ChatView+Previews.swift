@@ -207,37 +207,44 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
     }
 }
 
-private struct OpenClawChatPreviewProvider: PreviewProvider {
-    static var previews: some View {
-        Group {
-            OpenClawChatPreview(scenario: .connected)
-                .previewDisplayName("Chat")
-            OpenClawChatPreview(scenario: .connected)
-                .previewDisplayName("Chat connected")
-            OpenClawChatPreview(
-                scenario: .empty,
-                sessionKey: "empty-preview")
-                .previewDisplayName("Chat empty")
-            OpenClawChatPreview(
-                scenario: .loading,
-                sessionKey: "loading-preview")
-                .previewDisplayName("Chat loading")
-            OpenClawChatPreview(
-                scenario: .error,
-                sessionKey: "error-preview")
-                .previewDisplayName("Chat gateway error")
-            OpenClawChatView(
-                viewModel: OpenClawChatViewModel(
-                    sessionKey: "ios-preview",
-                    transport: OpenClawChatPreviewTransport()),
-                showsSessionSwitcher: false,
-                style: .onboarding,
-                markdownVariant: .standard,
-                userAccent: OpenClawChatTheme.accent)
-                .previewDisplayName("Onboarding chat")
-        }
-    }
+#if os(iOS)
+#Preview("Chat") {
+    OpenClawChatPreview(scenario: .connected)
 }
+
+#Preview("Chat connected") {
+    OpenClawChatPreview(scenario: .connected)
+}
+
+#Preview("Chat empty") {
+    OpenClawChatPreview(
+        scenario: .empty,
+        sessionKey: "empty-preview")
+}
+
+#Preview("Chat loading") {
+    OpenClawChatPreview(
+        scenario: .loading,
+        sessionKey: "loading-preview")
+}
+
+#Preview("Chat gateway error") {
+    OpenClawChatPreview(
+        scenario: .error,
+        sessionKey: "error-preview")
+}
+
+#Preview("Onboarding chat") {
+    OpenClawChatView(
+        viewModel: OpenClawChatViewModel(
+            sessionKey: "ios-preview",
+            transport: OpenClawChatPreviewTransport()),
+        showsSessionSwitcher: false,
+        style: .onboarding,
+        markdownVariant: .standard,
+        userAccent: OpenClawChatTheme.accent)
+}
+#endif
 
 private struct OpenClawChatPreview: View {
     let scenario: OpenClawChatPreviewTransport.Scenario
