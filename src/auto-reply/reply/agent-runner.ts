@@ -2762,11 +2762,9 @@ export async function runReplyAgent(params: {
         );
       }
     }
-
     const result = returnWithQueuedFollowupDrain(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
     );
-
     return result;
   } catch (error) {
     // Drain/restart aborts stay silent and defer to post-restart main-session
