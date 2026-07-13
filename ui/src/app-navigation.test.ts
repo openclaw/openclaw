@@ -398,6 +398,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "channels",
       "communications",
       "ai-agents",
+      "sessions",
       "model-providers",
       "automation",
       "mcp",
