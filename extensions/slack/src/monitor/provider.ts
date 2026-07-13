@@ -379,7 +379,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let botId = "";
   const expectedApiAppIdFromAppToken =
     slackMode === "socket" ? parseApiAppIdFromAppToken(appToken) : undefined;
-  let authTestFailed = false;
   let authTestError: string | undefined;
   let authIdentityWarning: string | undefined;
   let authTestIdentity: SlackAuthTestIdentity | undefined;
@@ -398,23 +397,21 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       accountId: account.accountId,
     });
     if (!authUserId && !enterpriseOrgInstall) {
-      authTestFailed = true;
       authTestError = "auth.test returned no user_id";
     }
   } catch (err) {
-    authTestFailed = true;
     authTestError = err instanceof Error ? err.message : String(err);
   }
   const installationIdentity = resolveSlackInstallationIdentity({
     enterpriseOrgInstall,
-    auth: authTestFailed ? undefined : authTestIdentity,
+    auth: authTestError === undefined ? authTestIdentity : undefined,
     authError: authTestError,
     transportApiAppId: expectedApiAppIdFromAppToken,
   });
   const teamId = installationIdentity.kind === "workspace" ? installationIdentity.teamId : "";
   const apiAppId =
     installationIdentity.kind === "degraded" ? "" : (installationIdentity.apiAppId ?? "");
-  if (authTestFailed) {
+  if (authTestError !== undefined) {
     runtime.log?.(
       warn(
         `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
