@@ -47,7 +47,6 @@ function skipWS(raw: string, c: Cursor): void {
   }
 }
 
-/** Skip a JSON5 string (single or double quoted). */
 function skipStr(raw: string, c: Cursor): void {
   const quote = raw[c.pos];
   c.pos++;
@@ -64,7 +63,6 @@ function skipStr(raw: string, c: Cursor): void {
   }
 }
 
-/** Skip a JSON5 value (string, number, boolean, null, object, array). */
 function skipVal(raw: string, c: Cursor): void {
   skipWS(raw, c);
   if (c.pos >= raw.length) {
@@ -95,7 +93,6 @@ function skipVal(raw: string, c: Cursor): void {
   }
 }
 
-/** Skip a composite value (object or array), correctly tracking nesting. */
 function skipComposite(raw: string, c: Cursor): void {
   const open = raw[c.pos];
   const close = open === "{" ? "}" : "]";
@@ -133,7 +130,6 @@ function skipComposite(raw: string, c: Cursor): void {
   }
 }
 
-/** Read a JSON5 string value (single or double quoted). */
 function readStr(raw: string, c: Cursor): string | null {
   skipWS(raw, c);
   const quote = raw[c.pos];
@@ -161,7 +157,6 @@ function readStr(raw: string, c: Cursor): string | null {
   return null;
 }
 
-/** Read a JSON5 object key (quoted string or unquoted identifier). */
 function readKey(raw: string, c: Cursor): string | null {
   skipWS(raw, c);
   const ch = raw[c.pos];
@@ -179,7 +174,6 @@ function readKey(raw: string, c: Cursor): string | null {
   return null;
 }
 
-/** Expect and consume a specific character (skipping whitespace). */
 function expect(raw: string, c: Cursor, ch: string): boolean {
   skipWS(raw, c);
   if (raw[c.pos] !== ch) {
@@ -189,10 +183,6 @@ function expect(raw: string, c: Cursor, ch: string): boolean {
   return true;
 }
 
-/**
- * Navigate raw JSON5 text to find the byte offset of a value at the given path.
- * Returns undefined when the path cannot be resolved.
- */
 function navigateToOffset(
   raw: string,
   segments: readonly ConfigIssuePathSegment[],
@@ -213,7 +203,6 @@ function navigateAt(
 ): number | undefined {
   const segment = segments[depth];
   const isLeaf = depth === segments.length - 1;
-
   if (typeof segment === "number") {
     if (!expect(raw, c, "[")) {
       return undefined;
@@ -230,7 +219,6 @@ function navigateAt(
     }
     return navigateAt(raw, c, segments, depth + 1);
   }
-
   if (!expect(raw, c, "{")) {
     return undefined;
   }
@@ -267,7 +255,6 @@ function navigateAt(
   return undefined;
 }
 
-/** Format config issue path segments with bracket notation for array indexes. */
 export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[]): string {
   if (segments.length === 0) {
     return "";
@@ -283,11 +270,6 @@ export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[
   return out;
 }
 
-/**
- * Parse a display-formatted issue path back into traversal segments.
- * Supports bracket notation (`agents.list[3]`) and legacy dot-notation
- * (`agents.list.3` with numericDotSegments option).
- */
 export function parseConfigIssuePath(
   pathValue: string,
   opts?: { numericDotSegments?: boolean },
@@ -333,7 +315,6 @@ export function parseConfigIssuePath(
   return segments;
 }
 
-/** Resolve the actual value at a path in the parsed config object. */
 export function resolveConfigValueAtPath(
   root: unknown,
   segments: readonly ConfigIssuePathSegment[],
@@ -355,11 +336,6 @@ export function resolveConfigValueAtPath(
   return current;
 }
 
-/**
- * Resolve raw path segments against the parsed config to distinguish array
- * indices from numeric record keys. A numeric segment is treated as an array
- * index only when the parent value is actually an array.
- */
 function resolveSegmentsAgainstParsed(
   root: unknown,
   rawSegments: readonly ConfigIssuePathSegment[],
@@ -406,8 +382,7 @@ function safeStringify(v: unknown): string | null {
 }
 
 function messageAlreadyHasReceived(message: string): boolean {
-  const lower = message.toLowerCase();
-  return lower.includes("got:") || /\breceived\b/.test(lower);
+  return message.toLowerCase().includes("got:") || /\breceived\b/.test(message.toLowerCase());
 }
 
 function shouldOmitReceivedValue(pathValue: string, value: unknown): boolean {
@@ -426,7 +401,6 @@ function shouldOmitReceivedValue(pathValue: string, value: unknown): boolean {
   return safeStringify(value) === null;
 }
 
-/** Append a compact `got: <value>` hint when safe and not already present. */
 export function appendReceivedValueHint(
   message: string,
   pathValue: string,
@@ -442,7 +416,6 @@ export function appendReceivedValueHint(
   return `${message}, got: ${label}`;
 }
 
-/** Resolve the 1-based source line number for a value at the given path. */
 export function resolveConfigIssueLineInRaw(
   raw: string,
   segments: readonly ConfigIssuePathSegment[],
@@ -467,13 +440,6 @@ export type ConfigIssueDiagnostics = ConfigValidationIssue & {
   sourceFile?: string;
 };
 
-/**
- * Enrich config validation issues with display-friendly diagnostics:
- * bracket notation, received value hints, and source line numbers.
- * Line numbers and received values are only attached when the value can be
- * resolved in the raw config text. Paths in $include'd files gracefully
- * degrade — the navigator won't find them in the raw text.
- */
 export function attachConfigIssueDiagnostics(
   issues: readonly ConfigValidationIssue[],
   params: AttachConfigIssueDiagnosticsParams,
@@ -483,7 +449,6 @@ export function attachConfigIssueDiagnostics(
     typeof params.configPath === "string" && params.configPath.trim()
       ? path.basename(params.configPath)
       : "openclaw.json";
-
   return issues.map((issue) => {
     const rawSegments = parseConfigIssuePath(issue.path, { numericDotSegments: true });
     const segments = resolveSegmentsAgainstParsed(params.parsed, rawSegments);
