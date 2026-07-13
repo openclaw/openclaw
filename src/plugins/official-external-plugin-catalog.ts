@@ -1229,11 +1229,8 @@ export function resolveOfficialExternalPluginInstall(
     };
   }
   const hasFeedInstallCandidates = getFeedEntryInstallCandidateRecords(entry).length > 0;
-  const npmSpec =
-    manifestNpmSpec ??
-    (!clawhubSpec && !localPath && !hasFeedInstallCandidates
-      ? normalizeOptionalString(entry.name)
-      : undefined);
+  const fallback = !clawhubSpec && !localPath && !hasFeedInstallCandidates;
+  const npmSpec = manifestNpmSpec ?? (fallback ? normalizeOptionalString(entry.name) : undefined);
   const defaultChoice =
     normalizeDefaultChoice(install?.defaultChoice) ??
     (npmSpec ? "npm" : clawhubSpec ? "clawhub" : localPath ? "local" : undefined);

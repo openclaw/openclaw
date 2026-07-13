@@ -1309,14 +1309,8 @@ export async function runPluginInstallCommand(params: {
     }
     return;
   }
-
-  const clawhubInstallSpec =
-    officialExternalPlan?.source === "clawhub"
-      ? officialExternalPlan.clawhubSpec
-      : clawhubSpec
-        ? raw
-        : undefined;
-  if (clawhubInstallSpec) {
+  const installSpec = officialExternalPlan?.clawhubSpec ?? (clawhubSpec ? raw : undefined);
+  if (installSpec) {
     const result = await installPluginFromClawHub({
       ...safetyOverrides,
       ...resolveClawHubRiskAcknowledgementCliOptions({
@@ -1324,11 +1318,9 @@ export async function runPluginInstallCommand(params: {
         action: "installing",
       }),
       mode: installMode,
-      spec: clawhubInstallSpec,
+      spec: installSpec,
       extensionsDir,
-      ...(officialExternalPlan?.source === "clawhub"
-        ? { expectedPluginId: officialExternalPlan.pluginId }
-        : {}),
+      expectedPluginId: officialExternalPlan?.pluginId,
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
@@ -1343,7 +1335,7 @@ export async function runPluginInstallCommand(params: {
       pluginId: result.pluginId,
       install: {
         ...buildClawHubPluginInstallRecordFields(result.clawhub),
-        spec: clawhubInstallSpec,
+        spec: installSpec,
         installPath: result.targetDir,
       },
       invalidateRuntimeCache,
@@ -1351,7 +1343,6 @@ export async function runPluginInstallCommand(params: {
     });
     return;
   }
-
   const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
     npmSpec: raw,
     findOfficialExternalPackage: findTrustedCatalogPackageInstall,
