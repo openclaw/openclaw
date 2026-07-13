@@ -89,7 +89,21 @@ Auth profiles and other per-agent runtime state live in SQLite under the state d
 
 OpenClaw canonicalizes paths before building the archive: if config, the credentials directory, or a workspace already live inside the state directory, they are not duplicated as separate top-level backup sources. Missing paths are skipped.
 
-During archive creation, OpenClaw skips known live-mutation files with no restoration value: active agent session transcripts, cron run logs, rolling logs, delivery queues, socket/pid/temp files under the state directory, and related durable-queue temp files. The JSON result's `skippedVolatileCount` reports how many files were intentionally omitted. SQLite databases under the state directory are compacted with `VACUUM INTO` so deleted-page remnants do not enter the archive, and live WAL/SHM files are not copied. A plugin-owned database that requires unavailable owner-defined SQLite capabilities fails closed rather than falling back to a raw page copy. SQLite files included through workspace backups are copied as workspace files and are not covered by the compaction guarantee.
+During archive creation, OpenClaw excludes known live-mutation paths before `tar` reads them. This avoids races between a file's recorded size and concurrent writes. The filter applies these state-relative rules under each backed-up state directory:
+
+| State-relative scope                         | Skipped file suffixes         |
+| -------------------------------------------- | ----------------------------- |
+| `sessions/**`                                | `.jsonl`, `.log`              |
+| `agents/<agentId>/sessions/**`               | `.jsonl`, `.log`              |
+| `cron/runs/**`                               | `.jsonl`, `.log`              |
+| `logs/**`                                    | `.jsonl`, `.log`              |
+| `delivery-queue/**`                          | `.json`, `.delivered`, `.tmp` |
+| `session-delivery-queue/**`                  | `.json`, `.delivered`, `.tmp` |
+| Any path under the backed-up state directory | `.sock`, `.pid`, `.tmp`       |
+
+These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports how many files were intentionally omitted.
+
+SQLite databases under the state directory are compacted with `VACUUM INTO` so deleted-page remnants do not enter the archive, and live WAL/SHM files are not copied. A plugin-owned database that requires unavailable owner-defined SQLite capabilities fails closed rather than falling back to a raw page copy. SQLite files included through workspace backups are copied as workspace files and are not covered by the compaction guarantee.
 
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.
 

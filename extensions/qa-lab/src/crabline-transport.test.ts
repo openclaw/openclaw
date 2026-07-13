@@ -47,12 +47,14 @@ describe("crabline transport", () => {
             },
           },
         });
-        expect(transport.buildAgentDelivery({ target: "dm:alice" })).toEqual({
+        const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
+        expect(delivery).toMatchObject({
           channel: "telegram",
-          to: "100001",
           replyChannel: "telegram",
-          replyTo: "100001",
+          replyTo: expect.stringMatching(/^[1-9]\d+$/u),
+          to: expect.stringMatching(/^[1-9]\d+$/u),
         });
+        expect(delivery.replyTo).toBe(delivery.to);
 
         await expect(
           fs.access(path.join(outputDir, "crabline-fake-provider-server.json")),
@@ -377,7 +379,7 @@ describe("crabline transport", () => {
           CRABLINE_WHATSAPP_RECORDER_PATH: expect.stringMatching(/whatsapp-fake-provider\.jsonl$/u),
           CRABLINE_WHATSAPP_SELF_JID: "15550000000@s.whatsapp.net",
           OPENCLAW_WHATSAPP_WEB_SOCKET_URL: expect.stringMatching(
-            /^ws:\/\/127\.0\.0\.1:\d+\/crabline\/whatsapp\/ws\/chat\?access_token=/u,
+            /^ws:\/\/127\.0\.0\.1:\d+\/ws\/chat\?access_token=/u,
           ),
         });
         expect(env.CRABLINE_WHATSAPP_ACCESS_TOKEN).toBeUndefined();
@@ -399,7 +401,7 @@ describe("crabline transport", () => {
       try {
         const message = await transport.state.addInboundMessage({
           conversation: {
-            id: "15551234567@s.whatsapp.net",
+            id: "15557654321@s.whatsapp.net",
             kind: "direct",
           },
           senderId: "15557654321@s.whatsapp.net",
@@ -408,7 +410,7 @@ describe("crabline transport", () => {
         });
         expect(message).toMatchObject({
           conversation: {
-            id: "15551234567@s.whatsapp.net",
+            id: "15557654321@s.whatsapp.net",
             kind: "direct",
           },
           direction: "inbound",
@@ -443,12 +445,18 @@ describe("crabline transport", () => {
           },
         });
         expect(transport.createRuntimeEnvPatch?.()).toEqual({});
-        expect(transport.buildAgentDelivery({ target: "dm:alice" })).toMatchObject({
+        const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
+        expect(delivery).toMatchObject({
           channel: "signal",
           replyChannel: "signal",
-          replyTo: expect.stringMatching(/^\+1555\d{7}$/u),
-          to: expect.stringMatching(/^\+1555\d{7}$/u),
+          replyTo: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+          ),
+          to: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+          ),
         });
+        expect(delivery.replyTo).toBe(delivery.to);
 
         await expect(
           transport.state.addInboundMessage({
@@ -552,8 +560,6 @@ describe("crabline transport", () => {
           replyTo: expect.stringMatching(/^channel:[a-z0-9]{26}$/u),
           to: expect.stringMatching(/^channel:[a-z0-9]{26}$/u),
         });
-        // crabline@0.1.9 emits a scalar `streaming`; the adapter seam must
-        // rewrite it into the nested-only Mattermost streaming shape.
         expect(mattermostGatewayConfig.channels?.mattermost?.streaming).toEqual({ mode: "off" });
 
         await expect(
@@ -654,9 +660,6 @@ describe("crabline transport", () => {
             },
           },
         });
-        // crabline@0.1.9 emits the retired flat spellings; the adapter seam
-        // must rewrite them or the nested-only Matrix schema rejects the
-        // gateway config at startup.
         expect(matrixGatewayConfig.channels?.matrix?.streaming).toEqual({
           mode: "off",
           block: { enabled: false },

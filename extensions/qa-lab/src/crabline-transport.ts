@@ -296,6 +296,10 @@ function createCrablineState(params: {
       const providerInbound = params.adapter.createInbound({
         input: {
           ...input,
+          conversation: {
+            ...input.conversation,
+            kind: input.conversation.kind === "direct" ? "direct" : "group",
+          },
           senderId: providerSenderId,
         },
       });
@@ -325,44 +329,6 @@ function createCrablineState(params: {
       await params.adapter.close();
     },
   };
-}
-
-// @openclaw/crabline@0.1.9 bridges still emit the retired flat streaming
-// spellings in their gateway config contribution (matrix: `blockStreaming` +
-// scalar `streaming`; mattermost: scalar `streaming`), which the nested-only
-// channel schemas now reject at gateway startup. Rewrite them into the
-// canonical nested shape at this adapter seam; drop this once the crabline
-// pin moves past a release that emits nested streaming config.
-function normalizeCrablineChannelStreamingConfig(
-  config: OpenClawConfig,
-  channel: string,
-): OpenClawConfig {
-  const channels = isRecord(config.channels) ? config.channels : undefined;
-  const entry = channels && isRecord(channels[channel]) ? channels[channel] : undefined;
-  if (!entry) {
-    return config;
-  }
-  const { blockStreaming, streaming, ...rest } = entry;
-  const scalarMode =
-    streaming === true
-      ? "partial"
-      : streaming === false
-        ? "off"
-        : typeof streaming === "string"
-          ? streaming
-          : undefined;
-  if (blockStreaming === undefined && scalarMode === undefined) {
-    return config;
-  }
-  const nestedStreaming = {
-    ...(isRecord(streaming) ? streaming : {}),
-    ...(scalarMode !== undefined ? { mode: scalarMode } : {}),
-    ...(blockStreaming !== undefined ? { block: { enabled: blockStreaming } } : {}),
-  };
-  return {
-    ...config,
-    channels: { ...channels, [channel]: { ...rest, streaming: nestedStreaming } },
-  } as OpenClawConfig;
 }
 
 class QaCrablineTransport extends QaStateBackedTransportAdapter {
@@ -411,10 +377,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   }
 
   createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig => {
-    const config = normalizeCrablineChannelStreamingConfig(
-      this.#adapter.createGatewayConfig(params) as OpenClawConfig,
-      this.#selection.channel,
-    );
+    const config = this.#adapter.createGatewayConfig(params) as OpenClawConfig;
     if (this.#selection.channel !== "telegram") {
       return config as QaTransportGatewayConfig;
     }
