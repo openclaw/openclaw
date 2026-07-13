@@ -1404,7 +1404,13 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
-  it("does not auto-reconnect on AUTH_TOKEN_MISSING", async () => {
+  it.each([
+    ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+    ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+    ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+    ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+    ConnectErrorDetailCodes.PAIRING_REQUIRED,
+  ])("does not auto-reconnect on %s", async (detailCode) => {
     useNodeFakeTimers();
     localStorage.clear();
 
@@ -1421,7 +1427,7 @@ describe("GatewayBrowserClient", () => {
       error: {
         code: "INVALID_REQUEST",
         message: "unauthorized",
-        details: { code: "AUTH_TOKEN_MISSING" },
+        details: { code: detailCode },
       },
     });
     await expectSocketClosed(ws1);
