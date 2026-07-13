@@ -11,13 +11,15 @@ describe("deepMergeDefined", () => {
           enabled: true,
         },
         {
-          provider: { voice: "echo", language: undefined },
+          provider: { voice: "echo", language: undefined, nullable: null },
           enabled: undefined,
+          introduced: { nullable: null },
         },
       ),
     ).toEqual({
-      provider: { voice: "echo", language: "en" },
+      provider: { voice: "echo", language: "en", nullable: null },
       enabled: true,
+      introduced: { nullable: null },
     });
   });
 
@@ -36,6 +38,9 @@ describe("deepMergeDefined", () => {
       ),
     ).toEqual({
       safe: { keep: true, next: true },
+    });
+    expect(deepMergeDefined({ value: ["base"] }, { value: { enabled: true } })).toEqual({
+      value: { enabled: true },
     });
   });
 });
