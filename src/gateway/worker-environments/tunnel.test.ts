@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
-import {
-  createWorkerSshRunner,
-  createWorkerTunnelManager,
-  type WorkerSshProcess,
-  type WorkerSshProcessExit,
-  type WorkerSshRunner,
-} from "./tunnel.js";
+import { createWorkerSshRunner, createWorkerTunnelManager } from "./tunnel.js";
+
+type WorkerTunnelOptions = NonNullable<Parameters<typeof createWorkerTunnelManager>[0]>;
+type WorkerSshRunner = NonNullable<WorkerTunnelOptions["runner"]>;
+type WorkerSshProcess = ReturnType<WorkerSshRunner["start"]>;
+type WorkerSshProcessExit = Awaited<WorkerSshProcess["exited"]>;
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 const SSH: WorkerSshEndpoint = {

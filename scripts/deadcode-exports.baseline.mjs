@@ -3686,6 +3686,7 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/gateway/worker-environments/store.ts: WorkerEnvironmentTeardownTerminalState",
   "src/gateway/worker-environments/transcript-commit-store.ts: WorkerTranscriptCommitBeginResult",
   "src/gateway/worker-environments/transcript-commit.ts: WorkerTranscriptCommitter",
+  "src/gateway/worker-environments/tunnel.ts: createWorkerSshRunner",
   "src/gateway/ws-log.ts: shortId",
   "src/hooks/bundled/session-memory/transcript.ts: getRecentSessionContent",
   "src/hooks/bundled/session-memory/transcript.ts: sanitizeSessionMemoryTranscriptText",

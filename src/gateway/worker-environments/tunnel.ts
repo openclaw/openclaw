@@ -23,12 +23,7 @@ import type {
   WorkerTunnelStatus,
 } from "./tunnel-contract.js";
 
-export type {
-  WorkerTunnelHandle,
-  WorkerTunnelRequest,
-  WorkerTunnelStatus,
-  WorkerWorkspaceCommand,
-} from "./tunnel-contract.js";
+export type { WorkerTunnelHandle } from "./tunnel-contract.js";
 
 const READY_MARKER = "OPENCLAW_WORKER_TUNNEL_READY";
 const REMOTE_SOCKET_NAME = "gateway.sock";
@@ -68,23 +63,23 @@ rm -f -- "$socket"
 rmdir -- "$directory" 2>/dev/null || true
 `;
 
-export type WorkerSshProcessExit = {
+type WorkerSshProcessExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
 };
 
-export type WorkerSshProcess = {
+type WorkerSshProcess = {
   ready: Promise<void>;
   exited: Promise<WorkerSshProcessExit>;
   stop(): Promise<void>;
 };
 
-export type WorkerSshRunner = {
+type WorkerSshRunner = {
   start(argv: string[], options: CommandOptions): WorkerSshProcess;
   run(argv: string[], options: CommandOptions): Promise<SpawnResult>;
 };
 
-export type WorkerTunnelStartRequest = WorkerTunnelRequest & {
+type WorkerTunnelStartRequest = WorkerTunnelRequest & {
   gateway: { host: "127.0.0.1" | "::1"; port: number };
   ssh: WorkerSshEndpoint;
   resolveIdentity: WorkerSshIdentityResolver;
@@ -110,7 +105,7 @@ type TunnelEntry = {
   workspaceTasks: Set<Promise<unknown>>;
 };
 
-export type WorkerTunnelManagerOptions = {
+type WorkerTunnelManagerOptions = {
   runner?: WorkerSshRunner;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   backoff?: BackoffPolicy;

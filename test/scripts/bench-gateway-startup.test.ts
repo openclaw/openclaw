@@ -7,6 +7,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
+import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
 import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 async function listenOnLoopback(handler: RequestListener) {
@@ -384,14 +385,12 @@ describe("gateway startup benchmark script", () => {
   });
 
   it("keeps counts and memory metrics out of the slow-duration ranking", () => {
-    expect(testing.isStartupTraceDuration("plugins.runtime-post-bind")).toBe(true);
-    expect(testing.isStartupTraceDuration("plugins.gateway-load.loadMs")).toBe(true);
-    expect(testing.isStartupTraceDuration("ready.eventLoopMax")).toBe(true);
-    expect(testing.isStartupTraceDuration("plugins.runtime-post-bind.gatewayMethodCount")).toBe(
-      false,
-    );
-    expect(testing.isStartupTraceDuration("memory.ready.rssMb")).toBe(false);
-    expect(testing.isStartupTraceDuration("ready.total")).toBe(false);
+    expect(isStartupTraceDuration("plugins.runtime-post-bind")).toBe(true);
+    expect(isStartupTraceDuration("plugins.gateway-load.loadMs")).toBe(true);
+    expect(isStartupTraceDuration("ready.eventLoopMax")).toBe(true);
+    expect(isStartupTraceDuration("plugins.runtime-post-bind.gatewayMethodCount")).toBe(false);
+    expect(isStartupTraceDuration("memory.ready.rssMb")).toBe(false);
+    expect(isStartupTraceDuration("ready.total")).toBe(false);
   });
 
   it("records probe state transitions, first error kind, and first recovery", async () => {

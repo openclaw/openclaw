@@ -75,7 +75,6 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeEnv,
   getActiveSecretsRuntimeConfigSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -153,7 +152,6 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
-import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 type LoadGatewayModelCatalogSnapshot =
@@ -162,14 +160,8 @@ type LoadGatewayModelCatalogSnapshot =
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
 );
-const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
-  () => import("./worker-environments/runtime.js"),
-);
-const loadWorkerInferenceRuntimeModule = createLazyRuntimeModule(
-  () => import("./worker-environments/inference-runtime.js"),
-);
-const loadWorkerTunnelRuntimeModule = createLazyRuntimeModule(
-  () => import("./worker-environments/tunnel.js"),
+const loadWorkerEnvironmentStartupModule = createLazyRuntimeModule(
+  () => import("./server-worker-environment-startup.js"),
 );
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
@@ -183,7 +175,6 @@ ensureOpenClawCliOnPath();
 const MAX_MEDIA_TTL_HOURS = 24 * 7;
 const POST_READY_MAINTENANCE_DELAY_MS = 250;
 const RETAINED_PLUGIN_CLEANUP_DELAY_MS = 30_000;
-const RETAINED_PLUGIN_CLEANUP_RETRY_DELAY_MS = 30_000;
 
 type GatewayStartupChannelPlugin = {
   id: ChannelId;
@@ -572,32 +563,6 @@ const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
   return runSetupWizard(...args);
 };
 
-async function cleanupRetainedPluginInstallGenerations(
-  installRecords?: Readonly<Record<string, { installPath?: string }>>,
-): Promise<void> {
-  try {
-    const records =
-      installRecords ??
-      (
-        await import("../plugins/installed-plugin-index-records.js")
-      ).loadInstalledPluginIndexInstallRecordsSync();
-    const { cleanupRetainedManagedNpmInstallGenerations } =
-      await import("../plugins/managed-npm-retention.js");
-    const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({
-      activeInstallPaths: Object.values(records).flatMap((record) =>
-        record.installPath ? [record.installPath] : [],
-      ),
-      onError: (error, projectRoot) =>
-        log.warn(`failed to clean retained npm generation ${projectRoot}: ${String(error)}`),
-    });
-    if (removedGenerations > 0) {
-      log.info(`cleaned ${removedGenerations} retained npm plugin generation(s)`);
-    }
-  } catch (error) {
-    log.warn(`retained npm generation cleanup unavailable: ${String(error)}`);
-  }
-}
-
 export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
@@ -879,25 +844,12 @@ export async function startGatewayServer(
     ),
     preserveExistingOwnership: true,
   });
-  const workerEnvironmentStore = minimalTestGateway
+  const workerEnvironmentStartup = minimalTestGateway
     ? undefined
-    : (
-        await startupTrace.measure(
-          "worker-environments.store-import",
-          () => import("./worker-environments/store.js"),
-        )
-      ).createWorkerEnvironmentStore();
-  const workerEnvironmentRecordsAtStartup = workerEnvironmentStore?.list() ?? [];
-  const hasWorkerEnvironmentRecords = workerEnvironmentRecordsAtStartup.length > 0;
-  // Durable rows can outlive profiles. Startup planning still enforces plugin trust/disable gates.
-  const listDurableWorkerProviderIds = () =>
-    uniqueStrings(
-      workerEnvironmentRecordsAtStartup.flatMap((record) =>
-        record.state === "destroyed" || record.state === "failed" || record.state === "orphaned"
-          ? []
-          : [record.providerId],
-      ),
-    );
+    : await startupTrace.measure("worker-environments.store-import", async () => {
+        const workerModule = await loadWorkerEnvironmentStartupModule();
+        return await workerModule.loadGatewayWorkerEnvironmentStartupState();
+      });
   const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
@@ -905,7 +857,7 @@ export async function startGatewayServer(
       activationSourceConfig: startupActivationSourceConfig,
       startupRuntimeConfig,
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
-      workerProviderIds: listDurableWorkerProviderIds(),
+      workerProviderIds: workerEnvironmentStartup?.durableProviderIds ?? [],
       minimalTestGateway,
       log,
       loadRuntimePlugins: false,
@@ -950,127 +902,23 @@ export async function startGatewayServer(
   // Unconfigured clean installs get no service; durable rows still need list/status projection.
   const shouldStartWorkerEnvironmentService =
     Object.keys(gatewayPluginConfigAtStart.cloudWorkers?.profiles ?? {}).length > 0 ||
-    hasWorkerEnvironmentRecords;
-  let workerBundleProducer: WorkerBundleProducer | undefined;
-  let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
+    Boolean(workerEnvironmentStartup?.records.length);
   let resolveWorkerGatewayEndpoint: () =>
     | { host: "127.0.0.1" | "::1"; port: number }
     | undefined = () => undefined;
-  const prepareWorkerInstallation = async (install: "bundle" | "npm") => {
-    const [workerEnvironmentRuntime, { WORKER_PROTOCOL_FEATURES }] = await Promise.all([
-      loadWorkerEnvironmentRuntimeModule(),
-      import("../../packages/gateway-protocol/src/schema/worker-admission.js"),
-    ]);
-    workerBundleProducer ??= workerEnvironmentRuntime.createWorkerBundleProducer({
-      protocolFeatures: WORKER_PROTOCOL_FEATURES,
-    });
-    const bundle = await workerBundleProducer.prepare();
-    if (install === "bundle") {
-      return bundle;
-    }
-    workerNpmArtifact ??= workerEnvironmentRuntime
-      .resolveWorkerNpmInstallationArtifact({ bundle })
-      .catch((error: unknown) => {
-        workerNpmArtifact = undefined;
-        throw error;
-      });
-    return await workerNpmArtifact;
-  };
-  const workerEnvironmentRuntimeModules =
-    workerEnvironmentStore && shouldStartWorkerEnvironmentService
+  const workerEnvironmentRuntime =
+    workerEnvironmentStartup && shouldStartWorkerEnvironmentService
       ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
-          const [service, liveEvents, transcriptCommit, tunnel, workerProviderRegistry] =
-            await Promise.all([
-              import("./worker-environments/service.js"),
-              import("./worker-environments/live-events.js"),
-              import("./worker-environments/transcript-commit.js"),
-              loadWorkerTunnelRuntimeModule(),
-              import("../plugins/worker-provider-registry.js"),
-            ]);
-          return { service, liveEvents, transcriptCommit, tunnel, workerProviderRegistry };
+          const workerModule = await loadWorkerEnvironmentStartupModule();
+          return await workerModule.createGatewayWorkerEnvironmentRuntime({
+            getPluginRegistry: () => pluginRegistry,
+            resolveWorkerGateway: () => resolveWorkerGatewayEndpoint(),
+            startup: workerEnvironmentStartup,
+            log,
+          });
         })
-      : undefined;
-  const workerTunnelManager = workerEnvironmentRuntimeModules?.tunnel.createWorkerTunnelManager();
-  // Freeze restart-owned identities before any new attach can advance its environment.
-  // Only an exact pre-start owner may seed an ephemeral ACK after gateway state loss.
-  const workerStartupBindings = workerEnvironmentRecordsAtStartup.flatMap((record) =>
-    record.state === "attached" && record.attachedSessionIds.length === 1
-      ? [
-          {
-            environmentId: record.environmentId,
-            runEpoch: record.ownerEpoch,
-            sessionId: record.attachedSessionIds[0]!,
-          },
-        ]
-      : [],
-  );
-  const workerStartupOwners = new Map(
-    workerStartupBindings.map((binding) => [binding.environmentId, binding.runEpoch] as const),
-  );
-  const workerLiveEvents =
-    workerEnvironmentStore && workerEnvironmentRuntimeModules
-      ? workerEnvironmentRuntimeModules.liveEvents.createWorkerLiveEventReceiver({
-          getConfig: getRuntimeConfig,
-          startupBindings: workerStartupBindings,
-          startupOwners: workerStartupOwners,
-        })
-      : undefined;
-  const workerEnvironmentService =
-    workerEnvironmentStore && workerEnvironmentRuntimeModules
-      ? workerEnvironmentRuntimeModules.service.createWorkerEnvironmentService({
-          store: workerEnvironmentStore,
-          getConfig: getRuntimeConfig,
-          resolveProvider: (providerId) =>
-            workerEnvironmentRuntimeModules.workerProviderRegistry.resolveWorkerProvider(
-              pluginRegistry,
-              providerId,
-            ),
-          prepareInstallation: prepareWorkerInstallation,
-          tunnelManager: workerTunnelManager,
-          resolveWorkerGateway: () => resolveWorkerGatewayEndpoint(),
-          applyTranscriptCommit:
-            workerEnvironmentRuntimeModules.transcriptCommit.createWorkerTranscriptCommitter({
-              getConfig: getRuntimeConfig,
-            }).commit,
-          executeInference: async (params) => {
-            const workerInferenceRuntime = await loadWorkerInferenceRuntimeModule();
-            return await workerInferenceRuntime.executeWorkerInference(params);
-          },
-          ...(workerLiveEvents ? { liveEvents: workerLiveEvents } : {}),
-          resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
-            const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
-            return await workerEnvironmentRuntime.resolveWorkerSshIdentity({
-              provider,
-              leaseId,
-              profile,
-              keyRef,
-              resolveGeneric: async (genericKeyRef) => ({
-                kind: "material",
-                contents: await workerEnvironmentRuntime.resolveSecretRefString(genericKeyRef, {
-                  config:
-                    getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
-                  env: getActiveSecretsRuntimeEnv(),
-                }),
-              }),
-            });
-          },
-          bootstrapWorker: async ({ sshEndpoint, installation, resolveIdentity, signal }) => {
-            const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
-            return await workerEnvironmentRuntime.bootstrapWorker(
-              {
-                ssh: sshEndpoint,
-                artifact: installation,
-                pinnedHostKey: sshEndpoint.hostKey,
-              },
-              {
-                signal,
-                resolveIdentity,
-              },
-            );
-          },
-          logger: log.child("worker-environments"),
-        })
-      : undefined;
+      : {};
+  const { workerEnvironmentService, workerLiveEvents } = workerEnvironmentRuntime;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -1832,7 +1680,7 @@ export async function startGatewayServer(
         workspaceDir: defaultWorkspaceDir,
         env: params.env,
         activationSourceConfig: params.nextConfig,
-        workerProviderIds: listDurableWorkerProviderIds(),
+        workerProviderIds: workerEnvironmentStartup?.durableProviderIds ?? [],
       });
       const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
       const nextStartupChannelIds = new Set<ChannelId>();
@@ -2376,13 +2224,17 @@ export async function startGatewayServer(
       // from the startup snapshot so cleanup cannot remove active code or delay a turn.
       retainedPluginCleanupHandle = gatewayRuntimeServices.scheduleGatewayIdleTask({
         delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
-        retryDelayMs: RETAINED_PLUGIN_CLEANUP_RETRY_DELAY_MS,
+        retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
         isClosing: () => closePreludeStarted,
         isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
-        run: () =>
-          cleanupRetainedPluginInstallGenerations(
-            startupConfigLoad.pluginMetadataSnapshot?.index.installRecords,
-          ),
+        run: async () => {
+          const { cleanupRetainedPluginInstallGenerations } =
+            await import("./server-retained-plugin-cleanup.js");
+          await cleanupRetainedPluginInstallGenerations({
+            installRecords: startupConfigLoad.pluginMetadataSnapshot?.index.installRecords,
+            log,
+          });
+        },
         log,
         errorMessage: "retained npm generation cleanup failed",
       });
