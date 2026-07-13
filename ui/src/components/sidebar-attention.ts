@@ -130,7 +130,7 @@ export function buildSidebarAttentionItems(params: {
   now: number;
 }): SidebarAttentionItem[] {
   const items: SidebarAttentionItem[] = [];
-  const signatureOf = (ids: readonly string[]) => [...ids].sort().join("\n");
+  const signatureOf = (ids: readonly string[]) => ids.toSorted().join("\n");
 
   const failedCron = params.cronJobs.filter(isCronJobActiveFailure);
   if (failedCron.length > 0) {
