@@ -303,6 +303,7 @@ vi.mock("./browser-tool.runtime.js", () => {
   };
 });
 
+import { setBrowserToolSessionDepsForTest } from "./browser-tool-session.js";
 import { createBrowserTool } from "./browser-tool.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 
@@ -344,6 +345,12 @@ function resetBrowserToolMocks() {
     ok: true,
     running: true,
     source: "gateway-host",
+  });
+  setBrowserToolSessionDepsForTest({
+    acquireTrackedBrowserSessionAccess:
+      sessionTabRegistryMocks.acquireTrackedBrowserSessionAccess as never,
+    claimTrackedBrowserSessionOwner:
+      sessionTabRegistryMocks.claimTrackedBrowserSessionOwner as never,
   });
 }
 
@@ -1758,7 +1765,7 @@ describe("browser tool url alias support", () => {
           releaseAccess = () => resolve(() => {});
         }),
     );
-    browserToolTesting.setDepsForTest({
+    setBrowserToolSessionDepsForTest({
       acquireTrackedBrowserSessionAccess: acquireAccess,
     });
 
