@@ -1,16 +1,10 @@
 // JSON5-aware config issue path navigator and display enrichment.
-// Walks raw config text to resolve line numbers and received values
-// for config validation issues, without a full parser.
 import path from "node:path";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigValidationIssue } from "./types.js";
 import { isSecretRef } from "./types.secrets.js";
 
 export type ConfigIssuePathSegment = string | number;
-
-// ---------------------------------------------------------------------------
-// JSON5 text navigator
-// ---------------------------------------------------------------------------
 
 type Cursor = { pos: number };
 
@@ -24,7 +18,6 @@ function lineAtOffset(raw: string, offset: number): number {
   return line;
 }
 
-/** Skip whitespace and JSON5 comments. */
 function skipWS(raw: string, c: Cursor): void {
   while (c.pos < raw.length) {
     const ch = raw[c.pos];
@@ -274,10 +267,6 @@ function navigateAt(
   return undefined;
 }
 
-// ---------------------------------------------------------------------------
-// Path formatting
-// ---------------------------------------------------------------------------
-
 /** Format config issue path segments with bracket notation for array indexes. */
 export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[]): string {
   if (segments.length === 0) {
@@ -285,18 +274,14 @@ export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[
   }
   let out = "";
   for (const s of segments) {
-    if (typeof s === "number") {
-      out += `[${s}]`;
-    } else {
-      out = out ? `${out}.${s}` : s;
-    }
+    out += typeof s === "number" ? `[${s}]` : out ? `${out}.${s}` : s;
   }
   return out;
 }
 
 /**
  * Parse a display-formatted issue path back into traversal segments.
- * Supports both bracket notation (`agents.list[3]`) and legacy dot-notation
+ * Supports bracket notation (`agents.list[3]`) and legacy dot-notation
  * (`agents.list.3` with numericDotSegments option).
  */
 export function parseConfigIssuePath(
@@ -343,10 +328,6 @@ export function parseConfigIssuePath(
   }
   return segments;
 }
-
-// ---------------------------------------------------------------------------
-// Value resolution from parsed config
-// ---------------------------------------------------------------------------
 
 /** Resolve the actual value at a path in the parsed config object. */
 export function resolveConfigValueAtPath(
@@ -405,10 +386,6 @@ function resolveSegmentsAgainstParsed(
   return resolved;
 }
 
-// ---------------------------------------------------------------------------
-// Received value hint
-// ---------------------------------------------------------------------------
-
 function safeStringify(v: unknown): string | null {
   if (v === undefined) {
     return null;
@@ -461,10 +438,6 @@ export function appendReceivedValueHint(
   return `${message}, got: ${label}`;
 }
 
-// ---------------------------------------------------------------------------
-// Line number resolution
-// ---------------------------------------------------------------------------
-
 /** Resolve the 1-based source line number for a value at the given path. */
 export function resolveConfigIssueLineInRaw(
   raw: string,
@@ -476,10 +449,6 @@ export function resolveConfigIssueLineInRaw(
   }
   return lineAtOffset(raw, offset);
 }
-
-// ---------------------------------------------------------------------------
-// Issue enrichment
-// ---------------------------------------------------------------------------
 
 export type AttachConfigIssueDiagnosticsParams = {
   raw: string | null | undefined;
@@ -496,14 +465,10 @@ export type ConfigIssueDiagnostics = ConfigValidationIssue & {
 
 /**
  * Enrich config validation issues with display-friendly diagnostics:
- * - Bracket notation for array indices (when formatPathForDisplay is true)
- * - Received value hints (when includeReceivedValueHint is true)
- * - Source line numbers and file name
- *
+ * bracket notation, received value hints, and source line numbers.
  * Line numbers and received values are only attached when the value can be
  * resolved in the raw config text. Paths in $include'd files gracefully
- * degrade — the navigator won't find them in the raw text, so no line
- * number or received value is shown for those issues.
+ * degrade — the navigator won't find them in the raw text.
  */
 export function attachConfigIssueDiagnostics(
   issues: readonly ConfigValidationIssue[],
@@ -517,19 +482,14 @@ export function attachConfigIssueDiagnostics(
 
   return issues.map((issue) => {
     const rawSegments = parseConfigIssuePath(issue.path, { numericDotSegments: true });
-    // Resolve segments against the parsed config to distinguish array indices
-    // from numeric record keys (e.g., plugins.entries.123 is a string key, not
-    // an array index).
     const segments = resolveSegmentsAgainstParsed(params.parsed, rawSegments);
     const receivedValue = resolveConfigValueAtPath(params.parsed, segments);
     const line = raw === null ? undefined : resolveConfigIssueLineInRaw(raw, segments);
     const canResolve = line !== undefined;
-
     const message =
       params.includeReceivedValueHint && canResolve
         ? appendReceivedValueHint(issue.message, issue.path, receivedValue)
         : issue.message;
-
     return {
       ...issue,
       path: params.formatPathForDisplay ? formatConfigIssuePath(segments) : issue.path,
