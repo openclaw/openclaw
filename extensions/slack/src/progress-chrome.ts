@@ -101,16 +101,6 @@ function detectSlackProgressChromeReaction(
   return undefined;
 }
 
-function isSlackToolProgressChannelData(channelData: unknown): boolean {
-  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
-    return false;
-  }
-  return (
-    (channelData as { openclawProgressKind?: unknown }).openclawProgressKind ===
-    SLACK_TOOL_PROGRESS_KIND
-  );
-}
-
 function isSlackProgressChromePayload(payload: { channelData?: unknown }): boolean {
   const channelData = payload.channelData;
   const slackData =
@@ -224,32 +214,8 @@ export async function maybeSuppressSlackProgressChrome(
   return { suppress: true, reactionAttempted: Boolean(progressReaction && input.threadTs) };
 }
 
-type SlackSuppressedSendResult = {
-  messageId: "suppressed";
-  channelId: string;
-  suppressed: true;
-  threadTs?: string;
-};
-
 export function isSuppressedSlackSendResult(result: { suppressed?: true } | undefined): boolean {
   return result?.suppressed === true;
-}
-
-function buildSlackSuppressedSendShell(params: { channelId: string; threadTs?: string }): Omit<
-  SlackSuppressedSendResult,
-  never
-> & {
-  channelId: string;
-  messageId: "suppressed";
-  suppressed: true;
-  threadTs?: string;
-} {
-  return {
-    messageId: "suppressed",
-    channelId: params.channelId,
-    suppressed: true,
-    ...(params.threadTs ? { threadTs: params.threadTs } : {}),
-  };
 }
 
 /** Track suppressed progress-chrome deliveries without treating them as chat posts. */
