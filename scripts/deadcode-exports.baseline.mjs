@@ -824,7 +824,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/acp/runtime/registry.ts: AcpRuntimeBackend",
   "src/agents/agent-bundle-lsp-runtime.ts: spawnLspServerProcess",
   "src/agents/agent-bundle-mcp-tools.ts: __testing",
-  "src/agents/agent-bundle-mcp-tools.ts: completeDeferredSessionMcpRuntimeRetirement",
   "src/agents/agent-bundle-mcp-tools.ts: testing",
   "src/agents/agent-hooks/compaction-instructions.ts: DEFAULT_COMPACTION_INSTRUCTIONS",
   "src/agents/agent-hooks/compaction-safeguard.ts: testing",
