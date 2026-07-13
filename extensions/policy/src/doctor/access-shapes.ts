@@ -1,15 +1,15 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  agentWorkspacePolicyShapeFinding,
+  toolPosturePolicyShapeFinding,
+} from "./agent-tool-shapes.js";
 import { execApprovalAllowlistExpectedShapeFinding } from "./exec-approval-rules.js";
 import {
   SUPPORTED_DM_POLICIES,
   SUPPORTED_DM_SCOPES,
   SUPPORTED_EXEC_APPROVAL_SECURITY,
 } from "./policy-constants.js";
-import {
-  agentWorkspacePolicyShapeFinding,
-  toolPosturePolicyShapeFinding,
-} from "./runtime-shapes.js";
 import {
   policyShapeFinding,
   policyStringArrayPropertyShapeFinding,

@@ -8,15 +8,14 @@ import {
   scopedDataHandlingPolicyShapeFinding,
   scopedToolsPolicyShapeFinding,
 } from "./access-shapes.js";
+import {
+  agentWorkspacePolicyShapeFinding,
+  toolPosturePolicyShapeFinding,
+} from "./agent-tool-shapes.js";
 import { SUPPORTED_POLICY_SECTIONS } from "./policy-constants.js";
 import { normalizePolicyChannelId } from "./policy-runtime.js";
 import { duplicateScopedPolicyFieldFinding } from "./policy-scope.js";
-import {
-  agentWorkspacePolicyShapeFinding,
-  gatewayPolicyShapeFinding,
-  sandboxPolicyShapeFinding,
-  toolPosturePolicyShapeFinding,
-} from "./runtime-shapes.js";
+import { gatewayPolicyShapeFinding, sandboxPolicyShapeFinding } from "./sandbox-gateway-shapes.js";
 import {
   policyShapeFinding,
   policyStringArrayPropertyShapeFinding,

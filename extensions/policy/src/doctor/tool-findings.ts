@@ -1,12 +1,12 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
+import { toolPosturePolicyShapeFinding } from "./agent-tool-shapes.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./metadata.js";
 import { KNOWN_RISK_LEVELS, KNOWN_SENSITIVITY_LEVELS } from "./policy-constants.js";
 import { expandPolicyToolRequirement, toolListCoversTool } from "./policy-runtime.js";
 import { agentScopedPolicyTargets, scopedToolAgentMatches } from "./policy-scope.js";
 import { hasValidScopedPolicy } from "./policy-shape.js";
-import { toolPosturePolicyShapeFinding } from "./runtime-shapes.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
 export function toolPostureFindings(

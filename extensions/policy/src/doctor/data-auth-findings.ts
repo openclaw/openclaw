@@ -1,13 +1,6 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyDataHandlingEvidence, PolicyEvidence } from "../policy-state.js";
-import { CHECK_IDS } from "./metadata.js";
-import { authProfileHasMetadata, requiredAuthProfileMetadata } from "./policy-runtime.js";
-import {
-  agentScopedPolicyTargets,
-  dataHandlingPolicyHasRules,
-  scopedAgentIdMatches,
-} from "./policy-scope.js";
 import {
   authProfileAllowModesShapeFindings,
   dataHandlingEntries,
@@ -15,7 +8,14 @@ import {
   dataHandlingLabel,
   dataHandlingPolicyShapeFindings,
   secretPolicyShapeFindings,
-} from "./runtime-shapes.js";
+} from "./data-auth-shapes.js";
+import { CHECK_IDS } from "./metadata.js";
+import { authProfileHasMetadata, requiredAuthProfileMetadata } from "./policy-runtime.js";
+import {
+  agentScopedPolicyTargets,
+  dataHandlingPolicyHasRules,
+  scopedAgentIdMatches,
+} from "./policy-scope.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
 export function secretAuthProvenanceFindings(

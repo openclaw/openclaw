@@ -4,7 +4,7 @@ import type { PolicyEvidence, PolicySandboxPostureEvidence } from "../policy-sta
 import { CHECK_IDS, POLICY_CHECK_IDS, SANDBOX_CONTAINER_POLICY_RULES } from "./metadata.js";
 import { agentScopedPolicyTargets, scopedAgentIdMatches } from "./policy-scope.js";
 import { hasValidScopedPolicy } from "./policy-shape.js";
-import { sandboxPolicyShapeFinding } from "./runtime-shapes.js";
+import { sandboxPolicyShapeFinding } from "./sandbox-gateway-shapes.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
 export function sandboxPostureFindings(
