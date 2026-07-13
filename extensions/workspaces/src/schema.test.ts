@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_WORKSPACE } from "./default-workspace.js";
-import {
-  CURRENT_WORKSPACE_SCHEMA_VERSION,
-  migrateWorkspaceDoc,
-  validateWorkspaceDoc,
-  type WorkspaceDoc,
-} from "./schema.js";
+import { migrateWorkspaceDoc, validateWorkspaceDoc, type WorkspaceDoc } from "./schema.js";
 
 function validDoc(): WorkspaceDoc {
   return structuredClone(DEFAULT_WORKSPACE);
@@ -25,7 +20,7 @@ describe("Workspaces document schema", () => {
 
   it("requires stable workspace and tab resource ids in the canonical schema", () => {
     expect(validDoc()).toMatchObject({
-      schemaVersion: CURRENT_WORKSPACE_SCHEMA_VERSION,
+      schemaVersion: 2,
       workspaceId: "default",
       tabs: [expect.objectContaining({ id: "main", slug: "main", revision: 1 })],
     });
@@ -64,7 +59,7 @@ describe("Workspaces document schema", () => {
 
     expect(migrated.changed).toBe(true);
     expect(migrated.doc).toMatchObject({
-      schemaVersion: CURRENT_WORKSPACE_SCHEMA_VERSION,
+      schemaVersion: 2,
       workspaceId: "default",
       tabs: [{ id: "main", slug: "main", revision: 1 }],
     });
