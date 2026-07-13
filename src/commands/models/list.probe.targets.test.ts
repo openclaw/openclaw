@@ -740,6 +740,42 @@ describe("buildProbeTargets reason codes", () => {
     ]);
   });
 
+  it("keeps profiles stored under the requested provider alias", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "byteplus-plan:saved": {
+          type: "api_key",
+          provider: "byteplus-plan",
+          key: "byteplus-plan-key",
+        },
+      },
+      order: { "byteplus-plan": ["byteplus-plan:saved"] },
+    };
+    mockAllowedProfiles = ["byteplus-plan:saved"];
+    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+
+    const plan = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      providers: ["byteplus-plan"],
+      modelCandidates: ["byteplus-plan/ark-code-latest"],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.results).toStrictEqual([]);
+    expect(plan.targets).toContainEqual(
+      expect.objectContaining({
+        provider: "byteplus-plan",
+        profileId: "byteplus-plan:saved",
+        source: "profile",
+      }),
+    );
+  });
+
   it("matches canonical providers against alias-valued catalog probe models", async () => {
     await withClearedZaiEnv(async () => {
       mockStore = {

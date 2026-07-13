@@ -373,7 +373,14 @@ export async function buildProbeTargets(params: {
       includeDirectKeys &&
       profileFilter.size === 0 &&
       hasConfiguredSecretInput(configuredProvider?.apiKey, cfg.secrets?.defaults);
-    const profileIds = listProfilesForProvider(store, authProviderKey);
+    // Keep profiles saved under either surface. The production profile helper
+    // is alias-aware, but scoped plugin metadata can differ between lookups.
+    const profileIds = [
+      ...new Set([
+        ...listProfilesForProvider(store, authProviderKey),
+        ...(authProviderKey === providerKey ? [] : listProfilesForProvider(store, providerKey)),
+      ]),
+    ];
     const configuredReference = includeConfigKey
       ? resolveProviderEntryApiKeyProfileReference({
           cfg,
