@@ -5569,9 +5569,58 @@ struct ChatViewModelTests {
         try await waitUntil("second model patch follows first") {
             await transport.patchedModels() == ["openai/gpt-first", "openai/gpt-second"]
         }
-        await vm.waitForPendingModelPatches(in: "main")
+        await vm.waitForPendingSessionSettings(in: "main")
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-second")
         #expect(await MainActor.run { vm.sessions.first?.model } == "gpt-second")
+    }
+
+    @Test func `thinking patch follows in flight model patch on shared settings lane`() async throws {
+        let modelPatchGate = AsyncGate()
+        let sessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: "claude-fable-5",
+                modelProvider: "anthropic",
+                thinkingLevels: [thinkingOption("off"), thinkingOption("high"), thinkingOption("ultra")]))
+        let models = [
+            modelChoice(id: "gpt-5.6-sol", name: "Sol", provider: "openai", reasoning: true),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            modelPatchResults: [
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "gpt-5.6-sol",
+                    thinkingLevel: "high",
+                    thinkingLevels: [thinkingOption("off"), thinkingOption("high"), thinkingOption("ultra")]),
+            ],
+            setSessionModelHook: { model in
+                if model == "openai/gpt-5.6-sol" {
+                    await modelPatchGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run {
+            vm.selectModel("openai/gpt-5.6-sol")
+            vm.selectThinkingLevel("ultra")
+        }
+        try await waitUntil("model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-5.6-sol"]
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await (transport.patchedThinkingLevels()).isEmpty)
+
+        await modelPatchGate.open()
+        try await waitUntil("thinking patch follows model") {
+            await transport.patchedThinkingLevels() == ["ultra"]
+        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.6-sol")
+        #expect(await MainActor.run { vm.thinkingLevel } == "ultra")
     }
 
     @Test func `send waits for in flight model patch to finish`() async throws {
@@ -7120,7 +7169,7 @@ struct ChatViewModelTests {
         try await waitUntil("second model patch follows the first") {
             await transport.patchedModels() == ["openai/model-a", "openai/model-b"]
         }
-        await vm.waitForPendingModelPatches(in: sessionKey)
+        await vm.waitForPendingSessionSettings(in: sessionKey)
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
     }
 
@@ -7168,7 +7217,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
 
         await firstPatchGate.open()
-        await vm.waitForPendingModelPatches(
+        await vm.waitForPendingSessionSettings(
             in: sessionKey,
             canonicalSessionKey: sessionKey,
             agentID: nil,
@@ -7412,7 +7461,7 @@ struct ChatViewModelTests {
         try await waitUntil("Luna model patch starts") {
             await transport.patchedModels() == ["openai/gpt-5.6-luna"]
         }
-        await vm.waitForPendingModelPatches(in: "main")
+        await vm.waitForPendingSessionSettings(in: "main")
         await staleListGate.open()
         await staleFetch.value
 
@@ -7431,7 +7480,7 @@ struct ChatViewModelTests {
         try await waitUntil("Terra model patch starts") {
             await transport.patchedModels() == ["openai/gpt-5.6-luna", "openai/gpt-5.6-terra"]
         }
-        await vm.waitForPendingModelPatches(in: "main")
+        await vm.waitForPendingSessionSettings(in: "main")
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.6-terra")
         #expect(await MainActor.run { vm.thinkingLevel } == "ultra")
         #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == solLevels.map(\.id))
@@ -7469,7 +7518,7 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         await MainActor.run { vm.selectModel("openai/legacy-reasoning") }
-        await vm.waitForPendingModelPatches(in: "main")
+        await vm.waitForPendingSessionSettings(in: "main")
 
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
         #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id).contains("ultra") } == false)
@@ -7987,7 +8036,7 @@ struct ChatViewModelTests {
         try await waitUntil("model X re-selection patched") {
             await transport.patchedModels() == ["openai/model-y", "openai/model-x"]
         }
-        await vm.waitForPendingModelPatches(in: "main")
+        await vm.waitForPendingSessionSettings(in: "main")
 
         #expect(await MainActor.run { vm.sessions.first?.thinkingLevels?.map(\.id) } == ["off"])
         #expect(await MainActor.run { vm.sessions.first?.thinkingOptions } == ["off"])
@@ -8240,7 +8289,7 @@ struct ChatViewModelTests {
             ["off", "minimal", "low", "medium", "high", "max"])
     }
 
-    @Test func `stale thinking patch completion reapplies latest selection`() async throws {
+    @Test func `thinking patches are serialized without replay`() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
@@ -8263,12 +8312,59 @@ struct ChatViewModelTests {
         }
         await MainActor.run { vm.selectThinkingLevel("high") }
 
-        try await waitUntil("thinking patch replayed latest selection") {
+        try await waitUntil("thinking patch applies latest selection") {
             let patched = await transport.patchedThinkingLevels()
-            return patched == ["medium", "high", "high"]
+            return patched == ["medium", "high"]
         }
 
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
+    }
+
+    @Test func `late thinking completion does not replace the current session choice`() async throws {
+        let firstPatchGate = AsyncGate()
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: 2,
+            path: nil,
+            count: 2,
+            defaults: nil,
+            sessions: [
+                sessionEntry(key: "main", updatedAt: 2, model: nil, thinkingLevel: "off"),
+                sessionEntry(key: "other", updatedAt: 1, model: nil, thinkingLevel: "off"),
+            ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "other", sessionId: "sess-other"),
+            ],
+            sessionsResponses: [sessions, sessions],
+            setSessionThinkingHook: { level in
+                if level == "medium" {
+                    await firstPatchGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await MainActor.run { vm.selectThinkingLevel("medium") }
+        try await waitUntil("main thinking patch starts") {
+            await transport.patchedThinkingLevels() == ["medium"]
+        }
+        await MainActor.run { vm.switchSession(to: "other") }
+        try await waitUntil("other session opens") {
+            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
+        }
+        await MainActor.run { vm.selectThinkingLevel("high") }
+        try await waitUntil("other thinking patch finishes") {
+            await transport.patchedThinkingLevels() == ["medium", "high"]
+        }
+        #expect(await MainActor.run { vm.thinkingLevel } == "high")
+
+        await firstPatchGate.open()
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await MainActor.run { vm.sessionKey == "other" && vm.thinkingLevel == "high" })
+        let mainThinkingLevel = await MainActor.run {
+            vm.sessions.first(where: { $0.key == "main" })?.thinkingLevel
+        }
+        #expect(mainThinkingLevel == "medium")
     }
 
     @Test func `clears streaming on external error event`() async throws {

@@ -1,6 +1,8 @@
+import type { SessionsPatchResult } from "../../api/types.ts";
 import {
   resolveSessionKey,
   type SessionCapability,
+  type SessionPatch,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
 import {
@@ -18,7 +20,6 @@ type ChatPickerPatchHost = SessionScopeHost & { sessions: SessionCapability };
 type PendingPatchStore = WeakMap<SessionCapability, Map<string, Promise<boolean>>>;
 
 const pendingChatPickerPatches: PendingPatchStore = new WeakMap();
-const pendingChatModelSwitches: PendingPatchStore = new WeakMap();
 
 function resolveChatPickerPatchKey(
   host: ChatPickerPatchHost,
@@ -71,10 +72,11 @@ function trackLatestPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   patchPromise: Promise<boolean>,
+  agentId?: string,
 ): void {
   const pendingBySession = store.get(host.sessions) ?? new Map<string, Promise<boolean>>();
   store.set(host.sessions, pendingBySession);
-  const patchKey = resolveChatPickerPatchKey(host, sessionKey);
+  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
   pendingBySession.set(patchKey, patchPromise);
   void patchPromise.finally(() => {
     if (pendingBySession.get(patchKey) === patchPromise) {
@@ -91,31 +93,45 @@ export function getPendingChatPickerPatch(
   return getPendingPatch(pendingChatPickerPatches, host, sessionKey, agentId);
 }
 
-export function trackPendingChatPickerPatch(
+export function trackPendingChatSettingsPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   patchPromise: Promise<boolean>,
+  agentId?: string,
 ): void {
-  const previous = getPendingChatPickerPatch(host, sessionKey);
-  // Aggregate every picker patch across the shared capability; overlapping
-  // Gateway handlers can overtake pane-local or latest-only tracking.
-  const pending = Promise.all([previous ?? true, patchPromise]).then(
-    ([previousReady, patchReady]) => previousReady && patchReady,
+  trackLatestPatch(pendingChatPickerPatches, host, sessionKey, patchPromise, agentId);
+}
+
+export function patchChatSessionSettings(
+  host: ChatPickerPatchHost,
+  sessionKey: string,
+  patch: Pick<SessionPatch, "model" | "thinkingLevel" | "fastMode">,
+  options: {
+    agentId?: string;
+    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+  } = {},
+): Promise<SessionsPatchResult | null> {
+  const previous = getPendingChatPickerPatch(host, sessionKey, options.agentId);
+  const operation = (async () => {
+    // Model-dependent settings and sends share this canonical per-session tail.
+    // Later user intent still runs after a rejection and gets its own Gateway validation.
+    if (previous) {
+      await previous;
+    }
+    const result = await host.sessions.patch(sessionKey, patch, { agentId: options.agentId });
+    if (result) {
+      await options.reconcile?.(result);
+    }
+    return result;
+  })();
+  trackPendingChatSettingsPatch(
+    host,
+    sessionKey,
+    operation.then(
+      (result) => result !== null,
+      () => false,
+    ),
+    options.agentId,
   );
-  trackLatestPatch(pendingChatPickerPatches, host, sessionKey, pending);
-}
-
-export function getPendingChatModelSwitch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-): Promise<boolean> | undefined {
-  return getPendingPatch(pendingChatModelSwitches, host, sessionKey);
-}
-
-export function trackPendingChatModelSwitch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  switchPromise: Promise<boolean>,
-): void {
-  trackLatestPatch(pendingChatModelSwitches, host, sessionKey, switchPromise);
+  return operation;
 }

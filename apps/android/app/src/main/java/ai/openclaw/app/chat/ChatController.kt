@@ -96,8 +96,7 @@ class ChatController internal constructor(
 
   private var appliedMainSessionKey = "main"
   private val cacheMutationMutex = Mutex()
-  private val modelSelectionMutex = Mutex()
-  private val pendingModelSelections = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+  private val pendingSettingsMutations = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
 
@@ -765,7 +764,21 @@ class ChatController internal constructor(
       return
     }
     if (normalized == _thinkingLevel.value) return
+    val key = normalizeRequestedSessionKey(_sessionKey.value)
+    val rollbackLevel =
+      _sessions.value
+        .firstOrNull { it.key == key }
+        ?.thinkingLevel
+        ?.let(::normalizeThinking)
+        ?: _thinkingLevel.value
     _thinkingLevel.value = normalized
+    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+      setSessionThinkingLevelAwait(
+        sessionKey = key,
+        thinkingLevel = normalized,
+        fallbackRollbackLevel = rollbackLevel,
+      )
+    }
   }
 
   /** Patches the active session model without blocking the Compose caller. */
@@ -786,41 +799,94 @@ class ChatController internal constructor(
   ): Boolean {
     val key = normalizeRequestedSessionKey(sessionKey)
     val normalizedModelRef = modelRef?.trim()?.takeIf { it.isNotEmpty() }
-    val pendingSelection = CompletableDeferred<Boolean>()
-    pendingModelSelections[key] = pendingSelection
-    return try {
-      val succeeded =
-        modelSelectionMutex.withLock {
-          updateErrorText(null)
-          try {
-            val params =
-              buildJsonObject {
-                put("key", JsonPrimitive(key))
-                put("model", normalizedModelRef?.let(::JsonPrimitive) ?: JsonNull)
-              }
-            val response = requestGateway("sessions.patch", params.toString())
-            val resolution = parseSessionModelPatchResolution(response)
-            normalizedModelRef?.let(recordModelRecent)
-            applyAcceptedModelPatch(key = key, modelRef = normalizedModelRef, resolution = resolution)
-            if (_sessionKey.value == key) {
-              modelSelectionGeneration.incrementAndGet()
-              _selectedModelRef.value = normalizedModelRef
-            }
-            true
-          } catch (err: CancellationException) {
-            throw err
-          } catch (err: Throwable) {
-            updateLocalizedErrorText(err.message?.let(::verbatimText) ?: nativeText("Could not update model."))
-            false
+    return runSessionSettingsMutation(key) {
+      updateErrorText(null)
+      try {
+        val params =
+          buildJsonObject {
+            put("key", JsonPrimitive(key))
+            put("model", normalizedModelRef?.let(::JsonPrimitive) ?: JsonNull)
           }
+        val response = requestGateway("sessions.patch", params.toString())
+        val resolution = parseSessionSettingsPatchResolution(response)
+        normalizedModelRef?.let(recordModelRecent)
+        applyAcceptedModelPatch(key = key, modelRef = normalizedModelRef, resolution = resolution)
+        if (_sessionKey.value == key) {
+          modelSelectionGeneration.incrementAndGet()
+          _selectedModelRef.value = normalizedModelRef
         }
-      pendingSelection.complete(succeeded)
+        true
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        updateLocalizedErrorText(err.message?.let(::verbatimText) ?: nativeText("Could not update model."))
+        false
+      }
+    }
+  }
+
+  private suspend fun setSessionThinkingLevelAwait(
+    sessionKey: String,
+    thinkingLevel: String,
+    fallbackRollbackLevel: String,
+  ): Boolean =
+    runSessionSettingsMutation(sessionKey) {
+      val rollbackLevel =
+        _sessions.value
+          .firstOrNull { it.key == sessionKey }
+          ?.thinkingLevel
+          ?.let(::normalizeThinking)
+          ?: fallbackRollbackLevel
+      updateErrorText(null)
+      try {
+        val params =
+          buildJsonObject {
+            put("key", JsonPrimitive(sessionKey))
+            put("thinkingLevel", JsonPrimitive(thinkingLevel))
+          }
+        val response = requestGateway("sessions.patch", params.toString())
+        val resolution = parseSessionSettingsPatchResolution(response)
+        applyAcceptedThinkingPatch(sessionKey, thinkingLevel, resolution)
+        true
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        if (_sessionKey.value == sessionKey && _thinkingLevel.value == thinkingLevel) {
+          _thinkingLevel.value = rollbackLevel
+        }
+        updateLocalizedErrorText(
+          err.message?.let(::verbatimText) ?: nativeText("Could not update thinking level."),
+        )
+        false
+      }
+    }
+
+  private suspend fun runSessionSettingsMutation(
+    sessionKey: String,
+    operation: suspend () -> Boolean,
+  ): Boolean {
+    val pending = CompletableDeferred<Boolean>()
+    val previous = pendingSettingsMutations.put(sessionKey, pending)
+    return try {
+      previous?.await()
+      val succeeded = operation()
+      pending.complete(succeeded)
       succeeded
     } catch (err: CancellationException) {
-      pendingSelection.complete(false)
+      pending.complete(false)
       throw err
     } finally {
-      pendingModelSelections.remove(key, pendingSelection)
+      pendingSettingsMutations.remove(sessionKey, pending)
+    }
+  }
+
+  private suspend fun waitForPendingSessionSettings(sessionKey: String): Boolean {
+    var pending = pendingSettingsMutations[sessionKey] ?: return true
+    while (true) {
+      if (!pending.await()) return false
+      val next = pendingSettingsMutations[sessionKey]
+      if (next == null || next === pending) return true
+      pending = next
     }
   }
 
@@ -936,10 +1002,9 @@ class ChatController internal constructor(
     val trimmed = message.trim()
     if (trimmed.isEmpty() && attachments.isEmpty()) return false
     val sessionKey = _sessionKey.value
-    // Model patches and sends share one ordering boundary; the first post-selection turn
-    // must not leave on the previous model while sessions.patch is still in flight.
-    val pendingSelection = pendingModelSelections[sessionKey]
-    if (pendingSelection != null && !pendingSelection.await()) return false
+    // Session settings and sends share one ordering boundary; the first post-selection turn
+    // must not leave with stale model or thinking state while sessions.patch is in flight.
+    if (!waitForPendingSessionSettings(sessionKey)) return false
     if (_sessionKey.value != sessionKey) return false
     // agent-command.ts throws for explicit unsupported levels, so hidden controls must send off.
     // Applied at enqueue time too so durable rows never persist a level the selected model
@@ -2230,6 +2295,11 @@ class ChatController internal constructor(
     item: ChatOutboxItem,
     flushScope: ChatCacheScope,
   ): OutboxSendOutcome {
+    // Reconnect flushes share the live-send settings boundary. Claiming before this wait
+    // could durably dispatch a queued turn against the previous model or thinking state.
+    if (!waitForPendingSessionSettings(normalizeRequestedSessionKey(item.sessionKey))) {
+      return OutboxSendOutcome.Stop
+    }
     // Atomically claim the row before sending: null means the claim could not be made durable,
     // and 0 means the row vanished or a direct dispatch claimed it first; neither may dispatch.
     val claimed = claimOutboxRowOrNull(outbox, item)
@@ -2988,7 +3058,7 @@ class ChatController internal constructor(
     val isTruncated: Boolean,
   )
 
-  private data class SessionModelPatchResolution(
+  private data class SessionSettingsPatchResolution(
     val modelProvider: String?,
     val model: String?,
     val thinkingLevel: String?,
@@ -3054,10 +3124,10 @@ class ChatController internal constructor(
     )
   }
 
-  private fun parseSessionModelPatchResolution(jsonString: String): SessionModelPatchResolution? {
+  private fun parseSessionSettingsPatchResolution(jsonString: String): SessionSettingsPatchResolution? {
     val root = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return null
     val resolved = root["resolved"].asObjectOrNull() ?: return null
-    return SessionModelPatchResolution(
+    return SessionSettingsPatchResolution(
       modelProvider = resolved["modelProvider"].asStringOrNull()?.trim(),
       model = resolved["model"].asStringOrNull()?.trim(),
       thinkingLevel = resolved["thinkingLevel"].asStringOrNull()?.trim(),
@@ -3080,7 +3150,7 @@ class ChatController internal constructor(
   private fun applyAcceptedModelPatch(
     key: String,
     modelRef: String?,
-    resolution: SessionModelPatchResolution?,
+    resolution: SessionSettingsPatchResolution?,
   ) {
     val fallbackProvider = modelRef?.substringBefore('/', missingDelimiterValue = "")?.takeIf { it.isNotEmpty() }
     val fallbackModel =
@@ -3101,6 +3171,40 @@ class ChatController internal constructor(
     }
     if (_sessionKey.value == key) {
       applyThinkingMetadata(applied)
+    }
+  }
+
+  private fun applyAcceptedThinkingPatch(
+    key: String,
+    requestedLevel: String,
+    resolution: SessionSettingsPatchResolution?,
+  ) {
+    val acceptedLevel = resolution?.thinkingLevel?.let(::normalizeThinking) ?: requestedLevel
+    val current = _sessions.value
+    val index = current.indexOfFirst { it.key == key }
+    if (index >= 0) {
+      val existing = current[index]
+      _sessions.value =
+        current.toMutableList().also { sessions ->
+          sessions[index] =
+            existing.copy(
+              modelProvider = resolution?.modelProvider ?: existing.modelProvider,
+              model = resolution?.model ?: existing.model,
+              thinkingLevel = acceptedLevel,
+              thinkingLevels = resolution?.thinkingLevels ?: existing.thinkingLevels,
+            )
+        }
+    }
+    if (_sessionKey.value == key && _thinkingLevel.value == requestedLevel) {
+      _thinkingLevel.value = acceptedLevel
+      resolution?.thinkingLevels?.let { levels ->
+        applyThinkingMetadata(
+          (_sessions.value.getOrNull(index) ?: ChatSessionEntry(key = key, updatedAtMs = null)).copy(
+            thinkingLevel = acceptedLevel,
+            thinkingLevels = levels,
+          ),
+        )
+      }
     }
   }
 

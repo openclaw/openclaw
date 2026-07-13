@@ -11,7 +11,7 @@ extension OpenClawChatViewModel {
         self.updateCurrentSessionThinkingLevel(level, sessionKey: self.sessionKey)
     }
 
-    func performSelectThinkingLevel(_ level: String) async {
+    func performSelectThinkingLevel(_ level: String) {
         let next = Self.normalizedThinkingLevel(level) ?? "off"
         guard next != self.preferredThinkingLevel else { return }
 
@@ -21,25 +21,40 @@ extension OpenClawChatViewModel {
         self.thinkingLevel = next
         self.syncThinkingLevelOptions()
         self.updateCurrentSessionThinkingLevel(next, sessionKey: sessionKey)
+        let target = self.currentModelPatchTarget()
+        let settingsRequestID = self.reserveSessionSettingsRequest(for: target)
         self.onThinkingLevelChanged?(next)
         self.nextThinkingSelectionRequestID &+= 1
         let requestID = self.nextThinkingSelectionRequestID
         self.latestThinkingSelectionRequestIDsBySession[sessionKey] = requestID
         self.latestThinkingLevelsBySession[sessionKey] = next
-
-        do {
-            try await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: next)
-            guard requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey] else {
-                let latest = self.latestThinkingLevelsBySession[sessionKey] ?? next
-                guard latest != next else { return }
-                try? await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: latest)
-                return
+        self.enqueueSessionSettingsPatch(requestID: settingsRequestID, target: target) { [weak self] in
+            guard let self else { return }
+            do {
+                let patchResult = try await self.transport.patchSessionSettings(
+                    sessionKey: target.canonicalSessionKey,
+                    agentID: target.agentID,
+                    patch: OpenClawChatSessionSettingsPatch(thinkingLevel: .some(next)))
+                guard requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey] else { return }
+                let acceptedLevel = patchResult?.thinkingLevel ?? next
+                if let patchResult {
+                    self.lastSuccessfulSettingsPatchResultsByTarget[target] = patchResult
+                }
+                self.updateCurrentSessionThinkingLevel(acceptedLevel, sessionKey: sessionKey)
+                if let thinkingLevels = patchResult?.thinkingLevels {
+                    self.updateCurrentSessionThinkingLevels(thinkingLevels, sessionKey: sessionKey)
+                }
+                guard sessionKey == self.sessionKey else { return }
+                self.preferredThinkingLevel = acceptedLevel
+                self.thinkingLevel = acceptedLevel
+                self.syncThinkingLevelOptions()
+            } catch {
+                guard sessionKey == self.sessionKey,
+                      requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey]
+                else { return }
+                // preferredThinkingLevel already retains the user's latest choice. Keep any
+                // authoritative model result visible so a failed patch is not reused by sends.
             }
-        } catch {
-            guard sessionKey == self.sessionKey,
-                  requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey]
-            else { return }
-            // Best-effort. Persisting the user's local preference matters more than a patch error here.
         }
     }
 

@@ -51,25 +51,27 @@ class ChatControllerModelSelectionTest {
         ChatController(
           scope = this,
           json = json,
-          requestGateway = { _, _ ->
+          requestGateway = { _, paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            val acceptedThinking = (params["thinkingLevel"] as? JsonPrimitive)?.content ?: "max"
             """
-            {
-              "resolved": {
-                "modelProvider": "anthropic",
-                "model": "claude-sonnet-5",
-                "thinkingLevel": "max",
-                "thinkingLevels": [
-                  {"id": "off", "label": "off"},
-                  {"id": "minimal", "label": "minimal"},
-                  {"id": "low", "label": "low"},
-                  {"id": "medium", "label": "medium"},
-                  {"id": "high", "label": "high"},
-                  {"id": "xhigh", "label": "xhigh"},
-                  {"id": "adaptive", "label": "adaptive"},
-                  {"id": "max", "label": "max"}
-                ]
+              {
+                "resolved": {
+                  "modelProvider": "anthropic",
+                  "model": "claude-sonnet-5",
+                  "thinkingLevel": "$acceptedThinking",
+                  "thinkingLevels": [
+                    {"id": "off", "label": "off"},
+                    {"id": "minimal", "label": "minimal"},
+                    {"id": "low", "label": "low"},
+                    {"id": "medium", "label": "medium"},
+                    {"id": "high", "label": "high"},
+                    {"id": "xhigh", "label": "xhigh"},
+                    {"id": "adaptive", "label": "adaptive"},
+                    {"id": "max", "label": "max"}
+                  ]
+                }
               }
-            }
             """.trimIndent()
           },
         )
@@ -238,6 +240,125 @@ class ChatControllerModelSelectionTest {
       assertEquals(
         listOf("sessions.patch", "chat.send"),
         requests.filter { it == "sessions.patch" || it == "chat.send" },
+      )
+    }
+
+  @Test
+  fun thinkingPatchAndSendFollowPendingModelOnSharedSettingsLane() =
+    runTest {
+      val modelPatchStarted = CompletableDeferred<Unit>()
+      val releaseModelPatch = CompletableDeferred<Unit>()
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.patch" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                if ("model" in params) {
+                  modelPatchStarted.complete(Unit)
+                  releaseModelPatch.await()
+                }
+                "{}"
+              }
+              "chat.send" -> """{"runId":"run-ok","status":"ok"}"""
+              else -> "{}"
+            }
+          },
+        )
+      controller.handleGatewayEvent("health", null)
+
+      controller.setSessionModel("main", "openai/gpt-5.6-sol")
+      modelPatchStarted.await()
+      controller.setThinkingLevel("ultra")
+      val send =
+        async {
+          controller.sendMessageAwaitAcceptance(
+            message = "hello",
+            thinkingLevel = controller.thinkingLevel.value,
+            attachments = emptyList(),
+          )
+        }
+      yield()
+
+      assertEquals(
+        listOf("sessions.patch"),
+        requests.map { it.first }.filter { it == "sessions.patch" || it == "chat.send" },
+      )
+      releaseModelPatch.complete(Unit)
+      assertTrue(send.await())
+      assertEquals(
+        listOf("sessions.patch", "sessions.patch", "chat.send"),
+        requests.map { it.first }.filter { it == "sessions.patch" || it == "chat.send" },
+      )
+      val thinkingPatch = requests.first { (method, params) -> method == "sessions.patch" && "thinkingLevel" in params.orEmpty() }
+      assertEquals(
+        "ultra",
+        ((json.parseToJsonElement(thinkingPatch.second.orEmpty()) as JsonObject)["thinkingLevel"] as JsonPrimitive)
+          .content,
+      )
+    }
+
+  @Test
+  fun olderThinkingCompletionDoesNotReplaceNewerQueuedIntent() =
+    runTest {
+      val firstPatchStarted = CompletableDeferred<Unit>()
+      val releaseFirstPatch = CompletableDeferred<Unit>()
+      val secondPatchStarted = CompletableDeferred<Unit>()
+      val releaseSecondPatch = CompletableDeferred<Unit>()
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.patch" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                when ((params["thinkingLevel"] as? JsonPrimitive)?.content) {
+                  "high" -> {
+                    firstPatchStarted.complete(Unit)
+                    releaseFirstPatch.await()
+                  }
+                  "ultra" -> {
+                    secondPatchStarted.complete(Unit)
+                    releaseSecondPatch.await()
+                  }
+                }
+                "{}"
+              }
+              "chat.send" -> """{"runId":"run-ok","status":"ok"}"""
+              else -> "{}"
+            }
+          },
+        )
+      controller.handleGatewayEvent("health", null)
+
+      controller.setThinkingLevel("high")
+      firstPatchStarted.await()
+      controller.setThinkingLevel("ultra")
+      releaseFirstPatch.complete(Unit)
+      secondPatchStarted.await()
+
+      assertEquals("ultra", controller.thinkingLevel.value)
+      val send =
+        async {
+          controller.sendMessageAwaitAcceptance(
+            message = "hello",
+            thinkingLevel = controller.thinkingLevel.value,
+            attachments = emptyList(),
+          )
+        }
+      releaseSecondPatch.complete(Unit)
+      assertTrue(send.await())
+      val sendParams = requests.first { it.first == "chat.send" }.second.orEmpty()
+      assertEquals(
+        "ultra",
+        ((json.parseToJsonElement(sendParams) as JsonObject)["thinking"] as JsonPrimitive).content,
       )
     }
 

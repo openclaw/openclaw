@@ -256,6 +256,10 @@ public protocol OpenClawChatTransport: Sendable {
         agentID: String?,
         model: String?) async throws -> OpenClawChatModelPatchResult?
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws
+    func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
     func waitForRunCompletion(runId: String, timeoutMs: Int) async -> OpenClawChatRunObservation
@@ -430,6 +434,34 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.patch(thinkingLevel) not supported by this transport"])
+    }
+
+    public func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    {
+        var result: OpenClawChatModelPatchResult?
+        if let model = patch.model {
+            result = try await self.patchSessionModel(
+                sessionKey: sessionKey,
+                agentID: agentID,
+                model: model)
+        }
+        if let thinkingLevelUpdate = patch.thinkingLevel {
+            guard let thinkingLevel = thinkingLevelUpdate else {
+                throw NSError(
+                    domain: "OpenClawChatTransport",
+                    code: 0,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "sessions.patch(thinkingLevel=null) not supported by this transport",
+                    ])
+            }
+            try await self.setSessionThinking(
+                sessionKey: sessionKey,
+                thinkingLevel: thinkingLevel)
+        }
+        return result
     }
 }
 

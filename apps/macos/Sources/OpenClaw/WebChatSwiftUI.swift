@@ -143,26 +143,37 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         agentID: String?,
         model: String?) async throws -> OpenClawChatModelPatchResult?
     {
+        try await self.patchSessionSettings(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            patch: OpenClawChatSessionSettingsPatch(model: .some(model)))
+    }
+
+    func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    {
         let target = OpenClawChatSessionTarget.resolve(
             sessionKey,
             selectedAgentID: self.routingIdentity.currentAgentID(),
             overrideAgentID: agentID,
             policy: .preserveBareKeys)
-        let request = OpenClawChatGatewayRequests.patchSessionModel(
+        let request = OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
-            model: model)
+            model: patch.model,
+            thinkingLevel: patch.thinkingLevel)
         let data = try await GatewayConnection.shared.request(request)
         return try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
     }
 
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
         let target = self.sessionTarget(for: sessionKey)
-        let request = OpenClawChatGatewayRequests.patchSessionPreferences(
+        _ = try await self.patchSessionSettings(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
-            thinkingLevel: .some(thinkingLevel))
-        _ = try await GatewayConnection.shared.request(request)
+            patch: OpenClawChatSessionSettingsPatch(thinkingLevel: .some(thinkingLevel)))
     }
 
     func sendMessage(

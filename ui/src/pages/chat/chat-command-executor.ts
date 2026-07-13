@@ -40,6 +40,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
@@ -583,7 +584,13 @@ async function patchSession(
   sessionKey: string,
   patch: SessionPatch,
 ): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
-  const result = await context.sessions.patch(
+  const result = await patchChatSessionSettings(
+    {
+      sessions: context.sessions,
+      assistantAgentId: context.agentId,
+      agentsList: context.defaultAgentId ? { defaultId: context.defaultAgentId } : null,
+      hello: null,
+    },
     sessionKey,
     patch,
     selectedGlobalScope(sessionKey, context),
