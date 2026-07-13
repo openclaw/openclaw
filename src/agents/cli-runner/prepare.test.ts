@@ -17,10 +17,7 @@ import {
   registerContextEngineForOwner,
 } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import type {
-  McpLoopbackClientGrant,
-  McpLoopbackRequestContext,
-} from "../../gateway/mcp-grant-store.js";
+import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -50,6 +47,10 @@ import {
   shouldSkipLocalCliCredentialEpoch,
 } from "./prepare.js";
 import type { RunCliAgentParams } from "./types.js";
+
+type McpLoopbackClientGrant = ReturnType<
+  (typeof import("../../gateway/mcp-grant-store.js"))["mintMcpLoopbackClientGrant"]
+>;
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>

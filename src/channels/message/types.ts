@@ -240,7 +240,7 @@ export const unknownSendReconciliationKinds = [
   "batch",
 ] as const;
 
-export type UnknownSendReconciliationKind = (typeof unknownSendReconciliationKinds)[number];
+type UnknownSendReconciliationKind = (typeof unknownSendReconciliationKinds)[number];
 
 /** Send-attempt context tagged with the adapter method core is about to call. */
 export type ChannelMessageSendAttemptContext<TConfig = OpenClawConfig> =

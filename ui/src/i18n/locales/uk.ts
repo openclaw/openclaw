@@ -82,6 +82,7 @@ export const uk: TranslationMap = {
     relink: "Пов’язати знову",
     waitForScan: "Очікування сканування",
     logout: "Вийти",
+    skipToMainContent: "Перейти до основного вмісту",
   },
   nativeLinkMenu: {
     label: "Дії з посиланням",
@@ -390,6 +391,18 @@ export const uk: TranslationMap = {
     title: "Керовані Worktrees",
     subtitle: "Ізольовані копії репозиторію, що належать OpenClaw.",
     cleanNow: "Очистити зараз",
+    cleanupTitle: "Очищення",
+    cleanupSubtitle:
+      "OpenClaw періодично видаляє старі робочі дерева, щоб звільнити місце на диску. Налаштуйте інтенсивність очищення.",
+    cleanupMaxCount: "Максимальна кількість робочих дерев",
+    cleanupMaxCountHelp:
+      "Максимальна кількість керованих робочих дерев, які зберігатимуться в усіх репозиторіях. Для старіших робочих дерев спочатку створюються знімки, після чого їх видаляють. Установіть значення 0, щоб вимкнути обмеження кількості.",
+    cleanupMaxSize: "Максимальний загальний розмір (ГБ)",
+    cleanupMaxSizeHelp:
+      "Максимальний загальний розмір у ГБ для всіх керованих робочих дерев. Установіть значення 0, щоб вимкнути обмеження розміру.",
+    cleanupDecrease: "Зменшити {label}",
+    cleanupIncrease: "Збільшити {label}",
+    cleanupSaveFailed: "Не вдалося зберегти обмеження очищення.",
     name: "Назва",
     repo: "Репозиторій",
     branch: "Гілка",
@@ -408,6 +421,7 @@ export const uk: TranslationMap = {
     working: "Працює…",
     ready: "Готовий до спілкування",
     whatCanAgentDo: "Що може робити {name}?",
+    help: "Довідка",
     getHelp: "Отримати допомогу",
     discord: "Спільнота Discord",
     viewChangelog: "Переглянути журнал змін",
@@ -1113,6 +1127,7 @@ export const uk: TranslationMap = {
     settingsView: "Перегляд налаштувань",
     simple: "Простий",
     advanced: "Розширений",
+    content: "Вміст налаштувань",
     themeImported: "Імпортовано {name}.",
     themeRemoved: "Користувацьку тему видалено.",
     channels: {
@@ -1468,6 +1483,8 @@ export const uk: TranslationMap = {
     platforms: "Платформи: {platforms}",
     installNamed: "Встановити {name}",
     notFound: "Skill не знайдено.",
+    openDetails: "Відкрити відомості про {name}",
+    enabledNamed: "{name} увімкнено",
     invalidLink: "Недійсне посилання ClawHub",
     overview: "Огляд",
     skillCard: "Картка Skill",
@@ -3523,11 +3540,13 @@ export const uk: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Стан автоматизації",
       all: "Усі",
       active: "Активні",
       paused: "Призупинено",
     },
     list: {
+      viewLabel: "Подання автоматизації",
       searchPlaceholder: "Пошук запланованих завдань",
       newTask: "Нове завдання",
       filters: "Фільтри",
@@ -3598,6 +3617,7 @@ export const uk: TranslationMap = {
       nextWake: "Наступне пробудження",
     },
     detail: {
+      tabsLabel: "Відомості про автоматизацію",
       newTitle: "Нове заплановане завдання",
       newSubtitle: "Опишіть, що має зробити OpenClaw, потім виберіть час запуску.",
       back: "Усі автоматизації",
