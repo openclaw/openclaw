@@ -1210,7 +1210,7 @@ function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
 }
 
-function listAdoptedClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
+function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
   const config = currentConfig(api);
   const defaultAgentId = resolveDefaultAgentId(config);
   const agentIds = [
@@ -1221,6 +1221,11 @@ function listAdoptedClaudeSessions(api: OpenClawPluginApi): Map<string, string> 
   for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
     api.runtime.agent.session.listSessionEntries({ agentId }),
   )) {
+    const binding = entry.cliSessionBindings?.[CLAUDE_CLI_BACKEND_ID];
+    if (binding?.sessionId) {
+      adopted.set(binding.sessionId, sessionKey);
+      continue;
+    }
     const marker = entry.pluginExtensions?.anthropic?.sessionCatalog;
     if (
       entry.pluginOwnerId !== api.id ||
@@ -1334,7 +1339,7 @@ async function continueClaudeSession(
   if (hostId !== CLAUDE_LOCAL_SESSION_HOST_ID) {
     throw new ClaudeCatalogParamsError("paired-node Claude sessions are view-only");
   }
-  const existing = listAdoptedClaudeSessions(api).get(threadId);
+  const existing = listBoundClaudeSessions(api).get(threadId);
   if (existing) {
     return { sessionKey: existing };
   }
@@ -1390,7 +1395,7 @@ async function continueClaudeSession(
       });
       return { sessionKey: created.key };
     } catch (error) {
-      const raced = listAdoptedClaudeSessions(api).get(threadId);
+      const raced = listBoundClaudeSessions(api).get(threadId);
       if (raced) {
         return { sessionKey: raced };
       }
@@ -1475,7 +1480,7 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     label: "Claude Code",
     createSession: { model: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF },
     list: async (query) => {
-      const adopted = listAdoptedClaudeSessions(api);
+      const adopted = listBoundClaudeSessions(api);
       const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });
       return result.hosts.map((host) => toGenericClaudeHost(host, adopted));
     },

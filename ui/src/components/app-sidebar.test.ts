@@ -561,6 +561,64 @@ describe("AppSidebar session catalog pagination", () => {
     });
   });
 
+  it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const backingSessionKey = "agent:main:claude-bound";
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", backingSessionKey]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "global",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ],
+      },
+    );
+    sidebar.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: { continueSession: true, archive: false },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Local Claude",
+            kind: "gateway",
+            connected: true,
+            sessions: [
+              {
+                threadId: "claude-thread",
+                name: "Claude session",
+                status: "stored",
+                archived: false,
+                openClawSessionKey: backingSessionKey,
+                canContinue: true,
+                canArchive: false,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    await sidebar.updateComplete;
+
+    expect(
+      sidebar.querySelectorAll(
+        `.sidebar-agent-section__body [data-session-key="${backingSessionKey}"]`,
+      ),
+    ).toHaveLength(0);
+    expect(
+      sidebar.querySelectorAll(
+        `[data-session-section="catalog:claude"] [data-session-key="${backingSessionKey}"]`,
+      ),
+    ).toHaveLength(1);
+    expect(sidebar.querySelectorAll(`[data-session-key="${backingSessionKey}"]`)).toHaveLength(1);
+  });
+
   it("renders catalog groups inside the shared sessions scroller", async () => {
     vi.useFakeTimers();
     try {

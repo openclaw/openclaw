@@ -879,6 +879,18 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.requestUpdate();
   }
 
+  private catalogOwnedOpenClawSessionKeys(): Set<string> {
+    return new Set(
+      this.sessionCatalogs.flatMap((catalog) =>
+        catalog.hosts.flatMap((host) =>
+          host.sessions.flatMap((session) =>
+            session.openClawSessionKey ? [session.openClawSessionKey] : [],
+          ),
+        ),
+      ),
+    );
+  }
+
   private getSessionNavigationState() {
     const context = this.context;
     const routeSessionKey = this.getRouteSessionKey();
@@ -915,7 +927,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         unread: row.unread === true,
       };
     };
-    const visibleSessions = navigation.visibleSessions.map(toSidebarSession);
+    const catalogOwnedKeys = this.catalogOwnedOpenClawSessionKeys();
+    const visibleSessions = navigation.visibleSessions
+      .filter((row) => !catalogOwnedKeys.has(row.key))
+      .map(toSidebarSession);
     // The dialog always creates a fresh session, so only connectivity gates it.
     const newSessionDisabled = !this.connected;
     return {
@@ -2623,6 +2638,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       selected === loadedAgentId
         ? (this.sessionsResult?.sessions ?? [])
         : (this.sessionRowsByAgent[selected] ?? []);
+    const catalogOwnedKeys = this.catalogOwnedOpenClawSessionKeys();
     return filterVisibleSessionRows(rows, {
       agentId: selected,
       defaultAgentId: resolveUiDefaultAgentId({
@@ -2631,13 +2647,17 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       }),
       filterByAgent: true,
     })
+      .filter((row) => !catalogOwnedKeys.has(row.key))
       .toSorted(this.compareSidebarSessionRows)
       .map(navigationState.toSidebarSession);
   }
 
   private agentUnreadCount(agentId: string): number {
     const rows = this.sessionRowsByAgent[normalizeAgentId(agentId)] ?? [];
-    return rows.filter((row) => row.unread === true && row.archived !== true).length;
+    const catalogOwnedKeys = this.catalogOwnedOpenClawSessionKeys();
+    return rows.filter(
+      (row) => !catalogOwnedKeys.has(row.key) && row.unread === true && row.archived !== true,
+    ).length;
   }
 
   private renderDraftSessionRow() {
@@ -2857,8 +2877,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
         ? rawTimestamp * 1000
         : rawTimestamp;
+    const visuallyActive = this.activeRouteId === "chat" && this.getRouteSessionKey() === key;
     return html`
-      <div class="sidebar-recent-session session-row-host" data-session-key=${key}>
+      <div
+        class="sidebar-recent-session session-row-host ${visuallyActive
+          ? "sidebar-recent-session--active"
+          : ""}"
+        data-session-key=${key}
+      >
         <a
           href=${href}
           class="sidebar-recent-session__link"

@@ -156,6 +156,51 @@ describe("Claude session catalog", () => {
     );
   });
 
+  it("links a catalog row to an existing OpenClaw session with the same CLI binding", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "claude-bound-session";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          summary: "Bound session",
+          projectPath: "/work/source",
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "source prompt", 1)] },
+    });
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config: {},
+      runtime: {
+        config: { current: () => ({}) },
+        agent: {
+          session: {
+            listSessionEntries: () => [
+              {
+                sessionKey: "agent:main:claude-bound",
+                entry: {
+                  cliSessionBindings: { "claude-cli": { sessionId } },
+                },
+              },
+            ],
+          },
+        },
+      },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+    registerClaudeSessionCatalog(api);
+
+    const hosts = await provider?.list({});
+    expect(hosts?.[0]?.sessions[0]?.openClawSessionKey).toBe("agent:main:claude-bound");
+  });
+
   it("merges CLI indexes with active Desktop metadata and hides archived Desktop sessions", async () => {
     const home = await createHome();
     await writeProject({
