@@ -69,6 +69,10 @@ if (
     ensureOpenClawExecMarkerOnProcess();
     installProcessWarningFilter();
     normalizeEnv();
+    const { assertSupportedRuntime } = await import("./infra/runtime-guard.js");
+    assertSupportedRuntime();
+    const { requireNodeSqlite } = await import("./infra/node-sqlite.js");
+    requireNodeSqlite();
 
     enableOpenClawCompileCache({
       installRoot,
