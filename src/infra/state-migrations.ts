@@ -18,7 +18,3 @@ export {
   resetAutoMigrateLegacyStateDirForTest,
   resetAutoMigrateLegacyTaskStateSidecarsForTest,
 } from "./state-migrations.state-dir.js";
-export {
-  CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID,
-  migrateLegacyCronRunLogsToTaskRuns,
-} from "./state-migrations.cron-run-logs.js";
