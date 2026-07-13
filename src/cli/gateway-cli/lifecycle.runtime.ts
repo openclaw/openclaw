@@ -41,7 +41,7 @@ export {
   abortActiveCronTaskRuns,
   retireActiveCronTaskRunTracking,
   waitForActiveCronTaskRuns,
-} from "../../tasks/cron-task-cancel.js";
+} from "../../cron/service/active-run-cancellation.js";
 export {
   getActiveTaskCount,
   markGatewayDraining,

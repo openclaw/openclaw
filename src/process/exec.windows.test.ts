@@ -3,12 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getWindowsInstallRoots,
-  getWindowsSystem32ExePath,
-  resetWindowsInstallRootsForTests,
-} from "../infra/windows-install-roots.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
@@ -133,10 +128,19 @@ function expectCmdWrappedInvocation(call: ExecaCall, commandFragment = "pnpm.cmd
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
 let runExec: typeof import("./exec.js").runExec;
 let spawnCommand: typeof import("./exec.js").spawnCommand;
+let getWindowsInstallRoots: typeof import("../infra/windows-install-roots.js").getWindowsInstallRoots;
+let getWindowsSystem32ExePath: typeof import("../infra/windows-install-roots.js").getWindowsSystem32ExePath;
 
 describe("Windows command execution", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     vi.resetModules();
+    const accessSync = fs.accessSync.bind(fs);
+    vi.spyOn(fs, "accessSync").mockImplementation((filePath, mode) => {
+      if (String(filePath).toLowerCase() === "c:\\windows\\system32\\reg.exe") {
+        throw new Error("registry lookup disabled for test");
+      }
+      return accessSync(filePath, mode);
+    });
     vi.doMock("execa", () => ({ execa: execaMock }));
     vi.doMock("../infra/executable-path.js", async () => {
       const actual = await vi.importActual<typeof import("../infra/executable-path.js")>(
@@ -154,6 +158,8 @@ describe("Windows command execution", () => {
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       return { ...actual, spawnSync: spawnSyncMock };
     });
+    ({ getWindowsInstallRoots, getWindowsSystem32ExePath } =
+      await import("../infra/windows-install-roots.js"));
     ({ runCommandWithTimeout, runExec, spawnCommand } = await import("./exec.js"));
   });
 
@@ -165,7 +171,6 @@ describe("Windows command execution", () => {
   });
 
   beforeEach(() => {
-    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     execaMock.mockReset();
     execaMock.mockImplementation(() => createMockSubprocess());
     isRegularFileMock.mockReset();

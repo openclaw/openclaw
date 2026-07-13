@@ -4,7 +4,6 @@ import { EventEmitter } from "node:events";
 import process from "node:process";
 import { describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
-import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
 import {
   resolveCommandEnv,
@@ -14,6 +13,8 @@ import {
   runExec,
   shouldSpawnWithShell,
 } from "./exec.js";
+
+const OPENCLAW_CLI_ENV_VALUE = "1";
 
 describe("runCommandWithTimeout", () => {
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {

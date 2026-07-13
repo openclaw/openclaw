@@ -27,7 +27,7 @@ import { renderDefaultModels } from "./default-models-view.ts";
 
 export type ModelProviderRowMessage = { kind: "success" | "error"; text: string };
 
-export type ModelProvidersViewProps = {
+type ModelProvidersViewProps = {
   connected: boolean;
   loading: boolean;
   refreshing: boolean;

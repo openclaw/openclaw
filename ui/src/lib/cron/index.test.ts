@@ -1,6 +1,5 @@
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_CRON_FORM } from "../../lib/cron/index.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -20,6 +19,7 @@ import {
   validateCronForm,
   type CronState,
 } from "../../lib/cron/index.ts";
+import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 
 function createState(overrides: Partial<CronState> = {}): CronState {
   return {

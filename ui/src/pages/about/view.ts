@@ -21,7 +21,7 @@ import { brandIcons } from "./brand-icons.ts";
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 
-export type AboutProps = {
+type AboutProps = {
   buildInfo: ControlUiBuildInfo;
   gatewayVersion: string | null;
   copyState: AboutCommitCopyState;
@@ -54,7 +54,7 @@ const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: ()
   },
 ];
 
-export function formatControlUiBuildDate(
+function formatControlUiBuildDate(
   value: string | null,
   locales?: Intl.LocalesArgument,
 ): string | null {

@@ -24,7 +24,7 @@ import {
   trackPendingChatModelSwitch,
   trackPendingChatPickerPatch,
 } from "./chat-settings-patches.ts";
-export { getPendingChatPickerPatch, trackPendingChatPickerPatch };
+export { getPendingChatPickerPatch };
 
 const CHAT_SESSION_LIST_ACTIVE_MINUTES = 0;
 const CHAT_SESSION_LIST_LIMIT = 50;
@@ -60,7 +60,7 @@ type ChatIdleSessionReconciliationHost = SessionScopeHost & {
   sessionsResult?: SessionsListResult | null;
 };
 
-export function buildChatSessionListOptions(
+function buildChatSessionListOptions(
   _state: ChatSessionListHost,
   options: { offset?: number; append?: boolean; search?: string | null } = {},
 ): SessionListOptions {

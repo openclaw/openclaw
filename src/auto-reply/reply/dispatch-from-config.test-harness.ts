@@ -3,7 +3,6 @@ import { vi, type Mock } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { clearApprovalNativeRouteStateForTest } from "../../infra/approval-native-route-coordinator.js";
 import type {
   AcpRuntime,
   AcpRuntimeEnsureInput,
@@ -459,7 +458,6 @@ export const describe0BeforeEach0 = () => {
       ...passiveThreadingTestPlugins,
     ]),
   );
-  clearApprovalNativeRouteStateForTest();
   acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
   acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
   replyRunTesting.resetReplyRunRegistry();

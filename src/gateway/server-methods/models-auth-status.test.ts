@@ -380,7 +380,7 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          openrouter: { ...Object.fromEntries([["apiKey", profileId]]) },
+          openrouter: Object.fromEntries([["apiKey", profileId]]),
         },
       },
     });
@@ -458,11 +458,9 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          openai: {
-            ...Object.fromEntries([
-              ["apiKey", { source: "file", provider: "mounted-json", id: "model-provider-key" }],
-            ]),
-          },
+          openai: Object.fromEntries([
+            ["apiKey", { source: "file", provider: "mounted-json", id: "model-provider-key" }],
+          ]),
         },
       },
     });
@@ -484,7 +482,7 @@ describe("models.authStatus", () => {
       mocks.getRuntimeConfig.mockReturnValue({
         models: {
           providers: {
-            anthropic: { ...Object.fromEntries([["apiKey", "ANTHROPIC_API_KEY"]]) },
+            anthropic: Object.fromEntries([["apiKey", "ANTHROPIC_API_KEY"]]),
           },
         },
       });
@@ -506,7 +504,7 @@ describe("models.authStatus", () => {
       mocks.getRuntimeConfig.mockReturnValue({
         models: {
           providers: {
-            anthropic: { ...Object.fromEntries([["apiKey", "ANTHROPIC_API_KEY"]]) },
+            anthropic: Object.fromEntries([["apiKey", "ANTHROPIC_API_KEY"]]),
           },
         },
       });
@@ -527,7 +525,7 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          ollama: { ...Object.fromEntries([["apiKey", "ollama-local"]]) },
+          ollama: Object.fromEntries([["apiKey", "ollama-local"]]),
         },
       },
     });
@@ -546,7 +544,7 @@ describe("models.authStatus", () => {
     const profileId = "anthropic:saved";
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
-        providers: { anthropic: { ...Object.fromEntries([["apiKey", profileId]]) } },
+        providers: { anthropic: Object.fromEntries([["apiKey", profileId]]) },
       },
     });
     mocks.ensureAuthProfileStore.mockReturnValue({
@@ -1140,7 +1138,7 @@ describe("models.authLogout", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          openrouter: { ...Object.fromEntries([["apiKey", profileId]]) },
+          openrouter: Object.fromEntries([["apiKey", profileId]]),
         },
       },
     });

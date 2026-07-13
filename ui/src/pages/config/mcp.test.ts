@@ -2,7 +2,9 @@
 
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderMcp, type McpViewProps } from "./mcp.ts";
+import { renderMcp } from "./mcp.ts";
+
+type McpViewProps = Parameters<typeof renderMcp>[0];
 
 function createProps(overrides: Partial<McpViewProps> = {}): McpViewProps {
   return {

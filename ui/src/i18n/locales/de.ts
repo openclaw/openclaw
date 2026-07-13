@@ -129,6 +129,55 @@ export const de: TranslationMap = {
     lastError: "Letzter Fehler",
     refreshingStaleSnapshot:
       "Kanalstatus wird im Hintergrund aktualisiert; der letzte erfolgreiche Snapshot wird angezeigt.",
+    hub: {
+      connectedTitle: "Deine Kanäle",
+      addTitle: "Kanal hinzufügen",
+      addSubtitle: "Wähle einen Dienst aus und folge der geführten Einrichtung.",
+      updatedAgo: "Aktualisiert {ago}",
+      noneConnected: "Noch keine Kanäle verbunden. Wähle unten einen aus, um loszulegen.",
+      partialSnapshot:
+        "Einige Kanalprüfungen wurden nicht innerhalb des Zeitlimits der UI abgeschlossen.",
+      stateRunning: "Läuft",
+      stateConfigured: "Konfiguriert",
+      stateAttention: "Erfordert Aufmerksamkeit",
+      setUp: "Einrichten",
+      guidedSetup: "Geführte Schritt-für-Schritt-Einrichtung",
+      openDetails: "Details öffnen",
+      lastMessageAgo: "Letzte Nachricht {ago}",
+      browseAllTitle: "Weitere Kanäle…",
+      browseAllSubtitle:
+        "Durchsuche alle verfügbaren Kanäle, einschließlich installierbarer Plugins.",
+      runSetup: "Einrichtung starten",
+      saveBeforeSetup:
+        "Du hast nicht gespeicherte Änderungen an der Kanalkonfiguration. Speichere oder lade sie neu, bevor du die geführte Einrichtung startest.",
+    },
+    setup: {
+      dialogLabel: "{channel} einrichten",
+      title: "{channel} einrichten",
+      genericTitle: "einen Kanal",
+      subtitle: "Eine kurze geführte Einrichtung — du kannst später alles feinabstimmen.",
+      starting: "Einrichtung wird gestartet…",
+      working: "Arbeitet…",
+      continue: "Weiter",
+      finish: "Fertigstellen",
+      copyText: "Kopieren",
+      openLink: "Link öffnen",
+      docs: "Dokumentation",
+      doneTitle: "Kanal konfiguriert",
+      doneBody:
+        "Konfiguration gespeichert. Das Gateway lädt den Kanal automatisch neu. Den aktuellen Status finden Sie auf der zugehörigen Karte.",
+      doneNoChangesTitle: "Keine Änderungen vorgenommen",
+      doneNoChangesBody:
+        "Die Einrichtung wurde abgeschlossen, ohne einen Kanal zu konfigurieren. Es wurde nichts gespeichert.",
+      whatsappScanTitle: "WhatsApp durch Scannen des QR-Codes verknüpfen",
+      whatsappScanHelp:
+        "Öffnen Sie auf Ihrem Smartphone WhatsApp → Einstellungen → Verknüpfte Geräte → Gerät verknüpfen und scannen Sie anschließend diesen Code.",
+      whatsappQrLoading: "QR-Code wird generiert…",
+      whatsappQrHint: "Klicken Sie auf „QR-Code anzeigen“, um einen Kopplungscode zu generieren.",
+      whatsappLinked: "WhatsApp ist verknüpft und einsatzbereit.",
+      regenerateQr: "Neuer QR-Code",
+      linkLater: "Später verknüpfen",
+    },
     config: {
       schemaUnavailable: "Schema nicht verfügbar. Raw verwenden.",
       channelSchemaUnavailable: "Kanal-Konfigurationsschema nicht verfügbar.",

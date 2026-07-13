@@ -6466,19 +6466,25 @@ public struct CrestodianSetupAuthStartResult: Codable, Sendable {
     public let step: WizardStep?
     public let status: AnyCodable?
     public let error: String?
+    public let channels: [String]?
+    public let accounts: [[String: AnyCodable]]?
 
     public init(
         sessionid: String,
         done: Bool,
         step: WizardStep? = nil,
         status: AnyCodable? = nil,
-        error: String? = nil)
+        error: String? = nil,
+        channels: [String]? = nil,
+        accounts: [[String: AnyCodable]]? = nil)
     {
         self.sessionid = sessionid
         self.done = done
         self.step = step
         self.status = status
         self.error = error
+        self.channels = channels
+        self.accounts = accounts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6487,24 +6493,34 @@ public struct CrestodianSetupAuthStartResult: Codable, Sendable {
         case step
         case status
         case error
+        case channels
+        case accounts
     }
 }
 
 public struct WizardStartParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let workspace: String?
+    public let flow: AnyCodable?
+    public let channel: String?
 
     public init(
         mode: AnyCodable? = nil,
-        workspace: String? = nil)
+        workspace: String? = nil,
+        flow: AnyCodable? = nil,
+        channel: String? = nil)
     {
         self.mode = mode
         self.workspace = workspace
+        self.flow = flow
+        self.channel = channel
     }
 
     private enum CodingKeys: String, CodingKey {
         case mode
         case workspace
+        case flow
+        case channel
     }
 }
 
@@ -6617,17 +6633,23 @@ public struct WizardNextResult: Codable, Sendable {
     public let step: WizardStep?
     public let status: AnyCodable?
     public let error: String?
+    public let channels: [String]?
+    public let accounts: [[String: AnyCodable]]?
 
     public init(
         done: Bool,
         step: WizardStep? = nil,
         status: AnyCodable? = nil,
-        error: String? = nil)
+        error: String? = nil,
+        channels: [String]? = nil,
+        accounts: [[String: AnyCodable]]? = nil)
     {
         self.done = done
         self.step = step
         self.status = status
         self.error = error
+        self.channels = channels
+        self.accounts = accounts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6635,6 +6657,8 @@ public struct WizardNextResult: Codable, Sendable {
         case step
         case status
         case error
+        case channels
+        case accounts
     }
 }
 
@@ -6644,19 +6668,25 @@ public struct WizardStartResult: Codable, Sendable {
     public let step: WizardStep?
     public let status: AnyCodable?
     public let error: String?
+    public let channels: [String]?
+    public let accounts: [[String: AnyCodable]]?
 
     public init(
         sessionid: String,
         done: Bool,
         step: WizardStep? = nil,
         status: AnyCodable? = nil,
-        error: String? = nil)
+        error: String? = nil,
+        channels: [String]? = nil,
+        accounts: [[String: AnyCodable]]? = nil)
     {
         self.sessionid = sessionid
         self.done = done
         self.step = step
         self.status = status
         self.error = error
+        self.channels = channels
+        self.accounts = accounts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6665,6 +6695,8 @@ public struct WizardStartResult: Codable, Sendable {
         case step
         case status
         case error
+        case channels
+        case accounts
     }
 }
 

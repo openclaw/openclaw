@@ -129,6 +129,55 @@ export const es: TranslationMap = {
     lastError: "Último error",
     refreshingStaleSnapshot:
       "Actualizando el estado del canal en segundo plano; se muestra la última instantánea correcta.",
+    hub: {
+      connectedTitle: "Tus canales",
+      addTitle: "Añadir un canal",
+      addSubtitle: "Elige un servicio y sigue la configuración guiada.",
+      updatedAgo: "Actualizado {ago}",
+      noneConnected: "Aún no hay canales conectados. Elige uno a continuación para empezar.",
+      partialSnapshot:
+        "Algunas comprobaciones de canales no finalizaron antes de agotarse el tiempo asignado a la interfaz.",
+      stateRunning: "En ejecución",
+      stateConfigured: "Configurado",
+      stateAttention: "Requiere atención",
+      setUp: "Configurar",
+      guidedSetup: "Configuración guiada paso a paso",
+      openDetails: "Abrir detalles",
+      lastMessageAgo: "Último mensaje {ago}",
+      browseAllTitle: "Más canales…",
+      browseAllSubtitle:
+        "Explora todos los canales disponibles, incluidos los plugins instalables.",
+      runSetup: "Iniciar configuración",
+      saveBeforeSetup:
+        "Tienes cambios sin guardar en la configuración del canal. Guárdalos o vuelve a cargarlos antes de iniciar la configuración guiada.",
+    },
+    setup: {
+      dialogLabel: "Configurar {channel}",
+      title: "Configurar {channel}",
+      genericTitle: "un canal",
+      subtitle: "Una breve configuración guiada — podrás ajustarlo todo más adelante.",
+      starting: "Iniciando configuración…",
+      working: "Procesando…",
+      continue: "Continuar",
+      finish: "Finalizar",
+      copyText: "Copiar",
+      openLink: "Abrir enlace",
+      docs: "Documentación",
+      doneTitle: "Canal configurado",
+      doneBody:
+        "Configuración guardada. El gateway recarga el canal automáticamente; consulta su tarjeta para ver el estado en tiempo real.",
+      doneNoChangesTitle: "No se realizaron cambios",
+      doneNoChangesBody:
+        "La configuración finalizó sin configurar ningún canal. No se guardó nada.",
+      whatsappScanTitle: "Vincula WhatsApp escaneando el código QR",
+      whatsappScanHelp:
+        "En tu teléfono, abre WhatsApp → Configuración → Dispositivos vinculados → Vincular un dispositivo y, a continuación, escanea este código.",
+      whatsappQrLoading: "Generando código QR…",
+      whatsappQrHint: "Haz clic en Mostrar QR para generar un código de vinculación.",
+      whatsappLinked: "WhatsApp está vinculado y listo.",
+      regenerateQr: "Nuevo código QR",
+      linkLater: "Vincular más tarde",
+    },
     config: {
       schemaUnavailable: "Esquema no disponible. Usa Raw.",
       channelSchemaUnavailable: "El esquema de configuración del canal no está disponible.",

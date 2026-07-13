@@ -4,7 +4,9 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { ModelProviderCard } from "./data.ts";
-import { renderModelProviders, type ModelProvidersViewProps } from "./view.ts";
+import { renderModelProviders } from "./view.ts";
+
+type ModelProvidersViewProps = Parameters<typeof renderModelProviders>[0];
 
 function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
   return {

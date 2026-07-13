@@ -17,13 +17,13 @@ import { providerDisplayLabel } from "../../components/provider-icon.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
-export type ModelProviderAuthSummary = {
+type ModelProviderAuthSummary = {
   kind: ModelProviderAuthKind;
   profileCount: number;
   expiryLabel?: string;
 };
 
-export type ModelProviderLocalCost = {
+type ModelProviderLocalCost = {
   totalCost: number;
   totalTokens: number;
   sessionCount: number;
@@ -58,7 +58,7 @@ export type ModelProviderCard = {
   localCost?: ModelProviderLocalCost;
 };
 
-export type ModelProviderCardsInput = {
+type ModelProviderCardsInput = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
   catalogModels?: ModelCatalogEntry[] | null;
@@ -328,10 +328,10 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
-      return {
-        ...draft.card,
-        ...(apiKeySupported === undefined ? {} : { apiKeySupported }),
-      };
+      if (apiKeySupported !== undefined) {
+        draft.card.apiKeySupported = apiKeySupported;
+      }
+      return draft.card;
     })
     .toSorted((a, b) => a.displayName.localeCompare(b.displayName));
 }

@@ -129,6 +129,56 @@ export const fr: TranslationMap = {
     lastError: "Dernière erreur",
     refreshingStaleSnapshot:
       "Actualisation du statut du canal en arrière-plan ; affichage du dernier instantané réussi.",
+    hub: {
+      connectedTitle: "Vos canaux",
+      addTitle: "Ajouter un canal",
+      addSubtitle: "Choisissez un service et suivez la configuration guidée.",
+      updatedAgo: "Mis à jour {ago}",
+      noneConnected:
+        "Aucun canal n’est encore connecté. Choisissez-en un ci-dessous pour commencer.",
+      partialSnapshot:
+        "Certaines vérifications de canaux ne se sont pas terminées dans le délai imparti par l’interface.",
+      stateRunning: "En cours",
+      stateConfigured: "Configuré",
+      stateAttention: "Nécessite votre attention",
+      setUp: "Configurer",
+      guidedSetup: "Configuration guidée étape par étape",
+      openDetails: "Ouvrir les détails",
+      lastMessageAgo: "Dernier message {ago}",
+      browseAllTitle: "Plus de canaux…",
+      browseAllSubtitle:
+        "Parcourez tous les canaux disponibles, y compris les plugins installables.",
+      runSetup: "Lancer la configuration",
+      saveBeforeSetup:
+        "Vous avez des modifications non enregistrées dans la configuration des canaux. Enregistrez-les ou rechargez-les avant de lancer la configuration guidée.",
+    },
+    setup: {
+      dialogLabel: "Configurer {channel}",
+      title: "Configurer {channel}",
+      genericTitle: "un canal",
+      subtitle: "Une courte configuration guidée — vous pourrez tout ajuster plus tard.",
+      starting: "Démarrage de la configuration…",
+      working: "Traitement en cours…",
+      continue: "Continuer",
+      finish: "Terminer",
+      copyText: "Copier",
+      openLink: "Ouvrir le lien",
+      docs: "Documentation",
+      doneTitle: "Canal configuré",
+      doneBody:
+        "Configuration enregistrée. Le Gateway recharge automatiquement le canal ; consultez sa carte pour voir son statut en temps réel.",
+      doneNoChangesTitle: "Aucune modification apportée",
+      doneNoChangesBody:
+        "La configuration s’est terminée sans configurer de canal. Rien n’a été enregistré.",
+      whatsappScanTitle: "Associez WhatsApp en scannant le code QR",
+      whatsappScanHelp:
+        "Sur votre téléphone, ouvrez WhatsApp → Paramètres → Appareils connectés → Connecter un appareil, puis scannez ce code.",
+      whatsappQrLoading: "Génération du code QR…",
+      whatsappQrHint: "Cliquez sur Afficher le code QR pour générer un code d’association.",
+      whatsappLinked: "WhatsApp est associé et prêt.",
+      regenerateQr: "Nouveau code QR",
+      linkLater: "Associer plus tard",
+    },
     config: {
       schemaUnavailable: "Schéma indisponible. Utilisez le mode brut.",
       channelSchemaUnavailable: "Schéma de configuration du canal indisponible.",

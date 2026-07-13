@@ -102,10 +102,8 @@ vi.mock("./streaming-card.js", () => {
   };
 });
 
-import {
-  clearFeishuStreamingStartBackoffForTests,
-  createFeishuReplyDispatcher,
-} from "./reply-dispatcher.js";
+import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
+import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 
 afterAll(() => {
   vi.doUnmock("./accounts.js");
@@ -138,7 +136,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    clearFeishuStreamingStartBackoffForTests();
+    streamingStartBackoffUntilByAccount.clear();
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
     sendStructuredCardFeishuMock.mockResolvedValue(undefined);
