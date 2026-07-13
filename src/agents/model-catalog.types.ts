@@ -24,6 +24,8 @@ export type ModelCatalogEntry = {
   params?: Record<string, unknown>;
   compat?: ModelCompatConfig;
   mediaInput?: ModelMediaInputConfig;
+  /** Auth profile id this entry was discovered through (e.g. "openai:owndate1"). */
+  profileId?: string;
 };
 
 /** Logical catalog rows plus the physical variants used for route selection. */
