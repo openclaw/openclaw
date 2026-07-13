@@ -56,7 +56,9 @@ describe("controller query end-to-end benchmark", () => {
   });
 
   async function withTempEnv<T>(fn: () => Promise<T>): Promise<T> {
-    if (!tempStateDir) throw new Error("expected temp state dir");
+    if (!tempStateDir) {
+      throw new Error("expected temp state dir");
+    }
     return await withEnvAsync(
       {
         OPENCLAW_STATE_DIR: tempStateDir,
