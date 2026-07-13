@@ -843,7 +843,9 @@ async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, Gr
     if (chunk.length === 0) {
       continue;
     }
-    const response = await api.getGroupInfo(chunk);
+    const response = await withTimeout(api.getGroupInfo(chunk), 12_000, {
+      message: "Timed out fetching Zalo group info",
+    });
     const map = response.gridInfoMap ?? {};
     for (const [groupId, info] of Object.entries(map)) {
       result.set(groupId, info);
@@ -1044,7 +1046,9 @@ export async function checkZaloAuthenticated(
 export async function getZaloUserInfo(profileInput?: string | null): Promise<ZcaUserInfo | null> {
   const profile = normalizeProfile(profileInput);
   return await withZaloApi(profile, async (api) => {
-    const info = await api.fetchAccountInfo();
+    const info = await withTimeout(api.fetchAccountInfo(), 12_000, {
+      message: "Timed out fetching Zalo account info",
+    });
     const user = normalizeAccountInfoUser(info);
     if (!user?.userId) {
       return null;
@@ -1065,7 +1069,9 @@ export async function listZaloFriends(
   return await withZaloApi(
     profile,
     async (api) => {
-      const friends = await api.getAllFriends();
+      const friends = await withTimeout(api.getAllFriends(), 12_000, {
+        message: "Timed out fetching Zalo friend list",
+      });
       return friends.map(mapFriend);
     },
     { credentialPersistence: options?.credentialPersistence ?? "persist" },
@@ -1102,7 +1108,9 @@ export async function listZaloGroups(
   return await withZaloApi(
     profile,
     async (api) => {
-      const allGroups = await api.getAllGroups();
+      const allGroups = await withTimeout(api.getAllGroups(), 12_000, {
+        message: "Timed out fetching Zalo group list",
+      });
       const ids = Object.keys(allGroups.gridVerMap ?? {});
       if (ids.length === 0) {
         return [];
@@ -1145,7 +1153,9 @@ export async function listZaloGroupMembers(
 ): Promise<ZaloGroupMember[]> {
   const profile = normalizeProfile(profileInput);
   return await withZaloApi(profile, async (api) => {
-    const infoResponse = await api.getGroupInfo(groupId);
+    const infoResponse = await withTimeout(api.getGroupInfo(groupId), 12_000, {
+      message: "Timed out fetching Zalo group info",
+    });
     const groupInfo = infoResponse.gridInfoMap?.[groupId] as
       | (GroupInfo & { memVerList?: unknown })
       | undefined;
@@ -1180,7 +1190,9 @@ export async function listZaloGroupMembers(
 
     const profileMap = new Map<string, { displayName?: string; avatar?: string }>();
     if (uniqueIds.length > 0) {
-      const profiles = await api.getGroupMembersInfo(uniqueIds);
+      const profiles = await withTimeout(api.getGroupMembersInfo(uniqueIds), 12_000, {
+        message: "Timed out fetching Zalo group members",
+      });
       const profileEntries = profiles.profiles as Record<
         string,
         {
@@ -1227,7 +1239,9 @@ export async function resolveZaloGroupContext(
   }
 
   return await withZaloApi(profile, async (api) => {
-    const response = await api.getGroupInfo(normalizedGroupId);
+    const response = await withTimeout(api.getGroupInfo(normalizedGroupId), 12_000, {
+      message: "Timed out fetching Zalo group info",
+    });
     const groupInfo = response.gridInfoMap?.[normalizedGroupId] as
       | (GroupInfo & { currentMems?: unknown[]; memVerList?: unknown[] })
       | undefined;
@@ -1288,6 +1302,12 @@ export async function sendZaloTextMessage(
             }
 
             const attachmentFileName = fileName.includes(".") ? fileName : `${fileName}.bin`;
+            // Side-effecting: do not wrap with withTimeout. zca-js's
+            // uploadAttachment / sendVoice do not accept an AbortSignal, so the
+            // wrapper would only stop waiting on the Promise while the underlying
+            // upload/send continues. Returning { ok: false } on a timeout while
+            // the voice message has already been delivered would let the caller
+            // retry and create a duplicate message.
             const uploaded = await api.uploadAttachment(
               [
                 {
@@ -1398,7 +1418,9 @@ export async function sendZaloTypingEvent(
 
 async function resolveOwnUserId(api: API): Promise<string> {
   try {
-    const info = await api.fetchAccountInfo();
+    const info = await withTimeout(api.fetchAccountInfo(), 12_000, {
+      message: "Timed out fetching Zalo account info",
+    });
     const resolved = toNumberId(normalizeAccountInfoUser(info)?.userId);
     if (resolved) {
       return resolved;
