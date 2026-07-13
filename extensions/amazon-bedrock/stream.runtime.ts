@@ -602,6 +602,9 @@ function handleContentBlockStop(
       delete (block as Block).partialJson;
       stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
       break;
+    default:
+      // Unknown block types are silently dropped.
+      break;
   }
 }
 
