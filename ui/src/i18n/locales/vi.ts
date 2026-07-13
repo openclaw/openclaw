@@ -505,6 +505,8 @@ export const vi: TranslationMap = {
     start: "Bắt đầu phiên",
     starting: "Đang bắt đầu…",
     createFailed: "Không thể tạo phiên.",
+    createOutcomeUnknown:
+      "Gateway đã thay đổi trong khi phiên này đang khởi động. Hãy kiểm tra các phiên gần đây trước khi bắt đầu lại tác vụ này.",
     catalogUnavailable: "Đích của phiên này hiện không khả dụng.",
   },
   sessionsView: {

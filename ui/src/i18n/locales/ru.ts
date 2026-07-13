@@ -505,6 +505,8 @@ export const ru: TranslationMap = {
     start: "Начать сессию",
     starting: "Запуск…",
     createFailed: "Не удалось создать сессию.",
+    createOutcomeUnknown:
+      "Gateway изменился во время запуска этого сеанса. Проверьте недавние сеансы, прежде чем снова запускать эту задачу.",
     catalogUnavailable: "Целевой объект этого сеанса недоступен.",
   },
   sessionsView: {

@@ -498,6 +498,8 @@ export const th: TranslationMap = {
     start: "เริ่มเซสชัน",
     starting: "กำลังเริ่ม…",
     createFailed: "ไม่สามารถสร้างเซสชันได้",
+    createOutcomeUnknown:
+      "Gateway มีการเปลี่ยนแปลงขณะที่เซสชันนี้กำลังเริ่มต้น โปรดตรวจสอบเซสชันล่าสุดก่อนเริ่มงานนี้อีกครั้ง",
     catalogUnavailable: "เป้าหมายของเซสชันนี้ไม่พร้อมใช้งาน",
   },
   sessionsView: {

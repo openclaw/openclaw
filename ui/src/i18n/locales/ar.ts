@@ -500,6 +500,8 @@ export const ar: TranslationMap = {
     start: "بدء الجلسة",
     starting: "جارٍ البدء…",
     createFailed: "تعذّر إنشاء الجلسة.",
+    createOutcomeUnknown:
+      "تغيّر Gateway أثناء بدء هذه الجلسة. تحقّق من الجلسات الأخيرة قبل بدء هذه المهمة مرة أخرى.",
     catalogUnavailable: "هدف هذه الجلسة غير متاح.",
   },
   sessionsView: {
