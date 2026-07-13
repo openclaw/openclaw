@@ -938,13 +938,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       ranges and batch actions both key off this order. */
   private visibleSessionRowsInOrder(): SidebarRecentSession[] {
     const navigationState = this.getSessionNavigationState();
-    const agents = this.context?.agents.state.agentsList?.agents ?? [];
-    const rows =
-      agents.length > 1
-        ? this.sidebarRowsForAgent(this.expandedAgentId(), navigationState)
-        : navigationState.visibleSessions;
     const sections = groupSidebarSessionRows(
-      limitSidebarSessionRows(rows, this.visibleSessionLimit),
+      limitSidebarSessionRows(navigationState.visibleSessions, this.visibleSessionLimit),
       {
         grouping: this.sessionsGrouping,
         knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
@@ -1034,7 +1029,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   };
 
-  /** Browsing another agent's sessions never navigates; only row clicks do. */
+  /** Chip switching selects the agent and refreshes its session list. */
   private readonly expandAgent = (agentId: string) => {
     const context = this.context;
     if (!context) {
@@ -2605,25 +2600,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
-  /** Rows for a non-active agent come from the per-agent cache filled on expand. */
-  private sidebarRowsForAgent(
-    agentId: string,
-    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
-  ): SidebarRecentSession[] {
-    const normalized = normalizeAgentId(agentId);
-    if (normalized === normalizeAgentId(navigationState.selectedAgentId)) {
-      return navigationState.visibleSessions;
-    }
-    const cached = this.sessionRowsByAgent[normalized] ?? [];
-    return filterVisibleSessionRows(cached, {
-      agentId: normalized,
-      defaultAgentId: navigationState.selectedAgentId,
-      filterByAgent: true,
-    })
-      .toSorted(this.compareSidebarSessionRows)
-      .map(navigationState.toSidebarSession);
-  }
-
   private agentUnreadCount(agentId: string): number {
     const rows = this.sessionRowsByAgent[normalizeAgentId(agentId)] ?? [];
     return rows.filter((row) => row.unread === true && row.archived !== true).length;
@@ -2702,54 +2678,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
-  private renderAgentSection(
-    agent: { id: string; name?: string; identity?: { name?: string } },
-    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
-  ) {
-    const agentId = normalizeAgentId(agent.id);
-    const expanded = agentId === this.expandedAgentId();
-    const label = agent.identity?.name ?? agent.name ?? agent.id;
-    const unread = expanded ? 0 : this.agentUnreadCount(agentId);
-    const initial = (label || agent.id).slice(0, 1).toUpperCase();
-    return html`
-      <div class="sidebar-agent-section ${expanded ? "sidebar-agent-section--expanded" : ""}">
-        <button
-          type="button"
-          class="sidebar-agent-section__header"
-          aria-expanded=${String(expanded)}
-          @click=${() => this.expandAgent(agentId)}
-        >
-          <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-            >${expanded ? icons.chevronDown : icons.chevronRight}</span
-          >
-          <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
-          <span class="sidebar-agent-section__name">${label}</span>
-          ${unread > 0
-            ? html`<span
-                class="session-unread-dot sidebar-agent-section__unread"
-                role="img"
-                aria-label=${t("sessionsView.unread")}
-              ></span>`
-            : nothing}
-        </button>
-        ${expanded
-          ? this.renderSessionListBody(this.sidebarRowsForAgent(agentId, navigationState), {
-              showDraft:
-                Boolean(this.draftSessionAgentId) &&
-                normalizeAgentId(this.draftSessionAgentId) === agentId,
-              showFallback: true,
-            })
-          : nothing}
-      </div>
-    `;
-  }
-
   private renderSessions() {
-    const context = this.context;
     const navigationState = this.getSessionNavigationState();
     const { visibleSessions, newSessionDisabled, newSessionTitle } = navigationState;
-    const agents = context?.agents.state.agentsList?.agents ?? [];
-    const multiAgent = agents.length > 1;
     const expandedAgentId = this.expandedAgentId();
     return html`
       <section class="sidebar-sessions">
@@ -2787,12 +2718,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               ${icons.plus}
             </button>
           </div>
-          ${multiAgent
-            ? agents.map((agent) => this.renderAgentSection(agent, navigationState))
-            : this.renderSessionListBody(visibleSessions, {
-                showDraft: Boolean(this.draftSessionAgentId),
-                showFallback: true,
-              })}
+          ${this.renderSessionListBody(visibleSessions, {
+            showDraft:
+              Boolean(this.draftSessionAgentId) &&
+              normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
+            showFallback: true,
+          })}
           ${this.renderSessionCatalogs()}
         </div>
       </section>
@@ -2960,7 +2891,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
-    const { activeId: chipAgentId, agent: chipAgent } = this.activeChipAgent();
+    const { activeId: chipAgentId, agent: chipAgent, agents: chipAgents } = this.activeChipAgent();
+    const chipMenuUnread = chipAgents.some((entry) => {
+      const agentId = normalizeAgentId(entry.id);
+      return agentId !== chipAgentId && this.agentUnreadCount(agentId) > 0;
+    });
     const chipName = chipAgent ? normalizeAgentLabel(chipAgent) : chipAgentId;
     const chipAvatarText =
       (chipAgent ? resolveAgentTextAvatar(chipAgent) : null) ??
@@ -3011,6 +2946,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               .statusLabel=${gatewayStatus}
               .subtitle=${this.agentChipSubtitle(chipAgentId)}
               .menuOpen=${this.agentMenuPosition !== null}
+              .menuUnread=${chipMenuUnread}
               .newSessionDisabled=${!this.connected}
               .onOpenConversation=${() => this.openAgentConversation(chipAgentId)}
               .onNewSession=${() => this.onOpenNewSession?.(chipAgentId)}

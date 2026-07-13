@@ -331,6 +331,40 @@ describe("AppSidebar agent chip", () => {
     );
   });
 
+  it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions, "panel", TWO_AGENTS);
+    sidebar.connected = true;
+    const defaults = { modelProvider: null, model: null, contextTokens: null };
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults,
+        sessions: [{ key: "agent:research:one", kind: "direct", updatedAt: 3, unread: true }],
+      },
+      agentId: "research",
+    });
+    harness.publishList({
+      result: {
+        ts: 3,
+        path: "",
+        count: 1,
+        defaults,
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5 }],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+
+    // No per-agent sections: the chip menu owns agent switching now.
+    expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(1);
+    expect(sidebar.querySelector(".sidebar-agent-chip__menu-unread")).not.toBeNull();
+  });
+
   it("opens the footer menu with agent switching and folded-in utilities", async () => {
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKey = vi.fn();

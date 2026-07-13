@@ -2093,8 +2093,20 @@ openclaw-session-menu[popover] {
   stroke-linejoin: round;
 }
 
+.sidebar-agent-chip__menu-toggle {
+  position: relative;
+}
+
 .sidebar-agent-chip__menu-toggle svg {
   transition: transform var(--duration-fast) ease;
+}
+
+.sidebar-agent-chip__menu-unread {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
 }
 
 .sidebar-agent-chip__menu-toggle--open svg {
@@ -2662,29 +2674,7 @@ openclaw-session-menu[popover] {
   color: var(--muted);
 }
 
-.sidebar-agent-section {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.sidebar-agent-section__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}
-
-.sidebar-agent-section__header:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-}
-
+/* Kept for the agent-chip menu switcher rows (sessions list is single-agent now). */
 .sidebar-agent-section__avatar {
   display: inline-flex;
   align-items: center;
@@ -2696,25 +2686,6 @@ openclaw-session-menu[popover] {
   color: var(--text-strong);
   font-size: 11px;
   font-weight: 600;
-  flex: none;
-}
-
-.sidebar-agent-section__name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.sidebar-agent-section--expanded > .sidebar-agent-section__header .sidebar-agent-section__name {
-  color: var(--text-strong);
-}
-
-.sidebar-agent-section__unread {
   flex: none;
 }
 
