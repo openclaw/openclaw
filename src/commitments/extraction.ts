@@ -6,6 +6,7 @@ import {
 import { normalizeOptionalString as asString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
 import { isRecord } from "../utils.js";
 import { resolveCommitmentsConfig } from "./config.js";
@@ -252,7 +253,7 @@ function parseDueMs(raw: string | undefined): number | undefined {
     return undefined;
   }
   const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return Number.isFinite(parsed) && parseAbsoluteTimeMs(raw) !== null ? parsed : undefined;
 }
 
 function resolveMinimumDueMs(params: {

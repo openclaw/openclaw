@@ -172,6 +172,52 @@ describe("commitment extraction", () => {
     expect(valid.map((entry) => entry.candidate.dedupeKey)).toEqual(["interview:2026-04-30"]);
   });
 
+  it("rejects calendar-invalid due timestamps", () => {
+    const valid = validateCommitmentCandidates({
+      items: [item()],
+      result: {
+        candidates: [
+          candidate({
+            dedupeKey: "invalid-earliest",
+            dueWindow: { earliest: "2026-04-31T17:00:00.000Z" },
+          }),
+          candidate({
+            dedupeKey: "invalid-latest",
+            dueWindow: {
+              earliest: "2026-04-30T17:00:00.000Z",
+              latest: "2026-04-31T23:00:00.000Z",
+            },
+          }),
+        ],
+      },
+    });
+
+    const validCandidate = expectSingleValidCandidate(valid);
+    expect(validCandidate.candidate.dedupeKey).toBe("invalid-latest");
+    expect(validCandidate.latestMs).toBe(validCandidate.earliestMs + 12 * 60 * 60 * 1000);
+  });
+
+  it("accepts calendar-valid leap-day and offset due timestamps", () => {
+    const valid = validateCommitmentCandidates({
+      items: [item()],
+      result: {
+        candidates: [
+          candidate({
+            dedupeKey: "leap-day-offset",
+            dueWindow: {
+              earliest: "2028-02-29T09:00:00-08:00",
+              latest: "2028-02-29T12:00:00-08:00",
+            },
+          }),
+        ],
+      },
+    });
+
+    const validCandidate = expectSingleValidCandidate(valid);
+    expect(validCandidate.earliestMs).toBe(Date.parse("2028-02-29T09:00:00-08:00"));
+    expect(validCandidate.latestMs).toBe(Date.parse("2028-02-29T12:00:00-08:00"));
+  });
+
   it("clamps inferred due time to at least one heartbeat interval after write time", () => {
     const writeMs = nowMs + 5_000;
     const valid = validateCommitmentCandidates({
