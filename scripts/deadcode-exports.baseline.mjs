@@ -2497,7 +2497,7 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/infra/gateway-boot-lifecycle.ts: GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD",
   "src/infra/gateway-boot-lifecycle.ts: GATEWAY_BOOT_LOOP_WINDOW_MS",
   "src/infra/gateway-boot-lifecycle.ts: GatewayBootLifecycleOutcome",
-  "src/infra/gateway-lock.ts: GatewayLockOptions",
+  "src/infra/gateway-lock.ts: GatewayLockRole",
   "src/infra/gateway-suspend-coordinator.ts: GATEWAY_SUSPEND_RETRY_AFTER_MS",
   "src/infra/gateway-suspend-coordinator.ts: GATEWAY_SUSPEND_TTL_MS",
   "src/infra/gateway-suspend-coordinator.ts: GatewaySuspendPrepareResult",
