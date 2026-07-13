@@ -1,8 +1,7 @@
 // Lazy Commander placeholder registration used to keep CLI startup imports small.
 import type { Command } from "commander";
-import { reparseProgramFromActionArgs } from "./action-reparse.js";
+import { reparseProgramFromActionCommand } from "./action-reparse.js";
 import { removeCommandByName } from "./command-tree.js";
-import { resolveCommandOptionArgs } from "./helpers.js";
 
 type RegisterLazyCommandParams = {
   program: Command;
@@ -32,13 +31,10 @@ export function registerLazyCommand({
   placeholder.allowUnknownOption(true).allowExcessArguments(true);
   placeholder.action(async (...actionArgs) => {
     const actionCommand = actionArgs.at(-1) as Command;
-    // Commander separates option values from positional args on placeholders; restore them
-    // before reparsing so the real command sees the original token order.
-    actionCommand.args = [...resolveCommandOptionArgs(actionCommand), ...actionCommand.args];
     for (const commandName of new Set(removeNames ?? [name])) {
       removeCommandByName(program, commandName);
     }
     await register();
-    await reparseProgramFromActionArgs(program, actionArgs);
+    await reparseProgramFromActionCommand(program, actionCommand);
   });
 }
