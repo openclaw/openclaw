@@ -726,6 +726,9 @@ export function createGatewayCloseHandler(
     const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
       measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
     try {
+      // Fence lane auto-resume timers before the first awaited shutdown step;
+      // later teardown can stall long enough for a TTL callback to mutate queues.
+      clearSessionSuspensionTimers();
       // Debug-level: the signal handler already announced the stop/restart at
       // info, and the completion line below reports duration and outcome.
       shutdownLog.debug(`shutdown started: ${reason}`);
@@ -841,15 +844,6 @@ export function createGatewayCloseHandler(
       if (params.tailscaleCleanup) {
         await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
-      await shutdownStep(
-        "session-suspension-timers",
-        () => {
-          // Lane auto-resume timers mutate command-lane concurrency; they must not fire
-          // after shutdown has started tearing down queues, channels, and runtimes.
-          clearSessionSuspensionTimers();
-        },
-        warnings,
-      );
       if (params.postReadySidecars?.length) {
         await measureCloseStep("post-ready-sidecars", async () => {
           for (const [index, sidecar] of params.postReadySidecars!.entries()) {

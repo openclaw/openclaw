@@ -195,6 +195,10 @@ describe("createGatewayCloseHandler", () => {
 
   it("joins an in-flight config reload before mutable runtime teardown", async () => {
     const events: string[] = [];
+    mocks.clearSessionSuspensionTimers.mockImplementation(() => {
+      events.push("session-suspension-timers");
+      return 1;
+    });
     let releaseReload!: () => void;
     const reloadStopped = new Promise<void>((resolve) => {
       releaseReload = resolve;
@@ -231,7 +235,7 @@ describe("createGatewayCloseHandler", () => {
 
     const closePromise = close({ reason: "test" });
     await vi.waitFor(() => {
-      expect(events).toEqual(["reload:stopping"]);
+      expect(events).toEqual(["session-suspension-timers", "reload:stopping"]);
     });
     expect(postReadySidecar.stop).not.toHaveBeenCalled();
     expect(pluginServices.stop).not.toHaveBeenCalled();
@@ -241,6 +245,7 @@ describe("createGatewayCloseHandler", () => {
     await closePromise;
 
     expect(events).toEqual([
+      "session-suspension-timers",
       "reload:stopping",
       "reload:stopped",
       "sidecar:stopped",

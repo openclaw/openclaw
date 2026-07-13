@@ -45,10 +45,8 @@ describe("session suspension", () => {
       vi.clearAllTimers();
     }
     vi.useRealTimers();
-    const { clearSessionSuspensionTimers, enableSessionSuspensionTimersForGatewayStart } =
-      await import("./session-suspension.js");
-    clearSessionSuspensionTimers();
-    enableSessionSuspensionTimersForGatewayStart();
+    const { testing } = await import("./session-suspension.js");
+    testing.resetSessionSuspensionStateForTest();
     sessionAccessorMocks.patchSessionEntry.mockClear();
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
   });
@@ -164,6 +162,26 @@ describe("session suspension", () => {
     await suspendLane(100, {} as OpenClawConfig, CommandLane.Nested);
 
     expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Nested, 0);
+  });
+
+  it("restores suspended custom lanes when gateway startup re-enables timers", async () => {
+    vi.useFakeTimers();
+    const { clearSessionSuspensionTimers, enableSessionSuspensionTimersForGatewayStart } =
+      await import("./session-suspension.js");
+    const customLaneId = "plugin:voice:room-1" as CommandLane;
+
+    await suspendLane(100, {} as OpenClawConfig, customLaneId);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(customLaneId, 0);
+    expect(clearSessionSuspensionTimers()).toBe(1);
+    commandQueueMocks.setCommandLaneConcurrency.mockClear();
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+    expect(enableSessionSuspensionTimersForGatewayStart()).toBe(1);
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(customLaneId, 1);
+    expect(enableSessionSuspensionTimersForGatewayStart()).toBe(0);
   });
 
   it("does not throttle lanes when cleanup wins a pending suspension write race", async () => {

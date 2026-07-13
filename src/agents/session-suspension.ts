@@ -11,6 +11,7 @@ import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
@@ -28,9 +29,35 @@ type LaneResumeTimer = {
   resumeConcurrency: number;
 };
 
-const laneResumeTimers = new Map<string, LaneResumeTimer>();
-let cleanupGeneration = 0;
-let cleanupActive = false;
+type SessionSuspensionRuntimeState = {
+  laneResumeTimers: Map<string, LaneResumeTimer>;
+  clearedLaneResumes: Map<string, number>;
+  cleanupGeneration: number;
+  cleanupActive: boolean;
+};
+
+/**
+ * Keep timer shutdown state process-global so bundled gateway chunks cannot
+ * leave one module copy scheduling lane resumes after another copy cleaned up.
+ */
+const SESSION_SUSPENSION_STATE_KEY = Symbol.for("openclaw.sessionSuspensionRuntimeState");
+
+function getSessionSuspensionState(): SessionSuspensionRuntimeState {
+  const state = resolveGlobalSingleton<SessionSuspensionRuntimeState>(
+    SESSION_SUSPENSION_STATE_KEY,
+    () => ({
+      laneResumeTimers: new Map<string, LaneResumeTimer>(),
+      clearedLaneResumes: new Map<string, number>(),
+      cleanupGeneration: 0,
+      cleanupActive: false,
+    }),
+  );
+  if (!state.clearedLaneResumes) {
+    state.clearedLaneResumes = new Map<string, number>();
+  }
+  return state;
+}
+
 const deferredSessionSuspension = new AsyncLocalStorage<{
   claimed: boolean;
   onDeferred?: (params: SessionSuspensionParams) => void;
@@ -95,13 +122,14 @@ export function resolveSessionSuspensionTarget(): SessionSuspensionTarget {
 }
 
 function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurrency: number) {
-  const existing = laneResumeTimers.get(laneId);
+  const state = getSessionSuspensionState();
+  const existing = state.laneResumeTimers.get(laneId);
   if (existing) {
     clearTimeout(existing.timer);
   }
   const timer = setTimeout(() => {
-    if (laneResumeTimers.get(laneId)?.timer === timer) {
-      laneResumeTimers.delete(laneId);
+    if (state.laneResumeTimers.get(laneId)?.timer === timer) {
+      state.laneResumeTimers.delete(laneId);
     }
     setCommandLaneConcurrency(laneId, resumeConcurrency);
     log.info("auto-resumed lane after suspension TTL", {
@@ -113,24 +141,34 @@ function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurren
   if (typeof timer.unref === "function") {
     timer.unref();
   }
-  laneResumeTimers.set(laneId, { timer, resumeConcurrency });
+  state.laneResumeTimers.set(laneId, { timer, resumeConcurrency });
 }
 
 export function clearSessionSuspensionTimers(): number {
-  cleanupGeneration += 1;
-  cleanupActive = true;
+  const state = getSessionSuspensionState();
+  state.cleanupGeneration += 1;
+  state.cleanupActive = true;
   let cleared = 0;
-  for (const entry of laneResumeTimers.values()) {
+  for (const [laneId, entry] of state.laneResumeTimers) {
     clearTimeout(entry.timer);
+    state.clearedLaneResumes.set(laneId, entry.resumeConcurrency);
     cleared += 1;
   }
-  laneResumeTimers.clear();
+  state.laneResumeTimers.clear();
   return cleared;
 }
 
-export function enableSessionSuspensionTimersForGatewayStart(): void {
-  cleanupGeneration += 1;
-  cleanupActive = false;
+export function enableSessionSuspensionTimersForGatewayStart(): number {
+  const state = getSessionSuspensionState();
+  state.cleanupGeneration += 1;
+  state.cleanupActive = false;
+  let restored = 0;
+  for (const [laneId, resumeConcurrency] of state.clearedLaneResumes) {
+    setCommandLaneConcurrency(laneId, resumeConcurrency);
+    restored += 1;
+  }
+  state.clearedLaneResumes.clear();
+  return restored;
 }
 
 export async function suspendSession(params: SessionSuspensionParams) {
@@ -151,7 +189,8 @@ export async function suspendSession(params: SessionSuspensionParams) {
   const ttlMs = resolveTimerTimeoutMs(params.ttlMs, DEFAULT_QUOTA_SUSPENSION_RESUME_MS, 0);
   const now = Date.now();
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
-  const suspensionGeneration = cleanupGeneration;
+  const state = getSessionSuspensionState();
+  const suspensionGeneration = state.cleanupGeneration;
 
   try {
     await patchSessionEntry(
@@ -180,7 +219,8 @@ export async function suspendSession(params: SessionSuspensionParams) {
     return;
   }
 
-  if (cleanupActive || suspensionGeneration !== cleanupGeneration) {
+  const postPatchState = getSessionSuspensionState();
+  if (postPatchState.cleanupActive || suspensionGeneration !== postPatchState.cleanupGeneration) {
     try {
       await patchSessionEntry(
         { storePath, sessionKey },
@@ -218,6 +258,16 @@ export async function suspendSession(params: SessionSuspensionParams) {
 }
 
 export const testing = {
+  resetSessionSuspensionStateForTest: () => {
+    const state = getSessionSuspensionState();
+    for (const entry of state.laneResumeTimers.values()) {
+      clearTimeout(entry.timer);
+    }
+    state.laneResumeTimers.clear();
+    state.clearedLaneResumes.clear();
+    state.cleanupGeneration = 0;
+    state.cleanupActive = false;
+  },
   resolveLaneResumeConcurrency,
   resolveSessionSuspensionReason,
 } as const;

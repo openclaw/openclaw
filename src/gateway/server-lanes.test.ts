@@ -18,7 +18,11 @@ function applyConfigLaneConcurrency(config: OpenClawConfig): void {
 }
 
 describe("applyGatewayLaneConcurrency", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    // Gateway startup drains the process-global suspension cleanup state.
+    // Reset between tests so lane assertions only see this test's setup.
+    const { testing } = await import("../agents/session-suspension.js");
+    testing.resetSessionSuspensionStateForTest();
     resetCommandQueueStateForTest();
   });
 
