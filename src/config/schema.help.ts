@@ -1792,8 +1792,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Deprecated age-retention field kept for compatibility with legacy configs using day counts. Use session.maintenance.pruneAfter instead so duration syntax and behavior are consistent.",
   "session.maintenance.maxEntries":
     "Caps total session entry count retained in the store to prevent unbounded growth over time. Use lower limits for constrained environments, or higher limits when longer history is required.",
-  "session.maintenance.rotateBytes":
-    'Deprecated and ignored. Do not use for `sessions.json` growth control; OpenClaw no longer creates automatic rotation backups, and "openclaw doctor --fix" removes this key.',
   "session.maintenance.resetArchiveRetention":
     "Age-based retention for archived transcripts (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
   "session.maintenance.maxDiskBytes":
@@ -1827,6 +1825,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Compatibility setting for older file-backed cron run logs (for example `2mb`, default `2000000`). SQLite run history pruning is row-count based.",
   "cron.runLog.keepLines":
     "How many trailing run-history rows to retain per cron job (default `2000`). Increase for longer forensic history or lower for smaller disks.",
+  worktrees:
+    "Managed worktree retention settings applied by hourly cleanup and manual `openclaw worktrees gc`. Keep defaults unless managed worktrees accumulate faster than idle cleanup reclaims them.",
+  "worktrees.cleanup":
+    "Retention limits for OpenClaw-managed worktrees across all repositories. Cleanup snapshots and removes the least recently active session- and Workboard-owned worktrees first; manual, locked, and recently active worktrees are never limit-evicted.",
+  "worktrees.cleanup.maxCount":
+    "Maximum number of managed worktrees to retain across all repositories. When exceeded, the least recently active evictable worktrees are snapshotted and removed until the count fits. 0 or unset disables the count limit.",
+  "worktrees.cleanup.maxTotalSizeGb":
+    "Maximum total disk size in GB across all managed worktrees, measured during cleanup. When exceeded, the least recently active evictable worktrees are snapshotted and removed until usage fits. 0 or unset disables the size limit.",
   transcripts:
     "Core transcript capture settings for recording-capable agent tools and configured live meeting auto-start sources. Keep disabled unless operators explicitly want agents to capture or import meeting transcripts.",
   "transcripts.enabled":

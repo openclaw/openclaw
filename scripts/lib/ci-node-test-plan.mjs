@@ -24,10 +24,12 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
 };
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
-const COMPACT_NODE_TEST_JOB_WEIGHT = 192;
-const COMPACT_NODE_TEST_JOB_GROUPS = 8;
+// PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
+// Keep runner classes and subprocess isolation intact while bounding each combined job.
+const COMPACT_NODE_TEST_JOB_WEIGHT = 256;
+const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 3;
-const COMPACT_WHOLE_NODE_TEST_JOB_GROUPS = 6;
+const COMPACT_WHOLE_NODE_TEST_JOB_GROUPS = 8;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
 const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";

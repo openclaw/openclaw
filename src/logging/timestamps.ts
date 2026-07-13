@@ -85,11 +85,3 @@ export function formatTimestamp(date: Date, options?: FormatTimestampOptions): s
   }
   throw new Error("Unsupported timestamp style");
 }
-
-/**
- * @deprecated Use formatTimestamp from "./timestamps.js" instead.
- * This function will be removed in a future version.
- */
-export function formatLocalIsoWithOffset(now: Date, timeZone?: string): string {
-  return formatTimestamp(now, { style: "long", timeZone });
-}

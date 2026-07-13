@@ -8,6 +8,7 @@ import {
   appendCronRunLog,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntriesPage,
+  readCronRunLogEntriesPageAll,
   readCronRunLogEntriesSync,
   resolveCronRunLogPruneOptions,
 } from "./run-log.js";
@@ -119,6 +120,30 @@ describe("cron run log", () => {
       expect(jobEntries[0]?.runAtMs).toBe(900);
       expect(jobEntries[0]?.durationMs).toBe(100);
       expect(readCronRunLogEntriesSync({ storePath, jobId: "missing" })).toStrictEqual([]);
+    });
+  });
+
+  it("filters all-scope pages to an explicit set of owned jobs", async () => {
+    await withRunLogDir("openclaw-cron-log-scope-", async (dir) => {
+      const storePath = storePathForDir(dir);
+      await appendCronRunLog({
+        storePath,
+        entry: { ts: 1, jobId: "writer-job", action: "finished", status: "ok" },
+      });
+      await appendCronRunLog({
+        storePath,
+        entry: { ts: 2, jobId: "ops-job", action: "finished", status: "error" },
+      });
+
+      const writerPage = await readCronRunLogEntriesPageAll({
+        storePath,
+        jobIds: ["writer-job"],
+      });
+      const emptyPage = await readCronRunLogEntriesPageAll({ storePath, jobIds: [] });
+
+      expect(writerPage.entries.map((entry) => entry.jobId)).toEqual(["writer-job"]);
+      expect(writerPage.total).toBe(1);
+      expect(emptyPage).toMatchObject({ entries: [], total: 0 });
     });
   });
 

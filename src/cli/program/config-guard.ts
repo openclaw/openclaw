@@ -215,6 +215,8 @@ export async function ensureConfigReady(params: {
   suppressDoctorStdout?: boolean;
   allowInvalid?: boolean;
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  skipPristineCoreStateMigrations?: boolean;
+  skipPristineStartupStateMigrations?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
   const commandName = commandPath[0];
@@ -236,6 +238,12 @@ export async function ensureConfigReady(params: {
           : {}),
         ...(params.beforeStateMigrations
           ? { beforeStateMigrations: params.beforeStateMigrations }
+          : {}),
+        ...(params.skipPristineStartupStateMigrations
+          ? { skipPristineStartupStateMigrations: true }
+          : {}),
+        ...(params.skipPristineCoreStateMigrations
+          ? { skipPristineCoreStateMigrations: true }
           : {}),
       });
     try {
@@ -354,4 +362,3 @@ export async function ensureConfigReady(params: {
 export const testApi = {
   resetConfigGuardStateForTests,
 };
-export { testApi as __test__ };

@@ -3,6 +3,7 @@ import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import "../../styles/about.css";
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 

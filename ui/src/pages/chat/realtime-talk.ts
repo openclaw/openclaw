@@ -23,7 +23,7 @@ export type {
   RealtimeTalkStatus,
 };
 
-export type RealtimeTalkLaunchOptions = {
+type RealtimeTalkLaunchOptions = {
   provider?: string;
   model?: string;
   voice?: string;

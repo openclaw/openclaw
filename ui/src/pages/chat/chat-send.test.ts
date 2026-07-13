@@ -283,7 +283,6 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
         chatShowThinking: next.chatShowThinking,
         chatShowToolCalls: next.chatShowToolCalls,
         chatPersistCommentary: next.chatPersistCommentary,
-        chatAutoScroll: next.chatAutoScroll,
         chatSendShortcut: next.chatSendShortcut,
         splitRatio: next.splitRatio,
       });
@@ -369,6 +368,22 @@ async function raceWithMacrotask(promise: Promise<unknown>): Promise<"resolved" 
       setImmediate(() => resolve("pending"));
     }),
   ]);
+}
+
+async function completesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 describe("refreshChat", () => {
@@ -1264,6 +1279,32 @@ describe("handleSendChat", () => {
       }),
     );
   });
+
+  it.each(["stop", "esc", "abort", "wait", "exit"])(
+    "sends the idle conversational word %s as a normal message",
+    async (message) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return { runId: `idle-${message}`, status: "started" };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        chatMessage: message,
+        sessionKey: "agent:main",
+      });
+
+      await handleSendChat(host);
+
+      expect(request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ message, sessionKey: "agent:main" }),
+      );
+      expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+      expect(host.chatMessage).toBe("");
+    },
+  );
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -4234,12 +4275,7 @@ describe("handleSendChat", () => {
     });
     admitHostQueueItems(host);
 
-    const completed = await Promise.race([
-      retryReconnectableQueuedChatSends(host).then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 500);
-      }),
-    ]);
+    const completed = await completesWithin(retryReconnectableQueuedChatSends(host), 500);
 
     expect(completed).toBe(true);
     expect(executeSlashCommandMock).toHaveBeenCalledTimes(1);
@@ -7543,23 +7579,26 @@ describe("handleAbortChat", () => {
     expect(host.chatRunId).toBe("run-main");
   });
 
-  it("clears typed stop commands after aborting the active run", async () => {
-    const request = vi.fn(async () => ({ aborted: true }));
-    const host = makeHost({
-      client: { request } as unknown as ChatHost["client"],
-      chatRunId: "run-main",
-      chatMessage: "/stop",
-      sessionKey: "agent:main",
-    });
+  it.each(["/stop", "stop", "esc", "abort", "wait", "exit"])(
+    "clears the typed stop command %s after aborting the active run",
+    async (message) => {
+      const request = vi.fn(async () => ({ aborted: true }));
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        chatRunId: "run-main",
+        chatMessage: message,
+        sessionKey: "agent:main",
+      });
 
-    await handleSendChat(host);
+      await handleSendChat(host);
 
-    expect(request).toHaveBeenCalledWith("chat.abort", {
-      runId: "run-main",
-      sessionKey: "agent:main",
-    });
-    expect(host.chatMessage).toBe("");
-  });
+      expect(request).toHaveBeenCalledWith("chat.abort", {
+        runId: "run-main",
+        sessionKey: "agent:main",
+      });
+      expect(host.chatMessage).toBe("");
+    },
+  );
 
   it("queues the active run abort while disconnected", async () => {
     const host = makeHost({

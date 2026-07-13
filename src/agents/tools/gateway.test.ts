@@ -1,11 +1,12 @@
 // Gateway call helper tests pin URL override, token, and RPC scope behavior for
 // agent tools that route through the local gateway client.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import {
   mintMessageActionTurnCapability,
-  resetMessageActionTurnCapabilitiesForTest,
+  revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -67,6 +68,7 @@ function capturedGatewayCall(): CallGatewayOptions {
 }
 
 describe("gateway tool defaults", () => {
+  const mintedTurnCapabilities: string[] = [];
   const envSnapshot = {
     openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
     gatewayUrl: process.env.OPENCLAW_GATEWAY_URL,
@@ -77,10 +79,15 @@ describe("gateway tool defaults", () => {
     mocks.deviceIdentityError = undefined;
     mocks.persistedDeviceIdentity = undefined;
     mocks.configState.value = {};
-    resetMessageActionTurnCapabilitiesForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_URL;
+  });
+
+  afterEach(() => {
+    for (const token of mintedTurnCapabilities.splice(0)) {
+      revokeMessageActionTurnCapability(token);
+    }
   });
 
   afterAll(() => {
@@ -269,9 +276,12 @@ describe("gateway tool defaults", () => {
     );
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    const [[callParams]] = mocks.callGateway.mock.calls as unknown as Array<
-      [{ method?: string; scopes?: string[] }]
-    >;
+    const [callParams] = expectDefined(
+      (
+        mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>
+      )[0],
+      "(mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>)[0] test invariant",
+    );
     expect(callParams.method).toBe("plugins.sessionAction");
     expect(callParams.scopes).toEqual(["operator.approvals"]);
   });
@@ -290,9 +300,12 @@ describe("gateway tool defaults", () => {
     );
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    const [[callParams]] = mocks.callGateway.mock.calls as unknown as Array<
-      [{ method?: string; scopes?: string[] }]
-    >;
+    const [callParams] = expectDefined(
+      (
+        mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>
+      )[0],
+      "(mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>)[0] test invariant",
+    );
     expect(callParams.method).toBe("plugins.sessionAction");
     expect(callParams.scopes).toEqual([
       "operator.admin",
@@ -486,6 +499,7 @@ describe("gateway tool defaults", () => {
         currentChatType: "group",
       },
     });
+    mintedTurnCapabilities.push(turnCapability);
     await withGatewayToolCallerIdentity(
       { agentId: "ops", sessionKey: "agent:ops:telegram:group:room-1" },
       async () => {

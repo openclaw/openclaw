@@ -123,14 +123,6 @@ export async function startGatewayEarlyRuntime(params: {
   let getActiveTaskCount = () => 0;
 
   if (!params.minimalTestGateway) {
-    void import("../agents/context.js")
-      .then(({ ensureContextWindowCacheLoaded }) =>
-        ensureContextWindowCacheLoaded(params.cfgAtStart),
-      )
-      .catch((err: unknown) => {
-        params.log.warn(`Context-window cache warmup failed to start: ${String(err)}`);
-      });
-
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, taskRegistryMaintenance] =
       await measureStartup(params.startupTrace, "runtime.early.lazy-runtime-imports", () =>
         Promise.all([
@@ -203,6 +195,7 @@ export async function startGatewayEarlyRuntime(params: {
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         nodeSendToSession: params.nodeSendToSession,
+        getRuntimeConfig: params.getRuntimeConfig,
         enableSkillCurator: true,
         ...(typeof params.mediaCleanupTtlMs === "number"
           ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }

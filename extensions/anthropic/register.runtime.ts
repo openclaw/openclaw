@@ -57,8 +57,8 @@ import { anthropicMediaUnderstandingProvider } from "./media-understanding-provi
 import {
   createClaudeSessionNodeHostCommands,
   createClaudeSessionNodeInvokePolicies,
-  registerClaudeSessionCatalog,
-} from "./session-catalog.js";
+} from "./session-catalog-node-commands.js";
+import { registerClaudeSessionCatalog } from "./session-catalog.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 

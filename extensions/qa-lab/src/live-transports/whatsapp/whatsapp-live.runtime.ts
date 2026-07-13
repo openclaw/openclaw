@@ -387,7 +387,7 @@ function toWhatsAppLiveTransportEvidenceChecks(
   }));
 }
 
-export type WhatsAppQaRunResult = {
+type WhatsAppQaRunResult = {
   gatewayDebugDirPath?: string;
   observedMessagesPath: string;
   outputDir: string;
@@ -1965,7 +1965,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
 ];
 
-export const WHATSAPP_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+const WHATSAPP_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   scenarios: WHATSAPP_QA_SCENARIOS,
 });
 
@@ -2487,7 +2487,7 @@ function assertSafeArchiveEntries(entries: string[]) {
   }
 }
 
-export async function unpackWhatsAppAuthArchive(params: {
+async function unpackWhatsAppAuthArchive(params: {
   archiveBase64: string;
   clearSignalSessions?: boolean;
   label: string;

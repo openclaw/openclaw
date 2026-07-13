@@ -437,6 +437,7 @@ export type ChatState = {
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;
   chatLoading: boolean;
+  chatHistoryPagination?: ChatHistoryPagination;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
   chatThinkingLevel: string | null;
@@ -482,6 +483,11 @@ type ChatSessionMessageSubscriptionState = ChatState & {
 
 export type ChatHistoryResult = {
   messages?: Array<unknown>;
+  offset?: number;
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
+  completeSnapshot?: boolean;
   sessionId?: string;
   thinkingLevel?: string;
   verboseLevel?: string;
@@ -490,6 +496,38 @@ export type ChatHistoryResult = {
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
 };
+
+export type ChatHistoryPagination =
+  | { hasMore: false; totalMessages?: number; completeSnapshot?: true }
+  | { hasMore: true; nextOffset: number; totalMessages?: number };
+
+export function resolveChatHistoryPagination(
+  result: ChatHistoryResult | undefined,
+): ChatHistoryPagination {
+  const totalMessages = result?.totalMessages;
+  const validTotal =
+    typeof totalMessages === "number" && Number.isSafeInteger(totalMessages) && totalMessages >= 0
+      ? totalMessages
+      : undefined;
+  const nextOffset = result?.nextOffset;
+  if (
+    result?.hasMore === true &&
+    typeof nextOffset === "number" &&
+    Number.isSafeInteger(nextOffset) &&
+    nextOffset > 0
+  ) {
+    return {
+      hasMore: true,
+      nextOffset,
+      ...(validTotal !== undefined ? { totalMessages: validTotal } : {}),
+    };
+  }
+  return {
+    hasMore: false,
+    ...(validTotal !== undefined ? { totalMessages: validTotal } : {}),
+    ...(result?.completeSnapshot === true ? { completeSnapshot: true as const } : {}),
+  };
+}
 
 export type ChatMetadataResult = CommandsListResult & {
   models?: ModelCatalogEntry[];
@@ -915,6 +953,42 @@ export async function loadChatHistory(
   return promise;
 }
 
+export async function loadOlderChatHistoryPage(
+  state: ChatState,
+  offset: number,
+): Promise<ChatHistoryResult | undefined> {
+  if (!state.client || !state.connected) {
+    return undefined;
+  }
+  const client = state.client;
+  const sessionKey = state.sessionKey;
+  const requestAgentId = isUiSelectedGlobalSessionKey(sessionKey)
+    ? resolveUiSelectedSessionAgentId(state)
+    : undefined;
+  const ownership = beginChatHistoryRequest(
+    state,
+    client,
+    state.connectionEpoch,
+    sessionKey,
+    requestAgentId,
+  );
+  const result = await client.request<ChatHistoryResult>("chat.history", {
+    sessionKey,
+    ...(requestAgentId ? { agentId: requestAgentId } : {}),
+    limit: CHAT_HISTORY_REQUEST_LIMIT,
+    offset,
+  });
+  if (!shouldApplyChatHistoryResult(state, ownership)) {
+    return undefined;
+  }
+  return {
+    ...result,
+    messages: (Array.isArray(result.messages) ? result.messages : []).filter(
+      (message) => !shouldHideHistoryMessage(message),
+    ),
+  };
+}
+
 export function applyChatAgentsList(
   state: ChatState,
   agentsList: AgentsListResult | undefined,
@@ -1018,6 +1092,7 @@ async function loadChatHistoryUncached(
       return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
+    state.chatHistoryPagination = resolveChatHistoryPagination(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     const lateOptimisticTail = collectLateOptimisticTailMessages(

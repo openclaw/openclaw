@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { sessionCostUsageCacheTestApi } from "./session-cost-usage-cache.sqlite.js";
 import {
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
@@ -71,8 +72,7 @@ describe("session cost usage stream errors", () => {
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
       await refreshCostUsageCache();
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const cacheBefore = await fs.readFile(cachePath, "utf-8");
+      const cacheBefore = sessionCostUsageCacheTestApi.readCacheJson();
 
       const appendedEntry = `${usageEntry("2026-07-06T12:01:00.000Z", 20)}\n`;
       await fs.appendFile(sessionFile, appendedEntry, "utf-8");
@@ -86,7 +86,7 @@ describe("session cost usage stream errors", () => {
       });
 
       await expect(refreshCostUsageCache()).rejects.toThrow("stream read failed");
-      expect(await fs.readFile(cachePath, "utf-8")).toBe(cacheBefore);
+      expect(sessionCostUsageCacheTestApi.readCacheJson()).toBe(cacheBefore);
 
       const summary = await loadCostUsageSummaryFromCache({
         startMs: Date.UTC(2026, 6, 6),

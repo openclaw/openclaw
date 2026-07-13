@@ -1,5 +1,4 @@
-// Full-page new-session draft: pick agent, exec host, folder, and branch/worktree,
-// then the first message creates the session in one sessions.create call.
+// Full-page draft: pick agent, host, folder, and worktree, then create on first message.
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -17,6 +16,8 @@ import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../styles/chat.css";
+import "../../styles/new-session.css";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
@@ -33,6 +34,7 @@ type DraftBranches = {
 type DraftNode = {
   nodeId: string;
   displayName: string;
+  connected: boolean;
   canExec: boolean;
   canBrowse: boolean;
 };
@@ -41,8 +43,7 @@ type BrowserTarget = { nodeId: string; label: string };
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Last path segment for the folder trigger label; handles both separators.
-    Falls back to the raw path so filesystem roots ("/", "C:\") stay visible. */
+/** Last path segment for the label; raw-path fallback keeps filesystem roots visible. */
 function folderDisplayName(path: string): string {
   return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
 }
@@ -78,8 +79,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private browserError: string | null = null;
   @state() private browserListing: FsListDirResult | null = null;
   @state() private browserTarget: BrowserTarget | null = null;
-  // The head input's live value; a typed absolute path stays applicable via
-  // "Use this folder" even when the host cannot list it (no fs.listDir).
+  // Live head input; absolute paths stay applicable even without fs.listDir.
   @state() private browserPathDraft = "";
 
   private openedFor: string | null = null;
@@ -146,6 +146,12 @@ class NewSessionPage extends OpenClawLightDomElement {
   // event, and two open panels would overlap.
   private readonly handleMenuToggle = (event: Event) => {
     const details = event.currentTarget as HTMLDetailsElement;
+    if (this.submitting) {
+      // Native details can reopen from keyboard or scripted activation even
+      // after the draft becomes inert. Submission owns one frozen snapshot.
+      details.open = false;
+      return;
+    }
     if (!details.open) {
       return;
     }
@@ -303,6 +309,7 @@ class NewSessionPage extends OpenClawLightDomElement {
             {
               nodeId,
               displayName: normalizeOptionalString(node.displayName) ?? nodeId,
+              connected,
               canExec,
               canBrowse: canExec && commands.includes("fs.listDir"),
             },
@@ -409,6 +416,12 @@ class NewSessionPage extends OpenClawLightDomElement {
     const message = this.message.trim();
     this.submitting = true;
     this.error = null;
+    // Collapse menus and retire browser requests before awaiting the Gateway;
+    // otherwise a now-hidden picker can keep mutating the submitted draft.
+    this.closeBrowser();
+    for (const details of this.openMenus()) {
+      details.open = false;
+    }
     try {
       const result = await context.sessions.createResult(
         buildDraftSessionCreateParams({
@@ -464,6 +477,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private selectAgentId(agentId: string) {
+    if (this.submitting) {
+      return;
+    }
     // Re-picking the checked agent must not reset the draft (the native
     // select never fired change for the same option).
     if (normalizeAgentId(agentId) === normalizeAgentId(this.agentId)) {
@@ -478,6 +494,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private applyFolder(folder: string, execNode = this.execNode) {
+    if (this.submitting) {
+      return;
+    }
     this.execNode = execNode;
     this.folder = folder.trim();
     if (this.execNode) {
@@ -490,6 +509,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private selectExecNode(execNode: string) {
+    if (this.submitting) {
+      return;
+    }
     if (execNode === this.execNode) {
       return;
     }
@@ -503,6 +525,14 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private browseAvailable(): boolean {
     return this.isAdmin();
+  }
+
+  /** Unavailable device rows say why; exec-only nodes remain selectable for manual paths. */
+  private nodeBrowseBlockedReason(node: DraftNode): string | undefined {
+    if (node.canBrowse) {
+      return undefined;
+    }
+    return node.connected ? t("newSession.nodeCannotBrowse") : t("newSession.nodeOffline");
   }
 
   private closeBrowser() {
@@ -532,12 +562,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserPathDraft = "";
   }
 
-  /** "Use this folder" applies exactly what the head input shows. The draft
-      syncs to every listed directory, covers hosts that cannot list
-      (fs.listDir missing/failing), and an edited path always wins over a
-      stale listing. A cleared input applies "" — the host's default
-      directory (workspace on the Gateway, home on a node) — matching the
-      clearable folder textbox this browser replaced. Null disables Use. */
+  /** Use applies the live path; empty means host default, null disables. */
   private usableBrowserPath(): string | null {
     const draft = this.browserPathDraft.trim();
     if (draft.length === 0) {
@@ -558,6 +583,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     const client = this.context?.gateway.snapshot.client;
     const target = this.browserTarget;
     if (!client || !target) {
+      return;
+    }
+    // Exec-only nodes still accept a typed cwd; never probe an unsupported fs.listDir.
+    const targetNode = this.nodes.find((node) => node.nodeId === target.nodeId);
+    if (targetNode?.canExec && !targetNode.canBrowse) {
+      this.showBrowserRoot();
+      this.browserTarget = target;
+      this.browserPathDraft = path ?? "";
       return;
     }
     const requestId = ++this.browserRequestToken;
@@ -691,7 +724,8 @@ class NewSessionPage extends OpenClawLightDomElement {
                     <button
                       type="button"
                       class="new-session-page__browser-entry"
-                      ?disabled=${!node.canBrowse}
+                      ?disabled=${!node.canExec}
+                      title=${this.nodeBrowseBlockedReason(node) ?? nothing}
                       @click=${() =>
                         this.selectBrowserTarget({
                           nodeId: node.nodeId,
@@ -720,6 +754,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                     class="new-session-page__browser-entry ${entry.hidden
                       ? "new-session-page__browser-entry--hidden"
                       : ""}"
+                    title=${entry.hidden ? t("newSession.hiddenFolder") : nothing}
                     @click=${() => this.loadBrowser(entry.path)}
                   >
                     <span class="new-session-page__target-icon" aria-hidden="true"
@@ -774,7 +809,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         role="menuitemradio"
         aria-checked=${String(params.checked)}
         title=${params.title ?? nothing}
-        ?disabled=${params.disabled ?? false}
+        ?disabled=${this.submitting || (params.disabled ?? false)}
         @click=${params.onSelect}
       >
         <span class="session-menu__check" aria-hidden="true"
@@ -790,7 +825,16 @@ class NewSessionPage extends OpenClawLightDomElement {
     const label = selected?.identity?.name ?? selected?.name ?? selected?.id ?? this.agentId;
     return html`
       <details class="new-session-page__select" @toggle=${this.handleMenuToggle}>
-        <summary class="new-session-page__trigger" title=${t("newSession.agent")}>
+        <summary
+          class="new-session-page__trigger"
+          title=${t("newSession.agent")}
+          aria-disabled=${String(this.submitting)}
+          @click=${(event: Event) => {
+            if (this.submitting) {
+              event.preventDefault();
+            }
+          }}
+        >
           <span class="new-session-page__target-icon" aria-hidden="true">${icons.bot}</span>
           <span class="new-session-page__trigger-label">${label}</span>
           <span class="new-session-page__trigger-chevron" aria-hidden="true"
@@ -835,6 +879,12 @@ class NewSessionPage extends OpenClawLightDomElement {
           class="new-session-page__trigger"
           title=${t("newSession.where")}
           data-worktree=${String(this.worktree)}
+          aria-disabled=${String(this.submitting)}
+          @click=${(event: Event) => {
+            if (this.submitting) {
+              event.preventDefault();
+            }
+          }}
         >
           <span class="new-session-page__target-icon" aria-hidden="true">${icons.monitor}</span>
           <span class="new-session-page__trigger-label">${whereLabel}</span>
@@ -903,11 +953,15 @@ class NewSessionPage extends OpenClawLightDomElement {
                         <input
                           type="text"
                           list="new-session-branches"
+                          ?disabled=${this.submitting}
                           placeholder=${this.branchesLoading
                             ? t("common.loading")
                             : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
                           .value=${this.baseRef}
                           @input=${(event: Event) => {
+                            if (this.submitting) {
+                              return;
+                            }
                             this.baseRefEditGeneration += 1;
                             this.baseRef = (event.target as HTMLInputElement).value.trim();
                           }}
@@ -922,9 +976,13 @@ class NewSessionPage extends OpenClawLightDomElement {
                         <span>${t("newSession.worktreeName")}</span>
                         <input
                           type="text"
+                          ?disabled=${this.submitting}
                           placeholder=${t("newSession.worktreeNamePlaceholder")}
                           .value=${this.worktreeName}
                           @input=${(event: Event) => {
+                            if (this.submitting) {
+                              return;
+                            }
                             this.worktreeName = (event.target as HTMLInputElement).value.trim();
                           }}
                         />
@@ -969,10 +1027,10 @@ class NewSessionPage extends OpenClawLightDomElement {
           class="new-session-page__trigger ${browseAvailable
             ? ""
             : "new-session-page__trigger--disabled"}"
-          title=${browseAvailable ? t("newSession.browse") : t("newSession.folder")}
-          aria-disabled=${String(!browseAvailable)}
+          title=${browseAvailable ? t("newSession.browse") : t("newSession.browseRequiresAdmin")}
+          aria-disabled=${String(this.submitting || !browseAvailable)}
           @click=${(event: Event) => {
-            if (!browseAvailable) {
+            if (this.submitting || !browseAvailable) {
               event.preventDefault();
             }
           }}
@@ -1010,7 +1068,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.worktreeName.trim() !== "" &&
       !WORKTREE_NAME_PATTERN.test(this.worktreeName.trim());
     return html`
-      <div class="new-session-page__draft">
+      <div class="new-session-page__draft" aria-busy=${String(this.submitting)}>
         ${this.renderTargetBar()}
         ${worktreeNameInvalid
           ? html`<div class="new-session-page__error">${t("newSession.worktreeNameInvalid")}</div>`
@@ -1043,10 +1101,15 @@ class NewSessionPage extends OpenClawLightDomElement {
         hello: gateway?.hello ?? null,
       },
       onDraftChange: (next) => {
-        this.message = next;
+        if (!this.submitting) {
+          this.message = next;
+        }
       },
       onSend: () => void this.submit(),
       onOpenSession: (sessionKey) => {
+        if (this.submitting) {
+          return;
+        }
         this.context?.gateway.setSessionKey(sessionKey);
         this.context?.navigate("chat", { search: searchForSession(sessionKey) });
       },
@@ -1056,7 +1119,12 @@ class NewSessionPage extends OpenClawLightDomElement {
   override render() {
     return html`
       <div class="new-session-page">
-        <div class="new-session-page__scroll" @mousedown=${beginNativeWindowDragFromTopInset}>
+        <div
+          class="new-session-page__scroll"
+          ?inert=${this.submitting}
+          aria-busy=${String(this.submitting)}
+          @mousedown=${beginNativeWindowDragFromTopInset}
+        >
           ${this.renderWelcome()}
         </div>
       </div>
@@ -1064,6 +1132,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private handleMessageKeydown(event: KeyboardEvent) {
+    if (this.submitting) {
+      return;
+    }
     // keyCode 229 mirrors the chat composer's IME guard: some browsers emit
     // the candidate-confirm Enter with isComposing === false.
     if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) {
@@ -1088,10 +1159,13 @@ class NewSessionPage extends OpenClawLightDomElement {
             <textarea
               class="new-session-page__message"
               rows="3"
+              ?disabled=${this.submitting}
               placeholder=${t("newSession.messagePlaceholder")}
               .value=${this.message}
               @input=${(event: Event) => {
-                this.message = (event.target as HTMLTextAreaElement).value;
+                if (!this.submitting) {
+                  this.message = (event.target as HTMLTextAreaElement).value;
+                }
               }}
               @keydown=${(event: KeyboardEvent) => this.handleMessageKeydown(event)}
             ></textarea>
@@ -1105,7 +1179,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                 aria-label=${startLabel}
                 @click=${() => void this.submit()}
               >
-                ${this.submitting ? icons.loader : icons.send}
+                ${this.submitting ? icons.loader : icons.arrowUp}
               </button>
             </openclaw-tooltip>
           </div>

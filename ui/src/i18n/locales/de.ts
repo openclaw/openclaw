@@ -82,6 +82,7 @@ export const de: TranslationMap = {
     relink: "Erneut verknüpfen",
     waitForScan: "Auf Scan warten",
     logout: "Abmelden",
+    skipToMainContent: "Zum Hauptinhalt springen",
   },
   nativeLinkMenu: {
     label: "Link-Aktionen",
@@ -219,10 +220,11 @@ export const de: TranslationMap = {
   lazyView: {
     loadingTitle: "Panel wird geladen",
     errorTitle: "Panel konnte nicht geladen werden",
-    errorSubtitle:
-      "Laden Sie die Seite neu, um das neueste Control UI-Bundle zu laden, oder versuchen Sie es erneut, wenn die Netzwerkanfrage fehlgeschlagen ist.",
+    genericSubtitle: "Beim Laden dieses Bereichs ist ein Fehler aufgetreten.",
+    staleTitle: "Eine neue Version ist verfügbar",
+    staleSubtitle:
+      "OpenClaw wurde im Hintergrund aktualisiert. Laden Sie die Seite neu, um das neueste Panel zu erhalten.",
     retry: "Erneut versuchen",
-    unknownError: "Unbekannter Fehler beim Laden des Moduls.",
   },
   nodes: {
     pairing: {
@@ -231,6 +233,16 @@ export const de: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Scannen Sie diesen QR-Code in der mobilen App, um ein neues Telefon zu verbinden.",
       generating: "Sicherer Einrichtungscode wird erstellt…",
+      accessTitle: "Mobiler Zugriff",
+      fullAccess: "Vollzugriff (empfohlen)",
+      fullAccessHint:
+        "Node sowie vollständige Gateway-Steuerung, einschließlich Einstellungen und Upgrades.",
+      limitedAccess: "Eingeschränkter Zugriff",
+      limitedAccessHint: "Node, Chat und Genehmigungen ohne administrative Steuerung.",
+      generateCode: "Einrichtungscode erstellen",
+      transportLimitedTitle: "Zur Netzwerksicherheit eingeschränkt",
+      transportLimitedHint:
+        "Diese Gateway-URL verwendet unverschlüsseltes ws://. Verwenden Sie wss:// oder Tailscale Serve und erstellen Sie anschließend einen neuen Code für den Vollzugriff.",
       failed: "Einrichtungscode konnte nicht erstellt werden.",
       qrAlt: "QR-Code für die Kopplung mit OpenClaw mobile",
       qrUnavailable: "QR-Code nicht verfügbar. Kopieren Sie stattdessen den Einrichtungscode.",
@@ -266,7 +278,8 @@ export const de: TranslationMap = {
     },
     inventory: {
       title: "Geräte",
-      subtitle: "Eine Zeile pro gekoppeltem Client: Status, Rollen, Tokens.",
+      summaryConnected: "{connected} von {total} verbunden",
+      summaryPending: "{count} warten auf Genehmigung",
       cleanupStale: "{count} veraltete bereinigen",
       pendingApproval: "Ausstehende Genehmigung",
       paired: "Gekoppelt",
@@ -381,6 +394,18 @@ export const de: TranslationMap = {
     title: "Verwaltete Worktrees",
     subtitle: "Isolierte Repository-Checkouts im Besitz von OpenClaw.",
     cleanNow: "Jetzt bereinigen",
+    cleanupTitle: "Bereinigung",
+    cleanupSubtitle:
+      "OpenClaw entfernt regelmäßig alte Worktrees, um Speicherplatz freizugeben. Legen Sie fest, wie aggressiv die Bereinigung durchgeführt wird.",
+    cleanupMaxCount: "Maximale Anzahl an Worktrees",
+    cleanupMaxCountHelp:
+      "Maximale Anzahl verwalteter Worktrees, die über alle Repositorys hinweg beibehalten werden. Ältere Worktrees werden zuerst als Snapshots gespeichert und entfernt. Auf 0 setzen, um die Anzahlbegrenzung zu deaktivieren.",
+    cleanupMaxSize: "Maximale Gesamtgröße (GB)",
+    cleanupMaxSizeHelp:
+      "Maximale Gesamtgröße in GB über alle verwalteten Worktrees hinweg. Auf 0 setzen, um die Größenbegrenzung zu deaktivieren.",
+    cleanupDecrease: "{label} verringern",
+    cleanupIncrease: "{label} erhöhen",
+    cleanupSaveFailed: "Speichern der Bereinigungsgrenzwerte fehlgeschlagen.",
     name: "Name",
     repo: "Repository",
     branch: "Branch",
@@ -393,6 +418,24 @@ export const de: TranslationMap = {
     confirmDelete: "Snapshot erstellen und {name} löschen?",
     confirmForceDelete: "Snapshot fehlgeschlagen: {error}\n\nOhne Snapshot löschen?",
   },
+  agentChip: {
+    menuLabel: "Agentenmenü",
+    agents: "Agents",
+    working: "Arbeitet…",
+    ready: "Bereit zum Chatten",
+    whatCanAgentDo: "Was kann {name} tun?",
+    help: "Hilfe",
+    getHelp: "Hilfe erhalten",
+    discord: "Discord-Community",
+    viewChangelog: "Änderungsprotokoll anzeigen",
+    agentSettings: "Agent-Einstellungen",
+    filterAgents: "Agent suchen…",
+    noAgentMatches: "Keine passenden Agenten",
+  },
+  agentScope: {
+    label: "Agentenbereich",
+    allAgents: "Alle Agenten",
+  },
   newSession: {
     title: "Neue Sitzung",
     hint: "Wähle aus, wo diese Sitzung arbeitet, und sage dann, was zu tun ist.",
@@ -403,10 +446,14 @@ export const de: TranslationMap = {
     folder: "Ordner",
     folderPlaceholder: "Agent-Arbeitsbereich",
     browse: "Ordner durchsuchen",
+    browseRequiresAdmin: "Zum Durchsuchen von Ordnern ist eine Admin-Verbindung erforderlich",
     browserUp: "Übergeordneter Ordner",
     browserUse: "Diesen Ordner verwenden",
     browserEmpty: "Keine Unterordner",
     browserLoadFailed: "Dieser Ordner konnte nicht aufgelistet werden.",
+    nodeOffline: "Das Gerät ist offline",
+    nodeCannotBrowse: "Dieses Gerät unterstützt das Durchsuchen von Ordnern nicht",
+    hiddenFolder: "Ausgeblendeter Ordner",
     worktree: "Worktree",
     worktreeUnavailable: "Agent-Arbeitsbereich ist kein git Checkout",
     baseBranch: "Basis-Branch",
@@ -441,6 +488,24 @@ export const de: TranslationMap = {
     archivedOnlyTooltip: "Nur archivierte Sitzungen anzeigen.",
     minutesPlaceholder: "Min.",
     searchPlaceholder: "Nach Schlüssel, Agent, Label, Art filtern…",
+    transcriptSearchTitle: "Transkripte durchsuchen",
+    transcriptSearchDescription:
+      "Finde exakte Wörter oder Ausdrücke in Benutzer- und Assistentennachrichten aus den Sitzungen des Standard-Agenten.",
+    transcriptSearchInputLabel: "Sitzungstranskripte durchsuchen",
+    transcriptSearchPlaceholder: "Exakte Wörter oder Ausdrücke suchen…",
+    transcriptSearchAction: "Suchen",
+    transcriptSearchClear: "Löschen",
+    transcriptSearchRetry: "Erneut versuchen",
+    transcriptSearchSearching: "Transkripte werden durchsucht…",
+    transcriptSearchUnavailable: "Die Transkriptsuche erfordert ein neueres Gateway.",
+    transcriptSearchError: "Transkriptsuche fehlgeschlagen",
+    transcriptSearchIndexing:
+      "Der Transkriptindex wird noch aktualisiert. Versuche es erneut, um aktuelle Nachrichten einzubeziehen.",
+    transcriptSearchEmpty: "Keine Transkriptnachrichten entsprechen dieser Suche.",
+    transcriptSearchMatches: "Transkripttreffer: {count}",
+    transcriptSearchTruncated: "Die ersten 25 Treffer werden angezeigt.",
+    user: "Benutzer",
+    assistant: "Assistent",
     selected: "{count} ausgewählt",
     deleteSelected: "Löschen",
     selectAllOnPage: "Alle auf der Seite auswählen",
@@ -538,6 +603,7 @@ export const de: TranslationMap = {
     groupBy: "Gruppieren nach",
     groupByNone: "Keine",
     groupByCategory: "Benutzerdefinierte Gruppen",
+    showCronSessions: "Cron-Sitzungen anzeigen",
     groupByChannel: "Kanal",
     groupByKind: "Art",
     groupByAgent: "Agent",
@@ -578,6 +644,8 @@ export const de: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Im Umschalter anheften",
+    unpinFromSwitcher: "Vom Umschalter lösen",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -602,6 +670,19 @@ export const de: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identität",
+      subtitle: "Name, Emoji und Avatar, die in Chats und in der Seitenleiste angezeigt werden.",
+      name: "Anzeigename",
+      namePlaceholder: "Agentenname",
+      emoji: "Emoji",
+      chooseImage: "Bild auswählen…",
+      replaceImage: "Bild ersetzen…",
+      imageUnusable:
+        "Dieses Bild kann nicht verwendet werden. Wähle eine Bilddatei mit einer Größe von bis zu 2 MB aus.",
+      fileHint:
+        "Agenten können dies selbst festlegen, indem sie IDENTITY.md in ihrem Arbeitsbereich bearbeiten.",
     },
     overview: {
       title: "Übersicht",
@@ -1048,6 +1129,7 @@ export const de: TranslationMap = {
     settingsView: "Einstellungsansicht",
     simple: "Einfach",
     advanced: "Erweitert",
+    content: "Einstellungsinhalte",
     themeImported: "{name} importiert.",
     themeRemoved: "Benutzerdefiniertes Theme entfernt.",
     channels: {
@@ -1175,6 +1257,10 @@ export const de: TranslationMap = {
       inlineHintAfter:
         "um ein browserlokales tweakcn-Design hinzuzufügen. Verwenden Sie in tweakcn Share und fügen Sie den kopierten Link hier ein.",
       textSize: "Textgröße",
+    },
+    chatPrefs: {
+      title: "Chat",
+      hint: "Browserlokale Chat-Einstellungen.",
     },
     connection: {
       title: "Verbindung",
@@ -1398,6 +1484,8 @@ export const de: TranslationMap = {
     platforms: "Plattformen: {platforms}",
     installNamed: "{name} installieren",
     notFound: "Skill nicht gefunden.",
+    openDetails: "Details zu {name} öffnen",
+    enabledNamed: "{name} aktiviert",
     invalidLink: "ClawHub-Link ungültig",
     overview: "Übersicht",
     skillCard: "Skill Card",
@@ -1430,6 +1518,8 @@ export const de: TranslationMap = {
     blockedAgentFilter: "durch Agentenfilter blockiert",
   },
   nav: {
+    back: "Zurück",
+    forward: "Weiter",
     chat: "Chat",
     settings: "Einstellungen",
     settingsGeneral: "Allgemein",
@@ -1714,8 +1804,6 @@ export const de: TranslationMap = {
     removedRestart:
       "{name} wurde entfernt. Ein Neustart der Gateway ist erforderlich, um die Änderung anzuwenden.",
     verifiedSource: "Verifizierte Quelle",
-    menuLabel: "{name}-Aktionen",
-    menuDetails: "Details anzeigen",
     enableAction: "Aktivieren",
     disableAction: "Deaktivieren",
     working: "Wird ausgeführt…",
@@ -1853,6 +1941,10 @@ export const de: TranslationMap = {
       useCurrentChatAria: "Aktuellen Chat für Überarbeitungsanfragen verwenden",
       useCurrentChatTooltip:
         "Überarbeitungsanfragen an die aktuelle Chat-Sitzung statt an die Workshop-Sitzung des Vorschlags senden.",
+      selfLearning: "Selbstlernen",
+      selfLearningAria: "Vorschläge für selbstlernende Skills ein- oder ausschalten",
+      selfLearningTooltip:
+        "Erfasst Korrekturen und prüft umfangreiche abgeschlossene Arbeiten, um daraus ausstehende Skill-Vorschläge zu erstellen. Verbraucht zusätzliche Hintergrund-Tokens; Entwürfe erscheinen auf diesem Board als ausstehende Vorschläge.",
       view: "Workshop-Ansicht",
       board: "Board",
       today: "Heute",
@@ -1933,6 +2025,14 @@ export const de: TranslationMap = {
       noProposalsTitle: "Noch keine Vorschläge",
       noProposalsBody: "{agent} hat noch keine Skill-Vorschläge entworfen.",
       noProposalsFooter: "Neue Vorschläge werden hier zur Überprüfung angezeigt.",
+    },
+    selfLearning: {
+      pitchTitle: "Selbstlernen aktivieren",
+      pitchBody:
+        "OpenClaw prüft Korrekturen und umfangreiche abgeschlossene Durchläufe und erstellt anschließend Skill-Vorschläge für dieses Board. Dabei werden zusätzliche Hintergrund-Tokens verbraucht und die Entwürfe erscheinen als ausstehende Vorschläge.",
+      enable: "Selbstlernen aktivieren",
+      enabling: "Wird aktiviert…",
+      updateError: "Die Einstellung für das Selbstlernen konnte nicht aktualisiert werden.",
     },
     today: {
       emptyTitle: "Heute steht nichts an",
@@ -3052,6 +3152,8 @@ export const de: TranslationMap = {
     },
     pullRequests: {
       linkLabel: "Pull Request #{number}: {title}",
+      createPr: "PR erstellen",
+      createPrLabel: "Pull-Request für {branch} erstellen",
       dismiss: "Pull Request #{number} ausblenden",
       open: "Offen",
       draft: "Entwurf",
@@ -3071,24 +3173,16 @@ export const de: TranslationMap = {
       rateLimited:
         "GitHub API-Ratenlimit erreicht. Der Pull-Request-Status ist möglicherweise veraltet, bis das Limit zurückgesetzt wird.",
     },
-    refreshTitle: "Chat-Daten aktualisieren",
-    settings: "Chat-Einstellungen",
     usageRemaining: "Verbleibende Nutzung",
-    voiceSettings: "Sprache",
-    thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
-    toolCallsToggle: "Tool-Aufrufe und Tool-Ergebnisse umschalten",
-    commentaryToggle: "Kommentar nach der endgültigen Antwort behalten",
-    commentaryLabel: "Kommentar",
-    autoScrollMode: "Automatischer Scrollmodus",
-    autoScrollAlways: "Immer",
-    autoScrollNearBottom: "Nahe am unteren Rand",
-    autoScrollOff: "Aus",
+    view: {
+      menu: "Ansicht",
+      reasoning: "Argumentation",
+      toolCalls: "Tool-Aufrufe",
+      commentary: "Kommentare beibehalten",
+    },
     sendShortcut: "Tastenkürzel zum Senden",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Cron-Sitzungen ausblenden",
-    showCronSessions: "Cron-Sitzungen anzeigen",
-    showCronSessionsHidden: "Cron-Sitzungen anzeigen ({count} ausgeblendet)",
     onboardingDisabled: "Während der Einrichtung deaktiviert",
     gatewayStatus: "Gateway-Status: {status}",
     commandPaletteTitle: "Suchen oder springen zu… (⌘K)",
@@ -3278,7 +3372,6 @@ export const de: TranslationMap = {
       },
       takePhoto: "Foto aufnehmen",
       dismissVoiceInputError: "Fehler bei der Spracheingabe schließen",
-      loadingMicrophones: "Mikrofone werden geladen…",
       microphoneAccessFailed: "Auf Mikrofoneingänge kann nicht zugegriffen werden.",
       microphoneBusy: "Mikrofoneingänge sind belegt oder für den Browser nicht verfügbar.",
       microphoneFallback: "Mikrofon {number}",
@@ -3298,19 +3391,6 @@ export const de: TranslationMap = {
       stillListening: "Höre noch zu",
       stopVoiceInput: "Spracheingabe stoppen",
       systemDefaultMicrophone: "Systemstandard",
-      talkAdvancedSettingsRequiresAdmin: "Erweiterte Einstellungen erfordern Administratorzugriff",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Erweiterte Talk-Einstellungen erfordern operator.admin-Zugriff.",
-      talkDefault: "Standard",
-      talkModel: "Modell",
-      talkModelAuto: "Automatisch",
-      talkMoreInSettings: "Mehr in den Einstellungen",
-      talkSensitivity: "Empfindlichkeit",
-      talkSensitivityHigh: "Hoch",
-      talkSensitivityLow: "Niedrig",
-      talkSensitivityMedium: "Mittel",
-      talkVoice: "Stimme",
-      voiceOptions: "Sprachoptionen",
       voiceTranscript: "Sprachtranskript",
     },
     selectors: {
@@ -3379,6 +3459,12 @@ export const de: TranslationMap = {
         activityErrorMany: "Aktivität: {count} Tools, enthält Fehler.",
       },
     },
+    workRun: {
+      workedFor: "Gearbeitet für {duration}",
+      worked: "Gearbeitet",
+      workedForError: "Gearbeitet für {duration}, enthält Fehler.",
+      workedError: "Gearbeitet, enthält Fehler.",
+    },
     backgroundTasks: {
       label: "Hintergrundaufgaben",
       title: "Hintergrundaufgaben",
@@ -3389,6 +3475,8 @@ export const de: TranslationMap = {
       empty: "Noch keine Hintergrundaufgaben für diesen Agenten.",
       running: "Wird ausgeführt ({count})",
       finished: "Abgeschlossen ({count})",
+      statusRunningOne: "1 laufende Aufgabe",
+      statusRunningMany: "{count} laufende Aufgaben",
       stopTask: "{title} stoppen",
       viewTranscript: "Transkript anzeigen",
       toolUseOne: "1 Tool-Aufruf",
@@ -3477,11 +3565,13 @@ export const de: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Automatisierungsstatus",
       all: "Alle",
       active: "Aktiv",
       paused: "Pausiert",
     },
     list: {
+      viewLabel: "Automatisierungsansichten",
       searchPlaceholder: "Geplante Aufgaben suchen",
       newTask: "Neue Aufgabe",
       filters: "Filter",
@@ -3547,12 +3637,12 @@ export const de: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Zeitplaner",
       tasks: "Aufgaben",
       failing: "Fehlgeschlagen",
       nextWake: "Nächste Ausführung",
     },
     detail: {
+      tabsLabel: "Automatisierungsdetails",
       newTitle: "Neue geplante Aufgabe",
       newSubtitle: "Beschreibe, was OpenClaw tun soll, und wähle dann, wann es ausgeführt wird.",
       back: "Alle Automatisierungen",
@@ -3572,7 +3662,15 @@ export const de: TranslationMap = {
       clone: "Klonen",
       remove: "Entfernen",
       more: "Weitere Aktionen",
-      history: "Verlauf",
+    },
+    runNotStarted: {
+      notDue: "Diese Automatisierung ist noch nicht fällig.",
+      alreadyRunning: "Diese Automatisierung wird bereits ausgeführt.",
+      recoveryPending: "Die Wiederherstellung des Schedulers läuft noch.",
+      invalidSpec:
+        "Diese Automatisierung hat einen ungültigen Zeitplan oder eine ungültige Nutzlast.",
+      stopped: "Der Scheduler wurde angehalten.",
+      unknown: "Diese Automatisierung konnte nicht gestartet werden.",
     },
     jobs: {
       schedule: "Zeitplan",

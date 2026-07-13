@@ -177,8 +177,8 @@ jobs:
           }
 
           # Manual release-gate runs commonly validate the workflow ref's exact SHA.
-          # Fetch the branch/tag ref first so GitHub does not have to negotiate an
-          # arbitrary SHA fetch, then verify the resolved commit stayed pinned.
+          # Fetch the branch/tag ref first, then refetch the SHA if that ref moves
+          # while the manual run waits for a runner.
           checkout_ref="$CHECKOUT_REF"
           requested_sha=""
           if [[ "$CHECKOUT_REF" =~ ^[0-9a-f]{40}$ ]]; then
@@ -209,6 +209,12 @@ jobs:
 
           if [ -n "$requested_sha" ]; then
             resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            if [ "$resolved_sha" != "$requested_sha" ] && [ "$checkout_ref" != "$requested_sha" ]; then
+              echo "::notice::checkout ref '$checkout_ref' moved to '$resolved_sha'; fetching requested SHA '$requested_sha'"
+              checkout_ref="$requested_sha"
+              fetch_checkout_ref "$checkout_ref"
+              resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            fi
             if [ "$resolved_sha" != "$requested_sha" ]; then
               echo "::error::checkout ref '$checkout_ref' resolved to '$resolved_sha'," \
                 "expected '$requested_sha'" >&2
@@ -578,14 +584,14 @@ jobs:
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         run: node scripts/check-protocol-event-coverage.mjs
 
-  # Run dependency-free security checks in parallel with scope detection so the
-  # main Node jobs do not have to wait for Python/pre-commit setup.
+  # Run dependency-free security checks on a hosted runner in parallel with
+  # scope detection. No downstream job waits for Python/pre-commit setup.
   security-fast:
     permissions:
       contents: read
     needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -869,7 +875,7 @@ jobs:
         env:
           # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
           # the same built CLI. Keep the tighter Blacksmith regression ceiling.
-          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '350' }}
+          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
         run: |
           set +e
           pnpm test:startup:memory
@@ -1388,7 +1394,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.19.0"
+          node-version: "22.22.3"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1597,12 +1603,27 @@ jobs:
               fi
               ;;
             dependencies)
-              if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
+              has_package_script() {
+                node -e '
+                  const scripts = require("./package.json").scripts ?? {};
+                  process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+                ' "$1"
+              }
+              if has_package_script "deadcode:dependencies" &&
+                has_package_script "deadcode:unused-files"; then
                 pnpm deadcode:dependencies
                 pnpm deadcode:unused-files
-                pnpm deadcode:report:ci:ts-unused
-              else
+                if has_package_script "deadcode:exports"; then
+                  pnpm deadcode:exports
+                elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                  echo "Current CI targets must provide the deadcode:exports package script." >&2
+                  exit 1
+                fi
+              elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
+              else
+                echo "Target does not provide a supported deadcode check." >&2
+                exit 1
               fi
               ;;
             test-types)
@@ -1625,14 +1646,6 @@ jobs:
               exit 1
               ;;
           esac
-
-      - name: Upload deadcode reports
-        if: ${{ always() && matrix.task == 'dependencies' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: deadcode-reports
-          path: .artifacts/deadcode
-          if-no-files-found: ignore
 
   check-additional-shard:
     permissions:

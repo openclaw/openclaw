@@ -1,16 +1,11 @@
 import { createHash } from "node:crypto";
-import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  OpenClawPluginApi,
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogHost,
@@ -25,7 +20,6 @@ export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
 export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 
-const CLAUDE_SESSIONS_CAPABILITY = "claude-sessions";
 const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
@@ -50,6 +44,13 @@ const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 
 type ClaudeSessionSource = "claude-cli" | "claude-desktop";
+
+// Desktop-app sessions live in the same ~/.claude/projects store as CLI
+// sessions (records without a projects JSONL are dropped during discovery),
+// so `claude --resume --fork-session` continues both alike.
+function isResumableClaudeSource(source: string | undefined): boolean {
+  return source === "claude-cli" || source === "claude-desktop";
+}
 
 export type ClaudeSessionCatalogSession = {
   threadId: string;
@@ -207,15 +208,6 @@ function desktopSessionsDir(homeDir: string): string {
 
 function currentHomeDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
-}
-
-function claudeProjectsAvailable(env: NodeJS.ProcessEnv): boolean {
-  const homeDir = currentHomeDir(env);
-  try {
-    return statSync(projectsDir(homeDir)).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 async function readDesktopMetadata(homeDir: string): Promise<{
@@ -611,19 +603,6 @@ export async function listLocalClaudeSessionPage(
     sessions: page,
     ...(nextOffset < records.length ? { nextCursor: encodeOffset(nextOffset) } : {}),
   };
-}
-
-function parseNodeParams(paramsJSON?: string | null): unknown {
-  if (!paramsJSON) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(paramsJSON) as unknown;
-  } catch (error) {
-    throw new ClaudeCatalogParamsError("Claude session parameters must be valid JSON", {
-      cause: error,
-    });
-  }
 }
 
 function transcriptItemType(role: string, content: unknown): string {
@@ -1167,37 +1146,6 @@ async function readClaudeSessionTranscript(params: {
   };
 }
 
-export function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
-  return [
-    {
-      command: CLAUDE_SESSIONS_LIST_COMMAND,
-      cap: CLAUDE_SESSIONS_CAPABILITY,
-      dangerous: false,
-      isAvailable: ({ env }) => claudeProjectsAvailable(env),
-      handle: async (paramsJSON) =>
-        JSON.stringify(await listLocalClaudeSessionPage(parseNodeParams(paramsJSON))),
-    },
-    {
-      command: CLAUDE_SESSION_READ_COMMAND,
-      cap: CLAUDE_SESSIONS_CAPABILITY,
-      dangerous: false,
-      isAvailable: ({ env }) => claudeProjectsAvailable(env),
-      handle: async (paramsJSON) =>
-        JSON.stringify(await readLocalClaudeTranscriptPage(parseNodeParams(paramsJSON))),
-    },
-  ];
-}
-
-export function createClaudeSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
-  return [
-    {
-      commands: [CLAUDE_SESSIONS_LIST_COMMAND, CLAUDE_SESSION_READ_COMMAND],
-      defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) => context.invokeNode(),
-    },
-  ];
-}
-
 function adoptedSessionKey(threadId: string): string {
   return `${CLAUDE_ADOPTED_SESSION_KEY_PREFIX}${createHash("sha256").update(threadId).digest("hex")}`;
 }
@@ -1342,8 +1290,8 @@ async function continueClaudeSession(
     const record = (await listClaudeSessions()).find(
       (candidate) => candidate.threadId === threadId,
     );
-    if (!record || record.source !== "claude-cli") {
-      throw new ClaudeCatalogParamsError("only local Claude CLI sessions can be continued");
+    if (!record || !isResumableClaudeSource(record.source)) {
+      throw new ClaudeCatalogParamsError("only local Claude Code sessions can be continued");
     }
     const source = await fs.stat(record.filePath).catch(() => undefined);
     if (!source?.isFile()) {
@@ -1439,9 +1387,9 @@ function toGenericClaudeHost(
     connected: host.connected,
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
     sessions: host.sessions.map((session) => {
-      const localCli =
-        host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && session.source === "claude-cli";
-      const openClawSessionKey = localCli ? adopted.get(session.threadId) : undefined;
+      const localResumable =
+        host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && isResumableClaudeSource(session.source);
+      const openClawSessionKey = localResumable ? adopted.get(session.threadId) : undefined;
       return {
         threadId: session.threadId,
         ...(session.name ? { name: session.name } : {}),
@@ -1456,7 +1404,7 @@ function toGenericClaudeHost(
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         archived: session.archived,
         ...(openClawSessionKey ? { openClawSessionKey } : {}),
-        canContinue: localCli,
+        canContinue: localResumable,
         canArchive: false,
       };
     }),

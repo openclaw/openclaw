@@ -104,6 +104,7 @@ import {
   formatCliBackendOutputDigest,
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
+import { createCliOutputFailoverError } from "./output-error.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
 const executeDeps = {
@@ -1767,6 +1768,35 @@ export async function executePreparedCliRun(
             }
           }
 
+          const streamedJsonlOutput =
+            outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
+          const parsedStructuredOutput =
+            streamedJsonlOutput ??
+            (outputMode === "json" && !stdoutParseExceeded
+              ? parseCliOutput({
+                  raw: stdout,
+                  backend,
+                  providerId: context.backendResolved.id,
+                  outputMode,
+                  fallbackSessionId: resolvedSessionId,
+                })
+              : null);
+          // A completed terminal record is authoritative even if the CLI hangs
+          // afterward. Reclassifying it as a timeout could replay completed tools.
+          if (parsedStructuredOutput?.terminalFailure) {
+            const terminalError = createCliOutputFailoverError({
+              output: parsedStructuredOutput,
+              provider: params.provider,
+              model: context.modelId,
+              runId: params.runId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+            });
+            if (terminalError) {
+              throw terminalError;
+            }
+          }
+
           if (result.exitCode !== 0 || result.reason !== "exit") {
             if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
               const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
@@ -1876,9 +1906,6 @@ export async function executePreparedCliRun(
             });
           }
 
-          const streamedJsonlOutput =
-            outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
-
           if (stdoutParseExceeded && !streamedJsonlOutput) {
             throw new FailoverError(
               `CLI stdout exceeded ${CLI_RUNNER_OUTPUT_PARSE_BYTES} bytes; refusing to parse truncated output.`,
@@ -1894,7 +1921,7 @@ export async function executePreparedCliRun(
           }
 
           const parsed =
-            streamedJsonlOutput ??
+            parsedStructuredOutput ??
             parseCliOutput({
               raw: stdout,
               backend,
@@ -1902,19 +1929,16 @@ export async function executePreparedCliRun(
               outputMode,
               fallbackSessionId: resolvedSessionId,
             });
-          if (parsed.errorText) {
-            const reason =
-              classifyFailoverReason(parsed.errorText, { provider: params.provider }) ?? "unknown";
-            const code = reason === "context_overflow" ? "cli_context_overflow" : undefined;
-            throw new FailoverError(parsed.errorText, {
-              reason,
-              provider: params.provider,
-              model: context.modelId,
-              sessionId: params.sessionId,
-              lane: params.lane,
-              status: resolveFailoverStatus(reason),
-              code,
-            });
+          const parsedError = createCliOutputFailoverError({
+            output: parsed,
+            provider: params.provider,
+            model: context.modelId,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            lane: params.lane,
+          });
+          if (parsedError) {
+            throw parsedError;
           }
           const rawText = parsed.text;
           cliBackendLog.info(

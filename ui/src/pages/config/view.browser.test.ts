@@ -61,6 +61,8 @@ describe("config view", () => {
     onOpenCustomThemeImport: vi.fn(),
     textScale: 100,
     setTextScale: vi.fn(),
+    chatSendShortcut: "enter" as const,
+    setChatSendShortcut: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
   });
@@ -239,7 +241,7 @@ describe("config view", () => {
     expect(onReset).toHaveBeenCalledTimes(1);
   });
 
-  it("renders inline progress inside busy action buttons without locking adjacent controls", () => {
+  it("locks config editors and adjacent actions while a config operation is pending", () => {
     const container = document.createElement("div");
     const renderCase = (overrides: Partial<ConfigProps>) =>
       render(
@@ -266,8 +268,9 @@ describe("config view", () => {
     expect(busyButton.disabled).toBe(true);
     expect(busyButton.getAttribute("aria-busy")).toBe("true");
     expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-    expect(clearButton.disabled).toBe(false);
-    expect(applyButton.disabled).toBe(false);
+    expect(clearButton.disabled).toBe(true);
+    expect(applyButton.disabled).toBe(true);
+    expect(container.querySelector(".config-content input")?.hasAttribute("disabled")).toBe(true);
 
     renderCase({ applying: true });
     busyButton = findButtonContainingText(container, "Applying…");
@@ -275,7 +278,7 @@ describe("config view", () => {
     clearButton = requireActionButton(actionButtons.clearButton, "Clear");
     expect(busyButton.disabled).toBe(true);
     expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-    expect(clearButton.disabled).toBe(false);
+    expect(clearButton.disabled).toBe(true);
 
     renderCase({ updating: true });
     busyButton = findButtonContainingText(container, "Updating…");
@@ -283,7 +286,17 @@ describe("config view", () => {
     clearButton = requireActionButton(actionButtons.clearButton, "Clear");
     expect(busyButton.disabled).toBe(true);
     expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-    expect(clearButton.disabled).toBe(false);
+    expect(clearButton.disabled).toBe(true);
+
+    renderCase({
+      formMode: "raw",
+      raw: '{\n  gateway: { mode: "remote" }\n}\n',
+      originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
+      saving: true,
+    });
+    const rawEditor = container.querySelector(".config-raw-field textarea");
+    expect(rawEditor).toBeInstanceOf(HTMLTextAreaElement);
+    expect(rawEditor?.hasAttribute("disabled")).toBe(true);
   });
 
   it("switches mode via the sidebar toggle", () => {
@@ -366,6 +379,17 @@ describe("config view", () => {
     const btn = findButtonByText(container, "Gateway");
     btn.click();
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
+
+    onSectionChange.mockClear();
+    const settings = findButtonByText(container, "Settings");
+    expect(settings.tabIndex).toBe(0);
+    expect(btn.tabIndex).toBe(-1);
+    expect(btn.getAttribute("aria-controls")).toBe("config-section-panel");
+    settings.focus();
+    settings.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+    expect(onSectionChange).toHaveBeenCalledWith("agents");
   });
 
   it("renders the virtual Notifications tab in Communication settings", () => {

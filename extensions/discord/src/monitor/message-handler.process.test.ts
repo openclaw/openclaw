@@ -2097,6 +2097,21 @@ describe("processDiscordMessage draft streaming", () => {
     expectFreshFinalText("Hello\nWorld");
   });
 
+  it("retries stale preview cleanup at teardown after fresh final delivery", async () => {
+    const draftStream = createMockDraftStream();
+    draftStream.clear.mockImplementationOnce(async () => {});
+    createDiscordDraftStream.mockReturnValueOnce(draftStream);
+
+    await runSingleChunkFinalScenario({
+      streaming: { mode: "partial" },
+      maxLinesPerMessage: 5,
+    });
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(2);
+    expect(draftStream.messageId()).toBeUndefined();
+  });
+
   it("delivers a fresh message instead of a preview edit when the final reply resolves a mention alias", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "On it @Sentinel" });
@@ -2223,6 +2238,7 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("renders narration updates into the Discord progress draft", async () => {
+    vi.useFakeTimers();
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -2230,6 +2246,8 @@ describe("processDiscordMessage draft streaming", () => {
       await params?.replyOptions?.onNarrationUpdate?.({
         text: "Reading the gateway config and restarting agents.",
       });
+      expect(draftStream.update).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
       await params?.dispatcher.sendFinalReply({ text: "done" });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
@@ -2241,7 +2259,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toContain("Pinching\n\nReading the gateway config and restarting agents.");
+    expect(updates).toContain("Reading the gateway config and restarting agents.");
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
   });
 

@@ -27,6 +27,7 @@ import {
   resolveChangedTargetArgs,
   resolveParallelFullSuiteConcurrency,
   shouldRetryVitestNoOutputTimeout,
+  writeVitestIncludeFile,
 } from "../../scripts/test-projects.test-support.mjs";
 import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
@@ -1499,6 +1500,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
       ["scripts/npm-runner.d.mts", ["test/scripts/npm-runner.test.ts"]],
       ["scripts/pnpm-runner.d.mts", ["test/scripts/pnpm-runner.test.ts"]],
+      [
+        "scripts/lib/cross-os-release-checks/runtime.ts",
+        ["test/scripts/openclaw-cross-os-release-checks.test.ts"],
+      ],
       [
         "scripts/install.sh",
         [
@@ -3566,6 +3571,50 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(spec?.includeFilePath).not.toMatch(new RegExp(`${process.pid}-\\d+-0\\.json$`, "u"));
   });
 
+  it("expands routed glob targets to literal include-file paths", () => {
+    withTinyGitRepo(
+      {
+        "src/gateway/core.test.ts": "",
+        "src/gateway/server-methods/ping.test.ts": "",
+        "src/gateway/server-startup.test.ts": "",
+      },
+      (cwd) => {
+        const includeFile = path.join(cwd, "include.json");
+        writeVitestIncludeFile(
+          includeFile,
+          [
+            "src/gateway/**/*.test.ts",
+            "src/gateway/server-*.test.ts",
+            "src/gateway/@(core|server-startup).test.ts",
+          ],
+          { cwd },
+        );
+
+        expect(JSON.parse(fs.readFileSync(includeFile, "utf8"))).toEqual([
+          "src/gateway/core.test.ts",
+          "src/gateway/server-methods/ping.test.ts",
+          "src/gateway/server-startup.test.ts",
+        ]);
+      },
+    );
+  });
+
+  it("retains routed glob targets in watch-mode include files", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-projects-watch-"));
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      writeVitestIncludeFile(includeFile, ["src/gateway/**/*.test.ts"], {
+        expandGlobs: false,
+      });
+
+      expect(JSON.parse(fs.readFileSync(includeFile, "utf8"))).toEqual([
+        "src/gateway/**/*.test.ts",
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("preflights targeted UI E2E specs with Playwright browser assets", () => {
     const [spec] = createVitestRunSpecs(["ui/src/pages/tasks/tasks.e2e.test.ts"], {
       baseEnv: {},
@@ -4323,9 +4372,11 @@ describe("scripts/test-projects full-suite sharding", () => {
 
   it("can expand full-suite shards to project configs for perf experiments", () => {
     const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
+    const agentsCoreConfig = "test/vitest/vitest.agents-core.config.ts";
     const toolingConfig = "test/vitest/vitest.tooling.config.ts";
     const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
     const plans = leafShardPlans;
+    const agentsCorePlans = plans.filter((plan) => plan.config === agentsCoreConfig);
     const toolingPlans = plans.filter((plan) => plan.config === toolingConfig);
     const unitFastPlans = plans.filter((plan) => plan.config === unitFastConfig);
 
@@ -4375,7 +4426,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
-      "test/vitest/vitest.agents-core.config.ts",
+      ...agentsCorePlans.map(() => agentsCoreConfig),
       "test/vitest/vitest.agents-embedded-agent.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
       "test/vitest/vitest.agents-tools.config.ts",
@@ -4432,6 +4483,18 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
     expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
     expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
+    const agentsCoreTargets = agentsCorePlans.flatMap((plan) => plan.forwardedArgs);
+    const agentsCoreChunkSizes = agentsCorePlans.map((plan) => plan.forwardedArgs.length);
+    expect(agentsCorePlans).toHaveLength(6);
+    expect(agentsCoreTargets.length).toBeGreaterThan(500);
+    expect(new Set(agentsCoreTargets).size).toBe(agentsCoreTargets.length);
+    expect(agentsCoreTargets).toContain("src/agents/agent-command.live-model-switch.test.ts");
+    expect(agentsCoreTargets).not.toContain(
+      "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
+    );
+    expect(
+      Math.max(...agentsCoreChunkSizes) - Math.min(...agentsCoreChunkSizes),
+    ).toBeLessThanOrEqual(1);
     const unitFastTargets = unitFastPlans.flatMap((plan) => plan.forwardedArgs);
     expect(unitFastPlans.length).toBeGreaterThan(10);
     expect(unitFastPlans.every((plan) => plan.forwardedArgs.length <= 70)).toBe(true);
@@ -4451,6 +4514,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       plans.filter(
         (plan) =>
           plan.config !== gatewayServerConfig &&
+          plan.config !== agentsCoreConfig &&
           plan.config !== toolingConfig &&
           plan.config !== unitFastConfig,
       ),
@@ -4459,6 +4523,7 @@ describe("scripts/test-projects full-suite sharding", () => {
         .filter(
           (plan) =>
             plan.config !== gatewayServerConfig &&
+            plan.config !== agentsCoreConfig &&
             plan.config !== toolingConfig &&
             plan.config !== unitFastConfig,
         )

@@ -543,6 +543,15 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test func `node connections use the node protocol floor`() {
+        #expect(
+            GatewayChannelActor.minimumProtocolVersion(role: "node", clientMode: "node") ==
+                GATEWAY_MIN_NODE_PROTOCOL_VERSION)
+        #expect(
+            GatewayChannelActor.minimumProtocolVersion(role: "operator", clientMode: "ui") ==
+                GATEWAY_MIN_PROTOCOL_VERSION)
+    }
+
     @Test
     func `watch approval warning text is optional and round trips`() throws {
         let legacy = try JSONDecoder().decode(
@@ -1920,6 +1929,49 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `node invoke result preserves structured worker payload`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["mcp"],
+            commands: ["mcp.tools.call.v1"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://example.invalid")),
+            credentials: .init(),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in
+                BridgeInvokeResponse(
+                    id: request.id,
+                    ok: true,
+                    payload: AnyCodable(["content": [["type": "text", "text": "worker-ok"]]]))
+            })
+        let task = try #require(session.latestTask())
+        task.emitInvokeRequest(id: "mcp-structured", command: "mcp.tools.call.v1")
+
+        try await waitUntil("structured invoke result") {
+            task.sentRequestCount(method: "node.invoke.result") == 1
+        }
+        let result = try #require(task.sentRequests(method: "node.invoke.result").first)
+        let params = try #require(result["params"] as? [String: Any])
+        let payload = try #require(params["payload"] as? [String: Any])
+        let content = try #require(payload["content"] as? [[String: Any]])
+        #expect(content.first?["text"] as? String == "worker-ok")
+
+        await gateway.disconnect()
+    }
+
+    @Test
     func `computer invoke receipts deduplicate in flight and after reconnect`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -2526,6 +2578,7 @@ struct GatewayNodeSessionTests {
         #expect(nodeEntry.scopes == [])
         #expect(operatorEntry.token == "operator-device-token")
         #expect(operatorEntry.scopes == [
+            "operator.admin",
             "operator.approvals",
             "operator.read",
             "operator.talk.secrets",

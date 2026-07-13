@@ -49,7 +49,7 @@ import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import { isFailoverError } from "../../agents/failover-error.js";
+import { findCliMaxTurnsError, isFailoverError } from "../../agents/failover-error.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -418,7 +418,7 @@ export type RuntimeFallbackAttempt = {
 };
 
 /** Result of running an agent turn through fallback/retry handling. */
-export type AgentRunLoopResult =
+type AgentRunLoopResult =
   | {
       kind: "success";
       runId: string;
@@ -791,6 +791,13 @@ function buildExternalRunFailureReply(
   const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
+  }
+  const cliMaxTurnsError = findCliMaxTurnsError(error);
+  if (cliMaxTurnsError) {
+    return {
+      text: sanitizeUserFacingText(cliMaxTurnsError.message, { errorContext: true }),
+      isGenericRunnerFailure: false,
+    };
   }
   const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {

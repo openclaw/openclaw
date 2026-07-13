@@ -21,7 +21,7 @@ import {
   type LobsterFamiliarity,
 } from "./lobster-dex.ts";
 
-export type LobsterPetAct =
+type LobsterPetAct =
   | "wave"
   | "snip"
   | "hop"
@@ -39,7 +39,7 @@ export type LobsterPetAct =
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
-export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
+type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
 
 export type LobsterPetPaletteId =
   | "crimson"
@@ -55,28 +55,21 @@ export type LobsterPetPaletteId =
   | "split"
   | "retro";
 
-export type LobsterPetPalette = {
+type LobsterPetPalette = {
   id: LobsterPetPaletteId;
   shell: string;
   claw: string;
 };
 
-export type LobsterPetAccessory =
-  | "none"
-  | "crown"
-  | "sprout"
-  | "patch"
-  | "santa"
-  | "pumpkin"
-  | "party";
+type LobsterPetAccessory = "none" | "crown" | "sprout" | "patch" | "santa" | "pumpkin" | "party";
 
-export type LobsterPetAntennae = "perky" | "droopy";
+type LobsterPetAntennae = "perky" | "droopy";
 
-export type LobsterPetBuild = "round" | "squat" | "slender";
+type LobsterPetBuild = "round" | "squat" | "slender";
 
-export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
+type LobsterPetClawSize = "dainty" | "regular" | "mighty";
 
-export type LobsterPetLook = {
+type LobsterPetLook = {
   palette: LobsterPetPalette;
   scale: number;
   accessory: LobsterPetAccessory;
@@ -306,7 +299,7 @@ const LEAVE_MS = 350;
 // One full ledge crossing for pass-through visitors.
 const PASSER_CROSS_MS = 11_000;
 
-export type LobsterPetAnchor = "ledge" | "bar";
+type LobsterPetAnchor = "ledge" | "bar";
 
 // The bar anchor stands the pet inside the footer bar's free stretch between
 // the status dot (left) and the settings icons (right).
@@ -387,7 +380,7 @@ export function isLobsterLogoLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x1063) >>> 0)() < 0.12;
 }
 
-export type LobsterLogoVisitPhase = "in" | "leaving" | "out";
+type LobsterLogoVisitPhase = "in" | "leaving" | "out";
 
 export type LobsterLogoVisitDetail = {
   phase: LobsterLogoVisitPhase;
@@ -399,9 +392,9 @@ export type LobsterLogoVisitDetail = {
 // sidebar owns the brand slot, so the swap renders there, not here.
 export const LOBSTER_LOGO_VISIT_EVENT = "openclaw-lobster-logo-visit";
 
-export type LobsterPasserKind = "stranger" | "crab";
+type LobsterPasserKind = "stranger" | "crab";
 
-export type LobsterPasserPlan = {
+type LobsterPasserPlan = {
   kind: LobsterPasserKind;
   atMs: number;
   direction: 1 | -1;
@@ -555,7 +548,7 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
   };
 }
 
-export type LobsterRunOutcome = "ok" | "error" | "aborted";
+type LobsterRunOutcome = "ok" | "error" | "aborted";
 
 // The most recently active session with a terminal status decides how the
 // pet reacts when the busy state clears: failures earn sympathy, not cheers.
@@ -772,7 +765,7 @@ const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
 
 // Not a lobster. Wide shell, eye stalks, walks sideways across the ledge,
 // and the Lobsterdex refuses to acknowledge it.
-export function renderCrabSvg() {
+function renderCrabSvg() {
   return svg`
     <svg
       class="lobster-pet__svg"

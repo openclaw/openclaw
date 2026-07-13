@@ -704,6 +704,41 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
     );
   }
 
+  // Completed work turn: commentary + tool results ahead of the final reply
+  // exercise the collapsed "Worked for X" rollup at the end of the thread.
+  const workTurnBase = baseTime + 37 * 60_000;
+  messages.push(
+    chatHistoryMessage(
+      "user",
+      "Mock work request: refactor the render guard and rerun the suite.",
+      workTurnBase,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Checking the guard implementation before editing.",
+      workTurnBase + 5_000,
+    ),
+    {
+      role: "toolResult",
+      toolCallId: "mock-work-read",
+      toolName: "read",
+      content: [{ type: "text", text: "Read ui/src/pages/chat/chat-thread.ts (120 lines)." }],
+      timestamp: workTurnBase + 12_000,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "mock-work-exec",
+      toolName: "exec",
+      content: [{ type: "text", text: "pnpm test chat-thread — 12 passed." }],
+      timestamp: workTurnBase + 95_000,
+    },
+    chatHistoryMessage(
+      "assistant",
+      "Refactored the render guard and reran the suite; all 12 tests pass.",
+      workTurnBase + 172_000,
+    ),
+  );
+
   return messages;
 }
 
@@ -975,6 +1010,26 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
       "sessions.diff": buildSessionDiffMock(),
+      // One live subagent task: exercises the tasks rail, the collapsed-rail
+      // toggle badge, and the post-turn running-tasks status row in the thread.
+      "tasks.list": {
+        tasks: [
+          {
+            id: "task-mock-running",
+            taskId: "task-mock-running",
+            status: "running",
+            runtime: "subagent",
+            agentId: "openclaw-mock",
+            title: "Map run-status indicator code",
+            createdAt: Date.now() - 25_000,
+            startedAt: Date.now() - 25_000,
+            updatedAt: Date.now(),
+            toolUseCount: 7,
+            lastToolName: "read",
+            childSessionKey: "agent:openclaw-mock:subagent:mock-task-1",
+          },
+        ],
+      },
       "plugins.list": buildPluginCatalogMock(),
       "skills.proposals.list": skillWorkshop.list,
       "skills.proposals.inspect": skillWorkshop.inspect,

@@ -106,6 +106,20 @@ openclaw-new-session-page {
   color: inherit;
 }
 
+/* Icon templates only carry paths; without an explicit stroke rule the SVGs
+   render as solid black fills (invisible-blob chips in dark mode). */
+.new-session-page__trigger-chevron svg,
+.new-session-page__target-icon svg,
+.new-session-page__browser-nav svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .new-session-page__trigger-chevron svg {
   width: 12px;
   height: 12px;
@@ -179,11 +193,6 @@ openclaw-new-session-page {
   color: var(--muted);
 }
 
-.new-session-page__target-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
 .new-session-page__browser-nav {
   display: inline-flex;
   align-items: center;
@@ -200,11 +209,6 @@ openclaw-new-session-page {
 .new-session-page__browser-nav:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   color: var(--text);
-}
-
-.new-session-page__browser-nav svg {
-  width: 14px;
-  height: 14px;
 }
 
 .new-session-page__browser-nav:disabled {

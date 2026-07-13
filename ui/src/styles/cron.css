@@ -11,7 +11,7 @@
 
 .cron-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -21,6 +21,46 @@
   gap: 8px;
   padding: 14px 16px;
   min-width: 0;
+}
+
+/* Failing card is a drill-down into run history filtered to errors. */
+.cron-stat--action {
+  position: relative;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.cron-stat--action:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.cron-stat__go {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.cron-stat__go svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.cron-stat--action:hover .cron-stat__go,
+.cron-stat--action:focus-visible .cron-stat__go {
+  opacity: 1;
 }
 
 .cron-stat__label {
@@ -69,6 +109,13 @@
 
 .cron-view-tabs {
   align-self: flex-start;
+}
+
+.cron-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
 }
 
 .cron-tab {
@@ -133,8 +180,25 @@
   padding-left: 32px;
 }
 
-.cron-new-task {
+/* The global :focus-visible outline draws an offset accent rectangle around
+   the input, and the accent is red — it reads as an error state. Focus is a
+   quiet border tint instead. */
+.cron-search-box input:focus,
+.cron-search-box input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+}
+
+.cron-toolbar__end {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.cron-new-task {
   flex: 0 0 auto;
   gap: 6px;
 }
@@ -235,7 +299,7 @@
   grid-template-columns: minmax(180px, 1.6fr) minmax(150px, 1.1fr) minmax(110px, 0.8fr) minmax(
       140px,
       0.9fr
-    ) 44px;
+    ) 116px;
   gap: 12px;
   align-items: center;
   padding: 0 16px;
@@ -371,7 +435,22 @@
 
 .cron-table__actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 6px;
+}
+
+.cron-row-run {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.cron-row-run svg {
+  width: 12px;
+  height: 12px;
 }
 
 .cron-table__footer {
@@ -656,6 +735,10 @@
   flex-direction: column;
   gap: 14px;
   max-width: 1060px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .cron-history,
@@ -1102,17 +1185,33 @@
 }
 
 .cron-run-filters {
-  display: grid;
-  grid-template-columns: minmax(200px, 1fr) minmax(140px, 180px) minmax(140px, 180px) minmax(
-      130px,
-      160px
-    );
-  gap: 10px;
-  align-items: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .cron-run-filter-search {
-  min-width: 0;
+  flex: 1 1 220px;
+}
+
+/* Match the .btn--sm dropdown triggers beside it instead of the native look. */
+.cron-run-sort {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  cursor: pointer;
+}
+
+.cron-run-sort:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
 }
 
 .cron-runs__empty {
@@ -1127,6 +1226,7 @@
 
 .cron-filter-dropdown {
   min-width: 0;
+  flex: 0 0 auto;
 }
 
 .cron-filter-dropdown__details {
@@ -1142,9 +1242,16 @@
 }
 
 .cron-filter-dropdown__trigger {
-  width: 100%;
   justify-content: space-between;
   text-align: left;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.cron-filter-dropdown__trigger svg {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
 }
 
 .cron-filter-dropdown__panel {
@@ -1283,14 +1390,6 @@
 /* ── Responsive ── */
 
 @media (max-width: 1100px) {
-  .cron-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .cron-run-filters {
-    grid-template-columns: 1fr;
-  }
-
   .cron-filter-dropdown__panel {
     width: 100%;
     max-width: none;
@@ -1325,7 +1424,7 @@
   }
 
   .cron-table__row {
-    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-columns: minmax(0, 1fr) 116px;
     row-gap: 4px;
   }
 

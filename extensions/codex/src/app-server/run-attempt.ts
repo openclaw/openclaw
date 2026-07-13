@@ -112,7 +112,6 @@ import {
   resolveCodexTurnAssistantCompletionIdleTimeoutMs,
   resolveCodexTurnCompletionIdleTimeoutMs,
   resolveCodexTurnTerminalIdleTimeoutMs,
-  withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
 import {
   createCodexAttemptTurnWatchController,
@@ -153,16 +152,10 @@ import {
 import {
   buildDynamicTools,
   createCodexDynamicToolBuildStageTracker,
-  filterCodexDynamicToolsForAllowlist,
   formatCodexDynamicToolBuildStageSummary,
-  includeForcedCodexDynamicToolAllow,
   resolveCodexAppServerHookChannelId,
   resolveCodexMessageToolProvider,
-  resolveOpenClawCodingToolsSessionKeys,
-  resetOpenClawCodingToolsFactoryForTests,
-  setOpenClawCodingToolsFactoryForTests,
   shouldEnableCodexAppServerNativeToolSurface,
-  shouldForceMessageTool,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
 import {
@@ -184,9 +177,7 @@ import {
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import {
-  filterCodexDynamicTools,
   isCrestodianOnlyCodexDynamicToolAllowlist,
-  resolveCodexDynamicToolsLoadingForModel,
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -198,19 +189,15 @@ import {
 import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
-  buildCodexNativeHookRelayId,
-  clearPendingCodexNativeHookRelayUnregistersForTests,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
   createCodexNativeHookRelay,
   emitCodexNativePreToolUseFailureDiagnostic,
-  flushPendingCodexNativeHookRelayUnregistersForTests,
   resolveCodexNativeHookRelayEvents,
   resolveCodexNativeHookRelayTtlMs,
-  resolveCodexNativeHookRelayUnregisterGraceMs,
   scheduleCodexNativeHookRelayUnregister,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
-import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import {
   assertCodexTurnStartResponse,
@@ -271,9 +258,9 @@ import {
 } from "./trajectory.js";
 import {
   buildCodexUserPromptMessage,
+  codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
   mirrorPromptAtTurnStartBestEffort,
-  mirrorTranscriptBestEffort,
 } from "./transcript-mirror.js";
 import {
   CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS,
@@ -289,6 +276,7 @@ import {
 } from "./usage-limit-error.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
+import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
@@ -307,8 +295,6 @@ function shouldKeepCodexSharedAbortOpen(params: {
   // freeze after those paths settle.
   return params.trigger === "memory" || !params.attemptSucceeded;
 }
-
-const ensuredCodexWorkspaceDirs = new Set<string>();
 
 function withCodexAppServerFastModeServiceTier(
   appServer: CodexAppServerRuntimeOptions,
@@ -336,7 +322,7 @@ function estimateCodexAppServerProjectedTurnTokens(params: {
 
 async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> {
   const normalized = path.resolve(workspaceDir);
-  if (ensuredCodexWorkspaceDirs.has(normalized)) {
+  if (codexWorkspaceDirCache.has(normalized)) {
     try {
       const stat = await fs.stat(normalized);
       if (stat.isDirectory()) {
@@ -349,13 +335,13 @@ async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> 
         throw error;
       }
     }
-    ensuredCodexWorkspaceDirs.delete(normalized);
+    codexWorkspaceDirCache.delete(normalized);
   }
   // Codex attempts re-enter the same workspace repeatedly; caching successful
   // mkdirs avoids repeated fs work while still recovering if cleanup prunes
   // the directory between attempts.
   await fs.mkdir(normalized, { recursive: true });
-  ensuredCodexWorkspaceDirs.add(normalized);
+  codexWorkspaceDirCache.add(normalized);
 }
 
 async function emitCodexAppServerEvent(
@@ -1637,7 +1623,9 @@ export async function runCodexAppServerAttempt(
     trajectoryEndRecorded = true;
   };
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
-  let nativeSubagentMonitor: ReturnType<typeof registerCodexNativeSubagentMonitor> | undefined;
+  let nativeSubagentMonitor:
+    | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
+    | undefined;
   const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
   const projectorRef: { current?: CodexAppServerEventProjector } = {};
   let nativePreToolUseFailureFallbackActive = false;
@@ -1721,7 +1709,7 @@ export async function runCodexAppServerAttempt(
   };
   const registerNativeSubagentMonitor = (parentThreadId: string) => {
     unregisterNativeSubagentMonitor();
-    nativeSubagentMonitor = registerCodexNativeSubagentMonitor({
+    nativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register({
       client,
       parentThreadId,
       requesterSessionKey: params.sessionKey,
@@ -3647,7 +3635,7 @@ export async function runCodexAppServerAttempt(
     } else {
       codexModelCallDiagnostics.emitCompleted(result);
     }
-    const assistantTranscriptOwned = await mirrorTranscriptBestEffort({
+    const assistantTranscriptOwned = await codexTranscriptMirrorRuntime.mirrorBestEffort({
       params,
       agentId: sessionAgentId,
       notifyUserMessagePersisted,
@@ -4147,35 +4135,3 @@ function resolveCodexDynamicToolDirectNames(
   }
   return names;
 }
-
-export const testing = {
-  buildCodexNativeHookRelayId,
-  buildDeveloperInstructions,
-  filterCodexDynamicTools,
-  buildDynamicTools,
-  filterCodexDynamicToolsForAllowlist,
-  includeForcedCodexDynamicToolAllow,
-  resolveCodexDynamicToolsLoadingForModel,
-  resolveCodexAppServerHookChannelId,
-  buildCodexAppServerPromptTimeoutOutcome,
-  resolveOpenClawCodingToolsSessionKeys,
-  shouldEnableCodexAppServerNativeToolSurface,
-  shouldForceMessageTool,
-  resolveCodexDynamicToolDirectNames,
-  createCodexDynamicToolExecutionRegistry,
-  hasPendingDynamicToolTerminalDiagnostic,
-  toTranscriptToolResultForTests: toTranscriptToolResult,
-  withCodexStartupTimeout,
-  setOpenClawCodingToolsFactoryForTests,
-  resetOpenClawCodingToolsFactoryForTests,
-  async ensureCodexWorkspaceDirOnceForTests(workspaceDir: string): Promise<void> {
-    await ensureCodexWorkspaceDirOnce(workspaceDir);
-  },
-  resetEnsuredCodexWorkspaceDirsForTests(): void {
-    ensuredCodexWorkspaceDirs.clear();
-  },
-  flushPendingCodexNativeHookRelayUnregistersForTests,
-  clearPendingCodexNativeHookRelayUnregistersForTests,
-  resolveCodexNativeHookRelayUnregisterGraceMs,
-} as const;
-export { testing as __testing };

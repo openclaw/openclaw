@@ -291,6 +291,7 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/*.test.ts",
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
+const FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT = 6;
 const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
 const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
@@ -502,6 +503,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ["test/scripts/ios-periphery-comment-workflow.test.ts"],
   ],
   [".github/workflows/ios-periphery.yml", ["test/scripts/ios-periphery-comment-workflow.test.ts"]],
+  [
+    ".github/workflows/shared-openclawkit-periphery.yml",
+    ["test/scripts/periphery-intersection.test.ts"],
+  ],
   [
     ".github/workflows/live-media-runner-image.yml",
     ["test/scripts/package-acceptance-workflow.test.ts"],
@@ -788,6 +793,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
+  ["scripts/periphery-intersection.mjs", ["test/scripts/periphery-intersection.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
   ["scripts/apple-app-i18n.ts", ["test/scripts/apple-app-i18n.test.ts"]],
@@ -2054,11 +2060,33 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
 
+const CROSS_OS_RELEASE_CHECK_SOURCE_PATHS = [
+  "scripts/openclaw-cross-os-release-checks.ts",
+  "scripts/lib/cross-os-release-checks/agent.ts",
+  "scripts/lib/cross-os-release-checks/config.ts",
+  "scripts/lib/cross-os-release-checks/index.ts",
+  "scripts/lib/cross-os-release-checks/install.ts",
+  "scripts/lib/cross-os-release-checks/installed.ts",
+  "scripts/lib/cross-os-release-checks/lanes.ts",
+  "scripts/lib/cross-os-release-checks/logs.ts",
+  "scripts/lib/cross-os-release-checks/network-smokes.ts",
+  "scripts/lib/cross-os-release-checks/process.ts",
+  "scripts/lib/cross-os-release-checks/reporting.ts",
+  "scripts/lib/cross-os-release-checks/runtime.ts",
+  "scripts/lib/cross-os-release-checks/shared.ts",
+];
+for (const sourcePath of CROSS_OS_RELEASE_CHECK_SOURCE_PATHS) {
+  TOOLING_SOURCE_TEST_TARGETS.set(sourcePath, [
+    "test/scripts/openclaw-cross-os-release-checks.test.ts",
+  ]);
+}
+
 const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
   ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
   ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
+  ["scripts/periphery-intersection.d.mts", "scripts/periphery-intersection.mjs"],
   [
     "scripts/lib/bundled-plugin-build-entries.d.mts",
     "scripts/lib/bundled-plugin-build-entries.mjs",
@@ -2515,6 +2543,18 @@ function listUnitFastFullSuiteTestTargets() {
   return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
 }
 
+function listAgentsCoreFullSuiteTestTargets(cwd) {
+  const agentsDir = path.join(cwd, "src/agents");
+  if (!fs.existsSync(agentsDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(agentsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
+    .map((entry) => `src/agents/${entry.name}`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns, watchMode, cwd }) {
   if (watchMode || config !== TOOLING_VITEST_CONFIG || !includePatterns) {
     return null;
@@ -2578,7 +2618,7 @@ function isExistingDirectoryTarget(arg, cwd) {
 }
 
 function isGlobTarget(arg) {
-  return /[*?[\]{}]/u.test(arg);
+  return /[*?[\]{}]|[@+!]\(/u.test(arg);
 }
 
 function isFileLikeTarget(arg) {
@@ -4232,7 +4272,14 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     return configs.flatMap((config) => {
       if (expandShard && targetArgs.length === 0) {
         let chunks = [];
-        if (config === UNIT_FAST_VITEST_CONFIG) {
+        if (config === AGENTS_CORE_VITEST_CONFIG) {
+          // A single non-isolated agents-core process grows until its worker can
+          // exit under the full-suite memory load. Bound each process lifetime.
+          chunks = splitTargetChunks(
+            listAgentsCoreFullSuiteTestTargets(cwd),
+            FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT,
+          );
+        } else if (config === UNIT_FAST_VITEST_CONFIG) {
           const targets = listUnitFastFullSuiteTestTargets();
           const chunkCount = Math.ceil(
             targets.length / FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE,
@@ -4507,8 +4554,28 @@ export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
   );
 }
 
-export function writeVitestIncludeFile(filePath, includePatterns) {
-  fs.writeFileSync(filePath, `${JSON.stringify(includePatterns, null, 2)}\n`);
+function expandVitestIncludePatterns(includePatterns, cwd) {
+  const candidateFiles = includePatterns.some(isGlobTarget)
+    ? listExplicitTestTargetFilesForCwd(cwd)
+    : [];
+  return uniqueOrdered(
+    includePatterns.flatMap((pattern) => {
+      if (!isGlobTarget(pattern)) {
+        return [pattern];
+      }
+      return candidateFiles.filter((file) => path.matchesGlob(file, pattern));
+    }),
+  );
+}
+
+export function writeVitestIncludeFile(filePath, includePatterns, options = {}) {
+  // Shared Vitest projects intersect this file with their ownership globs.
+  // One-shot runs emit concrete paths; watch runs retain globs for new files.
+  const expandedPatterns =
+    options.expandGlobs === false
+      ? includePatterns
+      : expandVitestIncludePatterns(includePatterns, options.cwd ?? process.cwd());
+  fs.writeFileSync(filePath, `${JSON.stringify(expandedPatterns, null, 2)}\n`);
 }
 
 function shellQuote(value) {

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   validateApprovalGetResult,
@@ -24,7 +25,12 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { getOperatorApproval, insertOperatorApproval } from "../operator-approval-store.js";
+import { getOperatorApprovalDetailed, insertOperatorApproval } from "../operator-approval-store.js";
+
+function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
+  const result = getOperatorApprovalDetailed(params);
+  return result.outcome === "found" ? result.record : null;
+}
 import { createApprovalHandlers } from "./approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -194,7 +200,10 @@ async function invoke(params: {
 }) {
   const respond = vi.fn();
   const context = params.context ?? createContext();
-  await params.handlers[params.method]({
+  await expectDefined(
+    params.handlers[params.method],
+    "params.handlers[params.method] test invariant",
+  )({
     req: { id: "req-1", type: "req", method: params.method, params: params.body },
     params: params.body,
     client: params.client,
@@ -920,7 +929,10 @@ describe("unified approval handlers", () => {
       databaseOptions,
     });
     const respond = vi.fn();
-    const handler = handlers["approval.resolve"]({
+    const handler = expectDefined(
+      handlers["approval.resolve"],
+      'handlers["approval.resolve"] test invariant',
+    )({
       req: {
         id: "req-slow-forwarder",
         type: "req",

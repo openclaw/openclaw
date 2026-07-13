@@ -1136,6 +1136,19 @@ export interface WorkerEnvironments {
   updated_at_ms: number;
 }
 
+export interface WorkerInferenceTurns {
+  created_at_ms: number;
+  environment_id: string;
+  request_hash: string;
+  run_epoch: number;
+  run_id: string;
+  session_id: string;
+  state: string;
+  terminal_json: string | null;
+  turn_id: string;
+  updated_at_ms: number;
+}
+
 export interface WorkerTranscriptCommitHeads {
   environment_id: string;
   next_seq: number;
@@ -1258,6 +1271,7 @@ export interface DB {
   web_push_vapid_keys: WebPushVapidKeys;
   worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environments: WorkerEnvironments;
+  worker_inference_turns: WorkerInferenceTurns;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
   workspace_setup_state: WorkspaceSetupState;

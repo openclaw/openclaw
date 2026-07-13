@@ -40,7 +40,7 @@ function createFixture(
   const context: SkillWorkshopContext = {
     agentSelection: {
       get state() {
-        return { selectedId: snapshot.assistantAgentId };
+        return { selectedId: snapshot.assistantAgentId, scopeId: snapshot.assistantAgentId };
       },
     },
     gateway: {

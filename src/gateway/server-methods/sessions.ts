@@ -148,6 +148,8 @@ import {
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
+import { resolveWorkerSessionTarget } from "../worker-environments/session-target.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
@@ -586,12 +588,18 @@ async function interruptSessionRunIfActive(params: {
     typeof params.sessionId === "string" && params.sessionId
       ? isEmbeddedAgentRunActive(params.sessionId)
       : false;
+  const hasWorkerRun =
+    typeof params.sessionId === "string" && params.sessionId
+      ? (asWorkerInferenceControl(params.context.workerEnvironmentService)?.hasInferenceForSession(
+          params.sessionId,
+        ) ?? false)
+      : false;
 
-  if (!hasTrackedRun && !hasEmbeddedRun) {
+  if (!hasTrackedRun && !hasEmbeddedRun && !hasWorkerRun) {
     return { interrupted: false };
   }
 
-  if (hasTrackedRun) {
+  if (hasTrackedRun || hasWorkerRun) {
     let abortOk = true;
     let abortError: ReturnType<typeof errorShape> | undefined;
     const abortSessionKey = resolveAbortSessionKey({
@@ -2138,6 +2146,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const requestedRunId = readStringValue(p.runId);
     const requestedKey = normalizeOptionalString(p.key);
     const requestedParamAgentId = normalizeOptionalString(p.agentId);
+    const workerRunSessionId = requestedRunId
+      ? asWorkerInferenceControl(context.workerEnvironmentService)?.resolveInferenceSessionForRunId(
+          requestedRunId,
+        )
+      : undefined;
+    const workerRunTarget = workerRunSessionId
+      ? resolveWorkerSessionTarget(cfg, workerRunSessionId)
+      : undefined;
     const scopedRequestedKey = resolveScopedAbortKey({
       cfg,
       key: requestedKey,
@@ -2163,6 +2179,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ? activeRunAgentId
         : undefined) ??
       requestedKeyAgentId ??
+      workerRunTarget?.agentId ??
       (requestedRunId && !activeRunSessionKey ? resolveDefaultAgentId(cfg) : undefined);
     const requestedRunAgentId = requestedRunId
       ? inferredRunAgentId
@@ -2183,7 +2200,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ? resolveSessionKeyForRun(requestedRunId, {
             agentId: requestedRunAgentId ?? resolveDefaultAgentId(cfg),
           })
-        : undefined);
+        : undefined) ??
+      workerRunTarget?.sessionKey;
     if (!keyCandidate && requestedRunId) {
       respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });
       return;
@@ -2227,7 +2245,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     // snapshot does not collide with the agent RPC dedupe cache.
     const preAbortRunKinds = new Map<string, "chat-send" | "agent" | undefined>();
     if (requestedRunId) {
-      preAbortRunKinds.set(requestedRunId, context.chatAbortControllers.get(requestedRunId)?.kind);
+      preAbortRunKinds.set(requestedRunId, activeRun?.kind);
     } else {
       for (const [rid, entry] of context.chatAbortControllers) {
         preAbortRunKinds.set(rid, entry.kind);
@@ -2259,7 +2277,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             : [];
         const firstAbortedRunId = runIds[0] ?? null;
         abortedRunId = firstAbortedRunId;
-        if (firstAbortedRunId) {
+        const workerOnly = Boolean(workerRunSessionId && !activeRun);
+        if (firstAbortedRunId && !workerOnly) {
           const endedAt = Date.now();
           const runKind = preAbortRunKinds.get(firstAbortedRunId);
           const dedupePrefix = runKind === "agent" ? "agent" : "chat";

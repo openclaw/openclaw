@@ -4,12 +4,21 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   type WorkerAdmissionHandshake,
   type WorkerConnectParams,
+  type WorkerLiveEventParams,
   type WorkerProtocolCloseReason,
   type WorkerTranscriptCommitErrorReason,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitResult,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type {
+  WorkerInferenceCancelParams,
+  WorkerInferenceCancelResult,
+  WorkerInferenceErrorReason,
+  WorkerInferenceStartParams,
+  WorkerInferenceStartResult,
+} from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
@@ -44,17 +53,25 @@ import {
   type WorkerCredentialBinding,
   type WorkerCredentialDeliveryClaim,
 } from "./credential.js";
+import type { WorkerInferenceStore } from "./inference-store.js";
+import {
+  createWorkerInferenceManager,
+  type WorkerInferenceExecutor,
+  type WorkerInferenceSink,
+} from "./inference.js";
+import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import {
   normalizeWorkerSshEndpoint,
   type WorkerEnvironmentRecord,
   type WorkerEnvironmentStore,
   type WorkerEnvironmentTransitionPatch as TransitionPatch,
+  WorkerSessionAlreadyAttachedError,
 } from "./store.js";
 import type { WorkerTunnelRequest } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
 
-export type WorkerEnvironmentServiceErrorCode =
+type WorkerEnvironmentServiceErrorCode =
   | "profile_not_found"
   | "provider_not_found"
   | "environment_not_found"
@@ -63,7 +80,7 @@ export type WorkerEnvironmentServiceErrorCode =
   | "provider_failure"
   | "bootstrap_failure";
 
-export class WorkerEnvironmentServiceError extends Error {
+class WorkerEnvironmentServiceError extends Error {
   constructor(
     readonly code: WorkerEnvironmentServiceErrorCode,
     message: string,
@@ -76,7 +93,7 @@ const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) 
   new WorkerEnvironmentServiceError(code, message);
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
 
-export type WorkerEnvironmentServiceOptions = {
+type WorkerEnvironmentServiceOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
   resolveProvider: (providerId: string) => WorkerProvider | undefined;
@@ -108,14 +125,38 @@ export type WorkerEnvironmentServiceOptions = {
     identity: WorkerConnectionIdentity;
     request: WorkerTranscriptCommitParams;
   }) => Promise<WorkerTranscriptCommitApplicationResult>;
+  liveEvents?: Pick<
+    WorkerLiveEventReceiver,
+    "apply" | "bindSession" | "clear" | "clearEnvironment" | "rotateCredential" | "start"
+  >;
+  executeInference: WorkerInferenceExecutor;
+  inferenceStore?: WorkerInferenceStore;
 };
 
-export type WorkerTranscriptCommitApplicationResult =
+type WorkerTranscriptCommitApplicationResult =
   | { ok: true; result: WorkerTranscriptCommitResult }
   | { ok: false; reason: WorkerTranscriptCommitErrorReason };
 
-export type WorkerTranscriptCommitServiceResult =
+type WorkerTranscriptCommitServiceResult =
   | WorkerTranscriptCommitApplicationResult
+  | { ok: false; closeReason: WorkerProtocolCloseReason };
+
+type WorkerLiveEventServiceResult =
+  | WorkerLiveEventApplicationResult
+  | { ok: false; closeReason: WorkerProtocolCloseReason };
+
+type WorkerInferenceStartServiceResult =
+  | {
+      ok: true;
+      result: WorkerInferenceStartResult;
+      launch: () => void;
+    }
+  | { ok: false; reason: WorkerInferenceErrorReason }
+  | { ok: false; closeReason: WorkerProtocolCloseReason };
+
+type WorkerInferenceCancelServiceResult =
+  | { ok: true; result: WorkerInferenceCancelResult }
+  | { ok: false; reason: WorkerInferenceErrorReason }
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -171,8 +212,15 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const activeOperations = new Set<Promise<unknown>>();
   const pendingCredentials = new Map<string, MintedWorkerCredential>();
   const now = options.now ?? Date.now;
+  const inference = createWorkerInferenceManager({
+    execute: options.executeInference,
+    getConfig: options.getConfig,
+    now,
+    ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
+  });
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
+  let unsubscribeSessionIdentityMutation: (() => void) | undefined;
   let stopping = false;
 
   const project = (record: WorkerEnvironmentRecord) => ({
@@ -188,6 +236,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const next = store.transition({ environmentId: r.environmentId, from: r.state, to, patch });
     if (to !== "ready" && to !== "idle" && to !== "attached") {
       pendingCredentials.delete(r.environmentId);
+    }
+    if (to !== "attached") {
+      inference.cancelEnvironment(r.environmentId);
+      options.liveEvents?.clearEnvironment(r.environmentId);
     }
     return next;
   };
@@ -317,7 +369,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     };
   };
 
-  const mintCredentialLocked = (request: WorkerCredentialBinding): MintedWorkerCredential => {
+  const mintCredentialLocked = (
+    request: WorkerCredentialBinding,
+  ): { credentialHash: string; grant: MintedWorkerCredential } => {
+    const previous = store.getCredential(request.environmentId);
+    if (previous) {
+      inference.cancelEnvironment(request.environmentId);
+    }
     const material = credentialMaterial();
     const credential = {
       environmentId: request.environmentId,
@@ -328,7 +386,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       expiresAtMs: credentialExpiry(),
     };
     const record = store.renewCredential(credential);
-    return grantFrom({ credential: material.credential, record });
+    return {
+      credentialHash: material.credentialHash,
+      grant: grantFrom({ credential: material.credential, record }),
+    };
   };
 
   const stageCredential = (grant: MintedWorkerCredential): MintedWorkerCredential => {
@@ -545,13 +606,21 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return;
     }
     pendingCredentials.delete(record.environmentId);
-    stageCredential(
-      mintCredentialLocked({
+    const minted = mintCredentialLocked({
+      environmentId: record.environmentId,
+      ownerEpoch: record.ownerEpoch,
+      sessionId,
+    });
+    stageCredential(minted.grant);
+    if (sessionId && credential?.ownerEpoch === record.ownerEpoch) {
+      options.liveEvents?.rotateCredential({
+        credentialHash: minted.credentialHash,
         environmentId: record.environmentId,
-        ownerEpoch: record.ownerEpoch,
+        previousCredentialHash: credential.credentialHash,
+        runEpoch: record.ownerEpoch,
         sessionId,
-      }),
-    );
+      });
+    }
   };
 
   const reconcileRecord = async (initialRecord: WorkerEnvironmentRecord): Promise<void> => {
@@ -792,21 +861,47 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         );
       }
       const material = credentialMaterial();
-      store.transition({
-        environmentId: request.environmentId,
-        from: current.state,
-        to: "attached",
-        expectedOwnerEpoch: request.ownerEpoch,
-        patch: {
-          attachedSessionIds: [request.sessionId],
-          credential: {
-            credentialHash: material.credentialHash,
-            sessionId: request.sessionId,
-            rpcSetVersion: WORKER_RPC_SET_VERSION,
-            expiresAtMs: credentialExpiry(),
+      let attached: WorkerEnvironmentRecord;
+      try {
+        attached = store.transition({
+          environmentId: request.environmentId,
+          from: current.state,
+          to: "attached",
+          expectedOwnerEpoch: request.ownerEpoch,
+          patch: {
+            attachedSessionIds: [request.sessionId],
+            credential: {
+              credentialHash: material.credentialHash,
+              sessionId: request.sessionId,
+              rpcSetVersion: WORKER_RPC_SET_VERSION,
+              expiresAtMs: credentialExpiry(),
+            },
           },
-        },
-      });
+        });
+      } catch (error) {
+        if (error instanceof WorkerSessionAlreadyAttachedError) {
+          throw serviceError("invalid_state", error.message);
+        }
+        throw error;
+      }
+      if (options.liveEvents) {
+        let liveSessionBound: boolean;
+        try {
+          liveSessionBound = options.liveEvents.bindSession({
+            environmentId: attached.environmentId,
+            runEpoch: attached.ownerEpoch,
+            sessionId: request.sessionId,
+          });
+        } catch {
+          liveSessionBound = false;
+        }
+        if (!liveSessionBound) {
+          move(attached, "idle");
+          // Preserve the bounded attachment error after rollback fences the old worker.
+          await tunnels?.stop(request.environmentId, current.ownerEpoch).catch(() => undefined);
+          throw serviceError("invalid_state", "Attached session target is unavailable");
+        }
+      }
       pendingCredentials.delete(request.environmentId);
       await tunnels?.stop(request.environmentId, current.ownerEpoch);
       return stageCredential(
@@ -910,6 +1005,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (interval || stopping) {
       return;
     }
+    unsubscribeSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
+      const currentSessionId = "current" in mutation ? mutation.current.sessionId : undefined;
+      if (mutation.previous.sessionId && mutation.previous.sessionId !== currentSessionId) {
+        inference.cancelSession(mutation.previous.sessionId);
+      }
+    });
+    options.liveEvents?.start();
     interval = setInterval(
       () => void reconcileOnce().catch(() => warn("Worker environment reconcile sweep failed")),
       options.reconcileIntervalMs ?? 60_000,
@@ -920,9 +1022,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const stop = async () => {
     stopping = true;
-    pendingCredentials.clear();
     clearInterval(interval);
     interval = undefined;
+    unsubscribeSessionIdentityMutation?.();
+    unsubscribeSessionIdentityMutation = undefined;
+    await inference.stop();
+    pendingCredentials.clear();
+    options.liveEvents?.clear();
     await tunnels?.stopAll();
     const reconciliation = reconcileInFlight;
     if (reconciliation) {
@@ -932,6 +1038,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       await Promise.allSettled(activeOperations);
     }
     pendingCredentials.clear();
+    options.liveEvents?.clear();
   };
 
   const readPendingCredential = (binding: WorkerCredentialBinding) => {
@@ -967,46 +1074,127 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return { checkedAtMs, credentialHash, grant };
   };
 
+  const validateAttachedWorkerRequest = (
+    identity: WorkerConnectionIdentity,
+    runEpoch: number,
+  ):
+    | { ok: true }
+    | { ok: false; closeReason: WorkerProtocolCloseReason }
+    | { ok: false; reason: "epoch-mismatch" | "session-not-attached" } => {
+    if (stopping) {
+      return { ok: false, closeReason: "environment-unavailable" };
+    }
+    const credential = store.getCredential(identity.environmentId);
+    if (!credential || !safeEqualSecret(credential.credentialHash, identity.credentialHash)) {
+      return { ok: false, closeReason: "credential-replaced" };
+    }
+    if (now() >= credential.expiresAtMs) {
+      return { ok: false, closeReason: "credential-expired" };
+    }
+    const environment = store.get(identity.environmentId);
+    if (!environment || environment.destroyRequestedAtMs !== null) {
+      return { ok: false, closeReason: "environment-unavailable" };
+    }
+    if (
+      runEpoch !== identity.ownerEpoch ||
+      runEpoch !== credential.ownerEpoch ||
+      runEpoch !== environment.ownerEpoch
+    ) {
+      return { ok: false, reason: "epoch-mismatch" };
+    }
+    if (
+      environment.state !== "attached" ||
+      !identity.sessionId ||
+      credential.sessionId !== identity.sessionId ||
+      environment.attachedSessionIds.length !== 1 ||
+      environment.attachedSessionIds[0] !== identity.sessionId
+    ) {
+      return { ok: false, reason: "session-not-attached" };
+    }
+    return { ok: true };
+  };
+
   const commitTranscript = (
     identity: WorkerConnectionIdentity,
     request: WorkerTranscriptCommitParams,
   ): Promise<WorkerTranscriptCommitServiceResult> =>
     withLock(identity.environmentId, async () => {
-      if (stopping) {
-        return { ok: false, closeReason: "environment-unavailable" };
-      }
-      const credential = store.getCredential(identity.environmentId);
-      if (!credential || !safeEqualSecret(credential.credentialHash, identity.credentialHash)) {
-        return { ok: false, closeReason: "credential-replaced" };
-      }
-      if (now() >= credential.expiresAtMs) {
-        return { ok: false, closeReason: "credential-expired" };
-      }
-      const environment = store.get(identity.environmentId);
-      if (!environment || environment.destroyRequestedAtMs !== null) {
-        return { ok: false, closeReason: "environment-unavailable" };
-      }
-      if (
-        request.runEpoch !== identity.ownerEpoch ||
-        request.runEpoch !== credential.ownerEpoch ||
-        request.runEpoch !== environment.ownerEpoch
-      ) {
-        return { ok: false, reason: "epoch-mismatch" };
-      }
-      if (
-        environment.state !== "attached" ||
-        !identity.sessionId ||
-        credential.sessionId !== identity.sessionId ||
-        environment.attachedSessionIds.length !== 1 ||
-        environment.attachedSessionIds[0] !== identity.sessionId
-      ) {
-        return { ok: false, reason: "session-not-attached" };
+      const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+      if (!binding.ok) {
+        return binding;
       }
       if (!options.applyTranscriptCommit) {
         return { ok: false, closeReason: "gateway-unavailable" };
       }
       return await options.applyTranscriptCommit({ identity, request });
     });
+
+  const pushLiveEvent = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerLiveEventParams,
+  ): Promise<WorkerLiveEventServiceResult> => {
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+    if (!binding.ok) {
+      if ("closeReason" in binding) {
+        return Promise.resolve(binding);
+      }
+      return Promise.resolve({ ok: false, details: { reason: binding.reason } });
+    }
+    if (!options.liveEvents) {
+      return Promise.resolve({ ok: false, closeReason: "gateway-unavailable" });
+    }
+    // Publish after authoritative validation without blocking on lifecycle work.
+    return Promise.resolve(options.liveEvents.apply({ identity, request }));
+  };
+
+  const revalidateInference = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceStartParams | WorkerInferenceCancelParams,
+  ): "epoch-mismatch" | "session-not-attached" | null => {
+    if (request.sessionId !== identity.sessionId) {
+      return "session-not-attached";
+    }
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+    return binding.ok ? null : "reason" in binding ? binding.reason : "session-not-attached";
+  };
+
+  const startInference = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceStartParams,
+    sink: WorkerInferenceSink,
+  ): WorkerInferenceStartServiceResult => {
+    if (request.sessionId !== identity.sessionId) {
+      return { ok: false, reason: "session-not-attached" };
+    }
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+    if (!binding.ok) {
+      return binding;
+    }
+    return inference.start({
+      identity,
+      request,
+      sink,
+      revalidate: () => revalidateInference(identity, request),
+    });
+  };
+
+  const cancelInference = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceCancelParams,
+  ): WorkerInferenceCancelServiceResult => {
+    if (request.sessionId !== identity.sessionId) {
+      return { ok: false, reason: "session-not-attached" };
+    }
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+    if (!binding.ok) {
+      return binding;
+    }
+    return inference.cancel({
+      identity,
+      request,
+      revalidate: () => revalidateInference(identity, request),
+    });
+  };
 
   return {
     list: () => store.list().map(project),
@@ -1046,6 +1234,15 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         ? ("environment-unavailable" as const)
         : validateWorkerConnectionIdentity({ store, identity, nowMs: now() }),
     commitTranscript,
+    pushLiveEvent,
+    startInference,
+    cancelInference,
+    cancelInferenceForSession: (params: { sessionId: string; runId?: string }): string[] =>
+      inference.cancelSession(params.sessionId, params.runId),
+    hasInferenceForSession: (sessionId: string, runId?: string): boolean =>
+      inference.hasSession(sessionId, runId),
+    resolveInferenceSessionForRunId: (runId: string): string | undefined =>
+      inference.resolveSessionIdForRunId(runId),
     attachSession,
     takeMintedCredential: (binding: WorkerCredentialBinding) =>
       readPendingCredential(binding)?.grant,

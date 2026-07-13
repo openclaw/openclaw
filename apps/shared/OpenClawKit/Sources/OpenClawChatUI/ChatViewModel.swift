@@ -455,6 +455,7 @@ public final class OpenClawChatViewModel {
         self.applySessionSwitch(to: sessionKey, intent: .externalSync)
     }
 
+    // periphery:ignore - package tests vary one identity field while preserving the current routing contract.
     public func syncActiveAgentId(_ agentId: String?) {
         self.syncDeliveryIdentity(
             activeAgentId: agentId,
@@ -541,7 +542,7 @@ public final class OpenClawChatViewModel {
     }
 
     private var usesMutableAgentRouting: Bool {
-        Self.agentID(fromSessionKey: self.sessionKey) == nil
+        OpenClawChatSessionKey.agentID(from: self.sessionKey) == nil
     }
 
     private func usesMutableContractRouting(for contract: String?) -> Bool {
@@ -549,7 +550,7 @@ public final class OpenClawChatViewModel {
     }
 
     func usesMutableContractRouting(sessionKey: String, contract: String?) -> Bool {
-        if Self.agentID(fromSessionKey: sessionKey) == nil {
+        if OpenClawChatSessionKey.agentID(from: sessionKey) == nil {
             return true
         }
         let parts = sessionKey
@@ -616,10 +617,6 @@ public final class OpenClawChatViewModel {
     public var hasDraftToSend: Bool {
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty || !self.attachments.isEmpty
-    }
-
-    public var canSendDraft: Bool {
-        !self.isSubmittingDraft && !self.isSending && self.hasDraftToSend
     }
 
     /// True while replacing this model could move an attachment across chats.
@@ -725,7 +722,7 @@ extension OpenClawChatViewModel {
             key: self.sessionKey,
             generation: self.sessionGeneration,
             agentID: self.activeAgentId,
-            deliveryAgentID: Self.agentID(fromSessionKey: self.sessionKey) ?? self.activeAgentId,
+            deliveryAgentID: OpenClawChatSessionKey.agentID(from: self.sessionKey) ?? self.activeAgentId,
             sessionRoutingContract: self.sessionRoutingContract)
     }
 
@@ -1555,23 +1552,14 @@ extension OpenClawChatViewModel {
 
     private func generatedNewSessionKey() -> String {
         let baseKey = "ios-\(UUID().uuidString.lowercased())"
-        guard let agentID = Self.agentID(fromSessionKey: sessionKey) ??
+        guard let agentID = OpenClawChatSessionKey.agentID(from: sessionKey) ??
             activeAgentId ??
-            Self.agentID(fromSessionKey: resolvedMainSessionKey) ??
-            sessions.lazy.compactMap({ Self.agentID(fromSessionKey: $0.key) }).first
+            OpenClawChatSessionKey.agentID(from: resolvedMainSessionKey) ??
+            sessions.lazy.compactMap({ OpenClawChatSessionKey.agentID(from: $0.key) }).first
         else {
             return baseKey
         }
         return "agent:\(agentID):\(baseKey)"
-    }
-
-    static func agentID(fromSessionKey sessionKey: String) -> String? {
-        let parts = sessionKey
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count >= 3, parts[0].lowercased() == "agent" else { return nil }
-        let agentID = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
-        return agentID.isEmpty ? nil : agentID
     }
 
     private func modelLabel(for modelID: String) -> String {

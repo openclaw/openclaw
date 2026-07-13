@@ -12,7 +12,7 @@ import {
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
-export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
+const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 const CRABBOX_KEY_REF_PROVIDER = "crabbox";
 
 const WARMUP_TIMEOUT_MS = 240_000;
@@ -99,7 +99,7 @@ type InspectCommandResult = { status: "found"; inspect: ParsedInspect } | { stat
 
 type IsExecutable = (candidate: string) => boolean;
 
-export type CrabboxWorkerProviderDependencies = {
+type CrabboxWorkerProviderDependencies = {
   isExecutable?: IsExecutable;
   openclawRoot?: string;
   pathEnv?: string;
