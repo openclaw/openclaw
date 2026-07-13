@@ -4,5 +4,6 @@ export {
   archiveSessionTranscriptsDetailed,
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
+  resolveSessionTranscriptCandidates,
   resolveStableSessionEndTranscript,
 } from "./session-archive.fs.js";

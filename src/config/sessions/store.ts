@@ -1292,56 +1292,26 @@ async function deleteSessionEntryLifecycleInternal(
         ? { allowedLockedEntryRemovals }
         : undefined,
     );
-    const remainingEntries = Object.values(store);
-    const referencedSessionIds = new Set(
-      remainingEntries.flatMap((entry) => (entry.sessionId ? [entry.sessionId] : [])),
-    );
-    const sessionsDir = path.dirname(params.storePath);
-    const referencedTranscriptPaths = new Set(
-      remainingEntries.flatMap((entry) => {
-        const transcriptPath = resolveLifecycleTranscriptPath({ entry, sessionsDir });
-        return transcriptPath ? [normalizePathForLifecycleComparison(transcriptPath)] : [];
-      }),
-    );
-    const removedEntriesBySessionId = new Map<string, SessionEntry[]>();
-    for (const entry of removedEntries) {
-      if (entry.sessionId) {
-        const entries = removedEntriesBySessionId.get(entry.sessionId) ?? [];
-        entries.push(entry);
-        removedEntriesBySessionId.set(entry.sessionId, entries);
-      }
-    }
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     if (params.archiveTranscript) {
-      const fullSessionArchives = [...removedEntriesBySessionId].flatMap(([sessionId, entries]) =>
-        referencedSessionIds.has(sessionId)
-          ? []
-          : [...new Set(entries.map((entry) => entry.sessionFile))].map((sessionFile) =>
-              archiveLifecycleSessionTranscripts({
-                sessionId,
-                storePath: params.storePath,
-                sessionFile,
-                agentId: params.agentId,
-                reason: "deleted",
-              }),
-            ),
+      const { archiveFileOnDisk, resolveSessionTranscriptCandidates } =
+        await loadSessionArchiveRuntime();
+      const resolveCandidatePaths = (entry: SessionEntry): string[] =>
+        entry.sessionId
+          ? resolveSessionTranscriptCandidates(
+              entry.sessionId,
+              params.storePath,
+              entry.sessionFile,
+              params.agentId,
+            ).map(normalizePathForLifecycleComparison)
+          : [];
+      const referencedTranscriptPaths = new Set(
+        Object.values(store).flatMap(resolveCandidatePaths),
       );
-      archivedTranscripts = (await Promise.all(fullSessionArchives)).flat();
-
-      // A surviving alias protects only its resolved path. Removed aliases can
-      // share the session ID while owning distinct files that still need archival.
-      const { archiveFileOnDisk } = await loadSessionArchiveRuntime();
-      const sharedSessionTranscriptPaths = new Set(
-        [...removedEntriesBySessionId].flatMap(([sessionId, entries]) =>
-          referencedSessionIds.has(sessionId)
-            ? entries.flatMap((entry) => {
-                const transcriptPath = resolveLifecycleTranscriptPath({ entry, sessionsDir });
-                return transcriptPath ? [normalizePathForLifecycleComparison(transcriptPath)] : [];
-              })
-            : [],
-        ),
-      );
-      for (const transcriptPath of sharedSessionTranscriptPaths) {
+      const removedTranscriptPaths = new Set(removedEntries.flatMap(resolveCandidatePaths));
+      // Aliases can share either an ID or a file independently. The resolved
+      // path set is the only safe deletion boundary across both relationships.
+      for (const transcriptPath of removedTranscriptPaths) {
         if (referencedTranscriptPaths.has(transcriptPath) || !fs.existsSync(transcriptPath)) {
           continue;
         }

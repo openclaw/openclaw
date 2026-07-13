@@ -642,6 +642,44 @@ describe("agent harness session store invariant", () => {
     expect(fs.readFileSync(survivingTranscriptPath, "utf-8")).toBe("surviving\n");
   });
 
+  it("preserves a file-backed transcript referenced by a different session id", async () => {
+    const removedKey = "agent:main:catalog-removed";
+    const survivingKey = "agent:main:catalog-surviving";
+    const transcriptPath = path.join(tempDir, "catalog-shared-path.jsonl");
+    const removedEntry: SessionEntry = {
+      modelSelectionLocked: true,
+      pluginOwnerId: "anthropic",
+      sessionFile: transcriptPath,
+      sessionId: "catalog-removed-session",
+      updatedAt: 1,
+    };
+    const survivingEntry: SessionEntry = {
+      sessionFile: transcriptPath,
+      sessionId: "catalog-surviving-session",
+      updatedAt: Date.now(),
+    };
+    await saveSessionStore(
+      storePath,
+      { [removedKey]: removedEntry, [survivingKey]: survivingEntry },
+      { skipMaintenance: true },
+    );
+    fs.writeFileSync(transcriptPath, "shared\n", "utf-8");
+
+    const result = await rollbackPluginOwnedSessionEntryLifecycle({
+      archiveTranscript: true,
+      expectedEntry: removedEntry,
+      expectedPluginOwnerId: "anthropic",
+      expectedSessionId: removedEntry.sessionId,
+      expectedUpdatedAt: removedEntry.updatedAt,
+      storePath,
+      target: { canonicalKey: removedKey, storeKeys: [removedKey] },
+    });
+
+    expect(result.archivedTranscripts).toEqual([]);
+    expect(loadSessionStore(storePath, { skipCache: true })[survivingKey]).toEqual(survivingEntry);
+    expect(fs.readFileSync(transcriptPath, "utf-8")).toBe("shared\n");
+  });
+
   it("does not expose privileged rollback for an unlocked legacy prefix collision", async () => {
     const sessionKey = "agent:main:harness:notes";
     const entry: SessionEntry = {
