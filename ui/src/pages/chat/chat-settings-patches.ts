@@ -11,12 +11,19 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   normalizeSessionKeyForUiComparison,
+  parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { normalizeOptionalLowercaseString } from "../../lib/string-coerce.ts";
 
 type ChatPickerPatchHost = SessionScopeHost & { sessions: SessionCapability };
+type ChatCommandSettingsContext = {
+  sessions: SessionCapability;
+  defaultAgentId?: string;
+  agentId?: string;
+};
 type PendingPatchStore = WeakMap<SessionCapability, Map<string, Promise<boolean>>>;
 
 const pendingChatPickerPatches: PendingPatchStore = new WeakMap();
@@ -134,4 +141,42 @@ export function patchChatSessionSettings(
     options.agentId,
   );
   return operation;
+}
+
+export function selectedGlobalScope(
+  sessionKey: string,
+  context: Pick<ChatCommandSettingsContext, "agentId">,
+): { agentId?: string } {
+  const normalizedSessionKey = normalizeOptionalLowercaseString(sessionKey);
+  const parsed = parseAgentSessionKey(normalizedSessionKey ?? "");
+  const aliasAgentId =
+    parsed &&
+    parsed.agentId !== DEFAULT_AGENT_ID &&
+    (parsed.rest === DEFAULT_MAIN_KEY || parsed.rest === "global")
+      ? parsed.agentId
+      : undefined;
+  const agentId = aliasAgentId ?? normalizeOptionalLowercaseString(context.agentId);
+  return (normalizedSessionKey === "global" || aliasAgentId) && agentId ? { agentId } : {};
+}
+
+export async function patchChatCommandSessionSettings(
+  context: ChatCommandSettingsContext,
+  sessionKey: string,
+  patch: SessionPatch,
+): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
+  const result = await patchChatSessionSettings(
+    {
+      sessions: context.sessions,
+      assistantAgentId: context.agentId,
+      agentsList: context.defaultAgentId ? { defaultId: context.defaultAgentId } : null,
+      hello: null,
+    },
+    sessionKey,
+    patch,
+    selectedGlobalScope(sessionKey, context),
+  );
+  if (!result) {
+    throw new Error("Session capability is unavailable");
+  }
+  return result;
 }

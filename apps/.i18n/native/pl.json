@@ -1074,6 +1074,11 @@
       "translated": "Nie udało się zaktualizować modelu."
     },
     {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "Nie udało się zaktualizować poziomu rozumowania."
+    },
+    {
       "id": "native.android.956a394937480f8a",
       "source": "Chat failed before the run started; try again.",
       "translated": "Czat nie powiódł się przed rozpoczęciem działania; spróbuj ponownie."
