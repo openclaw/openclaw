@@ -130,8 +130,27 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstResult.status, firstResult.stderr).toBe(0);
     expect(firstResult.stderr).toBe("");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_TARGET=global");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=4");
+    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=5");
+    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
     const firstReport = JSON.parse(fs.readFileSync(firstOutput, "utf8")) as {
+      concurrentRestoresVerified: number;
+      maintenanceProof: {
+        bloatBytes: number;
+        compaction: {
+          autoVacuum: { after: number };
+          freelistPages: { after: number; before: number };
+          reclaimedBytes: number;
+          walBytes: { after: number };
+        };
+        postCompact: {
+          restoreVerified: boolean;
+          state: {
+            batches: number;
+            rows: number;
+            sha256: string;
+          };
+        };
+      };
       paths: {
         sourceDatabase: string;
         syncedRepository: string;
@@ -146,11 +165,22 @@ describe("scripts/bench-sqlite-reliability", () => {
         rowsCommitted: number;
       };
     };
-    expect(firstReport.restoresVerified).toBe(4);
+    expect(firstReport.concurrentRestoresVerified).toBe(4);
+    expect(firstReport.restoresVerified).toBe(5);
     expect(firstReport.transactionProof.committedWalSentinel).toBe(true);
     expect(firstReport.transactionProof.heldRows).toBeGreaterThan(0);
     expect(firstReport.transactionProof.visibleAfterRestore).toBe(false);
     expect(firstReport.writer.rowsCommitted).toBeGreaterThan(0);
+    expect(firstReport.maintenanceProof.bloatBytes).toBeGreaterThan(0);
+    expect(firstReport.maintenanceProof.compaction.autoVacuum.after).toBe(2);
+    expect(firstReport.maintenanceProof.compaction.freelistPages.before).toBeGreaterThan(0);
+    expect(firstReport.maintenanceProof.compaction.freelistPages.after).toBe(0);
+    expect(firstReport.maintenanceProof.compaction.reclaimedBytes).toBeGreaterThan(0);
+    expect(firstReport.maintenanceProof.compaction.walBytes.after).toBe(0);
+    expect(firstReport.maintenanceProof.postCompact.restoreVerified).toBe(true);
+    expect(firstReport.maintenanceProof.postCompact.state.batches).toBeGreaterThan(0);
+    expect(firstReport.maintenanceProof.postCompact.state.rows).toBeGreaterThan(0);
+    expect(firstReport.maintenanceProof.postCompact.state.sha256).toMatch(/^[a-f0-9]{64}$/);
 
     const database = new DatabaseSync(firstReport.paths.sourceDatabase);
     try {
@@ -177,7 +207,7 @@ describe("scripts/bench-sqlite-reliability", () => {
       paths: { syncedRepository: string };
       restoresVerified: number;
     };
-    expect(secondReport.restoresVerified).toBe(4);
+    expect(secondReport.restoresVerified).toBe(5);
     expect(secondReport.paths.syncedRepository).not.toBe(firstReport.paths.syncedRepository);
   });
 

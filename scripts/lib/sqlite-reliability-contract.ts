@@ -16,9 +16,45 @@ export type CliOptions = {
   stateDir: string | null;
 };
 
+export type ReliabilityStateProof = {
+  batches: number;
+  rows: number;
+  sha256: string;
+};
+
 export type ReliabilityReport = {
   arch: string;
+  concurrentRestoresVerified: number;
   iterations: number;
+  maintenanceProof: {
+    bloatBytes: number;
+    compaction: {
+      autoVacuum: {
+        after: 2;
+        before: number;
+      };
+      databaseBytes: {
+        after: number;
+        before: number;
+      };
+      freelistPages: {
+        after: 0;
+        before: number;
+      };
+      reclaimedBytes: number;
+      walBytes: {
+        after: 0;
+        before: number;
+      };
+    };
+    postCompact: {
+      restoreMs: number;
+      restoreVerified: true;
+      snapshotBytes: number;
+      snapshotMs: number;
+      state: ReliabilityStateProof;
+    };
+  };
   node: string;
   paths: {
     repository: string;

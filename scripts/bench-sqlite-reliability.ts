@@ -95,6 +95,9 @@ function printProofLines(report: ReliabilityReport): void {
   console.log(`SQLITE_RELIABILITY_ARCH=${report.arch}`);
   console.log(`SQLITE_RELIABILITY_ITERATIONS=${report.iterations}`);
   console.log(`SQLITE_RELIABILITY_RETAINED_BATCHES=${report.retainedBatches}`);
+  console.log(
+    `SQLITE_RELIABILITY_CONCURRENT_RESTORES_VERIFIED=${report.concurrentRestoresVerified}`,
+  );
   console.log(`SQLITE_RELIABILITY_RESTORES_VERIFIED=${report.restoresVerified}`);
   console.log(`SQLITE_RELIABILITY_WRITER_ROWS=${report.writer.rowsCommitted}`);
   console.log(
@@ -104,6 +107,16 @@ function printProofLines(report: ReliabilityReport): void {
   console.log(`SQLITE_RELIABILITY_SNAPSHOT_P95_MS=${report.timingsMs.snapshotP95.toFixed(3)}`);
   console.log(`SQLITE_RELIABILITY_RESTORE_P95_MS=${report.timingsMs.restoreP95.toFixed(3)}`);
   console.log(`SQLITE_RELIABILITY_SNAPSHOT_BYTES_MAX=${report.snapshotBytes.max}`);
+  console.log(
+    `SQLITE_RELIABILITY_COMPACT_RECLAIMED_BYTES=${report.maintenanceProof.compaction.reclaimedBytes}`,
+  );
+  console.log(
+    `SQLITE_RELIABILITY_POST_COMPACT_RESTORE=${report.maintenanceProof.postCompact.restoreVerified ? "verified" : "missing"}`,
+  );
+  console.log(`SQLITE_RELIABILITY_FINAL_ROWS=${report.maintenanceProof.postCompact.state.rows}`);
+  console.log(
+    `SQLITE_RELIABILITY_FINAL_STATE_SHA256=${report.maintenanceProof.postCompact.state.sha256}`,
+  );
 }
 
 async function main(argv: string[]): Promise<void> {
