@@ -818,10 +818,16 @@ async function readClawHubResponseBytes(params: {
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
   const maxBytes = params.maxBytes ?? CLAWHUB_ARCHIVE_MAX_BYTES;
   const contentEncoding = normalizeOptionalString(params.response.headers.get("content-encoding"));
-  const declaredSize =
-    !contentEncoding || contentEncoding.toLowerCase() === "identity"
-      ? parseMediaContentLength(params.response.headers.get("content-length"))
-      : null;
+  let declaredSize: number | null;
+  try {
+    declaredSize =
+      !contentEncoding || contentEncoding.toLowerCase() === "identity"
+        ? parseMediaContentLength(params.response.headers.get("content-length"))
+        : null;
+  } catch (err) {
+    await params.response.body?.cancel().catch(() => undefined);
+    throw err;
+  }
   if (declaredSize !== null && declaredSize > maxBytes) {
     // Fetch may decode encoded bodies while retaining their wire length, so
     // only identity lengths can safely short-circuit the decoded stream cap.
