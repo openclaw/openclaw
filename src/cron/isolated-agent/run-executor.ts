@@ -416,6 +416,9 @@ export function createCronPromptExecutor(params: {
             cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
               ? cliSessionBinding
               : undefined;
+          // Cron intentionally reuses its durable session id as the run id; turn
+          // claims stay unique via per-claim ids and the worker gate handles this
+          // via credential rotation (see worker-environments/service.ts fences).
           const runId = params.cronSession.sessionEntry.sessionId;
           const result = await withLocalSessionPlacementTurnAdmission(
             {
