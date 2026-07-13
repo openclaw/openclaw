@@ -1094,6 +1094,8 @@ async function writeQaSuiteArtifacts(params: {
             crablineChannelDriverSelection.capabilityMatrixPath,
           providerReadinessArtifactPath:
             authoritativeProviderReadinessArtifactPath ??
+            // Legacy results expose the completed readiness generation through smokeArtifactPath.
+            // It outranks the selection's pre-run filename, which may never be materialized.
             authoritativeSmokeArtifactPath ??
             crablineChannelDriverSelection.providerReadinessArtifactPath ??
             crablineChannelDriverSelection.smokeArtifactPath,
