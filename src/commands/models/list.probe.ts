@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import pMap from "p-map";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -592,17 +593,9 @@ async function runTargetsWithConcurrency(params: {
   await fs.mkdir(workspaceDir, { recursive: true });
 
   let completed = 0;
-  const results: Array<AuthProbeResult | undefined> = Array.from({ length: targets.length });
-  let cursor = 0;
-
-  const worker = async () => {
-    while (true) {
-      const index = cursor;
-      cursor += 1;
-      if (index >= targets.length) {
-        return;
-      }
-      const target = expectDefined(targets[index], "targets entry at index");
+  return await pMap(
+    targets,
+    async (target) => {
       onProgress?.({
         completed,
         total: targets.length,
@@ -618,15 +611,12 @@ async function runTargetsWithConcurrency(params: {
         timeoutMs,
         maxTokens,
       });
-      results[index] = result;
       completed += 1;
       onProgress?.({ completed, total: targets.length });
-    }
-  };
-
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
-
-  return results.filter((entry): entry is AuthProbeResult => Boolean(entry));
+      return result;
+    },
+    { concurrency, stopOnError: true },
+  );
 }
 
 /** Runs all auth probes with bounded concurrency and returns a summary. */

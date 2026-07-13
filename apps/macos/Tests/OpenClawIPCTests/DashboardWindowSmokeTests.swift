@@ -44,6 +44,15 @@ struct DashboardWindowSmokeTests {
         #expect(controller.window?.styleMask.contains(.closable) == true)
         #expect(controller.window?.contentViewController != nil)
         #expect(controller.window?.standardWindowButton(.closeButton) != nil)
+        // The empty unified toolbar is what grows the titlebar to 52pt so the
+        // traffic lights center against the web titlebar row; without it they
+        // hug the top edge and misalign with the hosted web buttons.
+        #expect(controller.window?.toolbar != nil)
+        #expect(controller.window?.toolbarStyle == .unified)
+        // The toolbar only exists to size the titlebar, so View > Hide Toolbar
+        // (⌥⌘T) must be refused; otherwise hiding it desyncs the 52pt web inset.
+        controller.window?.toggleToolbarShown(nil)
+        #expect(controller.window?.toolbar?.isVisible == true)
         #expect((controller.window?.frame.width ?? 0) >= DashboardWindowLayout.windowMinSize.width)
         #expect((controller.window?.frame.height ?? 0) >= DashboardWindowLayout.windowMinSize.height)
         controller.closeDashboard()
@@ -485,61 +494,30 @@ struct DashboardWindowSmokeTests {
         #expect(chromeScript.source.contains(".sidebar-shell"))
         #expect(chromeScript.source.contains(".settings-sidebar__header"))
         #expect(chromeScript.source.contains("min-width: 700px"))
-        #expect(chromeScript.source.contains("--openclaw-native-titlebar-height"))
+        // Keep the injected titlebar height in lockstep with the 52pt unified
+        // toolbar in makeWindow(); the two must match for the traffic lights and
+        // the hosted web buttons to share one vertical center.
+        #expect(chromeScript.source.contains("--openclaw-native-titlebar-height: 52px"))
         #expect(!chromeScript.source.contains("max-width: 1100px"))
-        // Advertises the native titlebar sidebar toggle so the Control UI can
-        // drop its floating expand button (layout.css keys off this class).
-        #expect(chromeScript.source.contains("openclaw-native-nav"))
+        #expect(chromeScript.source.contains("openclaw-native-web-chrome"))
+        #expect(!chromeScript.source.contains("openclaw-native-nav"))
+        #expect(chromeScript.injectionTime == .atDocumentEnd)
+        #expect(chromeScript.isForMainFrameOnly)
     }
 
-    @Test func `dashboard titlebar hosts sidebar and history controls`() throws {
+    @Test func `dashboard advertises web titlebar chrome before document load`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
-        let accessories = try #require(controller.window?.titlebarAccessoryViewControllers)
-        let buttons = accessories.flatMap { accessory in
-            accessory.view.subviews.compactMap { $0 as? NSButton }
-        }
-        let sidebar = try #require(buttons.first { $0.accessibilityLabel() == "Toggle Sidebar" })
-        let back = try #require(buttons.first { $0.accessibilityLabel() == "Back" })
-        let forward = try #require(buttons.first { $0.accessibilityLabel() == "Forward" })
-        let search = try #require(buttons.first { $0.accessibilityLabel() == "Search" })
-        let newSession = try #require(buttons.first { $0.accessibilityLabel() == "New Session" })
-        let accessory = try #require(sidebar.superview as? DashboardNavAccessoryView)
-        // Until a trusted nav-state report arrives (older gateway bundles never
-        // send one), the shipped toggle/back/forward trio stays visible and the
-        // collapsed-only pair stays hidden.
-        #expect(accessory.state == .legacy)
-        #expect(!back.isHidden)
-        #expect(!forward.isHidden)
-        #expect(search.isHidden)
-        #expect(newSession.isHidden)
-        // A typo'd SF Symbol name yields a nil image (invisible button).
-        #expect(sidebar.image != nil)
-        #expect(search.image != nil)
-        #expect(newSession.image != nil)
-        // The toggle has no readiness state; back/forward stay disabled until
-        // the back-forward list gains entries (the SPA pushes history entries).
-        #expect(sidebar.isEnabled)
-        #expect(!sidebar.isBordered)
-        #expect(!back.isEnabled)
-        #expect(!forward.isEnabled)
-        #expect(controller._testAllowsBackForwardGestures)
+        let capabilityScript = try #require(controller._testUserScripts.first {
+            $0.source.contains("__OPENCLAW_NATIVE_WEB_CHROME__")
+        })
 
-        // Collapsed swaps history for search/new-session; expanded stretches
-        // the accessory toward the reported web sidebar edge.
-        accessory.apply(.collapsed, windowWidth: 1280)
-        #expect(back.isHidden)
-        #expect(forward.isHidden)
-        #expect(!search.isHidden)
-        #expect(!newSession.isHidden)
-        accessory.apply(.expanded(sidebarWidth: 258), windowWidth: 1280)
-        #expect(!back.isHidden)
-        #expect(!forward.isHidden)
-        #expect(search.isHidden)
-        #expect(newSession.isHidden)
-        #expect(accessory.frame.width > DashboardNavAccessoryView.legacyWidth)
+        #expect(capabilityScript.injectionTime == .atDocumentStart)
+        #expect(capabilityScript.isForMainFrameOnly)
+        #expect(controller.window?.titlebarAccessoryViewControllers.isEmpty == true)
+        #expect(controller._testAllowsBackForwardGestures)
     }
 
     @Test func `dashboard failure state opens in dashboard window`() throws {

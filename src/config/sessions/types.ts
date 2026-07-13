@@ -14,6 +14,7 @@ import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
+import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 
 export type SessionScope = "per-sender" | "global";
@@ -230,7 +231,7 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
-export type SessionEntry = {
+export type SessionEntry = SessionRestartRecoveryState & {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
    * Stored on the main session entry.
@@ -428,10 +429,6 @@ export type SessionEntry = {
   pendingFinalDeliveryContext?: DeliveryContext;
   /** Durable send intent backing pending final delivery, when already created. */
   pendingFinalDeliveryIntentId?: string | null;
-  /** Current visible run delivery context used only for restart recovery. */
-  restartRecoveryDeliveryContext?: DeliveryContext;
-  /** Active run id that owns restartRecoveryDeliveryContext cleanup. */
-  restartRecoveryDeliveryRunId?: string;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat

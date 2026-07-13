@@ -1,6 +1,7 @@
 // Pure profile-page aggregation: turns usage.cost daily totals and
 // sessions.usage aggregates into the hero stats, streaks, and heatmap model.
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
+import { formatDurationCompact } from "../../lib/format.ts";
 
 type DailyTokensEntry = { date: string; totalTokens: number };
 
@@ -83,22 +84,9 @@ export function formatTokenScale(tokens: number | null | undefined): string {
   return String(Math.round(tokens));
 }
 
-/** Hour-scale duration ("59h 4m", "12m", "45s"); profile sessions can span days. */
+/** Compact duration for profile sessions, including multi-day sessions. */
 export function formatLongDuration(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms) || ms < 1000) {
-    return "0s";
-  }
-  const totalSeconds = Math.floor(ms / 1000);
-  if (totalSeconds < 60) {
-    return `${totalSeconds}s`;
-  }
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) {
-    return `${totalMinutes}m`;
-  }
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  return formatDurationCompact(ms, { spaced: true }) ?? "0s";
 }
 
 function activeDates(daily: readonly DailyTokensEntry[]): string[] {
