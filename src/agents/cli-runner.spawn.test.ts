@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing as replyRunTesting,
@@ -1063,7 +1064,10 @@ describe("runCliAgent spawn path", () => {
       const input = (args[0] ?? {}) as { argv?: string[] };
       const configArg = requireArgAfter(input.argv, "-c");
       const match = requireRegexMatch(configArg, /^model_instructions_file="(.+)"$/);
-      promptFileText = await fs.readFile(match[1], "utf-8");
+      promptFileText = await fs.readFile(
+        expectDefined(match[1], "match[1] test invariant"),
+        "utf-8",
+      );
       return createManagedRun({
         reason: "exit",
         exitCode: 0,
@@ -4100,6 +4104,71 @@ ${JSON.stringify({
       {
         name: "FailoverError",
         message: "Credit balance is too low",
+      },
+    );
+  });
+
+  it("surfaces Claude live max-turn results with run and session recovery context", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          [
+            JSON.stringify({
+              type: "system",
+              subtype: "init",
+              session_id: "live-max-turns",
+            }),
+            JSON.stringify({
+              type: "result",
+              subtype: "error_max_turns",
+              session_id: "live-max-turns",
+              num_turns: 2,
+              stop_reason: "tool_use",
+              terminal_reason: "max_turns",
+              errors: ["Reached maximum number of turns (1)"],
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-max-turns",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      ),
+      {
+        name: "FailoverError",
+        message:
+          "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+          "OpenClaw run: run-live-max-turns. OpenClaw session: s1. " +
+          "Claude session: live-max-turns. Tool actions may already have run; verify their effects before retrying. " +
+          "Retry with a higher --max-turns value or a narrower task.",
+        sessionId: "s1",
+        reason: "unknown",
+        code: "cli_max_turns",
+        rawError: "Reached maximum number of turns (1)",
       },
     );
   });

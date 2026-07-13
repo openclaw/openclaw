@@ -2,9 +2,6 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import officialExternalChannelCatalog from "../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
-import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
-import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
@@ -16,6 +13,7 @@ import type {
   PluginManifestProviderEndpoint,
   PluginPackageInstall,
 } from "./manifest.js";
+import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOGS } from "./official-external-plugin-bundled-catalogs.js";
 
 type ManifestKey = typeof MANIFEST_KEY;
 
@@ -244,12 +242,6 @@ type OfficialExternalProviderContract =
   | "memoryEmbeddingProviders"
   | "speechProviders"
   | "webFetchProviders";
-
-const OFFICIAL_CATALOG_SOURCES = [
-  officialExternalChannelCatalog,
-  officialExternalProviderCatalog,
-  officialExternalPluginCatalog,
-] as const;
 
 const SUPPORTED_OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS = new Set([1, 2]);
 export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL =
@@ -580,7 +572,7 @@ async function readHostedCatalogResponseText(params: {
 }
 
 function bundledOfficialExternalPluginCatalogEntries(): OfficialExternalPluginCatalogEntry[] {
-  return OFFICIAL_CATALOG_SOURCES.flatMap((source) =>
+  return BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOGS.flatMap((source) =>
     filterOfficialExternalPluginCatalogEntriesBySourceRefs(
       parseOfficialExternalPluginCatalogEntries(source),
     ),
@@ -833,11 +825,6 @@ async function resolveHostedCatalogSnapshotStore(params: {
     ...(params.stateDir ? { stateDir: params.stateDir } : {}),
     ...(params.stateDatabasePath ? { stateDatabasePath: params.stateDatabasePath } : {}),
   });
-}
-
-/** Keep signature verification crypto lazy for ordinary catalog metadata paths. */
-export async function loadOfficialExternalPluginCatalogEnvelopeVerifier() {
-  return await import("./official-external-plugin-catalog-envelope.js");
 }
 
 export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {

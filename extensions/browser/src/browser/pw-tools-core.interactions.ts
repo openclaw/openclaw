@@ -4,7 +4,7 @@
  */
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { Frame, Page } from "playwright-core";
+import type { FileChooser, Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
@@ -690,10 +690,15 @@ export async function clickViaPlaywright(
     delayMs?: number;
     timeoutMs?: number;
     signal?: AbortSignal;
+    resolvedPage?: Page;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
-  const page = await getRestoredPageForTarget(opts);
+  const page = opts.resolvedPage ?? (await getRestoredPageForTarget(opts));
+  if (opts.resolvedPage) {
+    ensurePageState(page);
+    restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  }
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
@@ -784,7 +789,7 @@ export async function clickViaPlaywright(
 }
 
 /** Clicks absolute page coordinates with optional double-click and navigation guard. */
-export async function clickCoordsViaPlaywright(
+async function clickCoordsViaPlaywright(
   opts: {
     cdpUrl: string;
     targetId?: string;
@@ -1301,41 +1306,90 @@ export async function scrollIntoViewViaPlaywright(
   }
 }
 
+type BrowserWaitPredicateState = {
+  document: unknown;
+  pending?: boolean;
+  predicate?: () => unknown;
+  settled?: { kind: "value"; value: unknown } | { error: unknown; kind: "error" };
+};
+
+function createBrowserWaitPredicate(source: string): (state: BrowserWaitPredicateState) => boolean {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- compile only; Playwright runs it in-page
+  return new Function(
+    "state",
+    `
+      if (state.document !== this.document) throw "Wait predicate document changed";
+      state.predicate ??= (${source});
+      var settled = state.settled;
+      if (settled) {
+        delete state.settled;
+        if (settled.kind === "error") throw settled.error;
+        if (!!settled.value) return true;
+      }
+      if (state.pending) return false;
+      var predicate = state.predicate;
+      var value = predicate();
+      if (!value || typeof value.then !== "function") return !!value;
+      state.pending = true;
+      value.then(
+        function(resolved) {
+          state.settled = { kind: "value", value: resolved };
+          delete state.pending;
+        },
+        function(error) {
+          state.settled = { error: error, kind: "error" };
+          delete state.pending;
+        }
+      );
+      return false;
+    `,
+  ) as (state: BrowserWaitPredicateState) => boolean;
+}
+
 /** Waits for load state, timeout, URL, text, ref, or selector conditions. */
-export async function waitForViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  timeMs?: number;
-  text?: string;
-  textGone?: string;
-  selector?: string;
-  url?: string;
-  loadState?: "load" | "domcontentloaded" | "networkidle";
-  fn?: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<void> {
+export async function waitForViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    timeMs?: number;
+    text?: string;
+    textGone?: string;
+    selector?: string;
+    url?: string;
+    loadState?: "load" | "domcontentloaded" | "networkidle";
+    fn?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
+  const fn = normalizeOptionalString(opts.fn) ?? "";
+  const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
+  const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
     await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
   };
-
-  try {
-    // Playwright exposes no per-wait cancellation; retiring the shared
-    // connection would disrupt sibling tabs. Keep waits outside this guard.
+  const waitForSettledStep = async <T>(stepPromise: Promise<T>) => {
+    await stepPromise;
+    reconcileRemoteDialog();
+    throwIfInteractionAborted(opts.signal);
+  };
+  const runWaitSequence = async (
+    waitFor: <T>(stepPromise: Promise<T>) => Promise<void>,
+  ): Promise<void> => {
     if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
-      await waitForStep(
+      await waitFor(
         page.waitForTimeout(
           resolveBoundedDelayMs(opts.timeMs, "wait timeMs", ACT_MAX_WAIT_TIME_MS),
         ),
       );
     }
     if (opts.text) {
-      await waitForStep(
+      await waitFor(
         page.getByText(opts.text).first().waitFor({
           state: "visible",
           timeout,
@@ -1343,7 +1397,7 @@ export async function waitForViaPlaywright(opts: {
       );
     }
     if (opts.textGone) {
-      await waitForStep(
+      await waitFor(
         page.getByText(opts.textGone).first().waitFor({
           state: "hidden",
           timeout,
@@ -1353,24 +1407,61 @@ export async function waitForViaPlaywright(opts: {
     if (opts.selector) {
       const selector = normalizeOptionalString(opts.selector) ?? "";
       if (selector) {
-        await waitForStep(page.locator(selector).first().waitFor({ state: "visible", timeout }));
+        await waitFor(page.locator(selector).first().waitFor({ state: "visible", timeout }));
       }
     }
     if (opts.url) {
       const url = normalizeOptionalString(opts.url) ?? "";
       if (url) {
-        await waitForStep(page.waitForURL(url, { timeout }));
+        await waitFor(page.waitForURL(url, { timeout }));
       }
     }
     if (opts.loadState) {
-      await waitForStep(page.waitForLoadState(opts.loadState, { timeout }));
+      await waitFor(page.waitForLoadState(opts.loadState, { timeout }));
     }
-    if (opts.fn) {
-      const fn = normalizeOptionalString(opts.fn) ?? "";
-      if (fn) {
-        await waitForStep(page.waitForFunction(fn, { timeout }));
+    if (fn) {
+      // Passing the live document handle makes Playwright fail instead of
+      // recreating this predicate in a replacement execution context.
+      const documentHandle = await page.evaluateHandle(() => globalThis.document);
+      try {
+        throwIfInteractionAborted(opts.signal);
+        await waitFor(
+          page.waitForFunction(
+            predicate!,
+            {
+              document: documentHandle,
+            } satisfies BrowserWaitPredicateState,
+            { timeout },
+          ),
+        );
+      } finally {
+        await documentHandle.dispose();
       }
     }
+  };
+
+  try {
+    // Playwright exposes no per-wait cancellation; retiring the shared
+    // connection would disrupt sibling tabs. Only executable waits need the
+    // request guard, which must own the full sequence before their predicate.
+    // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
+    // this guard owns navigation during the action, not jobs trusted JS schedules later.
+    if (!fn) {
+      await runWaitSequence(waitForStep);
+      return;
+    }
+    await awaitNavigationGuardedInteraction(
+      {
+        action: async () => await runWaitSequence(waitForSettledStep),
+        cdpUrl: opts.cdpUrl,
+        page,
+        ...interactionNavigationPolicy(opts),
+        targetId: opts.targetId,
+      },
+      abortPromise,
+      opts.signal,
+      reconcileRemoteDialog,
+    );
   } finally {
     cleanup();
   }
@@ -1483,6 +1574,10 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   const inputs: RawAnnotationInput[] = [];
   let bboxFailures = 0;
   for (const ref of refKeys) {
+    const refInfo = opts.refs[ref];
+    if (refInfo === undefined) {
+      continue;
+    }
     const box = await refLocator(page, ref)
       .boundingBox()
       .catch(() => null);
@@ -1492,8 +1587,8 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
     }
     inputs.push({
       ref,
-      role: opts.refs[ref].role,
-      name: opts.refs[ref].name,
+      role: refInfo.role,
+      name: refInfo.name,
       doc: {
         x: box.x + scroll.x,
         y: box.y + scroll.y,
@@ -1584,13 +1679,36 @@ async function captureElementScreenshotForLabels(
 }
 
 /** Sets file inputs for a role ref or selector with strict existing-path checks. */
-export async function setInputFilesViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  inputRef?: string;
-  element?: string;
-  paths: string[];
-}): Promise<void> {
+export async function setFileChooserFilesViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    page: Page;
+    fileChooser: FileChooser;
+    paths: string[];
+    timeoutMs: number;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
+  await awaitNavigationGuardedInteraction({
+    action: async () => {
+      await opts.fileChooser.setFiles(opts.paths, { timeout: opts.timeoutMs });
+    },
+    cdpUrl: opts.cdpUrl,
+    page: opts.page,
+    ...interactionNavigationPolicy(opts),
+    targetId: opts.targetId,
+  });
+}
+
+export async function setInputFilesViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    inputRef?: string;
+    element?: string;
+    paths: string[];
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -1614,7 +1732,15 @@ export async function setInputFilesViaPlaywright(opts: {
   const resolvedPaths = resolvedResult.paths;
 
   try {
-    await locator.setInputFiles(resolvedPaths);
+    await awaitNavigationGuardedInteraction({
+      action: async () => {
+        await locator.setInputFiles(resolvedPaths);
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      ...interactionNavigationPolicy(opts),
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, inputRef || element);
   }
@@ -1769,6 +1895,7 @@ async function executeSingleAction(
         loadState: action.loadState,
         fn: action.fn,
         timeoutMs: action.timeoutMs,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1813,8 +1940,9 @@ function actionUsesNavigationRequestGuard(action: BrowserActRequest): boolean {
   switch (action.kind) {
     case "close":
     case "resize":
-    case "wait":
       return false;
+    case "wait":
+      return Boolean(action.fn);
     case "batch":
       return action.actions.some(actionUsesNavigationRequestGuard);
     default:

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
+import type { ensureNodeHostConfig } from "./config.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import {
   resolveNodeHostGatewayDeviceFamily,
@@ -164,6 +165,78 @@ describe("runNodeHost", () => {
       resolveNodeHostGatewayDeviceFamily(process.platform),
     );
     expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
+  });
+
+  it("keeps a ref'd lifetime handle until a ready foreground host stops", async () => {
+    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+      ready: true,
+      aborted: false,
+      elapsedMs: 0,
+    });
+    const unref = vi.fn();
+    const interval = { unref } as unknown as ReturnType<typeof setInterval>;
+    const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
+    const clearIntervalSpy = vi.spyOn(global, "clearInterval").mockImplementation(() => {});
+    const processOnceSpy = vi.spyOn(process, "once");
+    const previousExitCode = process.exitCode;
+    let resolveCloseMcp: (() => void) | undefined;
+    mocks.closeMcpManager.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          resolveCloseMcp = () => resolve(undefined);
+        }),
+    );
+    try {
+      const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
+      await vi.waitFor(() =>
+        expect(processOnceSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function)),
+      );
+      await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
+
+      expect(setIntervalSpy).toHaveBeenCalledOnce();
+      expect(unref).not.toHaveBeenCalled();
+      expect(clearIntervalSpy).not.toHaveBeenCalled();
+
+      const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+      expect(onSigterm).toBeTypeOf("function");
+      onSigterm?.("SIGTERM");
+      await vi.waitFor(() => expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce());
+
+      expect(clearIntervalSpy).not.toHaveBeenCalled();
+      resolveCloseMcp?.();
+      await running;
+
+      expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
+    } finally {
+      for (const [event, listener] of processOnceSpy.mock.calls) {
+        if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
+          process.off(event, listener);
+        }
+      }
+      process.exitCode = previousExitCode;
+      processOnceSpy.mockRestore();
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
+  });
+
+  it("clears the lifetime handle when gateway startup rejects", async () => {
+    const startupError = new Error("gateway startup failed");
+    mocks.startGatewayClientWhenEventLoopReady.mockRejectedValueOnce(startupError);
+    const interval = {} as ReturnType<typeof setInterval>;
+    const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
+    const clearIntervalSpy = vi.spyOn(global, "clearInterval").mockImplementation(() => {});
+    try {
+      await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toBe(
+        startupError,
+      );
+
+      expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
+      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
   });
 
   it("declares the built-in MCP command family before any server is configured", async () => {
@@ -418,7 +491,7 @@ describe("runNodeHost", () => {
       version: 1,
       nodeId: "node-test",
       gateway: { contextPath: "/old-path" },
-    } as any);
+    } as Awaited<ReturnType<typeof ensureNodeHostConfig>>);
 
     await expect(
       runNodeHost({
@@ -438,7 +511,7 @@ describe("runNodeHost", () => {
       version: 1,
       nodeId: "node-test",
       gateway: { contextPath: "/old-path" },
-    } as any);
+    } as Awaited<ReturnType<typeof ensureNodeHostConfig>>);
 
     await expect(
       runNodeHost({

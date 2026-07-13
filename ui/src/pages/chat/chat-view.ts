@@ -3,7 +3,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionBranch,
+  ControlUiSessionPullRequest,
+} from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
@@ -60,6 +63,10 @@ import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "./tool-stream.ts";
 import "../../components/resizable-divider.ts";
 
+function isFileDrag(dataTransfer: DataTransfer | null): boolean {
+  return Array.from(dataTransfer?.types ?? []).includes("Files");
+}
+
 export type ChatProps = {
   paneId: string;
   sessionKey: string;
@@ -74,7 +81,12 @@ export type ChatProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
-  historyPagination?: { loading: boolean; onLoadOlder: () => void };
+  historyPagination?: {
+    loading: boolean;
+    manualFallback: boolean;
+    onLoadOlder: () => void;
+  };
+  renderAllLoadedHistory?: boolean;
   sideChatTurns?: ChatSideResult[];
   sideChatPending?: ChatSideResultPending | null;
   sideChatHidden?: boolean;
@@ -121,6 +133,7 @@ export type ChatProps = {
   assistantAttachmentAuthToken?: string | null;
   autoExpandToolCalls?: boolean;
   attachments?: ChatAttachment[];
+  getAttachments?: () => ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
   showNewMessages?: boolean;
@@ -189,6 +202,7 @@ export type ChatProps = {
   onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   pullRequests?: ControlUiSessionPullRequest[];
+  pullRequestsBranch?: ControlUiSessionBranch;
   pullRequestsRateLimited?: boolean;
   pullRequestsExpanded?: boolean;
   onExpandPullRequests?: () => void;
@@ -219,11 +233,38 @@ export function renderChat(props: ChatProps) {
   };
   const sideChatVisible = isSideChatPanelVisible(sideChatProps);
   let chatSection: HTMLElement | null = null;
+  // Nested dragenter/dragleave events must stay balanced so crossing transcript
+  // children does not flicker the pane-level file drop affordance.
+  let attachmentDragDepth = 0;
+  const setAttachmentDropActive = (event: DragEvent, active: boolean) => {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (active) {
+      if (!canCompose || !isFileDrag(event.dataTransfer)) {
+        return;
+      }
+      attachmentDragDepth += 1;
+    } else {
+      attachmentDragDepth = Math.max(0, attachmentDragDepth - 1);
+    }
+    target.toggleAttribute("data-attachment-drop-active", attachmentDragDepth > 0);
+  };
+  const clearAttachmentDropActive = (event: DragEvent) => {
+    attachmentDragDepth = 0;
+    const target = event.currentTarget;
+    if (target instanceof HTMLElement) {
+      target.removeAttribute("data-attachment-drop-active");
+    }
+  };
 
   const thread = renderChatThread({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
     loading: props.loading,
+    historyPagination: props.historyPagination,
+    renderAllLoadedHistory: props.renderAllLoadedHistory,
     messages: props.messages,
     toolMessages: props.toolMessages,
     streamSegments: props.streamSegments,
@@ -292,6 +333,7 @@ export function renderChat(props: ChatProps) {
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
     attachments: props.attachments,
+    getAttachments: props.getAttachments,
     replyTarget: props.replyTarget,
     realtimeTalkActive: props.realtimeTalkActive,
     realtimeTalkStatus: props.realtimeTalkStatus,
@@ -325,7 +367,7 @@ export function renderChat(props: ChatProps) {
               class="chat-scroll-to-bottom"
               type="button"
               @click=${() => props.onScrollToBottom?.({ smooth: true })}
-              aria-label="Scroll to latest"
+              aria-label=${t("chat.actions.scrollToLatest")}
             >
               ${icons.arrowDown}
             </button>
@@ -349,11 +391,19 @@ export function renderChat(props: ChatProps) {
       )}
       @drop=${(event: DragEvent) => {
         event.preventDefault();
+        clearAttachmentDropActive(event);
         if (canCompose) {
           handleChatAttachmentDrop(event, props);
         }
       }}
-      @dragover=${(event: DragEvent) => event.preventDefault()}
+      @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
+      @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
+      @dragover=${(event: DragEvent) => {
+        event.preventDefault();
+        if (canCompose && event.dataTransfer && isFileDrag(event.dataTransfer)) {
+          event.dataTransfer.dropEffect = "copy";
+        }
+      }}
       @keydown=${(event: KeyboardEvent) => {
         if (event.key === "Escape" && props.replyTarget && !event.defaultPrevented) {
           event.preventDefault();
@@ -378,12 +428,12 @@ export function renderChat(props: ChatProps) {
               <span class="callout__content">${props.error}</span>
               ${props.onDismissError
                 ? html`
-                    <openclaw-tooltip content="Dismiss error">
+                    <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
                       <button
                         class="callout__dismiss"
                         type="button"
                         @click=${props.onDismissError}
-                        aria-label="Dismiss error"
+                        aria-label=${t("chat.actions.dismissError")}
                       >
                         ${icons.x}
                       </button>
@@ -395,12 +445,12 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${props.focusMode && props.onToggleFocusMode
         ? html`
-            <openclaw-tooltip content="Exit focus mode">
+            <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
               <button
                 class="chat-focus-exit"
                 type="button"
                 @click=${props.onToggleFocusMode}
-                aria-label="Exit focus mode"
+                aria-label=${t("chat.actions.exitFocusMode")}
               >
                 ${icons.x}
               </button>
@@ -418,19 +468,6 @@ export function renderChat(props: ChatProps) {
         },
         requestUpdate,
       )}
-      ${props.historyPagination
-        ? html`<div class="chat-history-pagination">
-            <button
-              class="btn btn--sm"
-              type="button"
-              ?disabled=${props.historyPagination.loading}
-              @click=${props.historyPagination.onLoadOlder}
-            >
-              ${props.historyPagination.loading ? t("common.loading") : t("chat.loadOlder")}
-            </button>
-          </div>`
-        : nothing}
-
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
           ? "chat-workbench--workspace-collapsed"
@@ -519,6 +556,7 @@ export function renderChat(props: ChatProps) {
               })}
               ${renderChatPullRequests({
                 pullRequests: props.pullRequests ?? [],
+                branch: props.pullRequestsBranch,
                 rateLimited: props.pullRequestsRateLimited === true,
                 expanded: props.pullRequestsExpanded === true,
                 onExpand: () => props.onExpandPullRequests?.(),

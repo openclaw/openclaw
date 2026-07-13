@@ -58,7 +58,6 @@ type ConfigSchemaShape<T extends object> = {
 };
 
 const GatewayRemoteSchemaShape = {
-  enabled: z.boolean().optional(),
   url: z.string().optional(),
   transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
   remotePort: z.number().int().min(1).max(65_535).optional(),
@@ -470,6 +469,30 @@ export const McpServerSchema = z
 const McpConfigSchema = z
   .object({
     servers: z.record(z.string(), McpServerSchema).optional(),
+    apps: z
+      .object({
+        enabled: z.boolean().optional(),
+        sandboxOrigin: z
+          .string()
+          .url()
+          .refine((value) => {
+            try {
+              const url = new URL(value);
+              return (
+                (url.protocol === "http:" || url.protocol === "https:") &&
+                url.origin === value.replace(/\/$/u, "") &&
+                !url.username &&
+                !url.password
+              );
+            } catch {
+              return false;
+            }
+          }, "sandboxOrigin must be an HTTP(S) origin without a path, query, or credentials")
+          .optional(),
+        sandboxPort: z.number().int().min(1).max(65535).optional(),
+      })
+      .strict()
+      .optional(),
     sessionIdleTtlMs: z.number().finite().min(0).optional(),
   })
   .strict()

@@ -66,10 +66,20 @@ const sessionStoreRuntimeFileBackedCompatNames = new Set([
 ]);
 const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"]);
 
-export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([]);
+// Shipped beta.5 official plugins import these deprecated helpers during
+// doctor migrations. Remove this ratchet with the compatibility bridge once
+// beta.5 is outside the supported upgrade window; do not add runtime callers.
+export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
+  "loadSessionStore",
+  "resolveSessionFilePath",
+  "resolveSessionStoreEntry",
+  "updateSessionStore",
+]);
 
 export const migratedSessionAccessorFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
+  "src/acp/control-plane/manager.background-task.ts",
+  "src/acp/control-plane/manager.core.ts",
   "src/acp/runtime/session-meta.ts",
   "src/agents/acp-spawn.ts",
   "src/agents/auth-profiles/session-override.ts",
@@ -157,6 +167,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/live-model-switch.ts",
   "src/agents/main-session-restart-recovery.ts",
+  "src/agents/session-suspension.ts",
   "src/auto-reply/reply/abort.ts",
   "src/agents/subagent-control.ts",
   "src/agents/subagent-registry-helpers.ts",

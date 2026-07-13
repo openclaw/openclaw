@@ -194,11 +194,11 @@ struct OpenClawApp: App {
         let handler = StatusItemMouseHandlerView()
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
-            HoverHUDController.shared.dismiss(reason: "statusItemClick")
+            HoverHUDController.shared.dismiss()
             self.openDashboardWindow()
         }
         handler.onRightClick = { [self] in
-            HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
+            HoverHUDController.shared.dismiss()
             WebChatManager.shared.closePanel()
             self.isMenuPresented = true
             self.updateStatusHighlight()
@@ -763,6 +763,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         self.updateStatus.isUpdateReady = false
     }
 
+    // periphery:ignore - Sparkle invokes this optional Objective-C delegate callback dynamically.
     func updater(
         _: SPUUpdater,
         userDidMakeChoice choice: SPUUserUpdateChoice,

@@ -1,6 +1,7 @@
 // Covers model fallback ordering, error classification, and auth cooldown behavior.
 import crypto from "node:crypto";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -711,6 +712,55 @@ describe("runWithModelFallback", () => {
     );
   });
 
+  it("does not replay CLI max-turn failures on configured fallback models", async () => {
+    const failure = new FailoverError(
+      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). Tool actions may already have run; verify their effects before retrying.",
+      {
+        provider: "claude-cli",
+        model: "sonnet",
+        reason: "unknown",
+        code: "cli_max_turns",
+      },
+    );
+    const run = vi.fn().mockRejectedValue(failure);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
+        provider: "claude-cli",
+        model: "sonnet",
+        run,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay aggregate failures containing a CLI max-turn stop", async () => {
+    const maxTurns = new FailoverError("max turns", {
+      provider: "claude-cli",
+      model: "sonnet",
+      reason: "unknown",
+      code: "cli_max_turns",
+    });
+    const failure = new AggregateError(
+      [maxTurns, new Error("fork successor persistence failed")],
+      "CLI turn failed and its fork successor could not be persisted",
+    );
+    const run = vi.fn().mockRejectedValue(failure);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
+        provider: "claude-cli",
+        model: "sonnet",
+        run,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
@@ -904,8 +954,12 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
     expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0].error).toBe("bad request");
-    expect(result.attempts[0].reason).toBe("unknown");
+    expect(expectDefined(result.attempts[0], "result.attempts[0] test invariant").error).toBe(
+      "bad request",
+    );
+    expect(expectDefined(result.attempts[0], "result.attempts[0] test invariant").reason).toBe(
+      "unknown",
+    );
   });
 
   it("does not treat Codex missing tool-result failures as model fallback candidates", async () => {
@@ -986,7 +1040,9 @@ describe("runWithModelFallback", () => {
       { isFinalFallbackAttempt: false },
     ]);
     expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0].reason).toBe("overloaded");
+    expect(expectDefined(result.attempts[0], "result.attempts[0] test invariant").reason).toBe(
+      "overloaded",
+    );
   });
 
   it("does not prepare agent harness plugins for forced OpenClaw candidates", async () => {

@@ -109,36 +109,6 @@ export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
 const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
 type SlackSaveRemoteMediaOptions = Parameters<typeof saveRemoteMedia>[0];
 
-function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
-  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (activeSignals.length === 0) {
-    return undefined;
-  }
-  if (activeSignals.length === 1) {
-    return activeSignals[0];
-  }
-  if (typeof AbortSignal.any === "function") {
-    return AbortSignal.any(activeSignals);
-  }
-  const controller = new AbortController();
-  for (const signal of activeSignals) {
-    if (signal.aborted) {
-      controller.abort();
-      return controller.signal;
-    }
-  }
-  const abort = () => {
-    controller.abort();
-    for (const signal of activeSignals) {
-      signal.removeEventListener("abort", abort);
-    }
-  };
-  for (const signal of activeSignals) {
-    signal.addEventListener("abort", abort, { once: true });
-  }
-  return controller.signal;
-}
-
 async function saveSlackMedia(params: {
   options: SlackSaveRemoteMediaOptions;
   readIdleTimeoutMs?: number;
@@ -146,11 +116,12 @@ async function saveSlackMedia(params: {
   abortSignal?: AbortSignal;
 }): ReturnType<typeof saveRemoteMedia> {
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
-  const signal = mergeAbortSignals([
+  const abortSignals = [
     params.abortSignal,
     params.options.requestInit?.signal ?? undefined,
     timeoutAbortController?.signal,
-  ]);
+  ].filter((signal): signal is AbortSignal => Boolean(signal));
+  const signal = abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
@@ -339,16 +310,17 @@ async function mapLimit<T, R>(
   }
   const results: R[] = [];
   results.length = items.length;
-  let nextIndex = 0;
+  const pendingItems = items.entries();
   const workerCount = Math.max(1, Math.min(limit, items.length));
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       while (true) {
-        const idx = nextIndex++;
-        if (idx >= items.length) {
+        const next = pendingItems.next();
+        if (next.done) {
           return;
         }
-        results[idx] = await fn(items[idx]);
+        const [idx, item] = next.value;
+        results[idx] = await fn(item);
       }
     }),
   );

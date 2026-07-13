@@ -222,7 +222,7 @@ describe("clawhub helpers", () => {
     ).toBe("1.2.2");
   });
 
-  it("checks plugin api ranges without semver dependency", () => {
+  it("checks plugin api ranges with semver precedence", () => {
     expect(satisfiesPluginApiRange("1.2.3", "^1.2.0")).toBe(true);
     expect(satisfiesPluginApiRange("1.9.0", ">=1.2.0 <2.0.0")).toBe(true);
     expect(satisfiesPluginApiRange("2.0.0", "^1.2.0")).toBe(false);
@@ -993,6 +993,72 @@ describe("clawhub helpers", () => {
         fetchImpl: async () => new Response("Rate limit exceeded", { status: 429 }),
       }),
     ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
+  });
+
+  it("retries transient ClawHub reads and honors Retry-After", async () => {
+    const cancel = vi.fn();
+    let attempts = 0;
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                cancel() {
+                  cancel();
+                },
+              }),
+              {
+                status: 503,
+                headers: { "Retry-After": "0" },
+              },
+            );
+          }
+          return new Response(JSON.stringify({ results: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      }),
+    ).resolves.toStrictEqual([]);
+
+    expect(attempts).toBe(2);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the final ClawHub error body after transient retries are exhausted", async () => {
+    let attempts = 0;
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () => {
+          attempts += 1;
+          return new Response("Rate limit temporarily unavailable", {
+            status: 503,
+            headers: { "Retry-After": "0" },
+          });
+        },
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/search failed (503): Rate limit temporarily unavailable");
+
+    expect(attempts).toBe(4);
+  });
+
+  it("does not retry non-idempotent ClawHub requests", async () => {
+    let attempts = 0;
+    await expect(
+      fetchClawHubSkillSecurityVerdicts({
+        items: [],
+        skipAuth: true,
+        fetchImpl: async () => {
+          attempts += 1;
+          return new Response("temporarily unavailable", { status: 503 });
+        },
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/skills/-/security-verdicts failed (503)");
+    expect(attempts).toBe(1);
   });
 
   it("wraps malformed successful ClawHub JSON responses", async () => {

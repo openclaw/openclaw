@@ -22,11 +22,7 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  CodexAppServerEventProjector,
-  type CodexAppServerEventProjectorOptions,
-  type CodexAppServerToolTelemetry,
-} from "./event-projector.js";
+import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
@@ -36,6 +32,10 @@ const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
+type CodexAppServerEventProjectorOptions = ConstructorParameters<
+  typeof CodexAppServerEventProjector
+>[3];
+type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
@@ -3675,6 +3675,44 @@ describe("CodexAppServerEventProjector", () => {
     expect(item.content).toContain("OpenClaw truncated Codex native tool output");
     expect(item.content).toContain("showing 10000");
   });
+
+  it.each([
+    { prefixLength: 7_999, delta: "😀tail", expectedChunk: "" },
+    { prefixLength: 7_998, delta: "x😀tail", expectedChunk: "x\n" },
+  ])(
+    "keeps streamed progress UTF-16 safe with $prefixLength chars already emitted",
+    async ({ prefixLength, delta, expectedChunk }) => {
+      const onToolResult = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        verboseLevel: "full",
+        onToolResult,
+      });
+
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta: "a".repeat(prefixLength),
+        }),
+      );
+      onToolResult.mockClear();
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta,
+        }),
+      );
+
+      expect(onToolResult).toHaveBeenCalledTimes(1);
+      expect(onToolResult).toHaveBeenCalledWith({
+        text: `🛠️ Bash\n\`\`\`txt\n${expectedChunk}...(truncated)...\n\`\`\``,
+      });
+      const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
+      expect(text).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+    },
+  );
 
   it("freezes streamed raw prefix after UTF-16-safe truncation so full-output echoes stay suppressed", async () => {
     const projector = await createProjector();

@@ -186,6 +186,7 @@ const pwMocks = vi.hoisted(() => {
   return {
     armDialogViaPlaywright: vi.fn(async () => {}),
     armFileUploadViaPlaywright: vi.fn(async () => {}),
+    uploadViaPlaywright: vi.fn(async () => {}),
     batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
     clickCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
@@ -543,7 +544,7 @@ vi.mock("./cdp.js", () => ({
   }),
 }));
 
-vi.mock("./pw-ai.js", () => pwMocks);
+vi.mock("./pw-ai.js", () => ({ pwAi: pwMocks }));
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMocks);
 

@@ -2,6 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createEmptyChangedLanes,
@@ -102,7 +103,12 @@ function runChangedFormatLaneWithRepoOxfmt(cwd: string, changedPaths: string[]) 
   const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
     scripts: Record<string, string>;
   };
-  const [scriptBin, ...scriptArgs] = packageJson.scripts["format:check"].split(" ");
+  const formatScript = expectDefined(
+    packageJson.scripts["format:check"],
+    "format:check package script",
+  );
+  const [rawScriptBin, ...scriptArgs] = formatScript.split(" ");
+  const scriptBin = expectDefined(rawScriptBin, "format:check script binary");
   expect(scriptBin).toBe("oxfmt");
   const invocation = resolveOxfmtInvocation(
     [...scriptArgs, ...(formatCommand?.args.slice(1) ?? [])],
@@ -713,7 +719,6 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, {
       core: true,
       coreTests: true,
-      strictRatchet: true,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain(
       "check:database-first-legacy-stores",
@@ -956,7 +961,10 @@ describe("scripts/changed-lanes", () => {
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { CI: "1", PATH: "/usr/bin" },
     );
-    const [shimDir] = (command.env?.PATH ?? "").split(path.delimiter);
+    const shimDir = expectDefined(
+      (command.env?.PATH ?? "").split(path.delimiter)[0],
+      "CI Corepack pnpm shim directory",
+    );
 
     expect(path.basename(shimDir)).toMatch(/^openclaw-corepack-pnpm-/u);
     expect(existsSync(path.join(shimDir, "pnpm"))).toBe(true);
@@ -1117,7 +1125,6 @@ describe("scripts/changed-lanes", () => {
 
     expectLanes(result.lanes, {
       coreTests: true,
-      strictRatchet: true,
     });
     expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
       "tsgo:core:test",
@@ -2113,7 +2120,6 @@ describe("scripts/changed-lanes", () => {
       extensions: false,
       extensionTests: false,
       scripts: false,
-      strictRatchet: false,
       testRoot: false,
       apps: false,
       docs: false,

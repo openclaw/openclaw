@@ -25,22 +25,13 @@ import {
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-export {
-  areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
-  isSafeToAdoptBootstrapOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
-  shouldBootstrapFromExternalCliCredential,
-  shouldReplaceStoredOAuthCredential,
-} from "./oauth-shared.js";
-
-export type ExternalCliResolvedProfile = {
+type ExternalCliResolvedProfile = {
   profileId: string;
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
 
-export type ExternalCliAuthProfileOptions = {
+type ExternalCliAuthProfileOptions = {
   allowKeychainPrompt?: boolean;
   providerIds?: Iterable<string>;
   profileIds?: Iterable<string>;
@@ -64,7 +55,7 @@ type ExternalCliSyncProvider = {
 
 // Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
 /** Return true when imported CLI credentials match an existing profile identity. */
-export function isSafeToUseExternalCliCredential(
+function isSafeToUseExternalCliCredential(
   existing: OAuthCredential | undefined,
   imported: OAuthCredential,
 ): boolean {

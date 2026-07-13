@@ -13,7 +13,7 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 ## What it does
 
 - Connects to a Gateway over WebSocket (LAN or tailnet).
-- Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake.
+- Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake, and opt-in Health summaries.
 - Receives `node.invoke` commands and reports node status events.
 - Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the gateway.
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
@@ -87,6 +87,13 @@ This is disabled by default. It applies only to fresh `role: node` pairing with 
 openclaw nodes status
 openclaw gateway call node.list --params "{}"
 ```
+
+## Health summaries
+
+The iOS node can return an opt-in, read-only HealthKit aggregate for the current
+calendar day. iPhone consent and explicit Gateway command authorization are
+independent gates. See [HealthKit summaries](/platforms/ios-healthkit) for
+setup, invocation, payload fields, privacy behavior, and troubleshooting.
 
 By default, the Apple Watch companion keeps using the existing iPhone relay and
 does not need a separate Gateway pairing. Pair the Watch with the iPhone in

@@ -2,6 +2,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import { copyToClipboard } from "../clipboard.ts";
 import {
   cloneConfigObject,
   removePathValue,
@@ -351,7 +352,8 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     );
 
     if (variants.length === 1) {
-      return coerceFormValues(value, variants[0]);
+      const variant = variants[0];
+      return variant ? coerceFormValues(value, variant) : value;
     }
     if (typeof value === "string") {
       for (const variant of variants) {
@@ -789,10 +791,9 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
       let errorMessage = res.error || "Failed to open config file";
       const path = res.path || state.configSnapshot?.path;
       if (path) {
-        try {
-          await navigator.clipboard.writeText(path);
+        if (await copyToClipboard(path)) {
           errorMessage += `\n\nFile path copied to clipboard: ${path}`;
-        } catch {
+        } else {
           errorMessage += `\n\nFile path: ${path}`;
         }
       }
@@ -807,11 +808,7 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
     const errorMessage = String(err);
     const path = state.configSnapshot?.path;
     if (path) {
-      try {
-        await navigator.clipboard.writeText(path);
-      } catch {
-        // ignore
-      }
+      await copyToClipboard(path);
     }
     if (isCurrent()) {
       state.lastError = errorMessage;
@@ -838,7 +835,11 @@ export function createRuntimeConfigCapability(
   };
   const run = async <T>(task: () => Promise<T>): Promise<T> => {
     try {
-      return await task();
+      const result = task();
+      // Async config owners mutate their busy flag before the first await.
+      // Publish that transition so editors can lock before accepting more input.
+      publish();
+      return await result;
     } finally {
       publish();
     }

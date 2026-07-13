@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
@@ -1569,6 +1570,12 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "string-coerce.ts",
       distFile: "string-coerce.mjs",
     });
+    const retry = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "retry",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
     const markdownCore = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "markdown-core",
@@ -1633,6 +1640,7 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(normalizationCore.distFile);
     fs.rmSync(normalizationBooleanCoercion.distFile);
     fs.rmSync(normalizationStringCoerce.distFile);
+    fs.rmSync(retry.distFile);
     fs.rmSync(terminalCore.distFile);
     fs.rmSync(terminalCoreTheme.distFile);
     fs.rmSync(netPolicy.distFile);
@@ -1696,6 +1704,7 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/string-coerce"] ?? "")).toBe(
       fs.realpathSync(normalizationStringCoerce.srcFile),
     );
+    expect(fs.realpathSync(aliases["@openclaw/retry"] ?? "")).toBe(fs.realpathSync(retry.srcFile));
     expect(fs.realpathSync(aliases["@openclaw/terminal-core"] ?? "")).toBe(
       fs.realpathSync(terminalCore.srcFile),
     );
@@ -1765,6 +1774,15 @@ describe("plugin sdk alias helpers", () => {
     );
     mkdirSafeDir(path.dirname(normalizationCoreRootDistFile));
     fs.writeFileSync(normalizationCoreRootDistFile, "export {};\n", "utf-8");
+    writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "retry",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const retryRootDistFile = path.join(fixture.root, "dist", "retry", "index.js");
+    mkdirSafeDir(path.dirname(retryRootDistFile));
+    fs.writeFileSync(retryRootDistFile, "export {};\n", "utf-8");
     const markdownCore = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "markdown-core",
@@ -1822,6 +1840,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/record-coerce"] ?? "")).toBe(
       fs.realpathSync(normalizationCoreRootDistFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/retry"] ?? "")).toBe(
+      fs.realpathSync(retryRootDistFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/terminal-core/links"] ?? "")).toBe(
       fs.realpathSync(terminalCoreRootDistFile),
@@ -2424,7 +2445,11 @@ export const syntheticRuntimeMarker = {
         }),
       ).toBe(distFile);
     } finally {
-      process.argv[1] = originalArgv1;
+      if (originalArgv1 === undefined) {
+        process.argv.splice(1, 1);
+      } else {
+        process.argv[1] = originalArgv1;
+      }
     }
   });
 
@@ -2845,7 +2870,7 @@ describe("buildPluginLoaderJitiOptions", () => {
 
     const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
 
-    expect(alias.gamma.length).toBeLessThan(32);
+    expect(expectDefined(alias.gamma, "alias.gamma test invariant").length).toBeLessThan(32);
   });
 
   it("does not attach an empty alias map", () => {

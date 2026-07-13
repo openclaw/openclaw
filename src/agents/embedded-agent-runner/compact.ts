@@ -15,6 +15,10 @@ import {
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
+import {
+  formatActiveNodeContextLabel,
+  getActiveNodeContext,
+} from "../../infra/active-node-context.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import {
   createDiagnosticTraceContext,
@@ -740,18 +744,17 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const authProfileId = resolvedCompactionTarget.authProfileId;
   const providedRuntimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
-  if (runtimeProvider !== provider || selectedHarnessRuntime) {
-    await ensureSelectedAgentHarnessPlugin({
-      config: params.config,
-      provider,
-      modelId,
-      agentId: runtimePolicyAgentId,
-      sessionKey: runtimePolicySessionKey,
-      agentHarnessId: boundHarnessRuntime,
-      agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
-      workspaceDir: resolvedWorkspace,
-    });
-  }
+  // Ensure the policy-selected harness plugin so selection can pick implicit codex.
+  await ensureSelectedAgentHarnessPlugin({
+    config: params.config,
+    provider,
+    modelId,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+    agentHarnessId: boundHarnessRuntime,
+    agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
+    workspaceDir: resolvedWorkspace,
+  });
   let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
@@ -806,8 +809,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
     agentRuntimeAuthPlanMatchesTarget(providedRuntimeAuthPlan, { provider, modelId })
       ? providedRuntimeAuthPlan
       : undefined;
-  const compactionHarnessRuntimeOverride =
-    selectedHarnessRuntimeOverride ?? (selectedHarnessRuntime ? undefined : "openclaw");
+  // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
+  // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native
+  // transcript compaction stays gated on selectedHarnessRuntime.
   const selectHarnessForPreparedAttempts = (attempts: readonly PreparedAgentRuntimeAuthAttempt[]) =>
     selectAgentHarnessForPreparedModelProviders({
       provider,
@@ -823,7 +827,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       agentId: runtimePolicyAgentId,
       sessionKey: runtimePolicySessionKey,
       agentHarnessId: boundHarnessRuntime,
-      agentHarnessRuntimeOverride: compactionHarnessRuntimeOverride,
+      agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
     });
   const initialHarness = reusableRuntimeAuthPlan
     ? undefined
@@ -835,7 +839,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         agentId: runtimePolicyAgentId,
         sessionKey: runtimePolicySessionKey,
         agentHarnessId: boundHarnessRuntime,
-        agentHarnessRuntimeOverride: compactionHarnessRuntimeOverride,
+        agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
       });
   const prepareRuntimeAuth = (harness: ReturnType<typeof selectAgentHarness>) =>
     prepareAgentRuntimeAuth({
@@ -1369,6 +1373,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           agentId: sessionAgentId,
         }),
       }),
+      activeNode: formatActiveNodeContextLabel(getActiveNodeContext()),
     };
     const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
       config: params.config,
@@ -2014,5 +2019,3 @@ export const testing = {
   runAfterCompactionHooks,
   runPostCompactionSideEffects,
 } as const;
-
-export { testing as __testing };

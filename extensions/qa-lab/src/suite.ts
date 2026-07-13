@@ -97,6 +97,23 @@ type QaSuiteStep = {
   run: () => Promise<string | void>;
 };
 
+type QaCrablineChannelDriverSmokeResult = Awaited<
+  ReturnType<typeof runOpenClawCrablineChannelDriverSmoke>
+>;
+
+type QaSuiteChannelDriverSelection = Omit<
+  OpenClawCrablineChannelDriverSelection,
+  "capabilityMatrixPath" | "providerReadinessArtifactPath" | "smokeArtifactPath"
+> & {
+  capabilityMatrixPath: string;
+  providerReadinessArtifactPath?: string;
+  smokeArtifactPath: string;
+};
+
+function readQaSuiteArtifactPath(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function resolveQaSuiteControlUiEnabled(params: {
   explicit?: boolean;
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
@@ -548,7 +565,7 @@ function buildRuntimeParityScenarioResult(params: {
 
 function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+  channelDriverSelection?: QaSuiteChannelDriverSelection | null;
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
@@ -558,7 +575,10 @@ function createQaSuiteReportNotes(params: {
 }) {
   return [
     ...params.transport.createReportNotes(params),
-    ...createOpenClawCrablineChannelReportNotes(params.channelDriverSelection),
+    // Crabline reports completed generation paths through this filename-narrowed selection.
+    ...createOpenClawCrablineChannelReportNotes(
+      params.channelDriverSelection as OpenClawCrablineChannelDriverSelection | null | undefined,
+    ),
   ];
 }
 
@@ -695,7 +715,7 @@ export type QaSuiteSummaryJsonParams = {
   fastMode: boolean;
   concurrency: number;
   channelDriver?: QaScorecardChannelDriver | null;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+  channelDriverSelection?: QaSuiteChannelDriverSelection | null;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
 };
@@ -791,6 +811,7 @@ async function runQaRuntimeParitySuite(params: {
   progressEnabled: boolean;
   scenarioIds?: readonly string[];
   runtimePair: [RuntimeId, RuntimeId];
+  writeEvidenceFile?: boolean;
 }) {
   const ownsLab = !params.lab;
   const startLab = requireQaSuiteStartLab(params.startLab);
@@ -891,6 +912,7 @@ async function runQaRuntimeParitySuite(params: {
               controlUiEnabled: scenarioRequiresControlUi(scenario),
               forcedRuntime: runtime,
               captureRuntimeParityCell: true,
+              writeEvidenceFile: params.writeEvidenceFile,
             });
             const scenarioResult =
               cellResult.scenarios[0] ??
@@ -981,6 +1003,7 @@ async function runQaRuntimeParitySuite(params: {
             ? params.selectedScenarios.map((scenario) => scenario.id)
             : undefined,
         runtimePair: params.runtimePair,
+        writeEvidenceFile: params.writeEvidenceFile,
       },
     );
     lab.setLatestReport({
@@ -1038,29 +1061,48 @@ async function writeQaSuiteArtifacts(params: {
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
   writeEvidenceFile?: boolean;
+  runCrablineChannelDriverSmoke?: (
+    params: Parameters<typeof runOpenClawCrablineChannelDriverSmoke>[0],
+  ) => Promise<QaCrablineChannelDriverSmokeResult>;
 }) {
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   const crablineChannelDriverSelection = params.channelDriverSelection;
-  const crablineChannelDriverSmoke = crablineChannelDriverSelection
-    ? await runOpenClawCrablineChannelDriverSmoke({
-        outputDir: params.outputDir,
-        selection: crablineChannelDriverSelection,
-      })
-    : undefined;
-  const crablineChannelDriverArtifactPaths = crablineChannelDriverSelection
-    ? [
-        {
-          kind: "channel-capability-matrix",
-          path: crablineChannelDriverSelection.capabilityMatrixPath,
-        },
-        {
-          kind: "channel-driver-smoke",
-          path: crablineChannelDriverSelection.smokeArtifactPath,
-        },
-      ]
-    : [];
+  const crablineChannelDriverSmoke: QaCrablineChannelDriverSmokeResult | undefined =
+    crablineChannelDriverSelection
+      ? await (params.runCrablineChannelDriverSmoke ?? runOpenClawCrablineChannelDriverSmoke)({
+          outputDir: params.outputDir,
+          selection: crablineChannelDriverSelection,
+        })
+      : undefined;
+  const authoritativeCapabilityMatrixPath = readQaSuiteArtifactPath(
+    crablineChannelDriverSmoke?.capabilityMatrixPath,
+  );
+  const authoritativeProviderReadinessArtifactPath = readQaSuiteArtifactPath(
+    crablineChannelDriverSmoke?.providerReadinessArtifactPath,
+  );
+  const authoritativeSmokeArtifactPath = readQaSuiteArtifactPath(
+    crablineChannelDriverSmoke?.smokeArtifactPath,
+  );
+  const effectiveChannelDriverSelection: QaSuiteChannelDriverSelection | null | undefined =
+    crablineChannelDriverSelection
+      ? {
+          ...crablineChannelDriverSelection,
+          capabilityMatrixPath:
+            authoritativeCapabilityMatrixPath ??
+            crablineChannelDriverSelection.capabilityMatrixPath,
+          providerReadinessArtifactPath:
+            authoritativeProviderReadinessArtifactPath ??
+            authoritativeSmokeArtifactPath ??
+            crablineChannelDriverSelection.providerReadinessArtifactPath ??
+            crablineChannelDriverSelection.smokeArtifactPath,
+          smokeArtifactPath:
+            authoritativeSmokeArtifactPath ??
+            authoritativeProviderReadinessArtifactPath ??
+            crablineChannelDriverSelection.smokeArtifactPath,
+        }
+      : crablineChannelDriverSelection;
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
     startedAt: params.startedAt,
@@ -1072,7 +1114,10 @@ async function writeQaSuiteArtifacts(params: {
       details: scenario.details,
       steps: scenario.steps,
     })) satisfies QaReportScenario[],
-    notes: createQaSuiteReportNotes(params),
+    notes: createQaSuiteReportNotes({
+      ...params,
+      channelDriverSelection: effectiveChannelDriverSelection,
+    }),
   });
   const evidence =
     params.scenarioDefinitions && params.scenarioDefinitions.length > 0
@@ -1080,7 +1125,18 @@ async function writeQaSuiteArtifacts(params: {
           artifactPaths: [
             { kind: "summary", path: path.basename(summaryPath) },
             { kind: "report", path: path.basename(reportPath) },
-            ...crablineChannelDriverArtifactPaths,
+            ...(effectiveChannelDriverSelection
+              ? [
+                  {
+                    kind: "channel-capability-matrix",
+                    path: effectiveChannelDriverSelection.capabilityMatrixPath,
+                  },
+                  {
+                    kind: "channel-driver-smoke",
+                    path: effectiveChannelDriverSelection.smokeArtifactPath,
+                  },
+                ]
+              : []),
           ],
           evidenceMode: params.evidenceMode,
           channelId: params.channelDriverSelection?.channel ?? params.transport.id,
@@ -1094,7 +1150,11 @@ async function writeQaSuiteArtifacts(params: {
           scenarioResults: params.scenarios,
         })
       : undefined;
-  if (crablineChannelDriverSelection && crablineChannelDriverSmoke) {
+  if (
+    crablineChannelDriverSelection &&
+    crablineChannelDriverSmoke &&
+    !authoritativeCapabilityMatrixPath
+  ) {
     await fs.writeFile(
       path.join(params.outputDir, crablineChannelDriverSelection.capabilityMatrixPath),
       `${JSON.stringify(
@@ -1111,6 +1171,12 @@ async function writeQaSuiteArtifacts(params: {
       )}\n`,
       "utf8",
     );
+  }
+  if (
+    crablineChannelDriverSelection &&
+    crablineChannelDriverSmoke &&
+    !authoritativeSmokeArtifactPath
+  ) {
     await fs.writeFile(
       path.join(params.outputDir, crablineChannelDriverSelection.smokeArtifactPath),
       `${JSON.stringify(
@@ -1135,7 +1201,14 @@ async function writeQaSuiteArtifacts(params: {
   }
   await fs.writeFile(
     summaryPath,
-    `${JSON.stringify(buildQaSuiteSummaryJson(params), null, 2)}\n`,
+    `${JSON.stringify(
+      buildQaSuiteSummaryJson({
+        ...params,
+        channelDriverSelection: effectiveChannelDriverSelection,
+      }),
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
   await assertQaSuiteArtifactWritten("report", reportPath);
@@ -1368,6 +1441,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       progressEnabled,
       scenarioIds: params.scenarioIds,
       runtimePair: params.runtimePair,
+      writeEvidenceFile: params.writeEvidenceFile,
     });
   }
 
@@ -1415,7 +1489,9 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         (scenario): scenario is QaSuiteScenarioResult => scenario !== undefined,
       );
       const completedScenarioDefinitions = completedScenarioResults.flatMap((scenario, index) =>
-        scenario === undefined ? [] : [selectedScenarios[index]],
+        scenario === undefined || selectedScenarios[index] === undefined
+          ? []
+          : [selectedScenarios[index]],
       );
       if (partialScenarios.length === 0) {
         return;
@@ -1681,7 +1757,9 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   let runError: unknown;
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
-    const activeMock = await startQaProviderServer(providerMode);
+    const activeMock = await startQaProviderServer(providerMode, {
+      modelRefs: [primaryModel, alternateModel],
+    });
     mock = activeMock;
     writeQaSuiteProgress(
       progressEnabled,
@@ -1700,6 +1778,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       alternateModel,
       fastMode,
       thinkingDefault: params?.thinkingDefault,
+      forcedRuntime: params?.forcedRuntime,
       claudeCliAuthMode: params?.claudeCliAuthMode,
       controlUiEnabled: params?.controlUiEnabled ?? true,
       enabledPluginIds,
@@ -1847,15 +1926,16 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       });
     }
 
+    const runtimeParityScenario = scenarios[0];
     const runtimeParityCell =
       params?.captureRuntimeParityCell &&
       params.forcedRuntime &&
       selectedScenarios.length === 1 &&
-      scenarios.length > 0
+      runtimeParityScenario
         ? await captureRuntimeParityCell({
             runtime: params.forcedRuntime,
             gateway: activeGateway,
-            scenarioResult: scenarios[0],
+            scenarioResult: runtimeParityScenario,
             wallClockMs: Math.max(1, Date.now() - startedAt.getTime()),
             mockBaseUrl: activeMock?.baseUrl,
           })

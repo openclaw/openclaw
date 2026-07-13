@@ -449,7 +449,7 @@ type SessionCompactionCheckpointReason =
   | "overflow-retry"
   | "timeout-retry";
 
-export type SessionCompactionTranscriptReference = {
+type SessionCompactionTranscriptReference = {
   sessionId: string;
   sessionFile?: string;
   leafId?: string;
@@ -522,6 +522,8 @@ export type GatewaySessionRow = {
   status?: SessionRunStatus;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** An enabled cron job is bound to this session (runs in it or delivers to it). */
+  hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -589,12 +591,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
 };
 
 export type {
-  CostUsageDailyEntry,
   CostUsageSummary,
-  SessionsUsageEntry,
   SessionsUsageResult,
-  SessionsUsageTotals,
-  SessionUsageTimePoint,
   SessionUsageTimeSeries,
 } from "../pages/usage/data-types.ts";
 
@@ -643,7 +641,7 @@ export type CronPayload =
       bestEffortDeliver?: boolean;
     };
 
-export type CronDelivery = {
+type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
@@ -703,6 +701,21 @@ export type CronStatus = {
   jobs: number;
   nextWakeAtMs?: number | null;
 };
+
+export type CronRunResult =
+  | { ok: true; ran: true }
+  | { ok: true; enqueued: true; runId: string }
+  | {
+      ok: true;
+      ran: false;
+      reason:
+        | "not-due"
+        | "already-running"
+        | "restart-recovery-pending"
+        | "invalid-spec"
+        | "stopped";
+    }
+  | { ok: false };
 
 export type CronRunLogEntry = {
   ts: number;

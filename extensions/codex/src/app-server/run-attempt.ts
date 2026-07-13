@@ -112,7 +112,6 @@ import {
   resolveCodexTurnAssistantCompletionIdleTimeoutMs,
   resolveCodexTurnCompletionIdleTimeoutMs,
   resolveCodexTurnTerminalIdleTimeoutMs,
-  withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
 import {
   createCodexAttemptTurnWatchController,
@@ -122,7 +121,6 @@ import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerFallbackApiKeyCacheKey,
-  resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerPreparedAuthHandoff,
@@ -154,16 +152,10 @@ import {
 import {
   buildDynamicTools,
   createCodexDynamicToolBuildStageTracker,
-  filterCodexDynamicToolsForAllowlist,
   formatCodexDynamicToolBuildStageSummary,
-  includeForcedCodexDynamicToolAllow,
   resolveCodexAppServerHookChannelId,
   resolveCodexMessageToolProvider,
-  resolveOpenClawCodingToolsSessionKeys,
-  resetOpenClawCodingToolsFactoryForTests,
-  setOpenClawCodingToolsFactoryForTests,
   shouldEnableCodexAppServerNativeToolSurface,
-  shouldForceMessageTool,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
 import {
@@ -185,9 +177,7 @@ import {
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import {
-  filterCodexDynamicTools,
   isCrestodianOnlyCodexDynamicToolAllowlist,
-  resolveCodexDynamicToolsLoadingForModel,
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -199,19 +189,15 @@ import {
 import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
-  buildCodexNativeHookRelayId,
-  clearPendingCodexNativeHookRelayUnregistersForTests,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
   createCodexNativeHookRelay,
   emitCodexNativePreToolUseFailureDiagnostic,
-  flushPendingCodexNativeHookRelayUnregistersForTests,
   resolveCodexNativeHookRelayEvents,
   resolveCodexNativeHookRelayTtlMs,
-  resolveCodexNativeHookRelayUnregisterGraceMs,
   scheduleCodexNativeHookRelayUnregister,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
-import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import {
   assertCodexTurnStartResponse,
@@ -241,6 +227,7 @@ import {
 } from "./session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
+  retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
@@ -271,9 +258,9 @@ import {
 } from "./trajectory.js";
 import {
   buildCodexUserPromptMessage,
+  codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
   mirrorPromptAtTurnStartBestEffort,
-  mirrorTranscriptBestEffort,
 } from "./transcript-mirror.js";
 import {
   CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS,
@@ -289,6 +276,7 @@ import {
 } from "./usage-limit-error.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
+import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
@@ -307,8 +295,6 @@ function shouldKeepCodexSharedAbortOpen(params: {
   // freeze after those paths settle.
   return params.trigger === "memory" || !params.attemptSucceeded;
 }
-
-const ensuredCodexWorkspaceDirs = new Set<string>();
 
 function withCodexAppServerFastModeServiceTier(
   appServer: CodexAppServerRuntimeOptions,
@@ -336,7 +322,7 @@ function estimateCodexAppServerProjectedTurnTokens(params: {
 
 async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> {
   const normalized = path.resolve(workspaceDir);
-  if (ensuredCodexWorkspaceDirs.has(normalized)) {
+  if (codexWorkspaceDirCache.has(normalized)) {
     try {
       const stat = await fs.stat(normalized);
       if (stat.isDirectory()) {
@@ -349,13 +335,13 @@ async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> 
         throw error;
       }
     }
-    ensuredCodexWorkspaceDirs.delete(normalized);
+    codexWorkspaceDirCache.delete(normalized);
   }
   // Codex attempts re-enter the same workspace repeatedly; caching successful
   // mkdirs avoids repeated fs work while still recovering if cleanup prunes
   // the directory between attempts.
   await fs.mkdir(normalized, { recursive: true });
-  ensuredCodexWorkspaceDirs.add(normalized);
+  codexWorkspaceDirCache.add(normalized);
 }
 
 async function emitCodexAppServerEvent(
@@ -1637,9 +1623,9 @@ export async function runCodexAppServerAttempt(
     trajectoryEndRecorded = true;
   };
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
-  const nativeSubagentMonitorRef: {
-    current?: ReturnType<typeof registerCodexNativeSubagentMonitor>;
-  } = {};
+  let nativeSubagentMonitor:
+    | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
+    | undefined;
   const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
   const projectorRef: { current?: CodexAppServerEventProjector } = {};
   let nativePreToolUseFailureFallbackActive = false;
@@ -1717,12 +1703,28 @@ export async function runCodexAppServerAttempt(
       await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   };
+  const unregisterNativeSubagentMonitor = () => {
+    nativeSubagentMonitor?.unregister();
+    nativeSubagentMonitor = undefined;
+  };
+  const registerNativeSubagentMonitor = (parentThreadId: string) => {
+    unregisterNativeSubagentMonitor();
+    nativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register({
+      client,
+      parentThreadId,
+      requesterSessionKey: params.sessionKey,
+      taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+      agentId: sessionAgentId,
+      retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
+    });
+  };
   const releaseCurrentRoute = () => {
     detachRouteAbort();
     detachRouteAbort = () => undefined;
     turnRoute?.release();
     turnRoute = undefined;
     routeActivated = false;
+    unregisterNativeSubagentMonitor();
   };
   let codexEnvironmentSelection: CodexTurnEnvironmentParams[] | undefined;
   let codexExecutionCwd = effectiveCwd;
@@ -2495,18 +2497,7 @@ export async function runCodexAppServerAttempt(
     await turnRoute?.drain();
   };
 
-  const nativeSubagentCodexHome =
-    appServer.start.transport === "stdio"
-      ? (appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir))
-      : undefined;
-  nativeSubagentMonitorRef.current = registerCodexNativeSubagentMonitor({
-    client,
-    parentThreadId: thread.threadId,
-    requesterSessionKey: params.sessionKey,
-    taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
-    agentId: params.agentId,
-    codexHome: nativeSubagentCodexHome,
-  });
+  registerNativeSubagentMonitor(thread.threadId);
   const handleServerRequest = async (
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
@@ -2854,6 +2845,9 @@ export async function runCodexAppServerAttempt(
       throw new Error("codex app-server turn route was not reserved");
     }
     if (!routeActivated) {
+      if (!nativeSubagentMonitor) {
+        registerNativeSubagentMonitor(thread.threadId);
+      }
       detachRouteAbort = attachRouteAbort(turnRoute);
       await turnRoute.activate({
         onNotificationReceived: noteNotificationReceived,
@@ -3641,7 +3635,7 @@ export async function runCodexAppServerAttempt(
     } else {
       codexModelCallDiagnostics.emitCompleted(result);
     }
-    const assistantTranscriptOwned = await mirrorTranscriptBestEffort({
+    const assistantTranscriptOwned = await codexTranscriptMirrorRuntime.mirrorBestEffort({
       params,
       agentId: sessionAgentId,
       notifyUserMessagePersisted,
@@ -3869,20 +3863,7 @@ export async function runCodexAppServerAttempt(
     if (!timedOut && !runAbortController.signal.aborted) {
       await steeringQueueRef.current?.flushPending();
     }
-    const yieldedOneShotCleanupDeferred =
-      !timedOut &&
-      params.cleanupBundleMcpOnRunEnd === true &&
-      yieldDetected &&
-      nativeSubagentMonitorRef.current?.deferUntilParentSettles(thread.threadId, async () => {
-        // Keep the parent subscription alive until native child delivery;
-        // unsubscribing first drops the completion signal that settles cleanup.
-        await unsubscribeCodexThreadBestEffort(client, {
-          threadId: thread.threadId,
-          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-        });
-        await releaseSharedClientLeaseAndRetireOneShotClient();
-      });
-    if (!timedOut && !yieldedOneShotCleanupDeferred) {
+    if (!timedOut) {
       await unsubscribeCodexThreadBestEffort(client, {
         threadId: thread.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -3891,9 +3872,7 @@ export async function runCodexAppServerAttempt(
     userInputBridgeRef.current?.cancelPending();
     turnWatches.clearAllTimers();
     releaseCurrentRoute();
-    if (!yieldedOneShotCleanupDeferred) {
-      await releaseSharedClientLeaseAndRetireOneShotClient();
-    }
+    await releaseSharedClientLeaseAndRetireOneShotClient();
     if (nativeHookRelay) {
       if (shouldDelayNativeHookRelayUnregister) {
         // Codex hook subprocesses can outlive a completed app-server turn by a
@@ -4156,35 +4135,3 @@ function resolveCodexDynamicToolDirectNames(
   }
   return names;
 }
-
-export const testing = {
-  buildCodexNativeHookRelayId,
-  buildDeveloperInstructions,
-  filterCodexDynamicTools,
-  buildDynamicTools,
-  filterCodexDynamicToolsForAllowlist,
-  includeForcedCodexDynamicToolAllow,
-  resolveCodexDynamicToolsLoadingForModel,
-  resolveCodexAppServerHookChannelId,
-  buildCodexAppServerPromptTimeoutOutcome,
-  resolveOpenClawCodingToolsSessionKeys,
-  shouldEnableCodexAppServerNativeToolSurface,
-  shouldForceMessageTool,
-  resolveCodexDynamicToolDirectNames,
-  createCodexDynamicToolExecutionRegistry,
-  hasPendingDynamicToolTerminalDiagnostic,
-  toTranscriptToolResultForTests: toTranscriptToolResult,
-  withCodexStartupTimeout,
-  setOpenClawCodingToolsFactoryForTests,
-  resetOpenClawCodingToolsFactoryForTests,
-  async ensureCodexWorkspaceDirOnceForTests(workspaceDir: string): Promise<void> {
-    await ensureCodexWorkspaceDirOnce(workspaceDir);
-  },
-  resetEnsuredCodexWorkspaceDirsForTests(): void {
-    ensuredCodexWorkspaceDirs.clear();
-  },
-  flushPendingCodexNativeHookRelayUnregistersForTests,
-  clearPendingCodexNativeHookRelayUnregistersForTests,
-  resolveCodexNativeHookRelayUnregisterGraceMs,
-} as const;
-export { testing as __testing };

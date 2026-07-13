@@ -49,7 +49,7 @@ import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import { isFailoverError } from "../../agents/failover-error.js";
+import { findCliMaxTurnsError, isFailoverError } from "../../agents/failover-error.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -791,6 +791,13 @@ function buildExternalRunFailureReply(
   const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
+  }
+  const cliMaxTurnsError = findCliMaxTurnsError(error);
+  if (cliMaxTurnsError) {
+    return {
+      text: sanitizeUserFacingText(cliMaxTurnsError.message, { errorContext: true }),
+      isGenericRunnerFailure: false,
+    };
   }
   const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {
@@ -3063,7 +3070,13 @@ async function runAgentTurnWithFallbackInternal(
         : isFailoverError(err)
           ? err.reason === "billing"
           : isBillingErrorMessage(message);
-      const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
+      // Prefer structured FailoverError reasons over message-text heuristics so
+      // typed context-overflow/transient failures are not misclassified when the
+      // error string lacks overflow/HTTP status tokens.
+      const isContextOverflow =
+        !isBilling &&
+        ((isFailoverError(err) && err.reason === "context_overflow") ||
+          isLikelyContextOverflowError(message));
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       // OAuth/auth-profile failures must reach buildExternalRunFailureReply so
       // the targeted re-auth/failover copy is surfaced instead of the generic
@@ -3078,7 +3091,11 @@ async function runAgentTurnWithFallbackInternal(
         !shouldSurfaceToControlUi
           ? classifyProviderRequestError(err)
           : undefined;
-      const isTransientHttp = isTransientHttpError(message);
+      // Typed overloaded failures stay out of the transient retry: they surface
+      // dedicated overloaded copy immediately instead of being retried silently.
+      const isTransientHttp =
+        isTransientHttpError(message) ||
+        (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
 
       // Drain/restart aborts stay silent and defer to post-restart
       // main-session recovery, which resumes the interrupted turn (or emits its

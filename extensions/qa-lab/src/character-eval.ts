@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import prettyMilliseconds from "pretty-ms";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import {
@@ -195,13 +196,16 @@ async function mapWithConcurrency<T, U>(
   mapper: (item: T, index: number) => Promise<U>,
 ) {
   const results = Array.from<U>({ length: items.length });
-  let nextIndex = 0;
+  const pendingItems = items.entries();
   const workerCount = Math.min(normalizeConcurrency(concurrency), items.length);
   const workers = Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await mapper(items[index], index);
+    while (true) {
+      const next = pendingItems.next();
+      if (next.done) {
+        return;
+      }
+      const [index, item] = next.value;
+      results[index] = await mapper(item, index);
     }
   });
   await Promise.all(workers);
@@ -258,17 +262,12 @@ function formatDuration(ms: number) {
   if (!Number.isFinite(ms) || ms < 0) {
     return "unknown";
   }
-  if (ms < 1_000) {
-    return `${Math.round(ms)}ms`;
-  }
-  if (ms < 60_000) {
-    const seconds = ms / 1_000;
-    return `${seconds >= 10 ? Math.round(seconds) : Number(seconds.toFixed(1))}s`;
-  }
-  const totalSeconds = Math.round(ms / 1_000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
+  return prettyMilliseconds(roundedMs, {
+    millisecondsDecimalDigits: 0,
+    secondsDecimalDigits: 0,
+    unitCount: 2,
+  });
 }
 
 function logCharacterEvalProgress(

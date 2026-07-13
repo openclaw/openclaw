@@ -487,38 +487,24 @@ struct DashboardWindowSmokeTests {
         #expect(chromeScript.source.contains("min-width: 700px"))
         #expect(chromeScript.source.contains("--openclaw-native-titlebar-height"))
         #expect(!chromeScript.source.contains("max-width: 1100px"))
-        // Advertises the native titlebar sidebar toggle so the Control UI can
-        // drop its floating expand button (layout.css keys off this class).
-        #expect(chromeScript.source.contains("openclaw-native-nav"))
+        #expect(chromeScript.source.contains("openclaw-native-web-chrome"))
+        #expect(!chromeScript.source.contains("openclaw-native-nav"))
+        #expect(chromeScript.injectionTime == .atDocumentEnd)
+        #expect(chromeScript.isForMainFrameOnly)
     }
 
-    @Test func `dashboard titlebar hosts sidebar and history controls`() throws {
+    @Test func `dashboard advertises web titlebar chrome before document load`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
-        let accessories = try #require(controller.window?.titlebarAccessoryViewControllers)
-        let buttons = accessories.flatMap { accessory in
-            accessory.view.subviews.compactMap { $0 as? NSButton }
-        }
-        let sidebar = try #require(buttons.first { $0.accessibilityLabel() == "Toggle Sidebar" })
-        let back = try #require(buttons.first { $0.accessibilityLabel() == "Back" })
-        let forward = try #require(buttons.first { $0.accessibilityLabel() == "Forward" })
-        // Titlebar order mirrors Safari: sidebar toggle first, then history.
-        let stack = try #require(sidebar.superview as? NSStackView)
-        #expect(stack.arrangedSubviews.firstIndex(of: sidebar) == 0)
-        #expect(stack.arrangedSubviews.firstIndex(of: back) == 1)
-        #expect(stack.arrangedSubviews.firstIndex(of: forward) == 2)
-        // A typo'd SF Symbol name yields a nil image (invisible button), and a
-        // frame narrower than the fitting size clips the trailing control.
-        #expect(sidebar.image != nil)
-        #expect(stack.fittingSize.width <= stack.frame.width)
-        // The toggle has no readiness state; back/forward stay disabled until
-        // the back-forward list gains entries (the SPA pushes history entries).
-        #expect(sidebar.isEnabled)
-        #expect(!sidebar.isBordered)
-        #expect(!back.isEnabled)
-        #expect(!forward.isEnabled)
+        let capabilityScript = try #require(controller._testUserScripts.first {
+            $0.source.contains("__OPENCLAW_NATIVE_WEB_CHROME__")
+        })
+
+        #expect(capabilityScript.injectionTime == .atDocumentStart)
+        #expect(capabilityScript.isForMainFrameOnly)
+        #expect(controller.window?.titlebarAccessoryViewControllers.isEmpty == true)
         #expect(controller._testAllowsBackForwardGestures)
     }
 

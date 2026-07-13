@@ -9,6 +9,7 @@ import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { toErrorObject } from "../../../infra/errors.js";
+import { formatDurationSeconds } from "../../../infra/format-time/format-duration.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
@@ -24,10 +25,8 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
 const bashSchema = Type.Object({
-  command: Type.String({ description: "Bash command to execute" }),
-  timeout: Type.Optional(
-    Type.Number({ description: "Timeout in seconds (optional, no default timeout)" }),
-  ),
+  command: Type.String({ description: "Bash command." }),
+  timeout: Type.Optional(Type.Number({ description: "Optional timeout seconds; default none." })),
 });
 export type { BashToolDetails, BashToolInput } from "./tool-contracts.js";
 
@@ -180,10 +179,6 @@ class BashResultRenderComponent extends Container {
   };
 }
 
-function formatDuration(ms: number): string {
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
 function formatBashCall(args: { command?: string; timeout?: number } | undefined): string {
   const command = str(args?.command);
   const timeout = args?.timeout;
@@ -274,7 +269,11 @@ function rebuildBashResultRenderComponent(
     const label = options.isPartial ? "Elapsed" : "Took";
     const endTime = endedAt ?? Date.now();
     component.addChild(
-      new Text(`\n${theme.fg("muted", `${label} ${formatDuration(endTime - startedAt)}`)}`, 0, 0),
+      new Text(
+        `\n${theme.fg("muted", `${label} ${formatDurationSeconds(endTime - startedAt)}`)}`,
+        0,
+        0,
+      ),
     );
   }
 }
@@ -289,7 +288,7 @@ export function createBashToolDefinition(
   return {
     name: "bash",
     label: "bash",
-    description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+    description: `Run bash in cwd; stdout+stderr. Returns last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; full truncated output saved temp. Optional timeout seconds.`,
     promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
     parameters: bashSchema,
     async execute(

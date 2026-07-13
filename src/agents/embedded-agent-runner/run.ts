@@ -1495,6 +1495,7 @@ async function runEmbeddedAgentInternal(
       agentHarness = selectHarnessForModel(effectiveModel);
       pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
 
+      const authStages = log.isEnabled("trace") ? createEmbeddedRunStageTracker() : undefined;
       const usesOpenAIAuthRouting = provider === OPENAI_PROVIDER_ID;
       const openClawNativeCodexResponsesNeedsAuthBootstrap =
         !pluginHarnessOwnsTransport &&
@@ -1532,6 +1533,7 @@ async function runEmbeddedAgentInternal(
             params.authProfileIdSource === "user" ? params.authProfileId : undefined,
         });
       }
+      authStages?.mark("scope");
       const attemptAuthProfileStore = usesOpenAIAuthRouting
         ? ensureAuthProfileStore(agentDir, {
             externalCliProviderIds: [OPENAI_PROVIDER_ID],
@@ -1550,6 +1552,7 @@ async function runEmbeddedAgentInternal(
               ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
                 allowKeychainPrompt: false,
               }));
+      authStages?.mark("store");
       const requestedProfileId = params.authProfileId?.trim() || undefined;
       const lockedProfileId =
         params.authProfileIdSource === "user" ? requestedProfileId : undefined;
@@ -1586,12 +1589,19 @@ async function runEmbeddedAgentInternal(
             }),
         });
 
-      const materializeAuthPlan = async (plan: AgentRuntimeAuthPlan) => {
+      const materializedRouteModels = new WeakMap<
+        AgentRuntimeAuthPlan,
+        Promise<typeof runtimeModel>
+      >();
+      const materializeAuthPlanUncached = async (plan: AgentRuntimeAuthPlan) => {
         // Native harness sessions own their model tuple. Route preparation may
         // attest auth/transport, but must not rediscover or replace that model.
         if (nativeModelOwned) {
           return runtimeModel;
         }
+        const requiresCredentialScopedResolve = Boolean(
+          plan.modelRoute && (plan.forwardedAuthProfileId || params.authProfileId),
+        );
         return (
           (await materializePreparedRuntimeModel({
             plan,
@@ -1599,7 +1609,9 @@ async function runEmbeddedAgentInternal(
             modelId,
             config: params.config,
             model: runtimeModel,
-            forceResolve: Boolean(plan.modelRoute),
+            // Unscoped direct auth cannot change credential-scoped metadata.
+            // Reuse an already matching tuple; route mismatches still resolve.
+            forceResolve: requiresCredentialScopedResolve,
             resolveModel: ({ config, authProfileId, authProfileMode }) =>
               resolveModelAsync(provider, modelId, agentDir, config, {
                 authStorage,
@@ -1614,10 +1626,25 @@ async function runEmbeddedAgentInternal(
           })) ?? runtimeModel
         );
       };
+      const materializeAuthPlan = (plan: AgentRuntimeAuthPlan) => {
+        if (!plan.modelRoute) {
+          return materializeAuthPlanUncached(plan);
+        }
+        const cached = materializedRouteModels.get(plan);
+        if (cached) {
+          return cached;
+        }
+        // Prepared plans are immutable within one run. Carry their exact model
+        // tuple into auth initialization instead of repeating provider discovery.
+        const materialized = materializeAuthPlanUncached(plan);
+        materializedRouteModels.set(plan, materialized);
+        return materialized;
+      };
       let resolvedAuthPreparation = createAuthPreparation();
       let preparedAuthAttempts = resolvedAuthPreparation.attempts;
       let activePreparedAuthPlan = resolvedAuthPreparation.plan;
       applyResolvedRuntimeModel(await materializeAuthPlan(activePreparedAuthPlan));
+      authStages?.mark("prepare-plan");
 
       const finalizedHarness = selectHarnessForPreparedAttempts(
         effectiveModel,
@@ -1640,6 +1667,7 @@ async function runEmbeddedAgentInternal(
           );
         }
       }
+      authStages?.mark("harness");
       // A selected plugin harness owns context pressure with its native transcript,
       // even if it cannot expose manual compaction. Generic recovery is OpenClaw-only.
       const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
@@ -1851,6 +1879,7 @@ async function runEmbeddedAgentInternal(
         },
         log,
       });
+      authStages?.mark("controller");
       const advancePluginHarnessAuthAttempt = async (): Promise<boolean> => {
         if (!pluginHarnessOwnsTransport || lockedProfileId) {
           return false;
@@ -1950,6 +1979,15 @@ async function runEmbeddedAgentInternal(
           preparedProfileAttempted = initialAttempt?.kind === "profile";
           lastProfileId = forwardedPluginHarnessProfileId;
         }
+      }
+      authStages?.mark("initialize");
+      if (authStages) {
+        log.trace(
+          formatEmbeddedRunStageSummary(
+            `[trace:embedded-run] auth stages: runId=${params.runId} sessionId=${params.sessionId} phase=auth`,
+            authStages.snapshot(),
+          ),
+        );
       }
       startupStages.mark("auth");
       notifyExecutionPhase("auth", { provider, model: modelId });
@@ -2057,10 +2095,7 @@ async function runEmbeddedAgentInternal(
         }
       };
       let lastRetryFailoverReason: FailoverReason | null = null;
-      let reasoningOnlyRetryInstruction: string | null = null;
-      let emptyResponseRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
-      let nextAttemptPromptOverride: string | null = null;
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       let codexAppServerRecoveryRetries = 0;
@@ -2119,9 +2154,18 @@ async function runEmbeddedAgentInternal(
         adoptActiveSessionId(resolvedTarget.sessionId);
       };
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
-      // The embedded agent owns JSONL persistence; this marker lets the outer retry avoid
-      // replaying the same inbound channel message after overflow compaction.
-      let lastPersistedCurrentMessageId: string | number | undefined;
+      let activePrompt: {
+        override?: string;
+        persisted: boolean;
+        internal: boolean;
+      } = {
+        persisted: suppressNextUserMessagePersistence,
+        internal: false,
+      };
+      const activateInternalPrompt = (prompt: string, persisted: boolean) => {
+        activePrompt = { override: prompt, persisted, internal: true };
+        suppressNextUserMessagePersistence = persisted;
+      };
       const onUserMessagePersisted: RunEmbeddedAgentParams["onUserMessagePersisted"] = (
         message,
       ) => {
@@ -2130,9 +2174,7 @@ async function runEmbeddedAgentInternal(
         };
         const blockedBeforeAgentRun = messageMetadata["__openclaw"]?.beforeAgentRunBlocked;
         const markCurrentUserMessagePersisted = () => {
-          if (params.currentMessageId !== undefined) {
-            lastPersistedCurrentMessageId = params.currentMessageId;
-          }
+          activePrompt.persisted = true;
           params.onUserMessagePersisted?.(message);
         };
         const recorder = params.userTurnTranscriptRecorder;
@@ -2172,8 +2214,7 @@ async function runEmbeddedAgentInternal(
         recorder.markRuntimePersistencePending(canonicalPersistence);
       };
       const continueFromCurrentTranscript = () => {
-        nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
-        suppressNextUserMessagePersistence = true;
+        activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT, true);
       };
       const waitForCurrentUserMessagePersistence = async () => {
         if (params.userTurnTranscriptRecorder?.hasRuntimePersistencePending() === true) {
@@ -2493,24 +2534,15 @@ async function runEmbeddedAgentInternal(
           }
 
           const basePrompt =
-            nextAttemptPromptOverride ??
+            activePrompt.override ??
             resolveEmbeddedAttemptBasePrompt({
               nativeModelOwned,
               provider,
               prompt: params.prompt,
             });
-          nextAttemptPromptOverride = null;
-          const promptAdditions = [
-            reasoningOnlyRetryInstruction,
-            emptyResponseRetryInstruction,
-            compactionContinuationRetryInstruction,
-          ].filter(
-            (value): value is string => typeof value === "string" && value.trim().length > 0,
-          );
-          const prompt =
-            promptAdditions.length > 0
-              ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
-              : basePrompt;
+          const prompt = compactionContinuationRetryInstruction
+            ? `${basePrompt}\n\n${compactionContinuationRetryInstruction}`
+            : basePrompt;
           const resolvedStreamApiKey = resolveAttemptDispatchApiKey({
             apiKeyInfo,
             runtimeAuthState,
@@ -2556,7 +2588,7 @@ async function runEmbeddedAgentInternal(
             runtimePlan,
           });
           const hostTrajectoryRecorder =
-            agentHarness.id === CODEX_HARNESS_ID
+            agentHarness.id === CODEX_HARNESS_ID && !params.disableTrajectory
               ? createTrajectoryRuntimeRecorder({
                   cfg: params.config,
                   env: process.env,
@@ -2695,6 +2727,7 @@ async function runEmbeddedAgentInternal(
             prompt,
             transcriptPrompt: params.transcriptPrompt,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+            skipPreparedUserTurnMessage: activePrompt.internal,
             currentInboundEventKind: params.currentInboundEventKind,
             currentInboundContext: params.currentInboundContext,
             images: params.images,
@@ -2813,6 +2846,7 @@ async function runEmbeddedAgentInternal(
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
             modelRun: params.modelRun,
+            disableTrajectory: params.disableTrajectory,
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
@@ -2825,6 +2859,7 @@ async function runEmbeddedAgentInternal(
             ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
             cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
+            forceRestartSafeTools: params.forceRestartSafeTools,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
             forceHeartbeatTool: params.forceHeartbeatTool,
@@ -2840,6 +2875,9 @@ async function runEmbeddedAgentInternal(
               params.suppressTranscriptOnlyAssistantPersistence,
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
             onUserMessagePersisted,
+            onUserMessagePersistenceInvalidated: () => {
+              activePrompt.persisted = false;
+            },
             onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
           })
             .catch((err: unknown): never => {
@@ -2858,6 +2896,7 @@ async function runEmbeddedAgentInternal(
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
           await waitForCurrentUserMessagePersistence();
+          suppressNextUserMessagePersistence = activePrompt.persisted;
           if (attemptCancellationRequested) {
             throwIfAborted();
             throw createAgentRunDirectAbortError();
@@ -3542,15 +3581,14 @@ async function runEmbeddedAgentInternal(
                   continueFromCurrentTranscript();
                 } else {
                   await waitForCurrentUserMessagePersistence();
-                  if (
-                    params.currentMessageId !== undefined &&
-                    params.currentMessageId === lastPersistedCurrentMessageId
-                  ) {
+                  if (activePrompt.internal) {
+                    // Retry the same internal prompt and preserve its exact durability state.
+                    suppressNextUserMessagePersistence = activePrompt.persisted;
+                  } else if (activePrompt.persisted) {
                     // The first attempt reached the embedded agent far enough to persist this user turn.
                     // Retrying the original prompt would replay it, so resume from the
                     // compacted transcript and suppress the next user append.
-                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
-                    suppressNextUserMessagePersistence = true;
+                    activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT, true);
                   }
                 }
                 continue;
@@ -3893,6 +3931,7 @@ async function runEmbeddedAgentInternal(
               aborted,
               externalAbort,
               fallbackConfigured,
+              failoverCode: promptErrorDetails.code,
               failoverFailure: promptFailoverFailure,
               failoverReason: promptFailoverReason,
               harnessOwnsTransport: pluginHarnessOwnsTransport,
@@ -3934,6 +3973,7 @@ async function runEmbeddedAgentInternal(
                 aborted,
                 externalAbort,
                 fallbackConfigured,
+                failoverCode: promptErrorDetails.code,
                 failoverFailure: promptFailoverFailure,
                 failoverReason: promptFailoverReason,
                 harnessOwnsTransport: pluginHarnessOwnsTransport,
@@ -4277,7 +4317,6 @@ async function runEmbeddedAgentInternal(
           };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(attemptAssistant);
           const finalAssistantRawText = resolveFinalAssistantRawText(attemptAssistant);
-
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
@@ -4304,6 +4343,7 @@ async function runEmbeddedAgentInternal(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didDeliverSourceReplyViaMessageTool:
               attempt.didDeliverSourceReplyViaMessageTool === true,
+            messagingToolSentTargets: attempt.messagingToolSentTargets,
             messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             agentId: params.agentId,
@@ -4506,7 +4546,8 @@ async function runEmbeddedAgentInternal(
             reasoningOnlyRetryAttempts < maxReasoningOnlyRetryAttempts
           ) {
             reasoningOnlyRetryAttempts += 1;
-            reasoningOnlyRetryInstruction = nextReasoningOnlyRetryInstruction;
+            // The assistant leaf is already durable, so persist a new user boundary.
+            activateInternalPrompt(nextReasoningOnlyRetryInstruction, false);
             log.warn(
               `reasoning-only assistant turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
@@ -4529,6 +4570,8 @@ async function runEmbeddedAgentInternal(
             missingAssistantRetryAttempts < MAX_MISSING_ASSISTANT_RETRIES
           ) {
             missingAssistantRetryAttempts += 1;
+            // Same-prompt retries reuse the canonical user leaf only when it was written.
+            suppressNextUserMessagePersistence = activePrompt.persisted;
             log.warn(
               `missing assistant terminal message detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
@@ -4541,7 +4584,8 @@ async function runEmbeddedAgentInternal(
             emptyResponseRetryAttempts < maxEmptyResponseRetryAttempts
           ) {
             emptyResponseRetryAttempts += 1;
-            emptyResponseRetryInstruction = nextEmptyResponseRetryInstruction;
+            // The assistant leaf is already durable, so persist a new user boundary.
+            activateInternalPrompt(nextEmptyResponseRetryInstruction, false);
             log.warn(
               `empty response detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
@@ -4766,12 +4810,10 @@ async function runEmbeddedAgentInternal(
             !emptyAssistantReplyIsSilent;
           if (beforeAgentFinalizeRevisionReason && shouldHonorBeforeAgentFinalizeRevision) {
             beforeAgentFinalizeRevisionAttempts += 1;
-            nextAttemptPromptOverride = buildBeforeAgentFinalizeRetryPrompt(
-              beforeAgentFinalizeRevisionReason,
+            activateInternalPrompt(
+              buildBeforeAgentFinalizeRetryPrompt(beforeAgentFinalizeRevisionReason),
+              true,
             );
-            suppressNextUserMessagePersistence = true;
-            reasoningOnlyRetryInstruction = null;
-            emptyResponseRetryInstruction = null;
             compactionContinuationRetryInstruction = null;
             log.warn(
               `before_agent_finalize requested one more pass: ` +
@@ -5000,12 +5042,16 @@ async function runEmbeddedAgentInternal(
               const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
                 sessionKey: params.sessionKey,
                 reason: "embedded-run-end",
+                // MCP App views hold bounded leases so their bridge can remain
+                // usable after a one-shot gateway run returns.
+                preserveActiveLeases: true,
                 onError,
               });
               if (!retiredBySessionKey) {
                 await retireSessionMcpRuntime({
                   sessionId: params.sessionId,
                   reason: "embedded-run-end",
+                  preserveActiveLeases: true,
                   onError,
                 });
               }
@@ -5029,9 +5075,7 @@ function resolveAuthProfileStateProvider(
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
 }
-
 export const testing = {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
 };
-export { testing as __testing };

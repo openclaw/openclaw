@@ -488,6 +488,23 @@ describe("normalizeOutboundPayloadsForJson", () => {
       { text: "final answer", mediaUrl: null, mediaUrls: undefined, audioAsVoice: undefined },
     ]);
   });
+
+  it("preserves portable locations during JSON normalization", () => {
+    const location = { latitude: 48.858844, longitude: 2.294351 };
+    expect(normalizeOutboundPayloadsForJson([{ location }])).toEqual([
+      {
+        text: "",
+        mediaUrl: null,
+        mediaUrls: undefined,
+        audioAsVoice: undefined,
+        presentation: undefined,
+        delivery: undefined,
+        interactive: undefined,
+        channelData: undefined,
+        location,
+      },
+    ]);
+  });
 });
 
 describe("normalizeOutboundPayloads", () => {
@@ -495,6 +512,13 @@ describe("normalizeOutboundPayloads", () => {
     const channelData = { line: { flexMessage: { altText: "Card", contents: {} } } };
     expect(normalizeOutboundPayloads([{ channelData }])).toEqual([
       { text: "", mediaUrls: [], channelData },
+    ]);
+  });
+
+  it("keeps location-only payloads", () => {
+    const location = { latitude: 48.858844, longitude: 2.294351 };
+    expect(normalizeOutboundPayloads([{ location }])).toEqual([
+      { text: "", mediaUrls: [], location },
     ]);
   });
 

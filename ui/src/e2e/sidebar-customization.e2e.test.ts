@@ -107,15 +107,44 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     const video = page.video();
     await installMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
+      methodResponses: {
+        "config.get": {
+          config: {},
+          hash: "settings-search-e2e",
+        },
+        "config.schema": {
+          schema: {
+            type: "object",
+            properties: {
+              browser: {
+                type: "object",
+                title: "Browser",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                    title: "Enabled",
+                  },
+                },
+              },
+            },
+          },
+          uiHints: {},
+          version: "e2e",
+          generatedAt: "2026-07-12T00:00:00.000Z",
+        },
+      },
     });
 
     try {
       await page.goto(`${server.baseUrl}sessions`);
 
       const sidebar = page.locator("openclaw-app-sidebar");
-      const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
-      // Nothing is pinned by default; sessions are the sidebar's core content.
-      await expect.poll(() => pinnedItems.count()).toBe(0);
+      const pinnedItems = sidebar.locator(
+        ".sidebar-nav > .nav-section__items > .nav-item:not(.nav-item--action)",
+      );
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Usage", "Automations", "Plugins"]);
       await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
@@ -193,16 +222,74 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           }),
         )
         .toBe(true);
+      await settingsSearch.fill("cp");
+      await expect
+        .poll(() =>
+          trimmedTextContents(
+            settingsSidebar.locator(
+              ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
+            ),
+          ),
+        )
+        .toEqual(["General", "Gateway Host"]);
+      await settingsSearch.fill("mcp");
+      await expect
+        .poll(() =>
+          trimmedTextContents(
+            settingsSidebar.locator(
+              ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
+            ),
+          ),
+        )
+        .toEqual(["MCP", "General", "Automations"]);
+      await settingsSidebar.getByRole("link", { name: "Automations" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#settings-general-automations");
+      await expect.poll(() => page.locator("#settings-general-automations").isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          settingsSidebar.getByRole("link", { name: "Automations" }).getAttribute("aria-current"),
+        )
+        .toBe("location");
+      await expect
+        .poll(() =>
+          settingsSidebar.getByRole("link", { name: "General" }).getAttribute("aria-current"),
+        )
+        .toBeNull();
       await settingsSearch.fill("  ThEmE  ");
-      await expect.poll(() => trimmedTextContents(settingsLinks)).toEqual(["Appearance"]);
+      await expect
+        .poll(() => trimmedTextContents(settingsLinks))
+        .toEqual(["Appearance", "General"]);
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
       await captureSettingsSidebarProof(settingsSidebar, "01b-settings-search-filtered.png");
       await holdUiProof(page);
       await settingsSearch.fill("system");
       await expect
         .poll(() => trimmedTextContents(settingsLinks))
-        .toEqual(["Infrastructure", "Worktrees", "Debug", "Logs", "About"]);
+        .toEqual([
+          "Infrastructure",
+          "Worktrees",
+          "Debug",
+          "Logs",
+          "Activity",
+          "About",
+          "General",
+          "Appearance",
+        ]);
       await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-group.png");
+      await holdUiProof(page);
+      await settingsSearch.fill("browser");
+      const browserResult = settingsSidebar.getByRole("link", {
+        name: "Browser",
+        exact: true,
+      });
+      await expect.poll(() => browserResult.isVisible()).toBe(true);
+      await browserResult.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/infrastructure");
+      await expect.poll(() => new URL(page.url()).search).toBe("?section=browser");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-browser");
+      await expect.poll(() => page.locator("#config-section-browser").isVisible()).toBe(true);
+      await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-deep-link.png");
       await holdUiProof(page);
       await settingsSearch.fill("does-not-exist");
       await expect.poll(() => settingsLinks.count()).toBe(0);
@@ -224,7 +311,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await settingsSearch.fill("channel");
       await captureSettingsSidebarProof(settingsSidebar, "01e-settings-search-route.png");
       await holdUiProof(page);
-      await settingsSidebar.getByRole("link", { name: "Channels" }).click();
+      await settingsSidebar.getByRole("link", { name: "Channels" }).first().click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/channels");
       await expect.poll(() => settingsSearch.inputValue()).toBe("channel");
       await captureSettingsSidebarProof(settingsSidebar, "01f-settings-search-navigated.png");
@@ -241,63 +328,59 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => new URL(page.url()).pathname).toBe("/sessions");
       await captureUiProof(page, "01-default-pinned.png");
 
-      const moreButton = sidebar.getByRole("button", { name: "More" });
+      const moreButton = sidebar.getByRole("button", { exact: true, name: "More" });
+      const moreMenu = sidebar.getByRole("menu", { exact: true, name: "More" });
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       await expect
-        .poll(() =>
-          trimmedTextContents(
-            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
-          ),
-        )
+        .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
         .toContain("Logbook");
       await expect.poll(() => trimmedTextContents(pinnedItems)).not.toContain("Logbook");
       // Workboard ships disabled, so it stays hidden from navigation entirely.
       await expect
-        .poll(() =>
-          trimmedTextContents(
-            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
-          ),
-        )
+        .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
         .not.toContain("Workboard");
 
-      const customizeButton = sidebar.getByRole("button", { name: "Edit pinned items" });
-      await customizeButton.click();
+      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
       const menu = sidebar.getByRole("menu", { name: "Edit pinned items" });
+      // The pin editor replaces the More menu in place.
+      await expect.poll(() => moreMenu.count()).toBe(0);
       await expect
         .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
         .not.toContain("Workboard");
       const sessionsItem = menu.getByRole("menuitemcheckbox", { name: "Sessions" });
       await expect.poll(() => sessionsItem.getAttribute("aria-checked")).toBe("false");
       const usageItem = menu.getByRole("menuitemcheckbox", { name: "Usage" });
-      await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("false");
+      await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("true");
       await expect
         .poll(() => sessionsItem.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await captureUiProof(page, "02-customize-menu.png");
 
       await usageItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
       await sessionsItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage", "Sessions"]);
-      await usageItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Sessions"]);
-      await page.reload();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Sessions"]);
-      await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       await expect
-        .poll(() =>
-          trimmedTextContents(
-            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
-          ),
-        )
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Automations", "Plugins", "Sessions"]);
+      await page.reload();
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Automations", "Plugins", "Sessions"]);
+      // The More menu is transient: closed after reload, unpinned routes inside.
+      await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
+      await moreButton.click();
+      await expect
+        .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
         .toContain("Usage");
       await captureUiProof(page, "03-persisted-customization.png");
 
-      await customizeButton.click();
+      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect.poll(() => pinnedItems.count()).toBe(0);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Usage", "Automations", "Plugins"]);
 
       // The sidebar search field is the command palette entry point.
       const searchButton = sidebar.locator(".sidebar-search");
@@ -424,14 +507,39 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     try {
       await page.goto(`${server.baseUrl}sessions`);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: "More" }).click();
+      await sidebar.getByRole("button", { exact: true, name: "More" }).click();
       await expect
         .poll(() =>
           trimmedTextContents(
-            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
+            sidebar.getByRole("menu", { exact: true, name: "More" }).getByRole("menuitem"),
           ),
         )
         .toContain("Workboard");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("opens the start screen from the sidebar brand without carrying the active session", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent("agent:main:work")}`);
+      const brand = page.locator("openclaw-app-sidebar").getByRole("link", { name: "New session" });
+      await expect.poll(() => brand.getAttribute("href")).toBe("/new");
+
+      await brand.click();
+
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await expect.poll(() => new URL(page.url()).search).toBe("");
+      await expect.poll(() => page.locator(".new-session-page").isVisible()).toBe(true);
+      await captureUiProof(page, "07-brand-start-screen.png");
     } finally {
       await context.close();
     }
@@ -491,15 +599,17 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     }
   });
 
-  it("restores focus to Edit pinned items after closing its menu with Escape", async () => {
+  it("restores focus to the More row after closing the pin editor with Escape", async () => {
     const { context, page } = await openSidebarTestPage();
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      const moreButton = sidebar.getByRole("button", { name: "More" });
+      const moreButton = sidebar.getByRole("button", { exact: true, name: "More" });
       await moreButton.click();
-      const editPinnedButton = sidebar.getByRole("button", { name: "Edit pinned items" });
-      await editPinnedButton.click();
+      await sidebar
+        .getByRole("menu", { exact: true, name: "More" })
+        .getByRole("menuitem", { name: "Edit pinned items" })
+        .click();
       const pinItems = sidebar
         .getByRole("menu", { name: "Edit pinned items" })
         .locator('[role="menuitem"], [role="menuitemcheckbox"]');
@@ -515,7 +625,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
       await expect.poll(() => page.locator(".sidebar-customize-menu").count()).toBe(0);
       await expect
-        .poll(() => editPinnedButton.evaluate((element) => element === document.activeElement))
+        .poll(() => moreButton.evaluate((element) => element === document.activeElement))
         .toBe(true);
     } finally {
       await context.close();
@@ -527,8 +637,17 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: "More" }).click();
-      await sidebar.getByRole("button", { name: "Edit pinned items" }).click();
+      await sidebar.getByRole("button", { exact: true, name: "More" }).click();
+      const moreMenu = sidebar.getByRole("menu", { exact: true, name: "More" });
+      await expect
+        .poll(() =>
+          moreMenu
+            .locator('[role="menuitem"]')
+            .first()
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
       const menu = sidebar.getByRole("menu", { name: "Edit pinned items" });
       const menuItems = menu.locator('[role="menuitem"], [role="menuitemcheckbox"]');
       await expect

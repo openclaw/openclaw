@@ -453,7 +453,7 @@ async function runLane(params: {
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
   await runCommand({
     command: "git",
-    args: ["worktree", "add", "--detach", worktreeDir, params.ref],
+    args: ["worktree", "add", "--detach", "--", worktreeDir, params.ref],
     cwd: params.repoRoot,
     runner: params.runner,
   });

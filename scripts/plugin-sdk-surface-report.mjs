@@ -151,12 +151,16 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-mention-gating": 7,
   "channel-lifecycle": 23,
   "channel-ingress": 8,
-  "channel-message": 231,
-  "channel-message-runtime": 228,
+  "channel-message": 232,
+  "channel-message-runtime": 229,
   "channel-pairing-paths": 1,
+  // Deprecated pairing/conversation exports from the SQLite pairing migration
+  // landed on main (#105802) without entrypoint pins; not touched by this PR.
+  "channel-pairing": 1,
+  "conversation-runtime": 4,
   "channel-policy": 8,
   "channel-route": 5,
-  "session-store-runtime": 1,
+  "session-store-runtime": 4,
   "session-transcript-runtime": 2,
   "group-access": 13,
   "media-generation-runtime-shared": 3,
@@ -194,22 +198,25 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      326,
+      327,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10623,
+      10641,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5348,
+      5357,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3273,
+      // 3279 + 5 deprecated pairing/conversation exports added on main by the
+      // SQLite pairing migration (#105802) without a pin bump (its changed-path
+      // set skipped this lane); sources are byte-identical to main here.
+      3284,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
