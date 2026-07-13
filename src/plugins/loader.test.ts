@@ -3,19 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildMemoryPromptSection,
-  clearMemoryPluginState,
-  getMemoryCapabilityRegistration,
-  getMemoryRuntime,
-  listActiveMemoryPublicArtifacts,
-  listMemoryCorpusSupplements,
-  listMemoryPromptSupplements,
-  registerMemoryCapability,
-  registerMemoryCorpusSupplement,
-  registerMemoryPromptSupplement,
-  resolveMemoryFlushPlan,
-} from "../../test/helpers/plugins/memory-state.js";
 import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
@@ -94,7 +81,19 @@ import {
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
-import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
+import {
+  buildMemoryPromptSection,
+  clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
+  getMemoryRuntime,
+  listActiveMemoryPublicArtifacts,
+  listMemoryCorpusSupplements,
+  listMemoryPromptSupplements,
+  registerMemoryCapability,
+  registerMemoryCorpusSupplement,
+  registerMemoryPromptSupplement,
+  resolveMemoryFlushPlan,
+} from "./memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -1463,133 +1462,6 @@ describe("loadOpenClawPlugins", () => {
     expect(record?.rootDir).toBe(fs.realpathSync.native(plugin.dir));
   });
 
-  it("refreshes bundled plugin-sdk aliases without deleting the shared alias directory", () => {
-    const distRoot = makeTempDir();
-    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
-    const aliasDir = path.join(distRoot, "extensions", "node_modules", "openclaw", "plugin-sdk");
-    mkdirSafe(pluginSdkDir);
-    mkdirSafe(aliasDir);
-    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const value = 1;\n", "utf8");
-    fs.writeFileSync(path.join(pluginSdkDir, "core.js"), "export const core = 1;\n", "utf8");
-    fs.writeFileSync(path.join(aliasDir, "sentinel.txt"), "keep\n", "utf8");
-
-    ensureOpenClawPluginSdkAlias(distRoot);
-    fs.writeFileSync(path.join(pluginSdkDir, "core.js"), "export const core = 2;\n", "utf8");
-    ensureOpenClawPluginSdkAlias(distRoot);
-
-    expect(fs.existsSync(path.join(aliasDir, "sentinel.txt"))).toBe(true);
-    expect(fs.readFileSync(path.join(aliasDir, "core.js"), "utf8")).toContain("core.js");
-  });
-
-  it("keeps private local-only plugin-sdk artifacts out of package dist aliases", () => {
-    const packageRoot = makeTempDir();
-    const distRoot = path.join(packageRoot, "dist");
-    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
-    const aliasRoot = path.join(distRoot, "extensions", "node_modules", "openclaw");
-    const aliasDir = path.join(aliasRoot, "plugin-sdk");
-    mkdirSafe(pluginSdkDir);
-    mkdirSafe(aliasDir);
-    fs.writeFileSync(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify(
-        {
-          name: "openclaw",
-          version: "2026.4.22",
-          type: "module",
-          exports: {
-            "./plugin-sdk": "./dist/plugin-sdk/index.js",
-            "./plugin-sdk/string-coerce-runtime": "./dist/plugin-sdk/string-coerce-runtime.js",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const root = true;\n", "utf8");
-    fs.writeFileSync(
-      path.join(pluginSdkDir, "string-coerce-runtime.js"),
-      "export const publicRuntime = true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginSdkDir, "ssrf-runtime-internal.js"),
-      "export const internal = true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(aliasDir, "ssrf-runtime-internal.js"),
-      "export const staleInternal = true;\n",
-      "utf8",
-    );
-
-    ensureOpenClawPluginSdkAlias(distRoot);
-
-    const aliasPackage = JSON.parse(
-      fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8"),
-    ) as { exports?: Record<string, string> };
-    expect(aliasPackage.exports).toEqual({
-      "./plugin-sdk": "./plugin-sdk/index.js",
-      "./plugin-sdk/string-coerce-runtime": "./plugin-sdk/string-coerce-runtime.js",
-    });
-    expect(fs.existsSync(path.join(aliasDir, "index.js"))).toBe(true);
-    expect(fs.existsSync(path.join(aliasDir, "string-coerce-runtime.js"))).toBe(true);
-    expect(fs.existsSync(path.join(aliasDir, "ssrf-runtime-internal.js"))).toBe(false);
-  });
-
-  it("keeps private local-only plugin-sdk artifacts out of legacy package dist aliases", () => {
-    const packageRoot = makeTempDir();
-    const distRoot = path.join(packageRoot, "dist");
-    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
-    const aliasRoot = path.join(distRoot, "extensions", "node_modules", "openclaw");
-    const aliasDir = path.join(aliasRoot, "plugin-sdk");
-    mkdirSafe(pluginSdkDir);
-    mkdirSafe(aliasDir);
-    fs.writeFileSync(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.4.22", type: "module" }, null, 2),
-      "utf8",
-    );
-    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const root = true;\n", "utf8");
-    fs.writeFileSync(
-      path.join(pluginSdkDir, "string-coerce-runtime.js"),
-      "export const publicRuntime = true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginSdkDir, "ssrf-runtime-internal.js"),
-      "export const internal = true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(aliasDir, "ssrf-runtime-internal.js"),
-      "export const staleInternal = true;\n",
-      "utf8",
-    );
-
-    ensureOpenClawPluginSdkAlias(distRoot);
-
-    const aliasPackage = JSON.parse(
-      fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8"),
-    ) as { exports?: Record<string, string> };
-    expect(aliasPackage.exports).toEqual({
-      "./plugin-sdk": "./plugin-sdk/index.js",
-      "./plugin-sdk/string-coerce-runtime": "./plugin-sdk/string-coerce-runtime.js",
-    });
-    expect(fs.existsSync(path.join(aliasDir, "index.js"))).toBe(true);
-    expect(fs.existsSync(path.join(aliasDir, "string-coerce-runtime.js"))).toBe(true);
-    expect(fs.existsSync(path.join(aliasDir, "ssrf-runtime-internal.js"))).toBe(false);
-  });
-
-  it("keeps private QA plugin-sdk filenames out of bundled source markers", () => {
-    const source = fs.readFileSync(new URL("./plugin-sdk-dist-alias.ts", import.meta.url), "utf8");
-
-    expect(source).not.toContain("qa-channel.js");
-    expect(source).not.toContain("qa-channel-protocol.js");
-    expect(source).not.toContain("qa-lab.js");
-    expect(source).not.toContain("qa-runtime.js");
-  });
-
   it("disables bundled plugins by default", () => {
     const bundledDir = makeTempDir();
     writePlugin({
@@ -1628,7 +1500,25 @@ describe("loadOpenClawPlugins", () => {
       "export const normalizeLowercaseStringOrEmpty = (value) => String(value).toLowerCase();\n",
       "utf-8",
     );
-    ensureOpenClawPluginSdkAlias(path.join(packageRoot, "dist"));
+    const aliasRoot = path.join(bundledDir, "node_modules", "openclaw");
+    const aliasPluginSdkDir = path.join(aliasRoot, "plugin-sdk");
+    fs.mkdirSync(aliasPluginSdkDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(aliasRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        exports: {
+          "./plugin-sdk/string-coerce-runtime": "./plugin-sdk/string-coerce-runtime.js",
+        },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(aliasPluginSdkDir, "string-coerce-runtime.js"),
+      "export * from '../../../../plugin-sdk/string-coerce-runtime.js';\n",
+      "utf-8",
+    );
     fs.writeFileSync(
       path.join(pluginRoot, "index.js"),
       [

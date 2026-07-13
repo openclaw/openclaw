@@ -5,12 +5,12 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it } from "vitest";
+import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
 import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
-} from "../../test/helpers/plugins/memory-state.js";
-import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
+} from "./memory-state.test-fixtures.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 afterEach(() => {

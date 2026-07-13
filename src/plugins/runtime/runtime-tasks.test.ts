@@ -14,11 +14,6 @@ import { createRuntimeTasks } from "./runtime-tasks.js";
 
 const runtimeTaskMocks = getRuntimeTaskMocks();
 
-const createRuntimeTaskFlows = () =>
-  createRuntimeTasks({ legacyTaskFlow: createRuntimeTaskFlow() }).flows;
-const createRuntimeTaskRuns = () =>
-  createRuntimeTasks({ legacyTaskFlow: createRuntimeTaskFlow() }).runs;
-
 afterEach(() => {
   resetRuntimeTaskTestState();
 });

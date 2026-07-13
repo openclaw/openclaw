@@ -2,11 +2,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type {
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyDispatchResult,
-  PluginTargetedInboundClaimOutcome,
-} from "../../../test/helpers/plugins/hooks.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -28,7 +23,7 @@ import type {
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
-import type { PluginTargetedInboundClaimOutcome } from "../../../test/helpers/plugins/hooks.js";
+import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   interruptSessionWorkAdmissions,

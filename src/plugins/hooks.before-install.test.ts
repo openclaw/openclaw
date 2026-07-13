@@ -1,7 +1,7 @@
 // Covers hook behavior before plugin install state exists.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { addTestHook } from "../../test/helpers/plugins/hooks.js";
 import { createHookRunner } from "./hooks.js";
+import { addTestHook } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeInstallContext,

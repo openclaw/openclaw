@@ -15,7 +15,7 @@ import {
   resolveMemoryFlushPlan,
   restoreMemoryPluginState,
   type MemoryPluginPublicArtifact,
-} from "../../test/helpers/plugins/memory-state.js";
+} from "./memory-state.test-fixtures.js";
 
 function createMemoryRuntime() {
   return {

@@ -1,14 +1,14 @@
 /** Test-only helpers for exercising plugin hook behavior. */
-import { createHookRunner } from "../../../src/plugins/hooks.js";
-import { addTestHook, createMockPluginRegistry } from "../../../src/plugins/hooks.test-helpers.js";
-import type { PluginRegistry } from "../../../src/plugins/registry.js";
-import type { PluginHookAgentContext, PluginHookRegistration } from "../../../src/plugins/types.js";
+import { createHookRunner } from "./hooks.js";
+import { addTestHook, createMockPluginRegistry } from "./hooks.test-helpers.js";
+import type { PluginRegistry } from "./registry.js";
+import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
 
 export { addTestHook, createMockPluginRegistry };
 export type {
   PluginHookBeforeDispatchResult,
   PluginHookReplyDispatchResult,
-} from "../../../src/plugins/hook-types.js";
+} from "./hook-types.js";
 export type PluginTargetedInboundClaimOutcome = Awaited<
   ReturnType<ReturnType<typeof createHookRunner>["runInboundClaimForPluginOutcome"]>
 >;
