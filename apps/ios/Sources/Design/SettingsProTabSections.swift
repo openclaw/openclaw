@@ -336,6 +336,34 @@ extension SettingsProTab {
                 SettingsDetailRow(
                     "Agents",
                     value: .verbatim(self.appModel.gatewayAgents.count.formatted()))
+                SettingsDetailRow(
+                    "Access",
+                    value: .verbatim(
+                        self.appModel.isOperatorGatewayConnected
+                            ? (self.appModel.hasOperatorAdminScope ? "Full" : "Limited")
+                            : "Not available"))
+            }
+
+            if self.appModel.isOperatorGatewayConnected,
+               !self.appModel.hasOperatorAdminScope
+            {
+                Section("Upgrade access") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("This phone has limited Gateway access.")
+                            .font(OpenClawType.subheadSemiBold)
+                        Text(
+                            "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.") // swiftlint:disable:this line_length
+                            .font(OpenClawType.caption) // Keep the native localization key contiguous.
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button {
+                        self.openGatewayQRScanner()
+                    } label: {
+                        Label("Scan Full-Access Code", systemImage: "qrcode.viewfinder")
+                            .font(OpenClawType.body)
+                    }
+                }
             }
 
             self.agentSelectionCard

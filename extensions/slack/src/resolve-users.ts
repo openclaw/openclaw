@@ -30,23 +30,6 @@ export type SlackUserResolution = {
   note?: string;
 };
 
-type SlackListUsersResponse = {
-  members?: Array<{
-    id?: string;
-    name?: string;
-    deleted?: boolean;
-    is_bot?: boolean;
-    is_app_user?: boolean;
-    real_name?: string;
-    profile?: {
-      display_name?: string;
-      real_name?: string;
-      email?: string;
-    };
-  }>;
-  response_metadata?: { next_cursor?: string };
-};
-
 function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -69,11 +52,11 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
 
 async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
   return collectSlackCursorPages({
-    fetchPage: async (cursor) =>
-      (await client.users.list({
+    fetchPage: (cursor) =>
+      client.users.list({
         limit: 200,
         cursor,
-      })) as SlackListUsersResponse,
+      }),
     collectPageItems: (res) =>
       (res.members ?? [])
         .map((member) => {

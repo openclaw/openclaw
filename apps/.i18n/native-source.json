@@ -21195,7 +21195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3787,
+      "line": 3814,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -21203,7 +21203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3788,
+      "line": 3815,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -21211,7 +21211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4454,
+      "line": 4492,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -21219,7 +21219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4455,
+      "line": 4493,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -21227,7 +21227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4774,
+      "line": 4837,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -21235,7 +21235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4774,
+      "line": 4837,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -21243,7 +21243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5920,
+      "line": 5985,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "No chat messages yet",
       "surface": "apple",
@@ -21251,7 +21251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6119,
+      "line": 6184,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -21259,7 +21259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6119,
+      "line": 6184,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -21267,7 +21267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8404,
+      "line": 8469,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -21275,7 +21275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8404,
+      "line": 8469,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -21283,7 +21283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8410,
+      "line": 8475,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -21291,7 +21291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8411,
+      "line": 8476,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -21299,7 +21299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 9715,
+      "line": 9780,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",
@@ -21763,7 +21763,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 108,
+      "line": 105,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Gateway auth token is missing.",
       "surface": "apple",
@@ -21771,7 +21771,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 112,
+      "line": 109,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Gateway rejected credentials.",
       "surface": "apple",
@@ -21779,7 +21779,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 116,
+      "line": 113,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Could not reach the gateway.",
       "surface": "apple",
@@ -21787,7 +21787,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 196,
+      "line": 193,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "QR Scanner Unavailable",
       "surface": "apple",
@@ -21795,7 +21795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 202,
+      "line": 199,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "OK",
       "surface": "apple",
@@ -21803,7 +21803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 307,
+      "line": 304,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Scan Setup Code",
       "surface": "apple",
@@ -21811,7 +21811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 315,
+      "line": 312,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -21819,7 +21819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 322,
+      "line": 319,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Photos",
       "surface": "apple",
@@ -21827,7 +21827,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 363,
+      "line": 360,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Back",
       "surface": "apple",
@@ -21835,7 +21835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 371,
+      "line": 368,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Close",
       "surface": "apple",
@@ -21843,7 +21843,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 397,
+      "line": 394,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Dismiss Keyboard",
       "surface": "apple",
@@ -21851,7 +21851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 452,
+      "line": 449,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Mode",
       "surface": "apple",
@@ -21859,7 +21859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 453,
+      "line": 450,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Discovery",
       "surface": "apple",
@@ -21867,7 +21867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 455,
+      "line": 452,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Status",
       "surface": "apple",
@@ -21875,7 +21875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 473,
+      "line": 470,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Choose a mode first.",
       "surface": "apple",
@@ -21883,7 +21883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 478,
+      "line": 475,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Back to Mode Selection",
       "surface": "apple",
@@ -21891,7 +21891,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 522,
+      "line": 519,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Manual Fallback",
       "surface": "apple",
@@ -21899,7 +21899,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 526,
+      "line": 523,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Domain Settings",
       "surface": "apple",
@@ -21907,7 +21907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 537,
+      "line": 534,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Developer Local",
       "surface": "apple",
@@ -21915,7 +21915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 540,
+      "line": 537,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Default host is localhost. Use your Mac LAN IP if simulator networking requires it.",
       "surface": "apple",
@@ -21923,7 +21923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 568,
+      "line": 565,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Gateway rejected credentials. Scan a fresh setup code or update token/password.",
       "surface": "apple",
@@ -21931,7 +21931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 576,
+      "line": 573,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "OpenClaw is checking gateway and node access.",
       "surface": "apple",
@@ -21939,7 +21939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 590,
+      "line": 587,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Resume After Approval",
       "surface": "apple",
@@ -21947,7 +21947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 596,
+      "line": 593,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Pairing Approval",
       "surface": "apple",
@@ -21955,7 +21955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 602,
+      "line": 599,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Request ID: %@",
       "surface": "apple",
@@ -21963,7 +21963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 605,
+      "line": 602,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Request ID: check `openclaw devices list`.",
       "surface": "apple",
@@ -21971,7 +21971,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 609,
+      "line": 606,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenClaw chat\n%2$@\nOpenClaw will also retry automatically when you return to this app.",
       "surface": "apple",
@@ -21979,7 +21979,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 626,
+      "line": 623,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Scan Setup Code Again",
       "surface": "apple",
@@ -21987,7 +21987,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 639,
+      "line": 636,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Retry Connection",
       "surface": "apple",
@@ -21995,7 +21995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 670,
+      "line": 667,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Enter setup code",
       "surface": "apple",
@@ -22003,7 +22003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 686,
+      "line": 683,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Apply",
       "surface": "apple",
@@ -22011,7 +22011,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 704,
+      "line": 701,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Setup Code",
       "surface": "apple",
@@ -22019,7 +22019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 707,
+      "line": 704,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Use this if you have a setup code instead of scanning.",
       "surface": "apple",
@@ -22027,7 +22027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 719,
+      "line": 716,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Host",
       "surface": "apple",
@@ -22035,7 +22035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 720,
+      "line": 717,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Port",
       "surface": "apple",
@@ -22043,7 +22043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 723,
+      "line": 720,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Discovery Domain (optional)",
       "surface": "apple",
@@ -22051,7 +22051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 728,
+      "line": 725,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Gateway Auth Token",
       "surface": "apple",
@@ -22059,7 +22059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 732,
+      "line": 729,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Gateway Password",
       "surface": "apple",
@@ -22067,7 +22067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 762,
+      "line": 759,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Unencrypted",
       "surface": "apple",
@@ -22075,7 +22075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 765,
+      "line": 762,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Secure (TLS)",
       "surface": "apple",
@@ -22083,7 +22083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 769,
+      "line": 766,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Connection security",
       "surface": "apple",
@@ -22091,7 +22091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 839,
+      "line": 836,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -22099,7 +22099,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 843,
+      "line": 840,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Connect",
       "surface": "apple",

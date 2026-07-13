@@ -76,10 +76,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import {
-  normalizeDeliveryChannelRoute,
-  normalizeSessionDeliveryFields,
-} from "../../utils/delivery-context.shared.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -103,40 +100,18 @@ import {
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
+import {
+  stripThreadFromSessionRoute,
+  stripThreadIdFromDeliveryContext,
+  stripThreadIdFromOrigin,
+} from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
-
-function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
-  const normalized = normalizeDeliveryChannelRoute(route);
-  if (!normalized?.thread) {
-    return normalized;
-  }
-  const { thread: _drop, ...withoutThread } = normalized;
-  return Object.keys(withoutThread).length > 0 ? withoutThread : undefined;
-}
 
 type ReplySessionEndReason = Extract<
   PluginHookSessionEndReason,
   "new" | "reset" | "idle" | "daily" | "unknown"
 >;
-
-function stripThreadIdFromDeliveryContext(
-  context: SessionEntry["deliveryContext"],
-): SessionEntry["deliveryContext"] {
-  if (!context || context.threadId == null || context.threadId === "") {
-    return context;
-  }
-  const { threadId: _threadId, ...rest } = context;
-  return Object.keys(rest).length > 0 ? rest : undefined;
-}
-
-function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["origin"] {
-  if (!origin || origin.threadId == null || origin.threadId === "") {
-    return origin;
-  }
-  const { threadId: _threadId, ...rest } = origin;
-  return Object.keys(rest).length > 0 ? rest : undefined;
-}
 
 function resolveExplicitSessionEndReason(matchedResetTriggerLower?: string): ReplySessionEndReason {
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
@@ -204,6 +179,7 @@ type InitSessionStateParams = {
   commandAuthorized: boolean;
   ctx: MsgContext;
   expectedExistingSessionId?: string;
+  pinExpectedExistingSession?: boolean;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
@@ -628,6 +604,8 @@ async function initSessionStateAttemptLocked(
   if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
     throw new Error(`session rebound for sessionKey: ${sessionKey}`);
   }
+  const pinExpectedExistingSession =
+    params.pinExpectedExistingSession === true && expectedExistingSessionId !== undefined;
   const requestedSessionId = params.requestedSessionId?.trim() || undefined;
   const requestedCurrentSession = Boolean(
     requestedSessionId && entry?.sessionId && entry.sessionId === requestedSessionId,
@@ -690,7 +668,8 @@ async function initSessionStateAttemptLocked(
   const freshEntry =
     (lockedModelSelection && canReuseExistingEntry) ||
     (isSystemEvent && canReuseExistingEntry) ||
-    (((reconnectResumeRequested && canReuseExistingEntry) ||
+    (((pinExpectedExistingSession && canReuseExistingEntry) ||
+      (reconnectResumeRequested && canReuseExistingEntry) ||
       recoverTerminalVisibleEntry ||
       (entryFreshness?.fresh ?? false) ||
       (softResetAllowed && canReuseExistingEntry)) &&

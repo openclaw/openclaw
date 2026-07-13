@@ -900,13 +900,12 @@ class GatewaySession(
     ): List<String>? =
       when (role.trim()) {
         "node" -> emptyList()
-        // Setup-code bootstrap handoff is deliberately least-privilege. It never
-        // persists operator.admin, so Skill Workshop lifecycle actions remain
-        // disabled until shared token/password auth or an owner-approved scope
-        // upgrade issues an admin-scoped operator device token.
+        // The Gateway bounds setup-code handoff to a closed mobile profile. Persist
+        // only the supported full or limited scope set and drop unexpected extras.
         "operator" -> {
           val allowedOperatorScopes =
             setOf(
+              "operator.admin",
               "operator.approvals",
               "operator.read",
               "operator.talk.secrets",

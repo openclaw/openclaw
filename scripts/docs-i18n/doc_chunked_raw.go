@@ -81,6 +81,9 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	if !sameI18NProtocolMarkers(source, translated) {
 		return fmt.Errorf("i18n placeholder mismatch")
 	}
+	if sourceStructure.fenceCount != translatedStructure.fenceCount {
+		return fmt.Errorf("code fence mismatch: source=%d translated=%d", sourceStructure.fenceCount, translatedStructure.fenceCount)
+	}
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
 	}
@@ -103,7 +106,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	}
 	if plan, ok := planDocChunkSplit(blocks, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
 		logDocChunkPlanSplit(chunkID, plan, source)
-		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, protectedPlaceholders, srcLang, tgtLang)
+		return translatePlannedDocChunkGroups(ctx, translator, chunkID, source, plan.groups, protectedPlaceholders, srcLang, tgtLang)
 	}
 	normalizedSource, commonIndent := stripCommonIndent(source)
 	log.Printf("docs-i18n: chunk start %s blocks=%d bytes=%d", chunkID, len(blocks), len(source))
@@ -127,17 +130,17 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		}
 		if plan, ok := planSingletonDocChunkRetry(source, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
 			logDocChunkPlanSplit(chunkID, plan, source)
-			return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, protectedPlaceholders, srcLang, tgtLang)
+			return translatePlannedDocChunkGroups(ctx, translator, chunkID, source, plan.groups, protectedPlaceholders, srcLang, tgtLang)
 		}
 		return "", fmt.Errorf("%s: %w", chunkID, err)
 	}
 	if plan, ok := planDocChunkSplit(blocks, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
 		logDocChunkSplit(chunkID, len(blocks), err)
-		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, protectedPlaceholders, srcLang, tgtLang)
+		return translatePlannedDocChunkGroups(ctx, translator, chunkID, source, plan.groups, protectedPlaceholders, srcLang, tgtLang)
 	}
 	if plan, ok := splitDocChunkBlocksMidpointSimple(blocks); ok {
 		logDocChunkSplit(chunkID, len(blocks), err)
-		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, protectedPlaceholders, srcLang, tgtLang)
+		return translatePlannedDocChunkGroups(ctx, translator, chunkID, source, plan.groups, protectedPlaceholders, srcLang, tgtLang)
 	}
 	return "", fmt.Errorf("%s: %w", chunkID, err)
 }
@@ -530,16 +533,72 @@ func containsProtocolWrapperToken(text string) bool {
 	return strings.Contains(lower, strings.ToLower(bodyTagStart)) || strings.Contains(lower, strings.ToLower(frontmatterTagStart))
 }
 
-func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslator, chunkID string, groups [][]string, protectedPlaceholders []string, srcLang, tgtLang string) (string, error) {
+func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslator, chunkID, source string, groups [][]string, protectedPlaceholders []string, srcLang, tgtLang string) (string, error) {
 	var out strings.Builder
+	translatedGroups := make([]string, 0, len(groups))
 	for index, group := range groups {
 		translated, err := translateDocBlockGroup(ctx, translator, fmt.Sprintf("%s.%02d", chunkID, index+1), group, protectedPlaceholders, srcLang, tgtLang)
 		if err != nil {
 			return "", err
 		}
+		translatedGroups = append(translatedGroups, translated)
 		out.WriteString(translated)
 	}
-	return out.String(), nil
+	translated := out.String()
+	if merged, ok := mergeSplitPureFencedDocTranslations(source, translatedGroups); ok {
+		translated = merged
+	}
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		return "", fmt.Errorf("%s: recombined split validation: %w", chunkID, err)
+	}
+	return translated, nil
+}
+
+func mergeSplitPureFencedDocTranslations(source string, translatedGroups []string) (string, bool) {
+	if len(translatedGroups) <= 1 {
+		return "", false
+	}
+	if summarizeDocChunkStructure(source).fenceCount != 2 {
+		return "", false
+	}
+	prefix, opening, _, closing, suffix, ok := splitPureFencedDocSection(source)
+	if !ok {
+		return "", false
+	}
+	var inner strings.Builder
+	for _, translated := range translatedGroups {
+		_, _, groupInner, _, _, groupOK := splitPureFencedDocSection(translated)
+		if !groupOK {
+			return "", false
+		}
+		inner.WriteString(groupInner)
+	}
+	return prefix + opening + inner.String() + closing + suffix, true
+}
+
+func splitPureFencedDocSection(text string) (prefix, opening, inner, closing, suffix string, ok bool) {
+	lines := strings.SplitAfter(text, "\n")
+	if len(lines) < 2 {
+		return "", "", "", "", "", false
+	}
+	openingIndex := firstNonEmptyLineIndex(lines)
+	closingIndex := lastNonEmptyLineIndex(lines)
+	if openingIndex == -1 || closingIndex <= openingIndex {
+		return "", "", "", "", "", false
+	}
+	opening = lines[openingIndex]
+	delimiter := leadingFenceDelimiter(opening)
+	if delimiter == "" || !isClosingFenceLine(lines[closingIndex], delimiter) {
+		return "", "", "", "", "", false
+	}
+	prefix = strings.Join(lines[:openingIndex], "")
+	suffix = strings.Join(lines[closingIndex+1:], "")
+	if strings.TrimSpace(prefix) != "" || strings.TrimSpace(suffix) != "" {
+		return "", "", "", "", "", false
+	}
+	inner = strings.Join(lines[openingIndex+1:closingIndex], "")
+	closing = lines[closingIndex]
+	return prefix, opening, inner, closing, suffix, true
 }
 
 func planDocChunkSplit(blocks []string, maxBytes, promptBudget int) (docChunkSplitPlan, bool) {
@@ -700,27 +759,10 @@ func splitDocBlockSections(block string) []string {
 }
 
 func splitPureFencedDocSectionWithMode(block string, maxBytes, promptBudget int, force bool) ([][]string, bool) {
-	lines := strings.SplitAfter(block, "\n")
-	if len(lines) < 2 {
+	_, opening, inner, closing, _, ok := splitPureFencedDocSection(block)
+	if !ok {
 		return nil, false
 	}
-	openingIndex := firstNonEmptyLineIndex(lines)
-	closingIndex := lastNonEmptyLineIndex(lines)
-	if openingIndex == -1 || closingIndex <= openingIndex {
-		return nil, false
-	}
-	opening := lines[openingIndex]
-	delimiter := leadingFenceDelimiter(opening)
-	if delimiter == "" || !isClosingFenceLine(lines[closingIndex], delimiter) {
-		return nil, false
-	}
-	prefix := strings.Join(lines[:openingIndex], "")
-	suffix := strings.Join(lines[closingIndex+1:], "")
-	if strings.TrimSpace(prefix) != "" || strings.TrimSpace(suffix) != "" {
-		return nil, false
-	}
-	closing := lines[closingIndex]
-	inner := strings.Join(lines[openingIndex+1:closingIndex], "")
 	groups, ok := splitPlainDocSectionWithMode(inner, maxBytes-len(opening)-len(closing), promptBudget, force)
 	if !ok {
 		return nil, false

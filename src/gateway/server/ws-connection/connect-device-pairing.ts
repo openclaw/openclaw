@@ -3,7 +3,6 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { GATEWAY_CLIENT_MODES } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
@@ -22,7 +21,7 @@ import {
   requestDevicePairing,
 } from "../../../infra/device-pairing.js";
 import {
-  isPairingSetupBootstrapProfile,
+  isMobilePairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
 } from "../../../shared/device-bootstrap-profile.js";
@@ -32,7 +31,9 @@ import { shouldAutoApproveNodePairingFromTrustedCidrs } from "../../node-pairing
 import { truncateCloseReason } from "../close-reason.js";
 import {
   isControlUiOperatorBootstrapProfile,
+  isMobileNodeBootstrapConnect,
   isSetupCodeMobileBootstrapClient,
+  pairedDeviceAllowsBootstrapProfile,
   resolvePairedAccessScopes,
 } from "./connect-device-metadata.js";
 import { issueGatewayConnectDeviceTokens } from "./connect-device-tokens.js";
@@ -155,18 +156,25 @@ export async function authorizeGatewayConnectDevice(
         reportedClientIp,
         autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
       });
+      const isSetupCodeMobileNodeConnect = isMobileNodeBootstrapConnect({
+        role,
+        scopes,
+        isControlUi,
+        isBrowserOperatorUi,
+        isWebchat,
+        clientMode: connectParams.client.mode,
+      });
+      const allowBoundBootstrapProfileLookup =
+        (reason === "not-paired" &&
+          !existingPairedDevice &&
+          (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"))) ||
+        (reason === "scope-upgrade" &&
+          Boolean(existingPairedDevice) &&
+          isSetupCodeMobileNodeConnect);
       const boundBootstrapProfile =
         authMethod === "bootstrap-token" &&
         bootstrapTokenCandidate &&
-        reason === "not-paired" &&
-        !existingPairedDevice &&
-        ((role === "node" &&
-          scopes.length === 0 &&
-          !isControlUi &&
-          !isBrowserOperatorUi &&
-          !isWebchat &&
-          connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE) ||
-          (isControlUi && role === "operator"))
+        allowBoundBootstrapProfileLookup
           ? await getBoundDeviceBootstrapProfile({
               token: bootstrapTokenCandidate,
               deviceId: device.id,
@@ -175,13 +183,8 @@ export async function authorizeGatewayConnectDevice(
           : null;
       const allowSetupCodeMobileBootstrapPairing =
         boundBootstrapProfile !== null &&
-        isPairingSetupBootstrapProfile(boundBootstrapProfile) &&
-        role === "node" &&
-        scopes.length === 0 &&
-        !isControlUi &&
-        !isBrowserOperatorUi &&
-        !isWebchat &&
-        connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+        isMobilePairingSetupBootstrapProfile(boundBootstrapProfile) &&
+        isSetupCodeMobileNodeConnect &&
         isSetupCodeMobileBootstrapClient(connectParams.client);
       const setupCodeMobileBootstrapProfile = allowSetupCodeMobileBootstrapPairing
         ? boundBootstrapProfile
@@ -196,7 +199,8 @@ export async function authorizeGatewayConnectDevice(
       // This is the native QR/setup-code onboarding seam. Mobile clients
       // must prove their canonical client id and platform/family metadata
       // agree before the Gateway can skip owner approval and hand off the
-      // bounded operator token below. Admin/pairing still require an explicit owner flow.
+      // selected operator profile below. Full mobile setup includes admin;
+      // limited setup retains the previous bounded operator scope set.
       const bootstrapPairingRoles = setupCodeMobileBootstrapProfile
         ? uniqueStrings([role, ...setupCodeMobileBootstrapProfile.roles])
         : controlUiOperatorBootstrapProfile
@@ -206,11 +210,13 @@ export async function authorizeGatewayConnectDevice(
         ? resolveBootstrapProfileScopesForRoles(
             bootstrapPairingRoles ?? [],
             setupCodeMobileBootstrapProfile.scopes,
+            setupCodeMobileBootstrapProfile.purpose,
           )
         : controlUiOperatorBootstrapProfile
           ? resolveBootstrapProfileScopesForRole(
               "operator",
               controlUiOperatorBootstrapProfile.scopes,
+              controlUiOperatorBootstrapProfile.purpose,
             )
           : undefined;
       const bootstrapApprovalProfile =
@@ -226,7 +232,7 @@ export async function authorizeGatewayConnectDevice(
             }
           : {}),
         silent:
-          reason === "scope-upgrade"
+          reason === "scope-upgrade" && !allowSetupCodeMobileBootstrapPairing
             ? false
             : allowSilentLocalPairing ||
               allowSilentTrustedCidrsNodePairing ||
@@ -312,9 +318,14 @@ export async function authorizeGatewayConnectDevice(
             }
           }
         } else {
-          resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
-            await getPairedDevice(device.id),
-          );
+          const pairedAfterConcurrentApproval = await getPairedDevice(device.id);
+          resolvedByConcurrentApproval = bootstrapApprovalProfile
+            ? pairedDeviceAllowsBootstrapProfile({
+                device: pairedAfterConcurrentApproval,
+                devicePublicKey,
+                profile: bootstrapApprovalProfile,
+              })
+            : pairingStateAllowsRequestedAccess(pairedAfterConcurrentApproval);
           let requestStillPending = false;
           if (!resolvedByConcurrentApproval) {
             recoveryRequestId = await resolveLivePendingRequestId();

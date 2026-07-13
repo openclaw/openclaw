@@ -155,7 +155,9 @@ struct MacNodeModeCoordinatorTests {
             nodeHostWorker: worker,
             notificationCenter: notificationCenter,
             observeNotifications: true)
-        _ = coordinator
+        // Notification handlers capture the coordinator weakly. Keep its observer
+        // alive until both asynchronous restart checks finish.
+        defer { withExtendedLifetime(coordinator) {} }
 
         notificationCenter.post(name: .openclawConfigDidChange, object: nil)
 
