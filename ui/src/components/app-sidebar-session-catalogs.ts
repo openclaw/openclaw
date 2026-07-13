@@ -90,11 +90,21 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   return params.catalogs.map((catalog) => {
     const sectionId = `catalog:${catalog.id}`;
     const collapsed = params.collapsedSections.has(sectionId);
-    const rows = catalog.hosts.flatMap((host) =>
-      host.sessions.map((session) => ({ host, session })),
-    );
+    const hosts = catalog.hosts;
+    const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
-    const hasMore = catalog.hosts.some((host) => Boolean(host.nextCursor));
+    const hasMore = hosts.some((host) => Boolean(host.nextCursor));
+    const errorMessages = [
+      ...(catalog.error ? [catalog.error.message] : []),
+      ...hosts.flatMap((host) => (host.error ? [host.error.message] : [])),
+    ];
+    const hasError = errorMessages.length > 0;
+    // Keep provider failures distinguishable from successful empty results.
+    // Hiding both states would silently mask unavailable session sources.
+    if (rows.length === 0 && !hasMore && !hasError) {
+      return nothing;
+    }
+    const errorMessage = errorMessages.join("; ");
     return html`
       <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
         <div class="sidebar-recent-sessions__head">
@@ -102,14 +112,22 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
             type="button"
             class="sidebar-session-group-toggle"
             aria-expanded=${String(!collapsed)}
-            aria-label=${catalog.label}
+            aria-label=${hasError ? `${catalog.label}: ${errorMessage}` : catalog.label}
+            title=${hasError ? errorMessage : nothing}
             @click=${() => params.onToggleSection(sectionId)}
           >
             <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
               >${collapsed ? icons.chevronRight : icons.chevronDown}</span
             >
             <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
-            <span class="sidebar-session-group-count">${rows.length}</span>
+            <span
+              class="sidebar-session-group-count ${hasError
+                ? "sidebar-session-group-count--error"
+                : ""}"
+              data-session-catalog-error=${hasError ? catalog.id : nothing}
+              aria-hidden="true"
+              >${hasError ? icons.alertTriangle : rows.length}</span
+            >
           </button>
         </div>
         ${collapsed

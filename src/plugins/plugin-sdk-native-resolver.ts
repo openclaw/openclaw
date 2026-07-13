@@ -38,7 +38,7 @@ type NativeAliasEntry = {
 };
 
 /** Resolver install options for CJS `_resolveFilename` and modern ESM loader hooks. */
-export type InstallOpenClawPluginSdkNativeResolverOptions = {
+type InstallOpenClawPluginSdkNativeResolverOptions = {
   modulePath?: string;
   pluginModulePath?: string;
   allowedParentRoots?: readonly string[];
@@ -133,7 +133,6 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
 const pluginSdkNativeAliases = new Map<string, NativeAliasEntry[]>();
 let installed = false;
 let previousResolveFilename: ResolveFilename | undefined;
-let esmHooks: { deregister: () => void } | undefined;
 
 function resolveLoaderModulePath(options: InstallOpenClawPluginSdkNativeResolverOptions): string {
   return options.modulePath ?? fileURLToPath(options.moduleUrl ?? import.meta.url);
@@ -366,7 +365,7 @@ function installResolver(): void {
     }
     return previousResolveFilename?.(request, parent, isMain, options) ?? request;
   }) satisfies ResolveFilename;
-  esmHooks = moduleWithResolver.registerHooks?.({
+  moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {
       const aliasTarget = resolveAliasTargetForParentUrl(specifier, context.parentURL);
       if (aliasTarget) {
@@ -438,15 +437,4 @@ export function installOpenClawInternalCorePackageNativeResolver(
   }
   installResolver();
   return [...pluginSdkNativeAliases.keys()].toSorted();
-}
-
-export function resetOpenClawPluginSdkNativeResolverForTest(): void {
-  pluginSdkNativeAliases.clear();
-  esmHooks?.deregister();
-  esmHooks = undefined;
-  if (installed && previousResolveFilename) {
-    moduleWithResolver[nodeResolveFilenameProperty] = previousResolveFilename;
-  }
-  previousResolveFilename = undefined;
-  installed = false;
 }

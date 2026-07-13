@@ -5,15 +5,8 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  installOpenClawPluginSdkNativeResolver,
-  resetOpenClawPluginSdkNativeResolverForTest,
-} from "./plugin-sdk-native-resolver.js";
-
-afterEach(() => {
-  resetOpenClawPluginSdkNativeResolverForTest();
-});
+import { beforeAll, describe, expect, it } from "vitest";
+import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 
 type NativeEsmLazyImportProbe = {
   status: number | null;
@@ -290,7 +283,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         'import fs from "node:fs";',
         'import path from "node:path";',
         'import { pathToFileURL } from "node:url";',
-        `import { installOpenClawPluginSdkNativeResolver, resetOpenClawPluginSdkNativeResolverForTest } from ${JSON.stringify(resolverModuleUrl)};`,
+        `import { installOpenClawPluginSdkNativeResolver } from ${JSON.stringify(resolverModuleUrl)};`,
         `const root = ${JSON.stringify(root)};`,
         "const writeJson = (targetPath, value) => {",
         "  fs.mkdirSync(path.dirname(targetPath), { recursive: true });",
@@ -334,7 +327,6 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         "});",
         "const module = await import(pathToFileURL(entryPath).href);",
         "const lazy = await module.loadLazy();",
-        "resetOpenClawPluginSdkNativeResolverForTest();",
         "console.log(`${module.eager}:${lazy.lazy}`);",
         "",
       ].join("\n"),

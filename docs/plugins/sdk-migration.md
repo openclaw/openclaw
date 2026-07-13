@@ -791,6 +791,18 @@ major release. Every entry maps the old API to its canonical replacement.
 
   </Accordion>
 
+  <Accordion title="Raw channel send results -> OutboundDeliveryResult">
+    **Old**: return `{ ok, messageId, error }` through
+    `ChannelSendRawResult` and normalize it with
+    `createRawChannelSendResultAdapter(...)`.
+
+    **New**: return `OutboundDeliveryResult` fields and attach the channel with
+    `createAttachedChannelResultAdapter(...)`. Failed sends should throw instead
+    of returning an error string. The raw result type remains available until
+    the next plugin-SDK major release.
+
+  </Accordion>
+
   <Accordion title="Subagent session messages types renamed">
     Two legacy type aliases still exported from `src/plugins/runtime/types.ts`:
 

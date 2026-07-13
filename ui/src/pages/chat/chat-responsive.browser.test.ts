@@ -186,12 +186,12 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
 function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
-      <div class="chat-settings-popover-wrapper">
-        <button class="chat-settings-chip" type="button" aria-label="Settings">
-          <span class="chat-settings-chip__icon">${iconSvg()}</span>
+      <div class="chat-view-menu-wrapper">
+        <button class="chat-view-menu-trigger" type="button" aria-label="View">
+          ${iconSvg()}
         </button>
-        <div class="chat-settings-popover" role="dialog" aria-label="Settings">
-          <div class="chat-settings-popover__section">Settings content</div>
+        <div class="chat-view-menu" role="menu" aria-label="View">
+          <button class="chat-view-menu__item" role="menuitemcheckbox">Reasoning</button>
         </div>
       </div>
       <div class="chat-composer-model-control">
@@ -1185,8 +1185,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           model: rectFor(".chat-composer-model-control"),
           context: rectFor(".context-ring"),
           send: rectFor(".chat-send-btn"),
-          settings: rectFor(".chat-settings-chip"),
-          settingsIcon: rectFor(".chat-settings-chip__icon svg"),
+          settings: rectFor(".chat-view-menu-trigger"),
+          settingsIcon: rectFor(".chat-view-menu-trigger svg"),
           shell: rectFor(".agent-chat__composer-shell"),
           textarea:
             textareaNode && textareaRect
@@ -1315,7 +1315,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
             context: rectFor(".context-ring"),
-            settings: rectFor(".chat-settings-chip"),
+            settings: rectFor(".chat-view-menu-trigger"),
             attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
             send: rectFor(".chat-send-btn"),
           };
@@ -1647,7 +1647,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           input: rectFor(".agent-chat__input"),
           meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-composer-model-control"),
-          settings: rectFor(".chat-settings-chip"),
+          settings: rectFor(".chat-view-menu-trigger"),
           send: rectFor(".chat-send-btn"),
         };
       });
@@ -1769,11 +1769,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(modelMenu.bottom).toBeLessThanOrEqual(height);
 
         await modelTrigger.click();
-        await page.locator(".chat-settings-popover").evaluate((node) => {
-          node.classList.add("chat-settings-popover--open");
+        await page.locator(".chat-view-menu").evaluate((node) => {
+          node.classList.add("chat-view-menu--open");
         });
 
-        const settingsMenu = await getRect(page, ".chat-settings-popover--open");
+        const settingsMenu = await getRect(page, ".chat-view-menu--open");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
         expect(settingsMenu.right).toBeLessThanOrEqual(width);
         expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
@@ -1793,11 +1793,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     async (width, height) => {
       const page = await openFixture(width, height);
       try {
-        await page.locator(".chat-settings-popover").evaluate((node) => {
-          node.classList.add("chat-settings-popover--open");
+        await page.locator(".chat-view-menu").evaluate((node) => {
+          node.classList.add("chat-view-menu--open");
         });
 
-        const settingsMenu = await getRect(page, ".chat-settings-popover--open");
+        const settingsMenu = await getRect(page, ".chat-view-menu--open");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
         expect(settingsMenu.right).toBeLessThanOrEqual(width);
         expect(settingsMenu.top).toBeGreaterThanOrEqual(0);

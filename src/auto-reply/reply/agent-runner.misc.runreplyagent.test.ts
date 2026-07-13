@@ -24,7 +24,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
-} from "../../plugins/memory-state.js";
+} from "../../plugins/memory-state.test-fixtures.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
