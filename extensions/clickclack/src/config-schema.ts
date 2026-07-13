@@ -17,7 +17,6 @@ const ClickClackAccountConfigSchema = z
     replyMode: z.enum(["agent", "model"]).optional(),
     model: z.string().optional(),
     systemPrompt: z.string().optional(),
-    maxTokens: z.number().int().min(1).max(32_768).optional(),
     timeoutSeconds: z.number().int().min(1).max(3_600).optional(),
     toolsAllow: z.array(z.string()).optional(),
     defaultTo: z.string().optional(),

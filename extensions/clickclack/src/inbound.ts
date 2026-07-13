@@ -1,3 +1,4 @@
+import { deriveDurableFinalDeliveryRequirements } from "openclaw/plugin-sdk/channel-outbound";
 /**
  * Converts authorized ClickClack messages into OpenClaw agent/model replies and
  * routes resulting outbound text back to ClickClack.
@@ -19,6 +20,16 @@ import type {
 
 const CHANNEL_ID = "clickclack" as const;
 const CLICKCLACK_MESSAGE_ID_PATTERN = /^msg_[0-9a-hjkmnp-tv-z]{26}$/u;
+
+function hasClickClackReplyMedia(payload: {
+  mediaUrl?: string;
+  mediaUrls?: readonly string[];
+}): boolean {
+  return Boolean(
+    payload.mediaUrl?.trim() ||
+    payload.mediaUrls?.some((mediaUrl) => typeof mediaUrl === "string" && mediaUrl.trim()),
+  );
+}
 
 function resolveClickClackAgentRunId(messageId: string): string | undefined {
   return CLICKCLACK_MESSAGE_ID_PATTERN.test(messageId) ? `${CHANNEL_ID}:${messageId}` : undefined;
@@ -89,7 +100,6 @@ async function dispatchModelReply(params: {
   const result = await runtime.llm.complete({
     agentId: params.route.agentId,
     model: params.account.model,
-    ...(params.account.maxTokens === undefined ? {} : { maxTokens: params.account.maxTokens }),
     purpose: "clickclack bot reply",
     systemPrompt: params.account.systemPrompt,
     messages: [
@@ -103,9 +113,7 @@ async function dispatchModelReply(params: {
   if (!text) {
     runtime.logging
       .getChildLogger({ plugin: "clickclack", feature: "model-reply" })
-      .warn(
-        `[${params.account.accountId}] ClickClack model reply produced no sendable text (maxTokens=${params.account.maxTokens ?? "runtime default"})`,
-      );
+      .warn(`[${params.account.accountId}] ClickClack model reply produced no sendable text`);
     return;
   }
   await sendClickClackText({
@@ -282,6 +290,9 @@ export async function handleClickClackInbound(params: {
         : undefined,
     delivery: {
       deliver: async (payload) => {
+        if (hasClickClackReplyMedia(payload)) {
+          throw new Error("ClickClack media reply requires durable delivery");
+        }
         const text =
           payload && typeof payload === "object" && "text" in payload
             ? ((payload as { text?: string }).text ?? "")
@@ -299,6 +310,23 @@ export async function handleClickClackInbound(params: {
           provenance: turnProvenance,
           correlationId: params.correlationId,
         });
+      },
+      durable: (payload) => {
+        if (!hasClickClackReplyMedia(payload)) {
+          return false;
+        }
+        const threadId = message.parent_message_id ? message.thread_root_id : undefined;
+        return {
+          to: target,
+          threadId,
+          replyToId: message.id,
+          requiredCapabilities: deriveDurableFinalDeliveryRequirements({
+            payload,
+            threadId,
+            replyToId: message.id,
+            reconcileUnknownSend: true,
+          }),
+        };
       },
       onError: (error) => {
         throw error instanceof Error

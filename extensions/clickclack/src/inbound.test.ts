@@ -77,7 +77,6 @@ function createAgentAccount(
     defaultTo: "channel:general",
     allowFrom: ["*"],
     reconnectMs: 1_500,
-    maxTokens: 512,
     agentActivity: false,
     config: {
       allowFrom: ["*"],
@@ -141,7 +140,6 @@ describe("handleClickClackInbound", () => {
       agentId: "service-bot",
       replyMode: "model",
       model: "openai/gpt-5.4-mini",
-      maxTokens: 512,
       toolsAllow: [],
       defaultTo: "channel:general",
       allowFrom: ["*"],
@@ -179,7 +177,7 @@ describe("handleClickClackInbound", () => {
     const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest?.agentId).toBe("service-bot");
     expect(completionRequest?.model).toBe("openai/gpt-5.4-mini");
-    expect(completionRequest?.maxTokens).toBe(512);
+    expect(completionRequest).not.toHaveProperty("maxTokens");
     expect(completionRequest?.purpose).toBe("clickclack bot reply");
     expect(completionRequest?.messages).toEqual([{ role: "user", content: "hello bot" }]);
 
@@ -191,14 +189,13 @@ describe("handleClickClackInbound", () => {
     expect(sendRequest?.correlationId).toBe("fakeco.case_1");
   });
 
-  it("omits the completion cap and delivers the reply when maxTokens is unset", async () => {
+  it("uses the selected runtime model budget", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const account = createAgentAccount({
       accountId: "service",
       agentId: "service-bot",
       replyMode: "model",
-      maxTokens: undefined,
     });
 
     await handleClickClackInbound({
@@ -246,7 +243,7 @@ describe("handleClickClackInbound", () => {
     });
     const logger = vi.mocked(runtime.logging.getChildLogger).mock.results[0]?.value;
     expect(logger?.warn).toHaveBeenCalledWith(
-      "[service] ClickClack model reply produced no sendable text (maxTokens=512)",
+      "[service] ClickClack model reply produced no sendable text",
     );
   });
 
@@ -390,6 +387,42 @@ describe("handleClickClackInbound", () => {
         text: "correlated reply",
       }),
     );
+  });
+
+  it("routes media replies through required durable delivery", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount(),
+      config: {} as CoreConfig,
+      message: createMessage({
+        id: VALID_MESSAGE_ID,
+        thread_root_id: VALID_MESSAGE_ID,
+      }),
+    });
+
+    const delivery = vi.mocked(runtime.channel.inbound.dispatchReply).mock.calls[0]?.[0].delivery;
+    if (typeof delivery?.durable !== "function") {
+      throw new Error("expected ClickClack media durable delivery resolver");
+    }
+    const payload = { text: "artifact", mediaUrl: "/workspace/artifact.txt" };
+    expect(delivery.durable(payload, { kind: "final" } as never)).toEqual({
+      to: "channel:chn_1",
+      threadId: undefined,
+      replyToId: VALID_MESSAGE_ID,
+      requiredCapabilities: {
+        text: true,
+        media: true,
+        replyTo: true,
+        messageSendingHooks: true,
+        reconcileUnknownSend: true,
+      },
+    });
+    await expect(delivery?.deliver(payload, { kind: "final" } as never)).rejects.toThrow(
+      "ClickClack media reply requires durable delivery",
+    );
+    expect(sendClickClackTextMock).not.toHaveBeenCalled();
   });
 
   it("does not derive a run id from a noncanonical message id", async () => {

@@ -107,7 +107,6 @@ describe("ClickClack account resolution", () => {
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
-      maxTokens: undefined,
       model: undefined,
       name: undefined,
       reconnectMs: 1_500,
@@ -133,7 +132,6 @@ describe("ClickClack account resolution", () => {
               agentId: "peter-bot",
               replyMode: "model",
               model: "openai/gpt-5.4-mini",
-              maxTokens: 2_048,
               toolsAllow: ["web_search"],
             },
           },
@@ -152,7 +150,6 @@ describe("ClickClack account resolution", () => {
         baseUrl: "https://app.clickclack.chat",
         enabled: true,
         model: "openai/gpt-5.4-mini",
-        maxTokens: 2_048,
         replyMode: "model",
         token: "ccb_peter",
         toolsAllow: ["web_search"],
@@ -163,7 +160,6 @@ describe("ClickClack account resolution", () => {
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
-      maxTokens: 2_048,
       model: "openai/gpt-5.4-mini",
       name: undefined,
       reconnectMs: 1_500,
@@ -174,27 +170,6 @@ describe("ClickClack account resolution", () => {
       toolsAllow: ["web_search"],
       workspace: "wsp_1",
     });
-  });
-
-  it("uses the runtime model budget when unset while honoring explicit account overrides", () => {
-    const cfg = {
-      channels: {
-        clickclack: {
-          enabled: true,
-          baseUrl: "https://app.clickclack.chat",
-          workspace: "wsp_1",
-          token: "ccb_default",
-          accounts: {
-            legacy: { token: "ccb_legacy" },
-            tuned: { token: "ccb_tuned", maxTokens: 8_192 },
-          },
-        },
-      },
-    } satisfies CoreConfig;
-
-    expect(resolveClickClackAccount({ cfg }).maxTokens).toBeUndefined();
-    expect(resolveClickClackAccount({ cfg, accountId: "legacy" }).maxTokens).toBeUndefined();
-    expect(resolveClickClackAccount({ cfg, accountId: "tuned" }).maxTokens).toBe(8_192);
   });
 
   it("resolves the agent activity opt-in only when explicitly enabled", () => {
