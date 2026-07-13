@@ -716,6 +716,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",
+      "node.invoke.progress",
       "node.invoke.result",
       "node.event",
     ],

@@ -5,6 +5,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
@@ -73,6 +74,7 @@ const SYSTEM_COMMANDS = [
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
 ];
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
@@ -80,6 +82,7 @@ const DESKTOP_HOST_COMMANDS = new Set<string>([
   NODE_FS_LIST_DIR_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   ...SCREEN_COMMANDS,
 ]);
 const UNKNOWN_PLATFORM_COMMANDS = [

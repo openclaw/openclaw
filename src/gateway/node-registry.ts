@@ -69,7 +69,13 @@ type PendingInvoke = {
   systemRunEvent?: PendingSystemRunEvent;
   resolve: (value: NodeInvokeResult) => void;
   reject: (err: Error) => void;
-  timer?: ReturnType<typeof setTimeout>;
+  hardTimer?: ReturnType<typeof setTimeout>;
+  idleTimer?: ReturnType<typeof setTimeout>;
+  idleTimeoutMs?: number;
+  onProgress?: (chunk: string) => void;
+  nextProgressSeq: number;
+  progressChunks: Map<number, string>;
+  removeAbortListener?: () => void;
 };
 
 /** system.run metadata remembered while waiting for node events. */
@@ -87,7 +93,7 @@ type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
 };
 
 /** Result payload returned from node.invoke. */
-type NodeInvokeResult = {
+export type NodeInvokeResult = {
   ok: boolean;
   payload?: unknown;
   payloadJSON?: string | null;
@@ -115,6 +121,7 @@ const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
 const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
 const WEBSOCKET_OPEN_READY_STATE = 1;
 const SLOW_CONSUMER_CLOSE_CODE = 1008;
+const MAX_PENDING_PROGRESS_CHUNKS = 128;
 
 export type SerializedEventPayload = {
   readonly json: string;
@@ -396,9 +403,7 @@ export class NodeRegistry {
       if (pending.connId !== connId) {
         continue;
       }
-      if (pending.timer !== undefined) {
-        clearTimeout(pending.timer);
-      }
+      this.clearInvokeTimers(pending);
       if (pending.command === NODE_MCP_TOOLS_CALL_COMMAND) {
         // Preserve MCP's structured failure contract when transport loss wins
         // the race; callers can degrade instead of seeing an opaque invoke error.
@@ -682,8 +687,15 @@ export class NodeRegistry {
     command: string;
     params?: unknown;
     timeoutMs?: number;
+    /** Inactivity deadline reset by each ordered progress chunk. */
+    idleTimeoutMs?: number;
+    onProgress?: (chunk: string) => void;
+    signal?: AbortSignal;
     idempotencyKey?: string;
   }): Promise<NodeInvokeResult> {
+    if (params.signal?.aborted) {
+      return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
+    }
     const node = this.nodesById.get(params.nodeId);
     if (!node) {
       return {
@@ -732,25 +744,148 @@ export class NodeRegistry {
       });
     }
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
-      const timer =
-        timeoutMs > 0
-          ? setTimeout(() => {
-              this.pendingInvokes.delete(requestId);
-              resolve({
-                ok: false,
-                error: { code: "TIMEOUT", message: "node invoke timed out" },
-              });
-            }, timeoutMs)
-          : undefined;
-      this.pendingInvokes.set(requestId, {
+      const pending: PendingInvoke = {
         nodeId: params.nodeId,
         connId: node.connId,
         command: params.command,
         systemRunEvent,
         resolve,
         reject,
-        ...(timer !== undefined ? { timer } : {}),
+        nextProgressSeq: 0,
+        progressChunks: new Map(),
+        ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+      };
+      if (timeoutMs > 0) {
+        pending.hardTimer = setTimeout(() => {
+          this.sendInvokeCancel(requestId, pending);
+          this.clearInvokeTimers(pending);
+          this.pendingInvokes.delete(requestId);
+          resolve({
+            ok: false,
+            error: { code: "TIMEOUT", message: "node invoke timed out" },
+          });
+        }, timeoutMs);
+      }
+      const idleTimeoutMs = resolveTimerTimeoutMs(params.idleTimeoutMs, 0, 0);
+      if (params.onProgress && idleTimeoutMs > 0) {
+        pending.idleTimeoutMs = idleTimeoutMs;
+      }
+      this.pendingInvokes.set(requestId, pending);
+      if (params.signal) {
+        const onAbort = () => {
+          if (this.pendingInvokes.get(requestId) !== pending) {
+            return;
+          }
+          this.sendInvokeCancel(requestId, pending);
+          this.clearInvokeTimers(pending);
+          this.pendingInvokes.delete(requestId);
+          resolve({ ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } });
+        };
+        params.signal.addEventListener("abort", onAbort, { once: true });
+        pending.removeAbortListener = () => params.signal?.removeEventListener("abort", onAbort);
+        if (params.signal.aborted) {
+          onAbort();
+        }
+      }
+    });
+  }
+
+  handleInvokeProgress(params: {
+    invokeId: string;
+    nodeId: string;
+    connId: string | undefined;
+    seq: number;
+    chunk: string;
+  }): boolean {
+    const pending = this.pendingInvokes.get(params.invokeId);
+    if (
+      !pending ||
+      pending.nodeId !== params.nodeId ||
+      pending.connId !== params.connId ||
+      !pending.onProgress ||
+      params.seq < pending.nextProgressSeq
+    ) {
+      return false;
+    }
+    if (
+      params.seq > pending.nextProgressSeq &&
+      !pending.progressChunks.has(params.seq) &&
+      pending.progressChunks.size >= MAX_PENDING_PROGRESS_CHUNKS
+    ) {
+      return false;
+    }
+    pending.progressChunks.set(params.seq, params.chunk);
+    this.resetInvokeIdleTimer(params.invokeId, pending);
+    while (true) {
+      const chunk = pending.progressChunks.get(pending.nextProgressSeq);
+      if (chunk === undefined) {
+        break;
+      }
+      pending.progressChunks.delete(pending.nextProgressSeq);
+      pending.nextProgressSeq += 1;
+      try {
+        pending.onProgress(chunk);
+      } catch (error) {
+        this.sendInvokeCancel(params.invokeId, pending);
+        this.clearInvokeTimers(pending);
+        this.pendingInvokes.delete(params.invokeId);
+        pending.reject(error instanceof Error ? error : new Error(String(error)));
+        break;
+      }
+    }
+    return true;
+  }
+
+  private createInvokeIdleTimer(requestId: string, pending: PendingInvoke) {
+    return setTimeout(() => {
+      if (this.pendingInvokes.get(requestId) !== pending) {
+        return;
+      }
+      this.sendInvokeCancel(requestId, pending);
+      this.clearInvokeTimers(pending);
+      this.pendingInvokes.delete(requestId);
+      pending.resolve({
+        ok: false,
+        error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
       });
+    }, pending.idleTimeoutMs);
+  }
+
+  private resetInvokeIdleTimer(requestId: string, pending: PendingInvoke): void {
+    if (!pending.idleTimeoutMs) {
+      return;
+    }
+    if (pending.idleTimer) {
+      clearTimeout(pending.idleTimer);
+    }
+    pending.idleTimer = this.createInvokeIdleTimer(requestId, pending);
+  }
+
+  private clearInvokeTimers(pending: PendingInvoke): void {
+    if (pending.hardTimer) {
+      clearTimeout(pending.hardTimer);
+    }
+    if (pending.idleTimer) {
+      clearTimeout(pending.idleTimer);
+    }
+    pending.removeAbortListener?.();
+    pending.removeAbortListener = undefined;
+  }
+
+  private sendInvokeCancel(requestId: string, pending: PendingInvoke): void {
+    // Cancel frames belong to the streaming-invoke contract only. Legacy
+    // single-result invokes must keep their pre-streaming wire behavior
+    // byte-identical, so timeouts there stay silent as before.
+    if (!pending.onProgress) {
+      return;
+    }
+    const node = this.nodesById.get(pending.nodeId);
+    if (!node || node.connId !== pending.connId) {
+      return;
+    }
+    this.sendEventToSession(node, "node.invoke.cancel", {
+      invokeId: requestId,
+      nodeId: pending.nodeId,
     });
   }
 
@@ -919,9 +1054,7 @@ export class NodeRegistry {
     if (pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
       return false;
     }
-    if (pending.timer !== undefined) {
-      clearTimeout(pending.timer);
-    }
+    this.clearInvokeTimers(pending);
     this.pendingInvokes.delete(params.id);
     if (!params.ok && pending.systemRunEvent) {
       this.forgetAuthorizedSystemRunEvent({

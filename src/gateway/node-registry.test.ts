@@ -563,6 +563,203 @@ describe("gateway/node-registry", () => {
     expect((error as Error).message).toBe("node disconnected (debug.ping)");
   });
 
+  it("orders streamed invoke progress and drops state after the final result", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const chunks: string[] = [];
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "agent.cli.claude.run.v1",
+      timeoutMs: 1_000,
+      idleTimeoutMs: 100,
+      onProgress: (chunk) => chunks.push(chunk),
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 1,
+        chunk: "second",
+      }),
+    ).toBe(true);
+    expect(chunks).toEqual([]);
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 0,
+        chunk: "first",
+      }),
+    ).toBe(true);
+    expect(chunks).toEqual(["first", "second"]);
+    expect(
+      registry.handleInvokeResult({
+        id: invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toMatchObject({ ok: true });
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 2,
+        chunk: "late",
+      }),
+    ).toBe(false);
+  });
+
+  it("resets streamed invoke idle timeout on progress", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry();
+    try {
+      const frames = registerNode(registry);
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "agent.cli.claude.run.v1",
+        timeoutMs: 1_000,
+        idleTimeoutMs: 50,
+        onProgress: () => {},
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+      const invokeId = request.payload?.id ?? "";
+
+      // Approval can outlive the idle window; inactivity starts with execution progress.
+      await vi.advanceTimersByTimeAsync(200);
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 0,
+          chunk: "still running",
+        }),
+      ).toBe(true);
+      await vi.advanceTimersByTimeAsync(40);
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 1,
+          chunk: "still running",
+        }),
+      ).toBe(true);
+      await vi.advanceTimersByTimeAsync(51);
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cleans streamed invoke state when the node disconnects", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "agent.cli.claude.run.v1",
+      timeoutMs: 1_000,
+      idleTimeoutMs: 100,
+      onProgress: () => {},
+    });
+    const disconnected = invoke.catch((error: unknown) => error);
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    expect(registry.unregister("conn-1")).toBe("node-1");
+    await expect(disconnected).resolves.toBeInstanceOf(Error);
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 0,
+        chunk: "late",
+      }),
+    ).toBe(false);
+  });
+
+  it("forwards cancellation and drops streamed invoke state", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "agent.cli.claude.run.v1",
+      timeoutMs: 1_000,
+      idleTimeoutMs: 100,
+      onProgress: () => {},
+      signal: controller.signal,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    controller.abort();
+
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: { code: "ABORTED", message: "node invoke cancelled" },
+    });
+    const cancel = JSON.parse(frames[1] ?? "{}") as {
+      event?: string;
+      payload?: { invokeId?: string; nodeId?: string };
+    };
+    expect(cancel).toMatchObject({
+      event: "node.invoke.cancel",
+      payload: { invokeId, nodeId: "node-1" },
+    });
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 0,
+        chunk: "late",
+      }),
+    ).toBe(false);
+  });
+
+  it("cancels the node when a streamed progress consumer fails", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "agent.cli.claude.run.v1",
+      timeoutMs: 1_000,
+      onProgress: () => {
+        throw new Error("parser failed");
+      },
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    expect(
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: "node-1",
+        connId: "conn-1",
+        seq: 0,
+        chunk: "bad jsonl",
+      }),
+    ).toBe(true);
+    await expect(invoke).rejects.toThrow("parser failed");
+    expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+      event: "node.invoke.cancel",
+      payload: { invokeId, nodeId: "node-1" },
+    });
+  });
+
   it("returns a structured unavailable result when a node disconnects during an MCP call", async () => {
     const registry = createNodeRegistry();
     registerNode(registry);

@@ -33,7 +33,10 @@ import {
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { NODE_FS_LIST_DIR_COMMAND } from "../../infra/node-commands.js";
+import {
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_FS_LIST_DIR_COMMAND,
+} from "../../infra/node-commands.js";
 import {
   approveNodePairing,
   listNodePairing,
@@ -86,6 +89,7 @@ import {
   nodeWakeNudgeById,
   type NodeWakeAttempt,
 } from "./nodes-wake-state.js";
+import { handleNodeInvokeProgress } from "./nodes.handlers.invoke-progress.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondInvalidParams,
@@ -1323,6 +1327,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node.invoke does not allow Claude agent runs; use sessions.catalog.continue",
+          { details: { command } },
+        ),
+      );
+      return;
+    }
     if (command === "browser.proxy" && isForbiddenBrowserProxyMutation(p.params)) {
       respond(
         false,
@@ -1650,6 +1666,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
+  "node.invoke.progress": handleNodeInvokeProgress,
   "node.invoke.result": handleNodeInvokeResult,
   "node.event": async ({ params, respond, context, client }) => {
     if (!validateNodeEventParams(params)) {
