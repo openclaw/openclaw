@@ -57,8 +57,17 @@ function isLightBackground(): boolean {
 
   const colorfgbg = process.env.COLORFGBG;
   if (colorfgbg && colorfgbg.length <= 64) {
+    // COLORFGBG may have two or more semicolon-separated fields (e.g. "0;15"
+    // or "0;default;15" on some terminals). The background color is the last
+    // field — using lastIndexOf(";") skips any middle fields.
     const sep = colorfgbg.lastIndexOf(";");
-    const bg = Number.parseInt(sep >= 0 ? colorfgbg.slice(sep + 1) : colorfgbg, 10);
+    const bgRaw = sep >= 0 ? colorfgbg.slice(sep + 1) : colorfgbg;
+    // Only accept purely numeric background values; reject non-numeric tokens
+    // like "default" that some terminals emit.
+    if (!/^\d+$/.test(bgRaw)) {
+      return false;
+    }
+    const bg = Number.parseInt(bgRaw, 10);
     if (bg >= 0 && bg <= 255) {
       if (bg <= 15) {
         return bg === 7 || bg === 15;
