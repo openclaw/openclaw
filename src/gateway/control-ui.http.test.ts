@@ -550,9 +550,9 @@ describe("handleControlUiHttpRequest", () => {
         const filePath = path.join(tmpRoot, filename);
         await fs.writeFile(filePath, Buffer.from("fixture"));
         const { res, handled } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=t`,
           method: "GET",
-          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          auth: { mode: "token", token: "t", allowTailscale: false },
         });
 
         expect(handled).toBe(true);
@@ -573,9 +573,9 @@ describe("handleControlUiHttpRequest", () => {
         const filePath = path.join(tmpRoot, filename);
         await fs.writeFile(filePath, Buffer.from("fixture"));
         const { res, handled } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=t`,
           method: "GET",
-          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          auth: { mode: "token", token: "t", allowTailscale: false },
         });
         const capped = "a".repeat(200);
 
