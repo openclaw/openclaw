@@ -95,23 +95,6 @@ function createFakeBaseStream(): {
   return { stream, controller, getReturnCalls: () => returnCalls };
 }
 
-function disableAbortSignalAny(): PropertyDescriptor | undefined {
-  const descriptor = Object.getOwnPropertyDescriptor(AbortSignal, "any");
-  Object.defineProperty(AbortSignal, "any", {
-    configurable: true,
-    value: undefined,
-  });
-  return descriptor;
-}
-
-function restoreAbortSignalAny(descriptor: PropertyDescriptor | undefined): void {
-  if (descriptor) {
-    Object.defineProperty(AbortSignal, "any", descriptor);
-  } else {
-    Reflect.deleteProperty(AbortSignal, "any");
-  }
-}
-
 describe("createOpencodeGoStalledStreamWrapper", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -623,104 +606,37 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     await consumer;
   });
 
-  it("aborts through the fallback combined signal when no first event arrives", async () => {
-    const abortSignalAnyDescriptor = disableAbortSignalAny();
-    const { stream: baseStream } = createFakeBaseStream();
-    let abortCalled = false;
-
-    try {
-      const underlying = vi.fn((_model, _context, options) => {
-        if (options?.signal) {
-          options.signal.addEventListener("abort", () => {
-            abortCalled = true;
-          });
-        }
-        return baseStream;
-      });
-
-      const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
-        provider: "opencode-go",
-        idleTimeoutMs: 5_000,
-      });
-
-      const downstream = await Promise.resolve(
-        wrapper(
-          { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
-          {} as ProviderContext,
-          { signal: new AbortController().signal } as ProviderCallOptions,
-        ),
-      );
-      expect(downstream).toBeDefined();
-      if (!downstream) {
-        return;
-      }
-
-      const consumer = (async () => {
-        for await (const event of downstream) {
-          void event;
-        }
-      })();
-
-      await vi.advanceTimersByTimeAsync(6_000);
-
-      expect(abortCalled).toBe(true);
-      await consumer;
-    } finally {
-      restoreAbortSignalAny(abortSignalAnyDescriptor);
-    }
-  });
-
-  it("cleans up fallback AbortSignal listeners after natural completion", async () => {
-    const abortSignalAnyDescriptor = disableAbortSignalAny();
-    const sourceController = new AbortController();
-    const addEventListener = vi.spyOn(sourceController.signal, "addEventListener");
-    const removeEventListener = vi.spyOn(sourceController.signal, "removeEventListener");
+  it("preserves caller abort reasons in the wrapped provider signal", async () => {
+    const caller = new AbortController();
+    const reason = new Error("caller stopped");
     const { stream: baseStream, controller } = createFakeBaseStream();
+    let capturedSignal: AbortSignal | undefined;
+    const underlying = vi.fn((_model, _context, options) => {
+      capturedSignal = options?.signal;
+      return baseStream;
+    });
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
+      provider: "opencode-go",
+      idleTimeoutMs: 5_000,
+    });
 
-    try {
-      const wrapper = createOpencodeGoStalledStreamWrapper(
-        vi.fn(() => baseStream) as ProviderStreamFn,
-        {
-          provider: "opencode-go",
-          idleTimeoutMs: 5_000,
-        },
-      );
+    const downstream = await Promise.resolve(
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
+        {} as ProviderContext,
+        { signal: caller.signal } as ProviderCallOptions,
+      ),
+    );
+    caller.abort(reason);
 
-      const downstream = await Promise.resolve(
-        wrapper(
-          { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
-          {} as ProviderContext,
-          { signal: sourceController.signal } as ProviderCallOptions,
-        ),
-      );
-      expect(downstream).toBeDefined();
-      if (!downstream) {
-        return;
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(capturedSignal?.reason).toBe(reason);
+
+    controller.end();
+    if (downstream) {
+      for await (const event of downstream) {
+        void event;
       }
-
-      const received: AnyEvent[] = [];
-      const consumer = (async () => {
-        for await (const event of downstream) {
-          received.push(event);
-        }
-      })();
-
-      const partial = {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        stopReason: "stop",
-      };
-      controller.emit({ type: "start", partial } as AnyEvent);
-      controller.emit({ type: "done", reason: "stop", message: partial } as AnyEvent);
-      await consumer;
-
-      expect(received.some((event) => event.type === "done")).toBe(true);
-      expect(addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
-      expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
-    } finally {
-      restoreAbortSignalAny(abortSignalAnyDescriptor);
-      addEventListener.mockRestore();
-      removeEventListener.mockRestore();
     }
   });
 
