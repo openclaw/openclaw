@@ -419,6 +419,12 @@ async function loadFreshFollowupRunnerModuleForTest() {
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
     isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) =>
       run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,
+    resolveFollowupAbortSignal: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) => {
+      const signals = [run.abortSignal, run.queueAbortSignal].filter(
+        (signal): signal is AbortSignal => signal !== undefined,
+      );
+      return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+    },
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
     resolveQueueSettings: (): QueueSettings => ({ mode: "followup" }),
   }));
