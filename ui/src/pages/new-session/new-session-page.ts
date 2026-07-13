@@ -64,6 +64,9 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private openedFor: string | null = null;
   private agentsHydrated = false;
+  // Agent lists clear during transport retries. Retain only an explicit draft
+  // choice; provisional defaults still follow refreshed Gateway state.
+  private agentSelectedByUser = false;
   private nodesRequestToken = 0;
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
@@ -124,6 +127,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     // A replacement client may target another Gateway. Keep the user's task,
     // but retire every selection and discovery result owned by the old host.
     this.agentId = "";
+    this.agentSelectedByUser = false;
     this.folder = "";
     this.worktree = false;
     this.worktreeName = "";
@@ -289,7 +293,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     // anything the user already typed while the list was loading.
     if (!this.agentsHydrated && agentsReady) {
       this.agentsHydrated = true;
-      this.adoptAgentDefaults({ preserveTypedFolder: true });
+      this.adoptAgentDefaults({ preserveSelectedAgent: true, preserveTypedFolder: true });
     }
   }
 
@@ -344,10 +348,17 @@ class NewSessionPage extends OpenClawLightDomElement {
     return Boolean(folder) && folder !== this.workspacePath();
   }
 
-  private adoptAgentDefaults(options: { preserveTypedFolder?: boolean } = {}) {
+  private adoptAgentDefaults(
+    options: { preserveSelectedAgent?: boolean; preserveTypedFolder?: boolean } = {},
+  ) {
     const agents = this.agents();
     const fallback = this.context?.agents.state.agentsList?.defaultId ?? agents[0]?.id ?? "main";
-    this.agentId = catalog.resolveAgentId(this.data, agents, fallback);
+    const keepSelectedAgent =
+      options.preserveSelectedAgent && this.agentSelectedByUser && Boolean(this.selectedAgent());
+    if (!keepSelectedAgent) {
+      this.agentId = catalog.resolveAgentId(this.data, agents, fallback);
+      this.agentSelectedByUser = false;
+    }
     if (!options.preserveTypedFolder || !this.folder.trim()) {
       this.folder = this.workspacePath();
     }
@@ -356,6 +367,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private resetDraft() {
+    this.agentSelectedByUser = false;
     this.folder = "";
     this.worktree = false;
     this.worktreeName = "";
@@ -571,6 +583,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     this.agentId = normalizeAgentId(agentId);
+    this.agentSelectedByUser = true;
     this.folder = this.execNode ? "" : this.workspacePath();
     this.worktree = false;
     this.worktreeName = "";

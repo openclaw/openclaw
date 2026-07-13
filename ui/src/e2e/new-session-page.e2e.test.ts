@@ -540,6 +540,78 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("preserves a manually selected agent across a same-client reconnect", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+            {
+              id: "research",
+              identity: { name: "Research" },
+              name: "Research",
+              workspace: "/home/peter/research",
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.create": { key: "agent:research:manual-reconnect" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await page.getByRole("heading", { name: "Main" }).waitFor();
+      await page.locator('.new-session-page__select > summary[title="Agent"]').click();
+      await page.getByRole("menuitemradio", { name: "Research" }).click();
+      await page.getByRole("heading", { name: "Research" }).waitFor();
+
+      const message = page.locator(".new-session-page__message");
+      await message.fill("keep my selected agent");
+      const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
+
+      await gateway.setOnline(false);
+      await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+      await gateway.setOnline(true);
+
+      await expect
+        .poll(async () => (await gateway.getRequests("agents.list")).length)
+        .toBe(agentRequestsBefore + 1);
+      await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
+      await expect
+        .poll(() => page.getByRole("heading").first().textContent())
+        .toContain("Research");
+
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "research",
+        message: "keep my selected agent",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("rediscovers Gateway-owned draft state when the app replaces its client", async () => {
     const context = await browser.newContext({
       locale: "en-US",
