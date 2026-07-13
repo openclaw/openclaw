@@ -234,18 +234,8 @@ export const icons = {
       <path d="M10 18h4" />
     </svg>
   `,
-  arrowDown: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M12 5v14" />
-      <path d="m19 12-7 7-7-7" />
-    </svg>
-  `,
-  arrowUp: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M12 19V5" />
-      <path d="m5 12 7-7 7 7" />
-    </svg>
-  `,
+  arrowDown: html` <svg viewBox="0 0 24 24"><path d="M12 5v14m7-7-7 7-7-7" /></svg> `,
+  arrowUp: html` <svg viewBox="0 0 24 24"><path d="M12 19V5m-7 7 7-7 7 7" /></svg> `,
   arrowLeft: html`
     <svg viewBox="0 0 24 24">
       <path d="m12 19-7-7 7-7" />
