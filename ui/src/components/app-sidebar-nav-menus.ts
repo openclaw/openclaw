@@ -17,7 +17,7 @@ import { t } from "../i18n/index.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
 
-export type SidebarMenuPosition = { x: number; y: number };
+type SidebarMenuPosition = { x: number; y: number };
 
 /** Ordinary primary click without modifiers; anything else keeps native link behavior. */
 export function shouldHandleNavigationClick(event: MouseEvent): boolean {
@@ -58,7 +58,7 @@ export function sidebarPluginTabs(
   );
 }
 
-export type SidebarNavRouteParams = {
+type SidebarNavRouteParams = {
   routeId: NavigationRouteId;
   href: string;
   active: boolean;
@@ -120,7 +120,7 @@ type SidebarMenuNavigationHandlers = {
   onCancelPreload: (event: Event) => void;
 };
 
-export type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
+type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
   position: SidebarMenuPosition | null;
   basePath: string;
   activeRouteId: NavigationRouteId | undefined;
@@ -219,7 +219,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
   `;
 }
 
-export type SidebarCustomizeMenuParams = {
+type SidebarCustomizeMenuParams = {
   position: SidebarMenuPosition | null;
   pinnedRoutes: readonly SidebarNavRoute[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
