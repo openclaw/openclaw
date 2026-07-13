@@ -1,11 +1,11 @@
 import { html, nothing } from "lit";
 import type {
-  GatewayAgentRow,
   MemoryMigrationItem,
   MemoryMigrationProviderPlan,
   MigrationsMemoryApplyResult,
   MigrationsMemoryPlanResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
+import type { GatewayAgentRow } from "../../../../src/shared/session-types.js";
 import "../../components/modal-dialog.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
