@@ -8375,6 +8375,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: First run (recommended)
   - H2: Safety defaults
   - H2: Existing solutions preflight
+  - H2: Git Work Isolation
   - H2: Session start (required)
   - H2: Soul (required)
   - H2: Shared spaces (recommended)
@@ -8664,6 +8665,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Backup tip (recommended)
   - H2: Safety defaults
   - H2: Existing solutions preflight
+  - H2: Git Work Isolation
   - H2: Daily memory (recommended)
   - H2: Heartbeats (optional)
   - H2: Customize
