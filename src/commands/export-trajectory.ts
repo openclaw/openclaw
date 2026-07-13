@@ -43,12 +43,11 @@ function readOptionalString(value: unknown): string | undefined {
 }
 
 function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajectoryCommandOptions> {
-  const trimmed = encoded.trim();
-  if (!ENCODED_EXPORT_REQUEST_RE.test(trimmed)) {
+  if (!ENCODED_EXPORT_REQUEST_RE.test(encoded)) {
     throw new Error("Encoded trajectory export request is invalid");
   }
-  const bytes = Buffer.from(trimmed, "base64url");
-  if (bytes.toString("base64url") !== trimmed) {
+  const bytes = Buffer.from(encoded, "base64url");
+  if (bytes.toString("base64url") !== encoded) {
     throw new Error("Encoded trajectory export request is invalid");
   }
   let decoded: unknown;
@@ -88,8 +87,8 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
 function resolveExportTrajectoryOptions(
   opts: ExportTrajectoryCommandOptions,
 ): ExportTrajectoryCommandOptions {
-  const encoded = opts.requestJsonBase64?.trim();
-  if (!encoded) {
+  const encoded = opts.requestJsonBase64;
+  if (encoded === undefined || encoded.length === 0) {
     return opts;
   }
   return {
