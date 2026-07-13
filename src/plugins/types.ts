@@ -120,6 +120,7 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import type { PluginLogger } from "./logger-types.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
@@ -129,6 +130,7 @@ import type {
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
 import type {
+  ProviderAuthOptionBag,
   ProviderExternalAuthProfile,
   ProviderExternalOAuthProfile,
   ProviderResolveExternalAuthProfilesContext,
@@ -240,25 +242,13 @@ export type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 
-export type ProviderAuthOptionBag = {
-  token?: string;
-  tokenProvider?: string;
-  secretInputMode?: SecretInputMode;
-  [key: string]: unknown;
-};
-
-/** Logger passed into plugin registration, services, and CLI surfaces. */
-export type PluginLogger = {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-};
+export type { PluginLogger } from "./logger-types.js";
 
 export type { PluginKind } from "./plugin-kind.types.js";
 export type {
   ProviderExternalAuthProfile,
   ProviderExternalOAuthProfile,
+  ProviderAuthOptionBag,
   ProviderResolveExternalAuthProfilesContext,
   ProviderResolveExternalOAuthProfilesContext,
   ProviderResolveSyntheticAuthContext,

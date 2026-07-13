@@ -7,13 +7,10 @@ import type { MigrationApplyResult, MigrationProviderPlugin } from "../../plugin
 import type { RuntimeEnv } from "../../runtime.js";
 import { backupCreateCommand } from "../backup.js";
 import { buildMigrationContext, buildMigrationReportDir } from "./context.js";
+import { applyMigrationItemSelection } from "./item-selection.js";
 import { assertApplySucceeded, assertConflictFreePlan, writeApplyResult } from "./output.js";
 import { buildMigrationProviderOptions } from "./providers.js";
-import {
-  applyMigrationItemSelection,
-  applyMigrationPluginSelection,
-  applyMigrationSkillSelection,
-} from "./selection.js";
+import { applyMigrationPluginSelection, applyMigrationSkillSelection } from "./selection.js";
 import type { MigrateApplyOptions } from "./types.js";
 
 function shouldTreatMissingBackupAsEmptyState(error: unknown): boolean {

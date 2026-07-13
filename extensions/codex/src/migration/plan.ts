@@ -1,5 +1,4 @@
 // Codex plugin module implements plan behavior.
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createMigrationItem,
@@ -14,21 +13,17 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  canonicalPathFromExistingAncestor,
-  isPathInside,
-} from "openclaw/plugin-sdk/security-runtime";
 import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";
-import { exists, sanitizeName } from "./helpers.js";
+import { sanitizeName } from "./helpers.js";
+import { buildCodexMemoryItems } from "./memory-plan.js";
+import { buildCodexSkillItems } from "./skill-plan.js";
 import {
   codexPluginMigrationSubscriptionWarning,
   discoverCodexSource,
   hasCodexSource,
   type CodexPluginSource,
-  type CodexMemorySource,
-  type CodexSkillSource,
 } from "./source.js";
 import { resolveCodexMigrationTargets } from "./targets.js";
 
@@ -45,70 +40,6 @@ const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
 const MIGRATION_REASON_PLUGIN_EXISTS = "plugin exists";
 const CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED = "not_run";
 
-async function assertSafeMemoryDestination(params: {
-  source: string;
-  workspaceDir: string;
-  target: string;
-}): Promise<void> {
-  const [canonicalSource, canonicalWorkspace, canonicalTarget] = await Promise.all([
-    fs.realpath(path.dirname(params.source)),
-    canonicalPathFromExistingAncestor(params.workspaceDir),
-    canonicalPathFromExistingAncestor(params.target),
-  ]);
-  if (!isPathInside(canonicalWorkspace, canonicalTarget)) {
-    throw new Error("Codex memory import destination must stay in the selected workspace.");
-  }
-  if (
-    isPathInside(canonicalSource, canonicalTarget) ||
-    isPathInside(canonicalTarget, canonicalSource)
-  ) {
-    throw new Error("Codex memory source and OpenClaw import destination must be separate paths.");
-  }
-}
-
-async function buildMemoryItems(params: {
-  memoryFiles: readonly CodexMemorySource[];
-  workspaceDir: string;
-  overwrite?: boolean;
-}): Promise<MigrationItem[]> {
-  const items: MigrationItem[] = [];
-  for (const memory of params.memoryFiles) {
-    const target = path.join(
-      params.workspaceDir,
-      "memory",
-      "imports",
-      "codex",
-      path.basename(memory.path),
-    );
-    await assertSafeMemoryDestination({
-      source: memory.path,
-      workspaceDir: params.workspaceDir,
-      target,
-    });
-    const targetExists = await exists(target);
-    items.push(
-      createMigrationItem({
-        id: memory.id,
-        kind: "memory",
-        action: "copy",
-        source: memory.path,
-        target,
-        status: targetExists && !params.overwrite ? "conflict" : "planned",
-        reason: targetExists && !params.overwrite ? MIGRATION_REASON_TARGET_EXISTS : undefined,
-        message: "Copy consolidated Codex memory into the OpenClaw memory index.",
-        details: {
-          sourceType: "codex-memory",
-          sourceLabel: memory.label,
-          collectionId: "codex",
-          collectionLabel: "Codex",
-          relativePath: path.basename(memory.path),
-        },
-      }),
-    );
-  }
-  return items;
-}
-
 export type CodexPluginMigrationConfigEntry = {
   configKey: string;
   pluginName: string;
@@ -122,59 +53,6 @@ type CodexPluginMigrationBlockSkipDetails = {
   apps?: NonNullable<CodexPluginSource["migrationBlock"]>["apps"];
   error?: string;
 };
-
-function uniqueSkillName(skill: CodexSkillSource, counts: Map<string, number>): string {
-  const base = sanitizeName(skill.name) || "codex-skill";
-  if ((counts.get(base) ?? 0) <= 1) {
-    return base;
-  }
-  const parent = sanitizeName(path.basename(path.dirname(skill.source)));
-  return sanitizeName(["codex", parent, base].filter(Boolean).join("-")) || base;
-}
-
-async function buildSkillItems(params: {
-  skills: CodexSkillSource[];
-  workspaceDir: string;
-  overwrite?: boolean;
-}): Promise<MigrationItem[]> {
-  const baseCounts = new Map<string, number>();
-  for (const skill of params.skills) {
-    const base = sanitizeName(skill.name) || "codex-skill";
-    baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
-  }
-  const resolvedCounts = new Map<string, number>();
-  const planned = params.skills.map((skill) => {
-    const name = uniqueSkillName(skill, baseCounts);
-    resolvedCounts.set(name, (resolvedCounts.get(name) ?? 0) + 1);
-    return { skill, name, target: path.join(params.workspaceDir, "skills", name) };
-  });
-  const items: MigrationItem[] = [];
-  for (const item of planned) {
-    const collides = (resolvedCounts.get(item.name) ?? 0) > 1;
-    const targetExists = await exists(item.target);
-    items.push(
-      createMigrationItem({
-        id: `skill:${item.name}`,
-        kind: "skill",
-        action: "copy",
-        source: item.skill.source,
-        target: item.target,
-        status: collides ? "conflict" : targetExists && !params.overwrite ? "conflict" : "planned",
-        reason: collides
-          ? `multiple Codex skills normalize to "${item.name}"`
-          : targetExists && !params.overwrite
-            ? MIGRATION_REASON_TARGET_EXISTS
-            : undefined,
-        message: `Copy ${item.skill.sourceLabel} into this OpenClaw agent workspace.`,
-        details: {
-          skillName: item.name,
-          sourceLabel: item.skill.sourceLabel,
-        },
-      }),
-    );
-  }
-  return items;
-}
 
 function uniquePluginConfigKey(
   plugin: CodexPluginSource,
@@ -577,7 +455,7 @@ export async function buildCodexMigrationPlan(
   }
   const items: MigrationItem[] = [];
   items.push(
-    ...(await buildMemoryItems({
+    ...(await buildCodexMemoryItems({
       memoryFiles: source.memoryFiles,
       workspaceDir: targets.workspaceDir,
       overwrite: ctx.overwrite,
@@ -586,7 +464,7 @@ export async function buildCodexMigrationPlan(
   if (!memoryOnly) {
     items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
     items.push(
-      ...(await buildSkillItems({
+      ...(await buildCodexSkillItems({
         skills: source.skills,
         workspaceDir: targets.workspaceDir,
         overwrite: ctx.overwrite,

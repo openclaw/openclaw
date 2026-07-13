@@ -112,6 +112,17 @@ export const MigrationsMemoryApplyResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const MigrationProtocolSchemas = {
+  MemoryMigrationItemStatus: MemoryMigrationItemStatusSchema,
+  MemoryMigrationItem: MemoryMigrationItemSchema,
+  MemoryMigrationSummary: MemoryMigrationSummarySchema,
+  MemoryMigrationProviderPlan: MemoryMigrationProviderPlanSchema,
+  MigrationsMemoryPlanParams: MigrationsMemoryPlanParamsSchema,
+  MigrationsMemoryPlanResult: MigrationsMemoryPlanResultSchema,
+  MigrationsMemoryApplyParams: MigrationsMemoryApplyParamsSchema,
+  MigrationsMemoryApplyResult: MigrationsMemoryApplyResultSchema,
+} as const;
+
 export type MemoryMigrationItemStatus = Static<typeof MemoryMigrationItemStatusSchema>;
 export type MemoryMigrationItem = Static<typeof MemoryMigrationItemSchema>;
 export type MemoryMigrationProviderPlan = Static<typeof MemoryMigrationProviderPlanSchema>;

@@ -12,22 +12,8 @@ export { formatValidationErrors, type ValidationError } from "./validation-error
 import { lazyCompile } from "./protocol-validator.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
-export type {
-  SessionCatalog,
-  SessionCatalogCapabilities,
-  SessionCatalogDescriptor,
-  SessionCatalogHost,
-  SessionCatalogSession,
-  SessionCatalogTranscriptItem,
-  SessionsCatalogArchiveParams,
-  SessionsCatalogArchiveResult,
-  SessionsCatalogContinueParams,
-  SessionsCatalogContinueResult,
-  SessionsCatalogListParams,
-  SessionsCatalogListResult,
-  SessionsCatalogReadParams,
-  SessionsCatalogReadResult,
-} from "./schema/sessions-catalog.js";
+export * from "./migration-api.js";
+export type * from "./public-session-catalog.js";
 import {
   AgentEventSchema,
   AuditActivityAgentRunV1Schema,
@@ -270,15 +256,6 @@ import {
   HelloOkSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
-  MAX_MEMORY_MIGRATION_ITEMS,
-  MemoryMigrationItemSchema,
-  MemoryMigrationItemStatusSchema,
-  MemoryMigrationProviderPlanSchema,
-  MemoryMigrationSummarySchema,
-  MigrationsMemoryApplyParamsSchema,
-  MigrationsMemoryApplyResultSchema,
-  MigrationsMemoryPlanParamsSchema,
-  MigrationsMemoryPlanResultSchema,
   TerminalAckResultSchema,
   TerminalAttachParamsSchema,
   TerminalAttachResultSchema,
@@ -842,8 +819,6 @@ export const validateExecApprovalsNodeGetParams = lazyCompile(ExecApprovalsNodeG
 export const validateExecApprovalsNodeSetParams = lazyCompile(ExecApprovalsNodeSetParamsSchema);
 export const validateExecApprovalsNodeSnapshot = lazyCompile(ExecApprovalsNodeSnapshotSchema);
 export const validateLogsTailParams = lazyCompile(LogsTailParamsSchema);
-export const validateMigrationsMemoryPlanParams = lazyCompile(MigrationsMemoryPlanParamsSchema);
-export const validateMigrationsMemoryApplyParams = lazyCompile(MigrationsMemoryApplyParamsSchema);
 export const validateTerminalOpenParams = lazyCompile(TerminalOpenParamsSchema);
 export const validateTerminalInputParams = lazyCompile(TerminalInputParamsSchema);
 export const validateTerminalResizeParams = lazyCompile(TerminalResizeParamsSchema);
@@ -1229,15 +1204,6 @@ export {
   CronRunsParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
-  MAX_MEMORY_MIGRATION_ITEMS,
-  MemoryMigrationItemStatusSchema,
-  MemoryMigrationItemSchema,
-  MemoryMigrationSummarySchema,
-  MemoryMigrationProviderPlanSchema,
-  MigrationsMemoryPlanParamsSchema,
-  MigrationsMemoryPlanResultSchema,
-  MigrationsMemoryApplyParamsSchema,
-  MigrationsMemoryApplyResultSchema,
   TerminalOpenParamsSchema,
   TerminalOpenResultSchema,
   TerminalInputParamsSchema,
@@ -1663,13 +1629,6 @@ export type {
   ExecApprovalResolveParams,
   LogsTailParams,
   LogsTailResult,
-  MemoryMigrationItemStatus,
-  MemoryMigrationItem,
-  MemoryMigrationProviderPlan,
-  MigrationsMemoryPlanParams,
-  MigrationsMemoryPlanResult,
-  MigrationsMemoryApplyParams,
-  MigrationsMemoryApplyResult,
   TerminalOpenParams,
   TerminalOpenResult,
   TerminalInputParams,

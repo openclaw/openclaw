@@ -305,34 +305,6 @@ export function applyMigrationPluginSelection(
   return applyMigrationSelectedPluginItemIds(plan, selectedIds);
 }
 
-/** Applies an exact item-id selection to planned/conflicting migration items. */
-export function applyMigrationItemSelection(
-  plan: MigrationPlan,
-  selectedItemIds: readonly string[] | undefined,
-): MigrationPlan {
-  if (selectedItemIds === undefined) {
-    return plan;
-  }
-  const selectable = plan.items.filter(
-    (item) => item.status === "planned" || item.status === "conflict",
-  );
-  const selectableIds = new Set(selectable.map((item) => item.id));
-  const unknown = uniqueStrings(selectedItemIds).filter((id) => !selectableIds.has(id));
-  if (unknown.length > 0) {
-    throw new Error(
-      `Unknown or unavailable migration item ids: ${formatSelectionRefList(unknown)}.`,
-    );
-  }
-  const selected = new Set(selectedItemIds);
-  const items = plan.items.map((item) => {
-    if (!selectableIds.has(item.id) || selected.has(item.id)) {
-      return item;
-    }
-    return markMigrationItemSkipped(item, MIGRATION_NOT_SELECTED_REASON);
-  });
-  return { ...plan, items, summary: summarizeMigrationItems(items) };
-}
-
 /** Marks unselected plugin items skipped and filters matching Codex plugin config writes. */
 export function applyMigrationSelectedPluginItemIds(
   plan: MigrationPlan,

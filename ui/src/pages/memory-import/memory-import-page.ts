@@ -1,8 +1,11 @@
 import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
+import type {
+  MigrationsMemoryApplyResult,
+  MigrationsMemoryPlanResult,
+} from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { MigrationsMemoryApplyResult, MigrationsMemoryPlanResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";

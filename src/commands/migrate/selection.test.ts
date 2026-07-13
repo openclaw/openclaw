@@ -3,8 +3,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
+import { applyMigrationItemSelection } from "./item-selection.js";
 import {
-  applyMigrationItemSelection,
   applyMigrationPluginSelection,
   applyMigrationSelectedPluginItemIds,
   applyMigrationSelectedSkillItemIds,
@@ -187,12 +187,7 @@ describe("applyMigrationItemSelection", () => {
 
     expectItemStatus(selected.items, "memory:one", "skipped", MIGRATION_NOT_SELECTED_REASON);
     expectItemStatus(selected.items, "memory:two", "planned");
-    expectItemStatus(
-      selected.items,
-      "memory:existing",
-      "skipped",
-      MIGRATION_NOT_SELECTED_REASON,
-    );
+    expectItemStatus(selected.items, "memory:existing", "skipped", MIGRATION_NOT_SELECTED_REASON);
     expectSummaryFields(selected.summary, { planned: 1, skipped: 2, conflicts: 0 });
   });
 

@@ -145,8 +145,8 @@ describe("copyMigrationFileItem", () => {
       { overwrite: true },
     );
 
-    expect(first.status).toBe("migrated");
-    expect(second.status).toBe("migrated");
+    expect(first.status, first.reason).toBe("migrated");
+    expect(second.status, second.reason).toBe("migrated");
     const firstBackup = first.details?.backupPath;
     const secondBackup = second.details?.backupPath;
     if (typeof firstBackup !== "string" || typeof secondBackup !== "string") {

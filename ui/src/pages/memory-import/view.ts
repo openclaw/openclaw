@@ -5,7 +5,7 @@ import type {
   MemoryMigrationProviderPlan,
   MigrationsMemoryApplyResult,
   MigrationsMemoryPlanResult,
-} from "../../api/types.ts";
+} from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import "../../components/modal-dialog.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";

@@ -29,43 +29,12 @@ import {
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { NODE_PAIR_GATEWAY_METHODS } from "./server-methods-node-methods.js";
+import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
 import type {
   GatewayRequestHandler,
-  GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
-
-function lazyHandlerModule<T>(
-  loadModule: () => Promise<T>,
-  selectHandlers: (module: T) => GatewayRequestHandlers,
-): () => Promise<GatewayRequestHandlers> {
-  let handlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  // Gateway starts advertise the method table before most handler modules are needed; cache the
-  // first import promise so concurrent calls to the same method family share one load.
-  return () => (handlersPromise ??= loadModule().then(selectHandlers));
-}
-
-function createLazyCoreHandlers(params: {
-  methods: readonly string[];
-  loadHandlers: () => Promise<GatewayRequestHandlers>;
-}): GatewayRequestHandlers {
-  return Object.fromEntries(
-    params.methods.map((method) => [
-      method,
-      async (opts: GatewayRequestHandlerOptions) => {
-        const handlers = await params.loadHandlers();
-        const handler = handlers[method];
-        if (!handler) {
-          // Descriptor drift should fail loudly: advertised core methods must exist in the
-          // loaded family module once the lazy boundary resolves.
-          throw new Error(`lazy gateway handler not found: ${method}`);
-        }
-        await handler(opts);
-      },
-    ]),
-  );
-}
 
 const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),

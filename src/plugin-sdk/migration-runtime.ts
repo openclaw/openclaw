@@ -110,15 +110,11 @@ export function withCachedMigrationConfigRuntime(
   };
 }
 
-async function exists(filePath: string): Promise<boolean> {
-  return await pathExists(filePath);
-}
-
 async function backupExistingMigrationTarget(
   target: string,
   reportDir: string,
 ): Promise<string | undefined> {
-  if (!(await exists(target))) {
+  if (!(await pathExists(target))) {
     return undefined;
   }
   const backupRoot = path.join(reportDir, "item-backups");
@@ -244,7 +240,7 @@ async function resolveUniqueArchivePath(
   const parsed = path.parse(relativePath);
   let candidate = path.join(archiveRoot, relativePath);
   let index = 2;
-  while (await exists(candidate)) {
+  while (await pathExists(candidate)) {
     const filename = `${parsed.name}-${index}${parsed.ext}`;
     candidate = path.join(archiveRoot, parsed.dir, filename);
     index += 1;
@@ -299,7 +295,7 @@ export async function copyMigrationFileItem(
     return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);
   }
   try {
-    const targetExists = await exists(item.target);
+    const targetExists = await pathExists(item.target);
     if (targetExists && !opts.overwrite) {
       return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
     }
