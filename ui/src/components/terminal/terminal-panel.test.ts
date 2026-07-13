@@ -1,9 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import type { OpenClawTerminalPanel as OpenClawTerminalPanelType } from "./terminal-panel.ts";
 
 type CreateOptions = {
   parent: HTMLElement;
@@ -12,12 +11,16 @@ type CreateOptions = {
   onResize?: (size: { columns: number; rows: number }) => void;
 };
 
-const createGhosttyTerminalMock = vi.hoisted(() =>
-  vi.fn<(options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>>(),
-);
+type CreateGhosttyTerminalMock = Mock<
+  (options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>
+>;
+type TerminalFactory = typeof import("./terminal-runtime.ts").createIsolatedGhosttyTerminal;
+
+const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 
 function createTerminalController(dispose: () => void = vi.fn()) {
   return {
+    readOnly: false,
     terminal: {
       cols: 100,
       rows: 30,
@@ -27,6 +30,9 @@ function createTerminalController(dispose: () => void = vi.fn()) {
     },
     write: vi.fn(),
     fit: vi.fn(),
+    resize: vi.fn(),
+    setReadOnly: vi.fn(),
+    attach: vi.fn(),
     dispose,
   };
 }
@@ -49,26 +55,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-vi.mock("./terminal-runtime.ts", () => {
-  return { createIsolatedGhosttyTerminal: createGhosttyTerminalMock };
-});
-
-// Other UI tests import the production panel without this file's runtime mock.
-// A query gives this file a fresh panel without resetting concurrent test modules.
-// @ts-expect-error -- Vite resolves test-only module queries.
-const { OpenClawTerminalPanel } = await import("./terminal-panel.ts?terminal-panel-test");
+import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-${crypto.randomUUID()}`;
 
-// Keep the mounted panel and i18n manager in the current module graph when
-// the non-isolated runner has retained an earlier production registration.
-class TestTerminalPanel extends OpenClawTerminalPanel {}
+// The full non-isolated UI suite can import the production panel before this
+// test. Override its factory instead of relying on a module mock import order.
+class TestTerminalPanel extends OpenClawTerminalPanel {
+  protected override createTerminal = createGhosttyTerminalMock as unknown as TerminalFactory;
+}
 
 customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
-
-function createPanel(): OpenClawTerminalPanelType {
-  return document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanelType;
-}
 
 describe("OpenClawTerminalPanel", () => {
   beforeEach(async () => {
@@ -87,18 +84,7 @@ describe("OpenClawTerminalPanel", () => {
     let createOptions: CreateOptions | undefined;
     createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {
       createOptions = options;
-      return {
-        terminal: {
-          cols: 100,
-          rows: 30,
-          viewportY: 0,
-          write: vi.fn(),
-          focus: vi.fn(),
-        },
-        write: vi.fn(),
-        fit: vi.fn(),
-        dispose: vi.fn(),
-      };
+      return createTerminalController();
     });
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
@@ -114,7 +100,7 @@ describe("OpenClawTerminalPanel", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = createPanel();
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = client;
     panel.agentId = "ops";
     panel.available = true;
@@ -154,20 +140,7 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   it("fullscreen mode auto-opens without dock chrome and survives last-tab close", async () => {
-    createGhosttyTerminalMock.mockImplementation(async () => {
-      return {
-        terminal: {
-          cols: 100,
-          rows: 30,
-          viewportY: 0,
-          write: vi.fn(),
-          focus: vi.fn(),
-        },
-        write: vi.fn(),
-        fit: vi.fn(),
-        dispose: vi.fn(),
-      };
-    });
+    createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
       request: async <T>(method: string, params?: unknown) => {
@@ -182,7 +155,7 @@ describe("OpenClawTerminalPanel", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = createPanel();
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = client;
     panel.available = true;
     panel.fullscreen = true;
@@ -240,7 +213,7 @@ describe("OpenClawTerminalPanel", () => {
         };
       },
     };
-    const panel = createPanel();
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -303,7 +276,7 @@ describe("OpenClawTerminalPanel", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = createPanel();
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = oldClient;
     panel.available = true;
     document.body.append(panel);
@@ -339,7 +312,7 @@ describe("OpenClawTerminalPanel", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = createPanel();
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -374,7 +347,7 @@ describe("OpenClawTerminalPanel", () => {
         (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
       addEventListener: () => () => {},
     };
-    const panel = createPanel();
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -396,7 +369,7 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   it("removes a tab host even when controller disposal throws", () => {
-    const panel = createPanel();
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     const host = document.createElement("div");
     document.body.append(host);
     const dispose = vi.fn(() => {
@@ -426,7 +399,7 @@ describe("OpenClawTerminalPanel", () => {
         };
       },
     };
-    const panel = createPanel();
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = client;
     panel.available = true;
     document.body.append(panel);

@@ -147,6 +147,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private lifecycleSyncToken = 0;
   private resizeCleanup: (() => void) | null = null;
   private tabSeq = 0;
+  protected createTerminal = createIsolatedGhosttyTerminal;
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   // Re-clamp a dock sized on a larger window so the header/resizer never end
@@ -419,8 +420,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     rows: number;
   }> {
     const connection = this.connectionFor(operation);
-    // Captured so the cancelled-open cleanup can close the session even if a
-    // teardown swaps this.connection while the open/attach RPC is in flight.
+    // Preserve the connection so cancelled-open cleanup still closes the in-flight session.
     const host = document.createElement("div");
     host.className = "tp-host";
     const id = `tab-${++this.tabSeq}`;
@@ -438,7 +438,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     const tabRef = { current: undefined as TerminalTabState | undefined };
     let controller: GhosttyTerminalController;
     try {
-      controller = await createIsolatedGhosttyTerminal({
+      controller = await this.createTerminal({
         parent: host,
         readOnly: false,
         terminalOptions: {
