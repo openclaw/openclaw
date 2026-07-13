@@ -1,6 +1,7 @@
 // Gateway methods expose session files and workspace browsing.
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { detectMime } from "@openclaw/media-core/mime";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -39,6 +40,16 @@ import {
   type WorkspaceDirEntry,
   type WorkspaceFileUpdateResult,
 } from "./workspace-fs.js";
+
+// Keep browser previews to formats supported by the Control UI's inline image
+// renderer. Native workspace clients own a broader, separate format policy.
+const BROWSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
 type FileKind = "modified" | "read";
 
@@ -326,12 +337,27 @@ async function toSessionFileEntry(
       entry.size = read.stat.size;
       entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
       const text = decodeUtf8Strict(read.buffer);
-      entry.content = text ?? read.buffer.toString("utf8");
-      // The hash doubles as the sessions.files.set CAS token, so it is only
-      // issued for strict-UTF-8 text; binary previews stay read-only because
-      // re-encoding their replacement characters would corrupt the file.
       if (text !== undefined) {
+        entry.mimeType = "text/plain";
+        entry.contentEncoding = "utf8";
+        entry.previewKind = "text";
+        entry.content = text;
         entry.hash = createHash("sha256").update(read.buffer).digest("hex");
+      } else {
+        // Content sniffing, not the filename, decides whether binary bytes can
+        // leave the Gateway as an inline image preview.
+        const mimeType = await detectMime({ buffer: read.buffer });
+        if (mimeType && BROWSER_PREVIEW_IMAGE_MIME_TYPES.has(mimeType)) {
+          entry.mimeType = mimeType;
+          entry.contentEncoding = "base64";
+          entry.previewKind = "image";
+          entry.content = read.buffer.toString("base64");
+        } else {
+          entry.previewKind = "unsupported";
+          if (mimeType) {
+            entry.mimeType = mimeType;
+          }
+        }
       }
     }
   }
@@ -665,12 +691,12 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     const result = await findSessionFile(params);
-    if (typeof result.file?.content !== "string") {
-      if (result.file && !result.file.missing) {
-        respondSessionFileTooLarge(respond, result.file, params.path);
-        return;
-      }
+    if (!result.file || result.file.missing) {
       respondSessionFileNotFound(respond, params.path);
+      return;
+    }
+    if (typeof result.file.content !== "string" && result.file.previewKind !== "unsupported") {
+      respondSessionFileTooLarge(respond, result.file, params.path);
       return;
     }
     respond(true, {

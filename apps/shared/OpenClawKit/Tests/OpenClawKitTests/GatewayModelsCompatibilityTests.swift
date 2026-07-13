@@ -48,4 +48,18 @@ struct GatewayModelsCompatibilityTests {
         #expect(params.fastmodevalue == nil)
         #expect(legacyParams.fastmode == true)
     }
+
+    @Test
+    func `agents workspace encoding remains AnyCodable`() {
+        let file = AgentsWorkspaceFile(
+            path: "notes.txt",
+            name: "notes.txt",
+            size: 5,
+            updatedatms: 1,
+            mimetype: "text/plain",
+            encoding: AnyCodable("utf8"),
+            content: "hello")
+
+        #expect(file.encoding.value as? String == "utf8")
+    }
 }

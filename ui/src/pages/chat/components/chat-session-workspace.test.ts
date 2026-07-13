@@ -136,4 +136,113 @@ describe("openSessionWorkspaceFile", () => {
     expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({ kind: "file" });
     expect(handleOpenSidebar.mock.calls[0]?.[0]?.edit).toBeUndefined();
   });
+
+  it("opens base64 session images in the existing image sidebar", async () => {
+    const handleOpenSidebar = vi.fn();
+    const state = {
+      client: {},
+      connected: true,
+      handleOpenSidebar,
+      hello: gatewayHello([]),
+      sessionKey: "agent:main:current",
+      sessions: {
+        getFile: vi.fn().mockResolvedValue({
+          sessionKey: "agent:main:current",
+          file: {
+            path: "screenshots/result.png",
+            name: "result.png",
+            kind: "read",
+            missing: false,
+            mimeType: "image/png",
+            contentEncoding: "base64",
+            previewKind: "image",
+            content: "iVBORw0KGgo=",
+          },
+        }),
+      },
+    } as unknown as SessionWorkspaceHost;
+
+    openSessionWorkspaceFile(state, { path: "screenshots/result.png" });
+
+    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
+    expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({
+      kind: "image",
+      mimeType: "image/png",
+      src: "data:image/png;base64,iVBORw0KGgo=",
+      title: "result.png",
+    });
+  });
+
+  it("opens unsupported session files as metadata without treating bytes as text", async () => {
+    const handleOpenSidebar = vi.fn();
+    const state = {
+      client: {},
+      connected: true,
+      handleOpenSidebar,
+      hello: gatewayHello([]),
+      sessionKey: "agent:main:current",
+      sessions: {
+        getFile: vi.fn().mockResolvedValue({
+          sessionKey: "agent:main:current",
+          file: {
+            path: "build/cache.db",
+            name: "cache.db",
+            kind: "read",
+            missing: false,
+            mimeType: "application/x-sqlite3",
+            previewKind: "unsupported",
+            size: 8192,
+            updatedAtMs: 1_700_000_000_000,
+          },
+        }),
+      },
+    } as unknown as SessionWorkspaceHost;
+
+    openSessionWorkspaceFile(state, { path: "build/cache.db" });
+
+    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
+    expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({
+      kind: "markdown",
+      title: "cache.db",
+    });
+    expect(handleOpenSidebar.mock.calls[0]?.[0]?.content).toContain(
+      "This file is not previewable inline.",
+    );
+    expect(handleOpenSidebar.mock.calls[0]?.[0]?.content).toContain("application/x-sqlite3");
+    expect(handleOpenSidebar.mock.calls[0]?.[0]?.content).toContain("bytes");
+  });
+
+  it("escapes unsupported filenames before rendering metadata as Markdown", async () => {
+    const handleOpenSidebar = vi.fn();
+    const hostilePath = " build/`\n\n![remote](https://example.com/x) report~~old~~&amp;.db ";
+    const state = {
+      client: {},
+      connected: true,
+      handleOpenSidebar,
+      hello: gatewayHello([]),
+      sessionKey: "agent:main:current",
+      sessions: {
+        getFile: vi.fn().mockResolvedValue({
+          sessionKey: "agent:main:current",
+          file: {
+            path: hostilePath,
+            name: "cache.db",
+            kind: "read",
+            missing: false,
+            mimeType: "application/octet-stream",
+            previewKind: "unsupported",
+          },
+        }),
+      },
+    } as unknown as SessionWorkspaceHost;
+
+    openSessionWorkspaceFile(state, { path: hostilePath });
+
+    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
+    const content = handleOpenSidebar.mock.calls[0]?.[0]?.content ?? "";
+    expect(content).toContain(
+      "``  build/`\\n\\n![remote](https://example.com/x) report~~old~~&amp;.db  ``",
+    );
+    expect(content).not.toContain("\n\n![remote]");
+  });
 });

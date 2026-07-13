@@ -75,6 +75,25 @@ describe("editorOpenUrl", () => {
 });
 
 describe("markdown sidebar", () => {
+  it("uses a supplied title for metadata previews", () => {
+    const container = document.createElement("div");
+    render(
+      renderMarkdownSidebar({
+        content: {
+          kind: "markdown",
+          title: "cache.db",
+          content: "This file is not previewable inline.",
+        },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".sidebar-title")?.textContent).toBe("cache.db");
+  });
+
   it("renders workspace file links in markdown previews", () => {
     const container = document.createElement("div");
     render(

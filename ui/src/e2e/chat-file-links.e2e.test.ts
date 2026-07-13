@@ -132,4 +132,144 @@ describeControlUiE2e("Control UI chat file links", () => {
       await context.close();
     }
   });
+
+  it("previews text and browser-safe images while falling back for BMP", async () => {
+    const png = fs.readFileSync(path.resolve(process.cwd(), "ui/public/apple-touch-icon.png"));
+    expect(png.byteLength).toBeLessThan(256 * 1024);
+    const pngBase64 = png.toString("base64");
+    const responses = {
+      "/workspace/notes.txt": {
+        root: "/workspace",
+        sessionKey: "main",
+        file: {
+          content: "Exact-head workspace preview proof.\n",
+          contentEncoding: "utf8",
+          hash: "a".repeat(64),
+          kind: "read",
+          mimeType: "text/plain",
+          missing: false,
+          name: "notes.txt",
+          path: "notes.txt",
+          previewKind: "text",
+          size: 36,
+          workspacePath: "notes.txt",
+        },
+      },
+      "/workspace/openclaw-5920-bytes.png": {
+        root: "/workspace",
+        sessionKey: "main",
+        file: {
+          content: pngBase64,
+          contentEncoding: "base64",
+          kind: "read",
+          mimeType: "image/png",
+          missing: false,
+          name: "openclaw-5920-bytes.png",
+          path: "openclaw-5920-bytes.png",
+          previewKind: "image",
+          size: png.byteLength,
+          workspacePath: "openclaw-5920-bytes.png",
+        },
+      },
+      "/workspace/unsupported-binary.bmp": {
+        root: "/workspace",
+        sessionKey: "main",
+        file: {
+          kind: "read",
+          mimeType: "image/bmp",
+          missing: false,
+          name: "unsupported-binary.bmp",
+          path: "unsupported-binary.bmp",
+          previewKind: "unsupported",
+          size: 4096,
+          workspacePath: "unsupported-binary.bmp",
+        },
+      },
+    } satisfies Record<string, Record<string, unknown>>;
+    const context = await browser.newContext({
+      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+      viewport: { height: 900, width: 1280 },
+    });
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(15_000);
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.files.get": {
+            cases: Object.entries(responses).map(([requestPath, response]) => ({
+              match: { path: requestPath },
+              response,
+            })),
+          },
+          "sessions.files.list": {
+            browser: {
+              entries: Object.keys(responses).map((requestPath) => {
+                const filePath = requestPath.slice("/workspace/".length);
+                return { kind: "file", name: filePath, path: filePath };
+              }),
+              path: "",
+            },
+            files: [],
+            root: "/workspace",
+            sessionKey: "main",
+          },
+        },
+      });
+      const openPreview = async (filePath: string) => {
+        const fileRow = page
+          .locator(".chat-workspace-rail__browser .chat-workspace-rail__file")
+          .filter({ hasText: filePath });
+        await fileRow.locator(".chat-workspace-rail__file-open").click();
+      };
+      const closePreview = async () => {
+        await page.locator(".sidebar-panel .sidebar-header button").click();
+        await page.locator(".sidebar-panel").waitFor({ state: "hidden" });
+      };
+
+      await page.goto(`${server.baseUrl}chat`);
+      await page.locator(".chat-workspace-toggle").click();
+      await page.getByRole("button", { name: "Collapse session workspace" }).waitFor();
+
+      await openPreview("notes.txt");
+      await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
+      expect(await page.locator(".cm-content").textContent()).toContain(
+        "Exact-head workspace preview proof.",
+      );
+      await page.screenshot({ path: path.join(artifactDir, "04-text-preview.png") });
+      await closePreview();
+
+      await openPreview("openclaw-5920-bytes.png");
+      const image = page.locator('.chat-tool-card__preview[data-kind="image"] img');
+      await image.waitFor({ state: "visible" });
+      expect(await image.getAttribute("src")).toBe(`data:image/png;base64,${pngBase64}`);
+      await page.screenshot({ path: path.join(artifactDir, "05-png-preview.png") });
+      await closePreview();
+
+      await openPreview("unsupported-binary.bmp");
+      const fallback = page.locator(".sidebar-markdown-shell");
+      await fallback.waitFor({ state: "visible" });
+      const fallbackText = await fallback.textContent();
+      expect(fallbackText).toContain("This file is not previewable inline.");
+      expect(fallbackText).toContain("image/bmp");
+      await page.screenshot({ path: path.join(artifactDir, "06-bmp-fallback.png") });
+
+      expect(
+        (await gateway.getRequests("sessions.files.get")).map((request) => request.params),
+      ).toEqual([
+        { agentId: "main", path: "/workspace/notes.txt", sessionKey: "main" },
+        {
+          agentId: "main",
+          path: "/workspace/openclaw-5920-bytes.png",
+          sessionKey: "main",
+        },
+        {
+          agentId: "main",
+          path: "/workspace/unsupported-binary.bmp",
+          sessionKey: "main",
+        },
+      ]);
+    } finally {
+      await context.close();
+    }
+  });
 });

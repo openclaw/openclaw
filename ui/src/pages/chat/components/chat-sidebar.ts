@@ -46,6 +46,7 @@ export type SidebarFullMessageRequest = {
 
 type MarkdownSidebarContent = {
   kind: "markdown";
+  title?: string;
   content: string;
   rawText?: string | null;
   fullMessageRequest?: SidebarFullMessageRequest;
@@ -548,7 +549,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
           : content?.kind === "session-diff"
             ? t("chat.sessionDiff.title")
             : content?.kind === "markdown"
-              ? "Markdown Preview"
+              ? content.title?.trim() || "Markdown Preview"
               : "Tool Details";
   return html`
     <div class="sidebar-panel">

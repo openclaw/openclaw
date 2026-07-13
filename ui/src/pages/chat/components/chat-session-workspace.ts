@@ -5,7 +5,11 @@ import {
   type GatewayBrowserClient,
   type GatewayHelloOk,
 } from "../../../api/gateway.ts";
-import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import type {
+  ArtifactDownloadResult,
+  SessionWorkspaceGetResult,
+  SessionWorkspaceListResult,
+} from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import {
   normalizeChatWorkspaceDock,
@@ -188,6 +192,49 @@ function languageForFile(name: string): string {
 
 function basenameForPath(filePath: string): string {
   return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
+}
+
+function formatMarkdownCodeSpan(value: string): string {
+  // Markdown finds block boundaries before inline spans, so filenames must stay on one logical line.
+  const singleLineValue = value.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+  const longestBacktickRun = Math.max(
+    0,
+    ...(singleLineValue.match(/`+/g)?.map((run) => run.length) ?? []),
+  );
+  const delimiter = "`".repeat(longestBacktickRun + 1);
+  const hasBoundarySpaces = singleLineValue.startsWith(" ") && singleLineValue.endsWith(" ");
+  const isOnlySpaces = /^ +$/.test(singleLineValue);
+  const padding =
+    singleLineValue.startsWith("`") ||
+    singleLineValue.endsWith("`") ||
+    (hasBoundarySpaces && !isOnlySpaces)
+      ? " "
+      : "";
+  return `${delimiter}${padding}${singleLineValue}${padding}${delimiter}`;
+}
+
+function unsupportedFileSidebarContent(
+  file: SessionWorkspaceGetResult["file"],
+  fallbackPath: string,
+): SidebarContent {
+  const filePath = file.workspacePath || file.path || fallbackPath;
+  const lines = [
+    "This file is not previewable inline.",
+    "",
+    `- Path: ${formatMarkdownCodeSpan(filePath)}`,
+    file.mimeType ? `- Type: \`${file.mimeType}\`` : null,
+    typeof file.size === "number" ? `- Size: ${file.size.toLocaleString()} bytes` : null,
+    typeof file.updatedAtMs === "number"
+      ? `- Updated: ${new Date(file.updatedAtMs).toISOString()}`
+      : null,
+  ].filter((line): line is string => line !== null);
+  const content = lines.join("\n");
+  return {
+    kind: "markdown",
+    title: file.name || basenameForPath(filePath),
+    content,
+    rawText: content,
+  };
 }
 
 export function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
@@ -404,10 +451,30 @@ function openFile(
       }),
     (result) => {
       const file = result.file;
-      if (!file || typeof file.content !== "string") {
+      if (!file) {
         return null;
       }
       const name = file.name || basenameForPath(path);
+      if (
+        file.previewKind === "image" &&
+        file.contentEncoding === "base64" &&
+        typeof file.content === "string" &&
+        file.mimeType?.startsWith("image/")
+      ) {
+        return {
+          kind: "image",
+          title: name,
+          src: `data:${file.mimeType};base64,${file.content}`,
+          mimeType: file.mimeType,
+          rawText: file.workspacePath || file.path || path,
+        };
+      }
+      if (file.previewKind === "unsupported") {
+        return unsupportedFileSidebarContent(file, path);
+      }
+      if (typeof file.content !== "string") {
+        return null;
+      }
       const canEdit =
         typeof file.hash === "string" &&
         hasUniformLineEndings(file.content) &&
