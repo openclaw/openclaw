@@ -158,6 +158,7 @@ import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-genera
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
+import { createWorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import { createWorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
@@ -171,6 +172,9 @@ const loadGatewayModelCatalogModule = createLazyRuntimeModule(
 );
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
   () => import("./worker-environments/runtime.js"),
+);
+const loadWorkerInferenceRuntimeModule = createLazyRuntimeModule(
+  () => import("./worker-environments/inference-runtime.js"),
 );
 const loadWorkerTunnelRuntimeModule = createLazyRuntimeModule(
   () => import("./worker-environments/tunnel.js"),
@@ -958,6 +962,31 @@ export async function startGatewayServer(
     workerEnvironmentStore && shouldStartWorkerEnvironmentService
       ? (await loadWorkerTunnelRuntimeModule()).createWorkerTunnelManager()
       : undefined;
+  // Freeze restart-owned identities before any new attach can advance its environment.
+  // Only an exact pre-start owner may seed an ephemeral ACK after gateway state loss.
+  const workerEnvironmentRecordsAtStartup = workerEnvironmentStore?.list() ?? [];
+  const workerStartupBindings = workerEnvironmentRecordsAtStartup.flatMap((record) =>
+    record.state === "attached" && record.attachedSessionIds.length === 1
+      ? [
+          {
+            environmentId: record.environmentId,
+            runEpoch: record.ownerEpoch,
+            sessionId: record.attachedSessionIds[0]!,
+          },
+        ]
+      : [],
+  );
+  const workerStartupOwners = new Map(
+    workerStartupBindings.map((binding) => [binding.environmentId, binding.runEpoch] as const),
+  );
+  const workerLiveEvents =
+    workerEnvironmentStore && shouldStartWorkerEnvironmentService
+      ? createWorkerLiveEventReceiver({
+          getConfig: getRuntimeConfig,
+          startupBindings: workerStartupBindings,
+          startupOwners: workerStartupOwners,
+        })
+      : undefined;
   const workerEnvironmentService =
     workerEnvironmentStore && shouldStartWorkerEnvironmentService
       ? createWorkerEnvironmentService({
@@ -970,6 +999,11 @@ export async function startGatewayServer(
           applyTranscriptCommit: createWorkerTranscriptCommitter({
             getConfig: getRuntimeConfig,
           }).commit,
+          executeInference: async (params) => {
+            const workerInferenceRuntime = await loadWorkerInferenceRuntimeModule();
+            return await workerInferenceRuntime.executeWorkerInference(params);
+          },
+          ...(workerLiveEvents ? { liveEvents: workerLiveEvents } : {}),
           resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
             const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
             return await workerEnvironmentRuntime.resolveWorkerSshIdentity({
@@ -2237,7 +2271,10 @@ export async function startGatewayServer(
           (agentId) => terminalLaunchPolicy.resolve(agentId).ok,
         );
       },
-      commitTerminalConfig: terminalLaunchPolicy.commitConfig,
+      commitTerminalConfig: (nextConfig) => {
+        terminalLaunchPolicy.commitConfig();
+        workerLiveEvents?.rebindAll(nextConfig);
+      },
       acceptTerminalConfig: terminalLaunchPolicy.acceptConfig,
       channelManager,
       activateRuntimeSecrets,

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -1264,6 +1265,32 @@ describe("handleSendChat", () => {
     );
   });
 
+  it.each(["stop", "esc", "abort", "wait", "exit"])(
+    "sends the idle conversational word %s as a normal message",
+    async (message) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return { runId: `idle-${message}`, status: "started" };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        chatMessage: message,
+        sessionKey: "agent:main",
+      });
+
+      await handleSendChat(host);
+
+      expect(request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ message, sessionKey: "agent:main" }),
+      );
+      expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+      expect(host.chatMessage).toBe("");
+    },
+  );
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -2456,6 +2483,49 @@ describe("handleSendChat", () => {
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
+  it("sends pasted plain text attachments as file payloads", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const text = "large paste\n" + "x".repeat(1100);
+    const file = new File([text], "pasted-text-123.txt", { type: "text/plain" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "pasted-text-att",
+        mimeType: "text/plain",
+        fileName: "pasted-text-123.txt",
+        sizeBytes: file.size,
+      },
+      dataUrl: `data:text/plain;base64,${btoa(text)}`,
+      file,
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatAttachments: [attachment],
+      chatMessage: "summarize this",
+    });
+
+    await handleSendChat(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.message).toBe("summarize this");
+    expect(payload.attachments).toStrictEqual([
+      {
+        type: "file",
+        mimeType: "text/plain",
+        fileName: "pasted-text-123.txt",
+        content: btoa(text),
+      },
+    ]);
+  });
+
   it("does not cross-gate case-distinct opaque Matrix sessions", async () => {
     const otherSessionSwitch = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
@@ -2592,9 +2662,9 @@ describe("handleSendChat", () => {
 
     const send = handleSendChat(host);
     await Promise.resolve();
-    const queuedId = host.chatQueue[0]?.id;
-    expect(queuedId).toEqual(expect.any(String));
-    removeQueuedMessage(host, queuedId);
+    const queued = expectDefined(host.chatQueue[0], "queued pending send");
+    expect(queued.id).toEqual(expect.any(String));
+    removeQueuedMessage(host, queued.id);
 
     switchUpdate.resolve(false);
     await send;
@@ -7499,23 +7569,26 @@ describe("handleAbortChat", () => {
     expect(host.chatRunId).toBe("run-main");
   });
 
-  it("clears typed stop commands after aborting the active run", async () => {
-    const request = vi.fn(async () => ({ aborted: true }));
-    const host = makeHost({
-      client: { request } as unknown as ChatHost["client"],
-      chatRunId: "run-main",
-      chatMessage: "/stop",
-      sessionKey: "agent:main",
-    });
+  it.each(["/stop", "stop", "esc", "abort", "wait", "exit"])(
+    "clears the typed stop command %s after aborting the active run",
+    async (message) => {
+      const request = vi.fn(async () => ({ aborted: true }));
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        chatRunId: "run-main",
+        chatMessage: message,
+        sessionKey: "agent:main",
+      });
 
-    await handleSendChat(host);
+      await handleSendChat(host);
 
-    expect(request).toHaveBeenCalledWith("chat.abort", {
-      runId: "run-main",
-      sessionKey: "agent:main",
-    });
-    expect(host.chatMessage).toBe("");
-  });
+      expect(request).toHaveBeenCalledWith("chat.abort", {
+        runId: "run-main",
+        sessionKey: "agent:main",
+      });
+      expect(host.chatMessage).toBe("");
+    },
+  );
 
   it("queues the active run abort while disconnected", async () => {
     const host = makeHost({

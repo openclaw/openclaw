@@ -419,7 +419,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
   clients: Iterable<SharedGatewayAuthClient>;
   prepareTerminalConfig: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
   reconcileTerminalSessions: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
-  commitTerminalConfig: () => void;
+  commitTerminalConfig: (nextConfig: OpenClawConfig) => void;
   acceptTerminalConfig: (options: { retireRejectedRestart: boolean }) => void;
 };
 
@@ -1868,7 +1868,7 @@ export function startManagedGatewayConfigReloader(
         throw error;
       }
     },
-    onConfigApplied: () => params.commitTerminalConfig(),
+    onConfigApplied: (_plan, nextConfig) => params.commitTerminalConfig(nextConfig),
     onEffectiveConfigUnchanged: async (nextConfig, transactionOwnership, sourceConfig) => {
       if (!transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();

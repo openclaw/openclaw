@@ -1,4 +1,5 @@
 // Control UI tests cover chat flow behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
@@ -421,6 +422,30 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const commandRequests = await waitForRequests(gateway, "chat.send", 2);
       const commandParams = requireRecord(commandRequests[1]?.params);
       expect(commandParams.message).toBe(spacedPairCommand);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("sends idle stop aliases as ordinary chat messages", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      await composer.fill("wait");
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(sendRequest.params).message).toBe("wait");
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
     } finally {
       await closeBrowserContext(context);
     }
@@ -1775,6 +1800,46 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps a steerable queued message above the composer while a run is active", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const activePrompt = "keep this run active";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(activePrompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const queuedPrompt = "show this only above the composer";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
+      await page.getByRole("button", { name: "Queue message" }).click();
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
+      await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-thread").getByText(queuedPrompt).count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/steer-queue-composer-only.png`,
+          fullPage: true,
+        });
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("scrolls a delayed pending send into view before the ACK resolves", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -2591,8 +2656,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     const sessions = chatSessionListResponse();
-    sessions.sessions[0].label = "Short";
-    sessions.sessions[1].label =
+    const firstSession = expectDefined(sessions.sessions[0], "first chat session fixture");
+    const secondSession = expectDefined(sessions.sessions[1], "second chat session fixture");
+    firstSession.label = "Short";
+    secondSession.label =
       "Review and repair the intentionally overlong sidebar session title before navigation ".repeat(
         4,
       );
@@ -2646,12 +2713,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
         button: 0,
       });
-      await page
-        .locator(".sidebar-recent-session--active")
-        .getByText(sessions.sessions[1].label)
-        .waitFor({
-          timeout: 10_000,
-        });
+      await page.locator(".sidebar-recent-session--active").getByText(secondSession.label).waitFor({
+        timeout: 10_000,
+      });
 
       const activeRow = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-b"]',

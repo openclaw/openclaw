@@ -35,6 +35,7 @@ import {
   appendSqliteTranscriptMessage,
   applySqliteSessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements,
+  applySqliteSessionStoreProjection,
   appendSqliteExpectedSessionTranscriptTurn,
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
@@ -66,7 +67,6 @@ import {
   rollbackSqliteAgentHarnessSessionEntryLifecycle,
   rollbackSqlitePluginOwnedSessionEntryLifecycle,
   resetSqliteSessionEntryLifecycle,
-  updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,
@@ -110,6 +110,13 @@ import {
 } from "./transcript-tree.js";
 import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
 import type { GroupKeyResolution, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+
+export { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+export type {
+  SessionIdentityMutation,
+  SessionIdentityMutationListener,
+  SessionIdentityMutationTarget,
+} from "../../sessions/session-lifecycle-events.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -1505,7 +1512,7 @@ export async function updateSessionEntry(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryUpdateOptions = {},
 ): Promise<SessionEntry | null> {
-  return await updateSqliteSessionEntry(scope, update, options);
+  return await patchSqliteSessionEntry(scope, update, options);
 }
 
 export type RecordInboundSessionMetaParams = {
@@ -1845,6 +1852,26 @@ export async function applySessionEntryReplacements<T>(params: {
   skipMaintenance?: boolean;
 }): Promise<T> {
   return await applySqliteSessionEntryReplacements(params);
+}
+
+/**
+ * Applies a detached whole-store projection under the storage writer lane.
+ * Compatibility adapters use this to preserve callback serialization while
+ * steady-state runtime callers stay on row-level accessors.
+ */
+export async function applySessionStoreProjection<T>(params: {
+  activeSessionKey?: string;
+  agentId?: string;
+  skipMaintenance?: boolean;
+  storePath: string;
+  update: (store: Record<string, SessionEntry>) =>
+    | Promise<{ persist: boolean; result: T }>
+    | {
+        persist: boolean;
+        result: T;
+      };
+}): Promise<T> {
+  return await applySqliteSessionStoreProjection(params);
 }
 
 /**

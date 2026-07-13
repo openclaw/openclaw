@@ -1146,6 +1146,71 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `replacement invoke fails promptly while disconnect lifecycle is blocked`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invalidationGate = AsyncGate()
+        let invocations = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: ["system.which"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in
+                await invocations.record(request.id)
+                return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
+            },
+            onRouteInvalidated: { await invalidationGate.wait() })
+        let firstTask = try #require(session.latestTask())
+        try await waitUntil("receive loop armed before disconnect") {
+            firstTask.hasPendingReceiveHandler()
+        }
+
+        firstTask.emitReceiveFailure()
+        try await waitUntil("disconnect lifecycle blocked") {
+            await invalidationGate.hasStarted()
+        }
+        try await waitUntil("replacement transport connected") {
+            session.snapshotMakeCount() == 2
+        }
+        let replacementTask = try #require(session.latestTask())
+        try await waitUntil("replacement socket receiving") {
+            replacementTask.hasPendingReceiveHandler()
+        }
+        replacementTask.emitInvokeRequest(id: "during-lifecycle", command: "system.which")
+
+        try await waitUntil("lifecycle unavailable result") {
+            replacementTask.sentRequestCount(method: "node.invoke.result") == 1
+        }
+        let result = try #require(replacementTask.sentRequests(method: "node.invoke.result").first)
+        let params = try #require(result["params"] as? [String: Any])
+        let error = try #require(params["error"] as? [String: Any])
+        #expect(params["id"] as? String == "during-lifecycle")
+        #expect(params["ok"] as? Bool == false)
+        #expect(error["code"] as? String == OpenClawNodeErrorCode.unavailable.rawValue)
+        #expect(error["message"] as? String == "UNAVAILABLE: node lifecycle transition in progress")
+        #expect(await invocations.values() == [])
+
+        await invalidationGate.release()
+        await gateway.disconnect()
+    }
+
+    @Test
     func `disconnect cleanup finishes after an in flight connected callback`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -1850,6 +1915,49 @@ struct GatewayNodeSessionTests {
         #expect(blockedParams["ok"] as? Bool == false)
         let error = try #require(blockedParams["error"] as? [String: Any])
         #expect(error["code"] as? String == OpenClawNodeErrorCode.unavailable.rawValue)
+
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `node invoke result preserves structured worker payload`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["mcp"],
+            commands: ["mcp.tools.call.v1"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://example.invalid")),
+            credentials: .init(),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in
+                BridgeInvokeResponse(
+                    id: request.id,
+                    ok: true,
+                    payload: AnyCodable(["content": [["type": "text", "text": "worker-ok"]]]))
+            })
+        let task = try #require(session.latestTask())
+        task.emitInvokeRequest(id: "mcp-structured", command: "mcp.tools.call.v1")
+
+        try await waitUntil("structured invoke result") {
+            task.sentRequestCount(method: "node.invoke.result") == 1
+        }
+        let result = try #require(task.sentRequests(method: "node.invoke.result").first)
+        let params = try #require(result["params"] as? [String: Any])
+        let payload = try #require(params["payload"] as? [String: Any])
+        let content = try #require(payload["content"] as? [[String: Any]])
+        #expect(content.first?["text"] as? String == "worker-ok")
 
         await gateway.disconnect()
     }
