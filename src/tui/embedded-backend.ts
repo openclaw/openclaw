@@ -25,6 +25,7 @@ import {
   createSessionGoal,
   formatSessionGoalStatus,
   getSessionGoal,
+  updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
@@ -675,7 +676,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!result.ok) {
       throw new Error(result.error.message);
     }
-    return { ok: true as const, key: result.key, entry: result.entry };
+    return { ok: true as const, key: result.key, entry: result.entry, resolved: result.resolved };
   }
 
   async createSession(opts: TuiSessionCreateOptions) {
@@ -691,7 +692,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!result.ok) {
       throw new Error(result.error.message);
     }
-    return { ok: true as const, key: result.key, entry: result.entry };
+    return {
+      ok: true as const,
+      key: result.key,
+      entry: result.entry,
+      resolved: result.resolved,
+    };
   }
 
   private async runBtwTurn(params: {
@@ -809,14 +815,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
           storePath,
           objective,
           fallbackEntry,
+          actor: { type: "human" },
+          agentId: opts.agentId,
         });
         return { text: `Goal started: ${goal.objective}` };
+      }
+      case "edit": {
+        const objective = parsed.text.trim();
+        if (!objective) {
+          return { text: "Usage: /goal edit <objective>" };
+        }
+        const goal = await updateSessionGoalObjective({
+          sessionKey,
+          storePath,
+          objective,
+          actor: { type: "human" },
+          agentId: opts.agentId,
+        });
+        return { text: `Goal updated: ${goal.objective}` };
       }
       case "pause": {
         const goal = await updateSessionGoalStatus({
           sessionKey,
           storePath,
           status: "paused",
+          actor: { type: "human" },
+          agentId: opts.agentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         return { text: `Goal paused: ${goal.objective}` };
@@ -826,6 +850,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
           sessionKey,
           storePath,
           status: "active",
+          actor: { type: "human" },
+          agentId: opts.agentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         return { text: `Goal resumed: ${goal.objective}` };
@@ -836,6 +862,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
           sessionKey,
           storePath,
           status: "complete",
+          actor: { type: "human" },
+          agentId: opts.agentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         return { text: `Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}` };
@@ -846,17 +874,24 @@ export class EmbeddedTuiBackend implements TuiBackend {
           sessionKey,
           storePath,
           status: "blocked",
+          actor: { type: "human" },
+          agentId: opts.agentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         return { text: `Goal blocked: ${goal.objective}` };
       }
       case "clear": {
-        const removed = await clearSessionGoal({ sessionKey, storePath });
+        const removed = await clearSessionGoal({
+          sessionKey,
+          storePath,
+          actor: { type: "human" },
+          agentId: opts.agentId,
+        });
         return { text: removed ? "Goal cleared." : "No goal to clear." };
       }
       default:
         return {
-          text: "Usage: /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
+          text: "Usage: /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
         };
     }
   }

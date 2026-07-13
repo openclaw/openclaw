@@ -110,11 +110,12 @@ function signalProcessTreeUnix(
 
 function runTaskkill(args: string[]): void {
   try {
-    spawn("taskkill", args, {
+    const child = spawn("taskkill", args, {
       stdio: "ignore",
       detached: true,
       windowsHide: true,
     });
+    child.once("error", () => {});
   } catch {
     // Ignore taskkill spawn failures.
   }

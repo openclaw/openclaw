@@ -6,6 +6,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
@@ -35,7 +36,6 @@ import {
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
-import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { __testing as agentJobTesting, waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -663,6 +663,39 @@ describe("waitForAgentJob", () => {
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
+  it("projects sanitized MCP App detail previews without changing tool content", () => {
+    const preview = {
+      kind: "canvas",
+      view: {
+        id: "cv_app",
+      },
+      presentation: { target: "assistant_message", sandbox: "scripts" },
+      mcpApp: { viewId: "cv_app" },
+    };
+    const toolMessage = {
+      role: "toolResult",
+      toolName: "demo__show",
+      content: [{ type: "text", text: "original tool text" }],
+      details: { mcpAppPreview: preview, secret: "drop-me" },
+    };
+    const assistantMessage = { role: "assistant", content: "Done" };
+
+    const sanitized = sanitizeChatHistoryMessages([toolMessage]);
+    expect(sanitized[0]).toMatchObject({
+      content: [{ type: "text", text: "original tool text" }],
+      details: { mcpAppPreview: preview },
+    });
+    expect(JSON.stringify(sanitized)).not.toContain("drop-me");
+
+    const augmented = augmentChatHistoryWithCanvasBlocks([sanitized[0], assistantMessage]);
+    expect(augmented[1]).toMatchObject({
+      content: [
+        { type: "text", text: "Done" },
+        { type: "canvas", preview: { mcpApp: { viewId: "cv_app" } } },
+      ],
+    });
+  });
+
   it("ignores user messages that merely contain canvas-shaped text", () => {
     const previewJson = JSON.stringify({
       kind: "canvas",
@@ -823,6 +856,28 @@ describe("injectTimestamp", () => {
 });
 
 describe("sanitizeChatHistoryMessages", () => {
+  it("truncates display text without splitting surrogate pairs", () => {
+    const prefix = "a".repeat(7);
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: `${prefix}😀tail` }],
+          timestamp: 1,
+        },
+      ],
+      8,
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `${prefix}\n...(truncated)...` }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("redacts base64 audio content blocks from chat history", () => {
     const data = Buffer.from("voice-bytes").toString("base64");
     const result = sanitizeChatHistoryMessages([
@@ -1411,6 +1466,7 @@ describe("projectRecentChatDisplayMessages", () => {
             args: { action: "send", message: "visible via message tool" },
           },
         ],
+        __openclaw: { seq: 1 },
         timestamp: 1,
       },
       {
@@ -1421,6 +1477,7 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { seq: 2 },
         timestamp: 2,
       },
       {
@@ -1428,6 +1485,7 @@ describe("projectRecentChatDisplayMessages", () => {
         toolName: "message",
         toolCallId: "call-message",
         content: JSON.stringify({ ok: true }),
+        details: { sourceReplySink: "internal-ui" },
         timestamp: 3,
       },
       {
@@ -1448,6 +1506,7 @@ describe("projectRecentChatDisplayMessages", () => {
             args: { action: "send", message: "visible via message tool" },
           },
         ],
+        __openclaw: { seq: 1 },
         timestamp: 1,
       },
       {
@@ -1459,6 +1518,7 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { seq: 2 },
         timestamp: 2,
       },
       {
@@ -1474,6 +1534,8 @@ describe("projectRecentChatDisplayMessages", () => {
         openclawMessageToolMirror: {
           toolName: "message",
           toolCallId: "call-message",
+          sourceReplySink: "internal-ui",
+          sourceMessageSeq: 1,
         },
         timestamp: 1,
       },
@@ -2494,12 +2556,12 @@ describe("timestampOptsFromConfig", () => {
   it.each([
     {
       name: "extracts timezone from config",
-      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as any,
+      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as OpenClawConfig,
       expected: "America/Chicago",
     },
     {
       name: "falls back gracefully with empty config",
-      cfg: {} as any,
+      cfg: {} as OpenClawConfig,
       expected: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     },
   ])("$name", ({ cfg, expected }) => {
@@ -2572,37 +2634,19 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
   });
 });
 
-describe("sanitizeChatSendMessageInput", () => {
-  it.each([
-    {
-      name: "rejects null bytes",
-      input: "before\u0000after",
-      expected: { ok: false as const, error: "message must not contain null bytes" },
-    },
-    {
-      name: "strips unsafe control characters while preserving tab/newline/carriage return",
-      input: "a\u0001b\tc\nd\re\u0007f\u007f",
-      expected: { ok: true as const, message: "ab\tc\nd\ref" },
-    },
-    {
-      name: "normalizes unicode to NFC",
-      input: "Cafe\u0301",
-      expected: { ok: true as const, message: "Café" },
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
-  });
-});
-
 describe("gateway chat transcript writes (guardrail)", () => {
   it("routes transcript writes through helper and async parentId append", () => {
     const chatTs = fileURLToPath(new URL("./chat.ts", import.meta.url));
     const chatSrc = fs.readFileSync(chatTs, "utf-8");
+    const persistenceTs = fileURLToPath(
+      new URL("./chat-transcript-persistence.ts", import.meta.url),
+    );
+    const persistenceSrc = fs.readFileSync(persistenceTs, "utf-8");
     const helperTs = fileURLToPath(new URL("./chat-transcript-inject.ts", import.meta.url));
     const helperSrc = fs.readFileSync(helperTs, "utf-8");
 
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
-    expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
+    expect(persistenceSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
     expect(helperSrc).toContain("persistSessionTranscriptTurn(");
     expect(helperSrc).toContain("useRawWhenLinear: true");
@@ -2639,7 +2683,16 @@ describe("exec approval handlers", () => {
     deviceId?: string;
     scopes?: string[];
     approvalRuntime?: boolean;
+    agentRuntimeIdentity?: { agentId: string; sessionKey: string };
   }): ExecApprovalRequestArgs["client"] {
+    const internal = {
+      ...(params.approvalRuntime ? { approvalRuntime: true } : {}),
+      ...(params.agentRuntimeIdentity
+        ? {
+            agentRuntimeIdentity: { kind: "agentRuntime" as const, ...params.agentRuntimeIdentity },
+          }
+        : {}),
+    };
     return {
       connId: params.connId,
       connect: {
@@ -2647,7 +2700,7 @@ describe("exec approval handlers", () => {
         device: params.deviceId ? { id: params.deviceId } : undefined,
         scopes: params.scopes,
       },
-      ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
+      ...(Object.keys(internal).length > 0 ? { internal } : {}),
     } as unknown as ExecApprovalRequestArgs["client"];
   }
 
@@ -2670,7 +2723,10 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     client?: ExecApprovalGetArgs["client"];
   }) {
-    return params.handlers["exec.approval.get"]({
+    return expectDefined(
+      params.handlers["exec.approval.get"],
+      'params.handlers["exec.approval.get"] test invariant',
+    )({
       params: { id: params.id } as ExecApprovalGetArgs["params"],
       respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
       context: {} as ExecApprovalGetArgs["context"],
@@ -2685,7 +2741,10 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     client?: ExecApprovalResolveArgs["client"];
   }) {
-    return params.handlers["exec.approval.list"]({
+    return expectDefined(
+      params.handlers["exec.approval.list"],
+      'params.handlers["exec.approval.list"] test invariant',
+    )({
       params: {} as never,
       respond: params.respond as never,
       context: {} as never,
@@ -2738,7 +2797,10 @@ describe("exec approval handlers", () => {
             : null,
       };
     }
-    return params.handlers["exec.approval.request"]({
+    return expectDefined(
+      params.handlers["exec.approval.request"],
+      'params.handlers["exec.approval.request"] test invariant',
+    )({
       params: requestParams,
       respond: params.respond as unknown as ExecApprovalRequestArgs["respond"],
       context: toExecApprovalRequestContext({
@@ -2759,7 +2821,10 @@ describe("exec approval handlers", () => {
     context: { broadcast: (event: string, payload: unknown) => void };
     client?: ExecApprovalResolveArgs["client"];
   }) {
-    return params.handlers["exec.approval.resolve"]({
+    return expectDefined(
+      params.handlers["exec.approval.resolve"],
+      'params.handlers["exec.approval.resolve"] test invariant',
+    )({
       params: {
         id: params.id,
         decision: params.decision ?? "allow-once",
@@ -3403,6 +3468,108 @@ describe("exec approval handlers", () => {
 
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     expect(manager.getSnapshot("approval-reviewer-runtime-runtime")?.decision).toBe("allow-once");
+    expect(manager.getSnapshot("approval-reviewer-runtime-runtime")?.resolutionSource).toBe(
+      "operator",
+    );
+  });
+
+  it("records matching trusted agent-runtime resolutions with default agent binding", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-auto-review-requester",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-auto-review-requester",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const resolverClient = createExecApprovalClient({
+      connId: "conn-auto-review-resolver",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-auto-review-resolver",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+      agentRuntimeIdentity: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-auto-review",
+        twoPhase: true,
+        systemRunPlan: {
+          ...defaultExecApprovalRequestParams.systemRunPlan,
+          agentId: null,
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-auto-review",
+      respond: resolveRespond,
+      context,
+      client: resolverClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-auto-review")).toMatchObject({
+      decision: "allow-once",
+      resolutionSource: "auto-review",
+    });
+  });
+
+  it("rejects auto-review resolution when trusted agent identity mismatches the request", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-auto-review-mismatch-requester",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-auto-review-mismatch-requester",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const resolverClient = createExecApprovalClient({
+      connId: "conn-auto-review-mismatch-resolver",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+      agentRuntimeIdentity: { agentId: "other", sessionKey: "agent:other:main" },
+    });
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: { id: "approval-auto-review-mismatch", twoPhase: true },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-auto-review-mismatch",
+      respond: resolveRespond,
+      context,
+      client: resolverClient,
+    });
+
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "auto-review approval identity does not match request",
+    });
+    expect(manager.getSnapshot("approval-auto-review-mismatch")?.decision).toBeUndefined();
+
+    expect(manager.resolve("approval-auto-review-mismatch", "deny")).toBe(true);
+    await requestPromise;
   });
 
   it("does not allow reviewer devices without approval scope to resolve runtime approvals", async () => {
@@ -3599,8 +3766,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond)).toBe(false);
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+      message: "allow-always is unavailable for this command",
     });
 
     const denyRespond = vi.fn();
@@ -3642,8 +3808,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond)).toBe(false);
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+      message: "allow-always is unavailable for this command",
     });
 
     const allowOnceRespond = vi.fn();
@@ -3798,6 +3963,13 @@ describe("exec approval handlers", () => {
           commandPreview: "echo ok",
           agentId: "main",
           sessionKey: "agent:main:main",
+          policySnapshot: {
+            security: "allowlist",
+            ask: "on-miss",
+            askFallback: "deny",
+            autoAllowSkills: false,
+            allowlistRules: [{ pattern: "/usr/bin/echo" }],
+          },
         },
       },
     });
@@ -3815,6 +3987,13 @@ describe("exec approval handlers", () => {
       commandPreview: "echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
+      policySnapshot: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+        autoAllowSkills: false,
+        allowlistRules: [{ pattern: "/usr/bin/echo" }],
+      },
     });
   });
 
@@ -4546,14 +4725,17 @@ describe("gateway healthHandlers.status scope handling", () => {
   async function runHealthStatus(scopes: string[]) {
     const respond = vi.fn();
 
-    await healthHandlers.status({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {} as never,
-      client: { connect: { role: "operator", scopes } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.status, "healthHandlers.status test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {} as never,
+        client: { connect: { role: "operator", scopes } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     return respond;
   }
@@ -4577,14 +4759,17 @@ describe("gateway healthHandlers.status scope handling", () => {
   it("can skip channel summary work for liveness-only status requests", async () => {
     const respond = vi.fn();
 
-    await healthHandlers.status({
-      req: {} as never,
-      params: { includeChannelSummary: false },
-      respond: respond as never,
-      context: {} as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.status, "healthHandlers.status test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: { includeChannelSummary: false },
+        respond: respond as never,
+        context: {} as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
       includeSensitive: false,
@@ -4665,30 +4850,33 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({
-          channels: {},
-          channelAccounts: {
-            discord: {
-              default: {
-                accountId: "default",
-                running: true,
-                connected: true,
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({
+            channels: {},
+            channelAccounts: {
+              discord: {
+                default: {
+                  accountId: "default",
+                  running: true,
+                  connected: true,
+                },
               },
             },
-          },
-        }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+          }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -4733,20 +4921,23 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
     const getEventLoopHealth = vi.fn(() => replacementEventLoop);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => null,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        getEventLoopHealth,
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => null,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          getEventLoopHealth,
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -4780,19 +4971,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     const payload = mockCallArg(respond, 0, 1) as
       | {
@@ -4854,19 +5048,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
       const respond = vi.fn();
       const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-      await healthHandlers.health({
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      });
+      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+        healthHandlers,
+        {
+          req: {} as never,
+          params: {} as never,
+          respond: respond as never,
+          context: {
+            getHealthCache: () => cached,
+            refreshHealthSnapshot,
+            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            logHealth: { error: vi.fn() },
+          } as never,
+          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+          isWebchatConnect: () => false,
+        },
+      );
 
       const payload = mockCallArg(respond, 0, 1) as
         | {
@@ -4893,6 +5090,163 @@ describe("gateway healthHandlers.health cache freshness", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("merges live dead-lettered delivery queue counts into cached health responses", async () => {
+    const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-cached-dq-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpStateDir;
+    try {
+      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
+        await import("../../infra/delivery-queue-sqlite.js");
+      // The cached snapshot was built before this delivery dead-lettered.
+      const cached = {
+        ok: true,
+        ts: Date.now(),
+        durationMs: 1,
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        heartbeatSeconds: 0,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      };
+      upsertDeliveryQueueEntry({
+        queueName: "outbound",
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+      });
+      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+
+      const respond = vi.fn();
+      const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+        healthHandlers,
+        {
+          req: {} as never,
+          params: {} as never,
+          respond: respond as never,
+          context: {
+            getHealthCache: () => cached,
+            refreshHealthSnapshot,
+            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            logHealth: { error: vi.fn() },
+          } as never,
+          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+          isWebchatConnect: () => false,
+        },
+      );
+
+      const payload = mockCallArg(respond, 0, 1) as
+        | {
+            deliveryQueues?: {
+              failed?: Array<{ queueName?: string; count?: number; oldestFailedAt?: number }>;
+            };
+          }
+        | undefined;
+      expect(payload?.deliveryQueues?.failed).toHaveLength(1);
+      expect(payload?.deliveryQueues?.failed?.[0]).toMatchObject({
+        queueName: "outbound",
+        count: 1,
+      });
+      expect(typeof payload?.deliveryQueues?.failed?.[0]?.oldestFailedAt).toBe("number");
+      expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tmpStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges a live disabled config hot-reload status into cached health responses", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      configReload: { hotReloadStatus: "active" },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+    const getConfigReloaderHotReloadStatus = vi.fn(() => "disabled" as const);
+
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          getConfigReloaderHotReloadStatus,
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | { configReload?: { hotReloadStatus?: string } }
+      | undefined;
+    // The cache-hit merge must reflect the live "disabled" flip immediately,
+    // not the stale "active" value from the cached snapshot — otherwise
+    // operators wait up to HEALTH_REFRESH_INTERVAL_MS to see a watcher that
+    // has already permanently given up.
+    expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+  });
+
+  it("preserves the cached config hot-reload status when no live accessor is available", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      configReload: { hotReloadStatus: "disabled" },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | { configReload?: { hotReloadStatus?: string } }
+      | undefined;
+    expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
@@ -4943,30 +5297,33 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
 
-    await healthHandlers.health({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({
-          channels: {},
-          channelAccounts: {
-            discord: {
-              work: {
-                accountId: "work",
-                running: true,
-                connected: true,
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({
+            channels: {},
+            channelAccounts: {
+              discord: {
+                work: {
+                  accountId: "work",
+                  running: true,
+                  connected: true,
+                },
               },
             },
-          },
-        }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+          }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -4997,7 +5354,10 @@ describe("logs.tail", () => {
     setLoggerOverride({ file: path.join(tempDir, "openclaw-2026-01-22.log") });
 
     const respond = vi.fn();
-    await logsHandlers["logs.tail"]({
+    await expectDefined(
+      logsHandlers["logs.tail"],
+      'logsHandlers["logs.tail"] test invariant',
+    )({
       params: {},
       respond,
       context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
@@ -5028,7 +5388,10 @@ describe("logs.tail", () => {
     setLoggerOverride({ file });
 
     const respond = vi.fn();
-    await logsHandlers["logs.tail"]({
+    await expectDefined(
+      logsHandlers["logs.tail"],
+      'logsHandlers["logs.tail"] test invariant',
+    )({
       params: {},
       respond,
       context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],

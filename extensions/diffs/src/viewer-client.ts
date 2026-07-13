@@ -21,7 +21,7 @@ function readInjectedLanguagePackFlag(): boolean | undefined {
     : undefined;
 }
 
-export function resolveViewerLanguagePackAvailability(
+function resolveViewerLanguagePackAvailability(
   buildFlag: boolean | undefined = readInjectedLanguagePackFlag(),
 ): boolean {
   return buildFlag === true;
@@ -39,7 +39,7 @@ type DiffController = {
   diff: FileDiff;
 };
 
-export const controllers: DiffController[] = [];
+const controllers: DiffController[] = [];
 
 const viewerState: ViewerState = {
   theme: "dark",
@@ -214,6 +214,10 @@ function applyToolbarButtonStyles(button: HTMLButtonElement, active: boolean): v
   icon.style.pointerEvents = "none";
 }
 
+function isImageRenderMode(): boolean {
+  return document.querySelector("main.oc-frame")?.getAttribute("data-render-mode") === "image";
+}
+
 function createToolbar(): HTMLElement {
   const toolbar = document.createElement("div");
   toolbar.className = "oc-diff-toolbar";
@@ -283,7 +287,10 @@ function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefi
     disableLineNumbers: payload.options.disableLineNumbers,
     disableBackground: !viewerState.backgroundEnabled,
     unsafeCSS: payload.options.unsafeCSS,
-    renderHeaderMetadata: () => createToolbar(),
+    // Image/PDF exports are static; the interactive toggle toolbar would
+    // render as dead UI in the captured file. Returning null keeps the
+    // library's built-in +N/-N header counts without the buttons.
+    renderHeaderMetadata: () => (isImageRenderMode() ? null : createToolbar()),
   };
 }
 
@@ -365,7 +372,7 @@ async function main(): Promise<void> {
   }
 }
 
-export const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
+const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
 
 const autoStartDisabled = Boolean(
   (globalThis as typeof globalThis & Record<symbol, unknown>)[disableAutoStartKey],

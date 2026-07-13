@@ -92,6 +92,7 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "packages/media-generation-core/src",
   "packages/media-understanding-common/src",
   "packages/normalization-core/src",
+  "packages/retry/src",
   "packages/acp-core/src",
   "packages/terminal-core/src",
   "src/video-generation/dashscope-compatible.ts",
@@ -167,6 +168,7 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts",
   "dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalization.d.ts",
   "dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
+  "dist/plugin-sdk/packages/retry/src/index.d.ts",
   "dist/plugin-sdk/error-runtime.d.ts",
   "dist/plugin-sdk/plugin-entry.d.ts",
   "dist/plugin-sdk/provider-auth.d.ts",
@@ -221,6 +223,7 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/normalization-core/src/record-coerce.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/string-coerce.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/string-normalization.d.ts",
+  "packages/plugin-sdk/dist/packages/retry/src/index.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/ansi.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/decorative-emoji.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/health-style.d.ts",
@@ -267,6 +270,9 @@ const SLACK_DTS_INPUTS = [
 ];
 const SLACK_DTS_STAMP = "dist/plugin-sdk/extensions/slack/.boundary-dts.stamp";
 const SLACK_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/slack/api.d.ts"];
+const TELEGRAM_DTS_INPUTS = ["extensions/telegram/api.ts", "extensions/telegram/tsconfig.json"];
+const TELEGRAM_DTS_STAMP = "dist/plugin-sdk/extensions/telegram/.boundary-dts.stamp";
+const TELEGRAM_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/telegram/api.d.ts"];
 const WHATSAPP_DTS_INPUTS = [
   "extensions/whatsapp/api.ts",
   "extensions/whatsapp/src/qa-driver.runtime.ts",
@@ -748,6 +754,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [SLACK_DTS_STAMP, ...SLACK_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(SLACK_DTS_REQUIRED_OUTPUTS);
+    const telegramDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: TELEGRAM_DTS_INPUTS,
+        outputPaths: [TELEGRAM_DTS_STAMP, ...TELEGRAM_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(TELEGRAM_DTS_REQUIRED_OUTPUTS);
     const whatsappDtsFresh =
       isArtifactSetFresh({
         inputPaths: WHATSAPP_DTS_INPUTS,
@@ -913,6 +925,37 @@ async function main(argv = process.argv.slice(2)) {
         });
       } else {
         process.stdout.write("[whatsapp boundary dts] fresh; skipping\n");
+      }
+      if (!telegramDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: TELEGRAM_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "telegram boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/telegram/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/telegram",
+            "--rootDir",
+            "extensions/telegram",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: TELEGRAM_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[telegram boundary dts] fresh; skipping\n");
       }
     }
 

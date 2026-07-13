@@ -94,11 +94,13 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(await progress.pushReasoningProgress("queued-turn thinking")).toBe(false);
 
     // New assistant message boundary on a queued/followup turn.
-    progress.beginNewTurn();
+    expect(progress.beginNewTurn()).toBe(true);
+    expect(progress.hasStarted).toBe(false);
     await progress.start();
     await progress.pushReasoningProgress("queued-turn thinking", { snapshot: true });
 
     expect(update).toHaveBeenCalled();
+    expect(progress.beginNewTurn()).toBe(false);
   });
 
   it("does not resurrect progress after suppression", async () => {
@@ -278,6 +280,91 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🧠 _Reading files_", {
       lines: ["🛠️ Exec", "🧠 _Reading files_"],
     });
+  });
+
+  it("replaces tool lines with narration and drops redundant edits", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushNarrationProgress("Updating the config file now.");
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nUpdating the config file now.",
+      expect.anything(),
+    );
+
+    // Tool events keep accumulating underneath without editing the message.
+    const callsAfterNarration = update.mock.calls.length;
+    await progress.pushToolProgress("🛠️ Wc", { startImmediately: true });
+    expect(update.mock.calls.length).toBe(callsAfterNarration);
+
+    // Identical narration is dropped; changed narration edits once.
+    expect(await progress.pushNarrationProgress("Updating the config file now.")).toBe(false);
+    await progress.pushNarrationProgress("Restarting the gateway.");
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nRestarting the gateway.",
+      expect.anything(),
+    );
+
+    // Narration stopping (empty update) falls back to the raw tool lines.
+    await progress.pushNarrationProgress("");
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
+  });
+
+  it("holds narration behind the initial progress delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress" } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
+
+      await progress.pushToolProgress("🛠️ Exec");
+      await progress.pushNarrationProgress("Reading the gateway config.");
+
+      expect(update).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
+      expect(update).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(update).toHaveBeenCalledWith("Reading the gateway config.", {
+        flush: true,
+        lines: ["🛠️ Exec"],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores narration once the final reply started and resets it per turn", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushNarrationProgress("Working on it.");
+    progress.markFinalReplyStarted();
+    expect(await progress.pushNarrationProgress("Too late.")).toBe(false);
+
+    progress.markFinalReplyDelivered();
+    progress.beginNewTurn();
+    await progress.pushToolProgress("🛠️ Next", { startImmediately: true });
+    // The queued turn starts without the primary turn's stale narration.
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Next", expect.anything());
   });
 
   it("logs a timer-fired start failure via the gate's default boundary logger", async () => {

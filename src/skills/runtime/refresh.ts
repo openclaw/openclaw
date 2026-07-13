@@ -18,13 +18,7 @@ import {
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
-export {
-  bumpSkillsSnapshotVersion,
-  getSkillsSnapshotVersion,
-  registerSkillsChangeListener,
-  shouldRefreshSnapshotForVersion,
-  type SkillsChangeEvent,
-} from "./refresh-state.js";
+export { bumpSkillsSnapshotVersion, registerSkillsChangeListener } from "./refresh-state.js";
 
 type SkillsPathWatchState = {
   watcher: FSWatcher;
@@ -80,7 +74,7 @@ setSkillsChangeListenerErrorHandler((err) => {
   log.warn(`skills change listener failed: ${String(err)}`);
 });
 
-export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
+const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,

@@ -145,6 +145,23 @@ describe("hasProviderAuthForTool", () => {
     expect(hasProviderAuthForTool({ provider: "hatchery", cfg })).toBe(true);
   });
 
+  it("accepts AWS SDK auth without a static credential", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "amazon-bedrock": {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            auth: "aws-sdk",
+            api: "bedrock-converse-stream",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg })).toBe(true);
+  });
+
   it("keeps auth-store profiles as valid tool auth", () => {
     // Tool-specific model selection should honor the same stored profile shape
     // used by agent sessions, not only process env/config keys.

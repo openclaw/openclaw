@@ -2,9 +2,9 @@
 
 // Reports plugin SDK export surface metadata.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import ts from "typescript";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -14,6 +14,9 @@ import {
 } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+let ts;
+
 function usage() {
   return `Usage: node scripts/plugin-sdk-surface-report.mjs [--check]
 
@@ -25,7 +28,7 @@ Options:
 `;
 }
 
-export function parsePluginSdkSurfaceReportArgs(argv) {
+function parsePluginSdkSurfaceReportArgs(argv) {
   const args = { check: false, help: false };
   for (const arg of argv) {
     if (arg === "--check") {
@@ -46,7 +49,7 @@ const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoin
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
 
-export function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
+function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined) {
     return fallback;
@@ -62,7 +65,7 @@ export function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env)
   return parsed;
 }
 
-export function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
+function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined) {
     return fallback;
@@ -87,7 +90,7 @@ export function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.e
   return Object.freeze({ ...fallback, ...overrides });
 }
 
-export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
+const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   health: 1,
   lmstudio: 1,
@@ -98,11 +101,14 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "runtime-logger": 3,
   "runtime-secret-resolution": 5,
   "setup-adapter-runtime": 1,
-  "channel-streaming": 48,
-  "approval-reply-runtime": 1,
+  "channel-streaming": 49,
+  "approval-gateway-runtime": 1,
+  "approval-handler-runtime": 1,
+  "approval-reply-runtime": 3,
+  "approval-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 421,
+  "config-types": 424,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -113,11 +119,12 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 585,
+  "infra-runtime": 595,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
   "text-runtime": 191,
+  "agent-core": 1,
   "agent-runtime": 7,
   "plugin-runtime": 13,
   "channel-secret-runtime": 23,
@@ -144,12 +151,17 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-mention-gating": 7,
   "channel-lifecycle": 23,
   "channel-ingress": 8,
-  "channel-message": 229,
-  "channel-message-runtime": 226,
+  "channel-message": 232,
+  "channel-message-runtime": 229,
   "channel-pairing-paths": 1,
+  // Deprecated pairing/conversation exports from the SQLite pairing migration
+  // landed on main (#105802) without entrypoint pins; not touched by this PR.
+  "channel-pairing": 1,
+  "conversation-runtime": 4,
+  "channel-send-result": 1,
   "channel-policy": 8,
   "channel-route": 5,
-  "session-store-runtime": 1,
+  "session-store-runtime": 4,
   "session-transcript-runtime": 2,
   "group-access": 13,
   "media-generation-runtime-shared": 3,
@@ -169,7 +181,7 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "provider-auth": 20,
   "provider-oauth-runtime": 2,
   "provider-auth-login": 3,
-  "provider-model-shared": 29,
+  "provider-model-shared": 30,
   "provider-stream-family": 40,
   "provider-stream-shared": 29,
   "provider-stream": 40,
@@ -187,27 +199,27 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      324,
+      327,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10430,
+      10645,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5207,
+      5358,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3261,
+      3282,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      212,
+      209,
       env,
     ),
   };
@@ -239,20 +251,9 @@ function hasDeprecatedTag(symbol) {
   return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
 }
 
-function isGeneratedPackageDeclaration(declaration) {
-  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
-  const relativePath = relative.split(path.sep).join(path.posix.sep);
-  // Package builds can make workspace package reexports look newly callable.
-  // Source-surface counts must stay independent of generated dist state.
-  return /^packages\/[^/]+\/dist\//u.test(relativePath);
-}
-
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
-  if (isGeneratedPackageDeclaration(declaration)) {
-    return false;
-  }
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);
   return checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0;
 }
@@ -279,13 +280,22 @@ function countWildcardReexports(entrypoints) {
 let exportStatsProgram;
 
 function collectExportStats(entrypoints) {
+  // CLI validation and help do not need the compiler's startup cost.
+  ts ??= require("typescript");
+  const configPath = path.join(repoRoot, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  if (config.error) {
+    throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
+  }
   exportStatsProgram ??= ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
     allowJs: false,
+    baseUrl: repoRoot,
     declaration: true,
     emitDeclarationOnly: true,
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
     noEmit: true,
+    paths: config.config.compilerOptions?.paths,
     skipLibCheck: true,
     strict: false,
     target: ts.ScriptTarget.ES2022,

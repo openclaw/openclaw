@@ -184,7 +184,7 @@ export type WorkboardWorkerProtocol = {
   detail?: string;
 };
 
-export type WorkboardStaleState = {
+type WorkboardStaleState = {
   detectedAt: number;
   lastSessionUpdatedAt?: number;
   reason: string;
@@ -228,6 +228,8 @@ export type WorkboardWorkspace = {
   kind: "scratch" | "dir" | "worktree";
   path?: string;
   branch?: string;
+  sourcePath?: string;
+  sourceBranch?: string;
 };
 
 export type WorkboardAutomation = {

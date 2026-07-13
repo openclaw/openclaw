@@ -130,8 +130,8 @@ describe("dev tooling safety helpers", () => {
       nested: [{ message: `Authorization: Bearer ${token}` }],
     }) as { nested: Array<{ message: string }> };
 
-    expect(redacted.nested[0].message).not.toContain(token);
-    expect(redacted.nested[0].message).toContain("Authorization");
+    expect(redacted.nested[0]?.message).not.toContain(token);
+    expect(redacted.nested[0]?.message).toContain("Authorization");
   });
 
   it("parses boolean env values explicitly", () => {
@@ -594,10 +594,18 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("formats OpenAI realtime smoke help without launching live checks", () => {
-    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({ help: true });
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({
+      help: true,
+      openAIOnly: false,
+    });
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-only"])).toEqual({
+      help: false,
+      openAIOnly: true,
+    });
     expect(realtimeSmokeTesting.usage()).toContain(
       "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts",
     );
+    expect(realtimeSmokeTesting.usage()).toContain("--openai-only");
   });
 
   it("rejects unknown OpenAI realtime smoke args before runtime setup", () => {

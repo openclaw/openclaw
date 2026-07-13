@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
+import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import {
   resolvePluginSetupCliBackend,
@@ -50,12 +51,14 @@ export type ResolvedCliBackend = {
   textTransforms?: PluginTextTransforms;
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
+  autoSelectAuthProfile?: boolean;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
 };
 
 type ResolvedCliBackendLiveTest = {
@@ -86,12 +89,14 @@ type FallbackCliBackendPolicy = {
   textTransforms?: PluginTextTransforms;
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
+  autoSelectAuthProfile?: boolean;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -128,12 +133,14 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     textTransforms: entry.backend.textTransforms,
     defaultAuthProfileId: entry.backend.defaultAuthProfileId,
     authEpochMode: entry.backend.authEpochMode,
+    autoSelectAuthProfile: entry.backend.autoSelectAuthProfile,
     contextEngineHostCapabilities: entry.backend.contextEngineHostCapabilities,
     ownsNativeCompaction: entry.backend.ownsNativeCompaction,
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
     nativeToolMode: entry.backend.nativeToolMode,
     sideQuestionToolMode: entry.backend.sideQuestionToolMode,
+    runtimeArtifact: entry.backend.runtimeArtifact,
   };
 }
 
@@ -429,12 +436,14 @@ export function resolveCliBackendConfig(
       textTransforms: mergePluginTextTransforms(runtimeTextTransforms, registered.textTransforms),
       defaultAuthProfileId: registered.defaultAuthProfileId,
       authEpochMode: registered.authEpochMode,
+      autoSelectAuthProfile: registered.autoSelectAuthProfile,
       contextEngineHostCapabilities: registered.contextEngineHostCapabilities,
       ownsNativeCompaction: registered.ownsNativeCompaction,
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
       nativeToolMode: registered.nativeToolMode,
       sideQuestionToolMode: registered.sideQuestionToolMode,
+      runtimeArtifact: registered.runtimeArtifact,
     };
   }
 
@@ -463,12 +472,14 @@ export function resolveCliBackendConfig(
       ),
       defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
       authEpochMode: fallbackPolicy.authEpochMode,
+      autoSelectAuthProfile: fallbackPolicy.autoSelectAuthProfile,
       contextEngineHostCapabilities: fallbackPolicy.contextEngineHostCapabilities,
       ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
       prepareExecution: fallbackPolicy.prepareExecution,
       resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
       nativeToolMode: fallbackPolicy.nativeToolMode,
       sideQuestionToolMode: fallbackPolicy.sideQuestionToolMode,
+      runtimeArtifact: fallbackPolicy.runtimeArtifact,
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
@@ -494,12 +505,14 @@ export function resolveCliBackendConfig(
     ),
     defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
     authEpochMode: fallbackPolicy?.authEpochMode,
+    autoSelectAuthProfile: fallbackPolicy?.autoSelectAuthProfile,
     contextEngineHostCapabilities: fallbackPolicy?.contextEngineHostCapabilities,
     ownsNativeCompaction: fallbackPolicy?.ownsNativeCompaction,
     prepareExecution: fallbackPolicy?.prepareExecution,
     resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
     nativeToolMode: fallbackPolicy?.nativeToolMode,
     sideQuestionToolMode: fallbackPolicy?.sideQuestionToolMode,
+    runtimeArtifact: fallbackPolicy?.runtimeArtifact,
   };
 }
 
@@ -515,4 +528,3 @@ export const testing = {
     };
   },
 } as const;
-export { testing as __testing };

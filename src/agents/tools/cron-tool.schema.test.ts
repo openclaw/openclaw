@@ -58,6 +58,7 @@ describe("createCronToolSchema", () => {
         "schedule",
         "sessionKey",
         "sessionTarget",
+        "trigger",
         "wakeMode",
       ].toSorted(),
     );
@@ -78,6 +79,7 @@ describe("createCronToolSchema", () => {
         "schedule",
         "sessionKey",
         "sessionTarget",
+        "trigger",
         "wakeMode",
       ].toSorted(),
     );
@@ -128,9 +130,9 @@ describe("createCronToolSchema", () => {
     const patchTz = propertyAt(schemaRecord, "patch.schedule.tz");
 
     for (const prop of [jobExpr, patchExpr]) {
-      expect(prop?.description).toMatch(/wall-clock time/i);
-      expect(prop?.description).toMatch(/do not convert/i);
-      expect(prop?.description).toContain("Gateway host local timezone");
+      expect(prop?.description).toMatch(/wall-time/i);
+      expect(prop?.description).toMatch(/never UTC-convert/i);
+      expect(prop?.description).toContain("Gateway local");
       expect(prop?.description).toContain("0 18 * * *");
       expect(prop?.description).toContain("Asia/Shanghai");
     }
@@ -225,6 +227,21 @@ describe("createCronToolSchema", () => {
           sessionKey: null,
           payload: {
             toolsAllow: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts payload.model and payload.fallbacks null in patch (clear-to-inherit)", () => {
+    expect(
+      Value.Check(createCronToolSchema(), {
+        action: "update",
+        jobId: "job-1",
+        patch: {
+          payload: {
+            model: null,
+            fallbacks: null,
           },
         },
       }),

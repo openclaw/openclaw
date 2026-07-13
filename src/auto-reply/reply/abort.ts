@@ -53,7 +53,6 @@ import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 
-export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 export {
   getAbortMemory,
   getAbortMemorySizeForTest,
@@ -136,10 +135,6 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
     aborted = abortDeps.abortEmbeddedAgentRun(sessionId) || aborted;
   }
   return { active, aborted };
-}
-
-export function abortSessionRunTarget(params: { key?: string; sessionId?: string }): boolean {
-  return abortSessionRunTargetWithOutcome(params).aborted;
 }
 
 export function formatAbortReplyText(
@@ -525,4 +520,3 @@ export async function tryFastAbortFromMessage(params: {
   const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
   return { handled: true, aborted: false, stoppedSubagents: stopped };
 }
-export { testing as __testing };

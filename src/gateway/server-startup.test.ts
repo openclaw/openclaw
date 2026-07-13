@@ -36,7 +36,7 @@ vi.mock("../agents/model-selection.js", () => ({
 }));
 
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.js").testing.prewarmConfiguredPrimaryModel;
-let shouldSkipProviderAuthStartupPrewarm: typeof import("./server-startup-post-attach.js").testing.shouldSkipProviderAuthStartupPrewarm;
+let prewarmConfiguredPrimaryModelWithTimeout: typeof import("./server-startup-post-attach.js").testing.prewarmConfiguredPrimaryModelWithTimeout;
 let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.js").testing.shouldSkipStartupModelPrewarm;
 
 function expectModelsJsonPrewarmCall(cfg: OpenClawConfig) {
@@ -57,7 +57,7 @@ describe("gateway startup primary model warmup", () => {
     ({
       testing: {
         prewarmConfiguredPrimaryModel,
-        shouldSkipProviderAuthStartupPrewarm,
+        prewarmConfiguredPrimaryModelWithTimeout,
         shouldSkipStartupModelPrewarm,
       },
     } = await import("./server-startup-post-attach.js"));
@@ -112,20 +112,6 @@ describe("gateway startup primary model warmup", () => {
     ).toBe(true);
   });
 
-  it("honors the provider auth prewarm skip env", () => {
-    expect(shouldSkipProviderAuthStartupPrewarm({})).toBe(false);
-    expect(
-      shouldSkipProviderAuthStartupPrewarm({
-        OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM: "1",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipProviderAuthStartupPrewarm({
-        OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM: "true",
-      }),
-    ).toBe(true);
-  });
-
   it("skips static warmup for configured CLI backends", async () => {
     await prewarmConfiguredPrimaryModel({
       cfg: {
@@ -170,5 +156,24 @@ describe("gateway startup primary model warmup", () => {
     expect(warn).toHaveBeenCalledWith(
       "startup model warmup failed for codex/gpt-5.4: Error: models write failed",
     );
+  });
+
+  it("debug-logs an optional warmup timeout without warning", async () => {
+    const warn = vi.fn();
+    const debug = vi.fn();
+
+    await prewarmConfiguredPrimaryModelWithTimeout(
+      {
+        cfg: {} as OpenClawConfig,
+        log: { warn, debug },
+        timeoutMs: 1,
+      },
+      async () => await new Promise<void>(() => {}),
+    );
+
+    expect(debug).toHaveBeenCalledWith(
+      "startup model warmup timed out after 1ms; continuing without waiting",
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 });

@@ -40,13 +40,13 @@ type PendingSpoolRequests = Map<
   }
 >;
 
-export type TelegramIngressRuntimePort = {
+type TelegramIngressRuntimePort = {
   postMessage(message: TelegramIngressWorkerMessage): void;
   onMessage(listener: (message: TelegramIngressWorkerCommand) => void): void;
   close(): void;
 };
 
-export type TelegramIngressRuntimeDeps = {
+type TelegramIngressRuntimeDeps = {
   fetch?: typeof fetch;
   closeTransport?: () => Promise<void>;
 };

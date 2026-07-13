@@ -188,6 +188,10 @@ describe("isTuiBusyActivityStatus", () => {
   it("treats finishing context as a visible busy status", () => {
     expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
   });
+
+  it("treats post-connect initialization as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("starting up")).toBe(true);
+  });
 });
 
 describe("resolveTuiToolsToggleActivityStatus", () => {

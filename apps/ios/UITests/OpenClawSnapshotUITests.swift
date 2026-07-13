@@ -417,6 +417,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
         app.tap()
 
         let copySetupCommand = app.buttons["Copy setup code command"]
@@ -674,6 +676,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
@@ -689,11 +693,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(port.waitForExistence(timeout: 5))
         port.tap()
         port.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "18920")
-        let useTLS = app.switches["Use TLS"]
-        XCTAssertTrue(useTLS.waitForExistence(timeout: 5))
-        if useTLS.value as? String != "0" {
-            useTLS.tap()
-        }
+        let unencrypted = app.buttons["Unencrypted"]
+        XCTAssertTrue(unencrypted.waitForExistence(timeout: 5))
+        unencrypted.tap()
         app.buttons["Connect"].tap()
 
         let tokenField = app.secureTextFields["Gateway Auth Token"]
@@ -733,7 +735,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(privacy.waitForExistence(timeout: 8))
         privacy.tap()
 
-        let request = try XCTUnwrap(self.app?.buttons["privacy-access-Photos-action"])
+        let request = try XCTUnwrap(self.app?.buttons["privacy-access-photos-action"])
         XCTAssertTrue(request.waitForExistence(timeout: 5))
         request.tap()
         self.app?.tap()
@@ -748,10 +750,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let limitedStatus = try XCTUnwrap(self.app?.staticTexts.matching(
             NSPredicate(
                 format: "identifier == %@ AND label == %@",
-                "privacy-access-Photos-status",
+                "privacy-access-photos-status",
                 "Limited")).firstMatch)
         XCTAssertTrue(limitedStatus.waitForExistence(timeout: 8))
-        XCTAssertEqual(self.app?.buttons["privacy-access-Photos-action"].label, "Manage Access")
+        XCTAssertEqual(self.app?.buttons["privacy-access-photos-action"].label, "Manage Access")
         self.attachScreenshot(named: "photos-limited-access")
     }
 
@@ -828,6 +830,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
@@ -878,7 +882,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(send.isEnabled)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
-        send.tap()
+        send.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))

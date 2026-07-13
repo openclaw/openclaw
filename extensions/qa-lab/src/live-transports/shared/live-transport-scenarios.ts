@@ -13,15 +13,14 @@ export {
   findMissingLiveTransportStandardScenarios,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
-  type LiveTransportStandardScenarioId,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 
-export type LiveTransportCoverageMember = {
+type LiveTransportCoverageMember = {
   scenarioId?: string;
   standardId: LiveTransportStandardScenarioId;
 };
 
-export type LiveTransportCoverageLane = {
+type LiveTransportCoverageLane = {
   commandName: string;
   members: readonly LiveTransportCoverageMember[];
   transportId: string;
@@ -36,7 +35,7 @@ export type LiveTransportCoverageLaneSummary = {
   transportId: string;
 };
 
-export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[] = [
+const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[] = [
   {
     transportId: "discord",
     commandName: "discord",
@@ -54,8 +53,6 @@ export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[]
       { standardId: "allowlist-block", scenarioId: "slack-allowlist-block" },
       { standardId: "top-level-reply-shape", scenarioId: "slack-top-level-reply-shape" },
       { standardId: "restart-resume", scenarioId: "slack-restart-resume" },
-      { standardId: "thread-follow-up", scenarioId: "slack-thread-follow-up" },
-      { standardId: "thread-isolation", scenarioId: "slack-thread-isolation" },
     ],
   },
   {

@@ -11,11 +11,12 @@ import {
   coercePersistedAuthProfileStore,
   loadPersistedAuthProfileStore,
 } from "../agents/auth-profiles/persisted.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
-  deletePersistedAuthProfileStoreRaw,
-  resolveAuthProfileDatabasePath,
-} from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+  captureAuthProfileStorePersistenceSnapshot,
+  restoreAuthProfileStorePersistenceSnapshot,
+  saveAuthProfileStoreIfPersistenceSnapshotMatches,
+} from "../agents/auth-profiles/store.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   replaceConfigFile,
@@ -25,6 +26,7 @@ import {
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
+import { normalizePluginConfigId } from "../plugins/plugin-config-trust.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
@@ -63,7 +65,8 @@ type ApplyWrite = {
 
 type AuthStoreSnapshot = {
   agentDir: string;
-  store: ReturnType<typeof loadPersistedAuthProfileStore>;
+  persistence: ReturnType<typeof captureAuthProfileStorePersistenceSnapshot>;
+  owned?: ReturnType<typeof captureAuthProfileStorePersistenceSnapshot>;
 };
 
 type ProjectedState = {
@@ -120,6 +123,23 @@ function planContainsExecReferences(plan: SecretsApplyPlan): boolean {
     return true;
   }
   return Object.values(plan.providerUpserts ?? {}).some((provider) => provider.source === "exec");
+}
+
+function hasPluginPolicyId(list: unknown, pluginId: string): boolean {
+  return Array.isArray(list) && list.some((entry) => normalizePluginConfigId(entry) === pluginId);
+}
+
+function findPluginEntry(entries: unknown, pluginId: string): Record<string, unknown> | undefined {
+  if (!isRecord(entries)) {
+    return undefined;
+  }
+  for (const [key, value] of Object.entries(entries)) {
+    if (normalizePluginConfigId(key) !== pluginId) {
+      continue;
+    }
+    return isRecord(value) ? value : {};
+  }
+  return undefined;
 }
 
 function resolveTarget(
@@ -199,6 +219,50 @@ function applyProviderPlanMutations(params: {
       continue;
     }
     currentProviders[providerAlias] = structuredClone(providerConfig);
+    changed = true;
+  }
+
+  for (const providerConfig of Object.values(params.upserts ?? {})) {
+    if (providerConfig.source !== "exec" || !("pluginIntegration" in providerConfig)) {
+      continue;
+    }
+    // Plugin-managed exec providers fail closed unless the owner is active.
+    // A secrets plan that upserts one must also make that owner resolvable.
+    const pluginId = normalizePluginConfigId(providerConfig.pluginIntegration.pluginId);
+    params.config.plugins ??= {};
+    if (params.config.plugins.enabled === false) {
+      throw new Error(
+        `Cannot apply plugin-managed SecretRef provider "${pluginId}" because plugins.enabled is false. Enable plugins before applying this plan.`,
+      );
+    }
+    if (hasPluginPolicyId(params.config.plugins.deny, pluginId)) {
+      throw new Error(
+        `Cannot apply plugin-managed SecretRef provider "${pluginId}" because plugins.deny includes "${pluginId}". Remove the deny rule before applying this plan.`,
+      );
+    }
+    const previousEntry = findPluginEntry(params.config.plugins.entries, pluginId);
+    if (previousEntry?.enabled === false) {
+      throw new Error(
+        `Cannot apply plugin-managed SecretRef provider "${pluginId}" because plugins.entries.${pluginId}.enabled is false. Enable the plugin explicitly before applying this plan.`,
+      );
+    }
+    if (
+      Array.isArray(params.config.plugins.allow) &&
+      params.config.plugins.allow.length > 0 &&
+      !hasPluginPolicyId(params.config.plugins.allow, pluginId)
+    ) {
+      throw new Error(
+        `Cannot apply plugin-managed SecretRef provider "${pluginId}" because plugins.allow does not include "${pluginId}". Add the plugin to plugins.allow before applying this plan.`,
+      );
+    }
+    params.config.plugins.entries ??= {};
+    if (previousEntry?.enabled === true) {
+      continue;
+    }
+    params.config.plugins.entries[pluginId] = {
+      ...(isRecord(previousEntry) ? previousEntry : {}),
+      enabled: true,
+    };
     changed = true;
   }
 
@@ -866,7 +930,7 @@ export async function runSecretsApply(params: {
     if (!authStoreSnapshots.has(pathname)) {
       authStoreSnapshots.set(pathname, {
         agentDir,
-        store: loadPersistedAuthProfileStore(agentDir),
+        persistence: captureAuthProfileStorePersistenceSnapshot(agentDir),
       });
     }
   };
@@ -904,7 +968,21 @@ export async function runSecretsApply(params: {
       const agentDir = projected.authStoreAgentDirByPath.get(pathname);
       const store = coercePersistedAuthProfileStore(value);
       if (agentDir && store) {
-        saveAuthProfileStore(store, agentDir);
+        const snapshot = authStoreSnapshots.get(pathname);
+        if (!snapshot) {
+          throw new Error(`missing captured auth profile store for ${pathname}`);
+        }
+        const committed = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+          store,
+          snapshot: snapshot.persistence,
+          agentDir,
+        });
+        // Persisted rows commit before runtime publication. Record their exact
+        // ownership first so a publication failure can still roll them back.
+        snapshot.owned = committed.owned;
+        if (!committed.publishRuntimeSnapshots()) {
+          throw new Error(`auth profile runtime publication failed for ${pathname}`);
+        }
       }
     }
   } catch (err) {
@@ -918,14 +996,15 @@ export async function runSecretsApply(params: {
       }
     }
     for (const snapshot of authStoreSnapshots.values()) {
+      if (!snapshot.owned) {
+        continue;
+      }
       try {
-        if (snapshot.store) {
-          saveAuthProfileStore(snapshot.store, snapshot.agentDir, {
-            syncExternalCli: false,
-          });
-        } else {
-          deletePersistedAuthProfileStoreRaw(snapshot.agentDir);
-        }
+        restoreAuthProfileStorePersistenceSnapshot(
+          snapshot.persistence,
+          snapshot.owned,
+          snapshot.agentDir,
+        );
       } catch {
         // Best effort only; preserve original error.
       }

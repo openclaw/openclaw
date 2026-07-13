@@ -156,7 +156,7 @@ export type DiscordVoiceRealtimeBootstrapContextFile = "IDENTITY.md" | "USER.md"
 export type DiscordVoiceRealtimeConfig = {
   /** Realtime voice provider id, for example "openai". */
   provider?: string;
-  /** Provider realtime session model, for example "gpt-realtime-2". */
+  /** Provider realtime session model, for example "gpt-realtime-2.1". */
   model?: string;
   /** Provider realtime output voice name, for example "cedar". */
   speakerVoice?: string;

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Normalizes provider auth input metadata collected from plugin setup flows. */
 import {
   normalizeOptionalLowercaseString,
@@ -17,16 +18,8 @@ import {
 } from "./provider-auth-ref.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
-export {
-  extractEnvVarFromSourceLabel,
-  promptSecretRefForSetup,
-  resolveRefFallbackInput,
-  type SecretRefSetupPromptCopy,
-} from "./provider-auth-ref.js";
-export {
-  resolveSecretInputModeForEnvSelection,
-  type SecretInputModePromptCopy,
-} from "./provider-auth-mode.js";
+export { promptSecretRefForSetup } from "./provider-auth-ref.js";
+export { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
 
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 
@@ -41,7 +34,9 @@ export function normalizeApiKeyInput(raw: string): string {
   const assignmentMatch = normalizedPaste.match(
     /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/,
   );
-  const valuePart = assignmentMatch ? assignmentMatch[1].trim() : normalizedPaste;
+  const valuePart = assignmentMatch
+    ? expectDefined(assignmentMatch[1], "assignment match capture group 1").trim()
+    : normalizedPaste;
   const withoutSemicolon = valuePart.endsWith(";") ? valuePart.slice(0, -1).trim() : valuePart;
 
   const unquoted =
@@ -108,7 +103,7 @@ export function normalizeSecretInputModeInput(
 }
 
 /** Applies a CLI-provided API key when its provider selector matches this auth method. */
-export async function maybeApplyApiKeyFromOption(params: {
+async function maybeApplyApiKeyFromOption(params: {
   token: string | undefined;
   tokenProvider: string | undefined;
   secretInputMode?: SecretInputMode;

@@ -25,7 +25,6 @@ const {
   formatThinkingLevels,
   resolveSupportedThinkingLevel,
   resolveThinkingDefaultForModel,
-  resolveMessagesResponseUsageDefault,
   resolveEffectiveResponseUsage,
 } = await import("./thinking.js");
 
@@ -78,6 +77,12 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("max")).toBe("max");
     expect(normalizeThinkLevel("MAX")).toBe("max");
   });
+
+  it("keeps explicit Ultra distinct from the legacy ultrathink alias", () => {
+    expect(normalizeThinkLevel("ultra")).toBe("ultra");
+    expect(normalizeThinkLevel("ULTRA")).toBe("ultra");
+    expect(normalizeThinkLevel("ultrathink")).toBe("high");
+  });
 });
 
 describe("listThinkingLevels", () => {
@@ -118,6 +123,23 @@ describe("listThinkingLevels", () => {
 
   it("does not include max without provider support", () => {
     expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("max");
+  });
+
+  it("passes the effective agent runtime into provider thinking profiles", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) => ({
+      levels: [
+        { id: "off" },
+        { id: "max" },
+        ...(context.agentRuntime === "openclaw" ? [{ id: "ultra" as const }] : []),
+      ],
+    }));
+
+    expect(listThinkingLevels("openai", "gpt-5.6-luna", undefined, "openclaw")).toContain("ultra");
+    expect(listThinkingLevels("openai", "gpt-5.6-luna", undefined, "codex")).not.toContain("ultra");
+    expect(providerRuntimeMocks.resolveProviderThinkingProfile).toHaveBeenLastCalledWith({
+      provider: "openai",
+      context: expect.objectContaining({ agentRuntime: "codex" }),
+    });
   });
 
   it("does not include adaptive without provider support", () => {
@@ -648,6 +670,20 @@ describe("listThinkingLevels", () => {
       }),
     ).toBe("high");
   });
+
+  it("clamps a below-range request down to the cheapest level on a no-off profile", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+    });
+
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "demo-noff",
+        model: "demo-model",
+        level: "off",
+      }),
+    ).toBe("low");
+  });
 });
 
 describe("listThinkingLevelLabels", () => {
@@ -810,33 +846,6 @@ describe("normalizeReasoningLevel", () => {
   });
 });
 
-describe("resolveMessagesResponseUsageDefault", () => {
-  it("returns undefined when unset (preserves off-by-default behavior)", () => {
-    expect(resolveMessagesResponseUsageDefault(undefined)).toBeUndefined();
-    expect(resolveMessagesResponseUsageDefault(undefined, "discord")).toBeUndefined();
-  });
-
-  it("returns a bare string default for any channel", () => {
-    expect(resolveMessagesResponseUsageDefault("full")).toBe("full");
-    expect(resolveMessagesResponseUsageDefault("full", "telegram")).toBe("full");
-  });
-
-  it("resolves the channel entry from a map", () => {
-    const cfg = { default: "off", discord: "full", telegram: "tokens" } as const;
-    expect(resolveMessagesResponseUsageDefault(cfg, "discord")).toBe("full");
-    expect(resolveMessagesResponseUsageDefault(cfg, "telegram")).toBe("tokens");
-  });
-
-  it("falls back to default for an unmapped channel", () => {
-    const cfg = { default: "tokens", discord: "full" } as const;
-    expect(resolveMessagesResponseUsageDefault(cfg, "whatsapp")).toBe("tokens");
-  });
-
-  it("returns undefined for a map with neither the channel nor a default", () => {
-    expect(resolveMessagesResponseUsageDefault({ discord: "full" }, "telegram")).toBeUndefined();
-  });
-});
-
 describe("resolveEffectiveResponseUsage", () => {
   it("returns off when session is unset and no config is provided", () => {
     expect(resolveEffectiveResponseUsage(undefined, undefined)).toBe("off");
@@ -860,7 +869,9 @@ describe("resolveEffectiveResponseUsage", () => {
     // Explicit "off" is stored and wins — non-off config default cannot re-enable it.
     expect(resolveEffectiveResponseUsage("off", "tokens")).toBe("off");
     expect(resolveEffectiveResponseUsage("off", "full")).toBe("off");
-    expect(resolveEffectiveResponseUsage("off", { default: "full", discord: "full" }, "discord")).toBe("off");
+    expect(
+      resolveEffectiveResponseUsage("off", { default: "full", discord: "full" }, "discord"),
+    ).toBe("off");
   });
 
   it("session explicit on value overrides config default", () => {
@@ -874,6 +885,6 @@ describe("resolveEffectiveResponseUsage", () => {
     // - "off"     = explicit off  → stays off
     const cfg = "tokens" as const;
     expect(resolveEffectiveResponseUsage(undefined, cfg)).toBe("tokens"); // inherits
-    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off");        // explicit off persists
+    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off"); // explicit off persists
   });
 });

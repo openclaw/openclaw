@@ -27,7 +27,7 @@ type RealtimeAudioQueueItem =
     };
 
 /** WebSocket send callback for realtime audio frames. */
-export type RealtimeAudioSend = (message: string) => boolean;
+type RealtimeAudioSend = (message: string) => boolean;
 
 /** Provider-specific serializer for media, clear, and mark frames. */
 export interface RealtimeAudioSerializer {
@@ -94,6 +94,11 @@ export class RealtimeAudioPacer {
     this.queuedAudioBytes = 0;
     this.params.send(this.params.serializer.clear());
     return clearedAudioBytes;
+  }
+
+  /** True while queued audio or a paced send timer can still reach the telephony stream. */
+  hasPendingAudio(): boolean {
+    return !this.closed && (this.queuedAudioBytes > 0 || this.timer !== null);
   }
 
   /** Stop sending and discard queued frames. */

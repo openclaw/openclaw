@@ -376,6 +376,83 @@ describeUnix("inspectPortUsage", () => {
     });
   });
 
+  it("preserves malformed lsof pid records as unknown-pid listener diagnostics", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout: "p\ncnode\nnTCP *:18789 (LISTEN)\np111\ncbun\nnTCP 127.0.0.1:18789 (LISTEN)\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        if (argv.includes("command=")) {
+          return {
+            stdout: "bun /tmp/openclaw/dist/index.js gateway run\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (argv.includes("user=")) {
+          return { stdout: "tester\n", stderr: "", code: 0 };
+        }
+        if (argv.includes("ppid=")) {
+          return { stdout: "1\n", stderr: "", code: 0 };
+        }
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toHaveLength(2);
+    expect(result.listeners[0]).toMatchObject({
+      command: "node",
+      address: "TCP *:18789 (LISTEN)",
+    });
+    expect(result.listeners[0]?.pid).toBeUndefined();
+    expect(result.listeners[1]).toMatchObject({
+      pid: 111,
+      command: "bun",
+      address: "TCP 127.0.0.1:18789 (LISTEN)",
+    });
+  });
+
+  it("rejects lsof pid tokens with trailing garbage instead of truncating them", async () => {
+    // Number.parseInt("111abc", 10) === 111, which would silently accept a
+    // corrupted pid field. Keep the socket evidence without fabricating pid 111.
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout: "p111abc\ncnode\nnTCP *:18789 (LISTEN)\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toEqual([
+      {
+        command: "node",
+        address: "TCP *:18789 (LISTEN)",
+      },
+    ]);
+    expect(result.hints).toContain("Another process is listening on this port.");
+  });
+
   it("reports multiple lsof socket records for one process", async () => {
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];

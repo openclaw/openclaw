@@ -1,11 +1,39 @@
 // Discord tests cover client plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDiscordRestClient } from "./client.js";
+import { createDiscordClient, createDiscordRestClient } from "./client.js";
 import type { RequestClient } from "./internal/discord.js";
+import type { GatewayPlugin } from "./internal/gateway.js";
+import { clearGateways, registerGateway } from "./monitor/gateway-registry.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  clearGateways();
+});
+
+describe("createDiscordClient", () => {
+  it("extends a single REST operation after the registered gateway disconnects", async () => {
+    registerGateway("default", { isConnected: false } as GatewayPlugin);
+    const request = createDiscordClient({
+      cfg: {
+        channels: {
+          discord: {
+            token: "discord-token",
+            retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+          },
+        },
+      },
+      rest: {} as RequestClient,
+    }).request;
+    const operation = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("sent");
+
+    await expect(request(operation, "send")).resolves.toBe("sent");
+    expect(operation).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("createDiscordRestClient", () => {

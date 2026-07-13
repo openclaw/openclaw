@@ -28,7 +28,7 @@ interface ResizedImage {
   wasResized: boolean;
 }
 
-export type ProcessImageResult =
+type ProcessImageResult =
   | { ok: true; image: ImageContent; hints: string[] }
   | { ok: false; message: string };
 

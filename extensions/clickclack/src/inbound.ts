@@ -3,6 +3,7 @@
  * routes resulting outbound text back to ClickClack.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
 import { createClickClackClient } from "./http-client.js";
@@ -17,6 +18,11 @@ import type {
 } from "./types.js";
 
 const CHANNEL_ID = "clickclack" as const;
+const CLICKCLACK_MESSAGE_ID_PATTERN = /^msg_[0-9a-hjkmnp-tv-z]{26}$/u;
+
+function resolveClickClackAgentRunId(messageId: string): string | undefined {
+  return CLICKCLACK_MESSAGE_ID_PATTERN.test(messageId) ? `${CHANNEL_ID}:${messageId}` : undefined;
+}
 
 function resolveAccountAgentRoute(params: {
   cfg: OpenClawConfig;
@@ -34,22 +40,40 @@ function resolveAccountAgentRoute(params: {
       id: params.target,
     },
   });
-  const agentId = params.account.agentId ?? route.agentId;
+  const agentId = normalizeAgentId(params.account.agentId ?? route.agentId);
   if (agentId === route.agentId) {
     return route;
   }
+  const peer = {
+    kind: params.isDirect ? ("direct" as const) : ("channel" as const),
+    id: params.target,
+  };
+  const dmScope = params.cfg.session?.dmScope ?? "main";
+  // Account-level agent ownership changes only the agent prefix. Preserve the
+  // resolved session policy so outbound recipient routing reaches this key.
+  const sessionKey = runtime.channel.routing.buildAgentSessionKey({
+    agentId,
+    mainKey: params.cfg.session?.mainKey,
+    channel: CHANNEL_ID,
+    accountId: params.account.accountId,
+    peer,
+    dmScope,
+    identityLinks: params.cfg.session?.identityLinks,
+  });
+  const mainSessionKey = runtime.channel.routing.buildAgentSessionKey({
+    agentId,
+    mainKey: params.cfg.session?.mainKey,
+    channel: CHANNEL_ID,
+    accountId: params.account.accountId,
+    dmScope: "main",
+  });
   return {
     ...route,
     agentId,
-    sessionKey: runtime.channel.routing.buildAgentSessionKey({
-      agentId,
-      channel: CHANNEL_ID,
-      accountId: params.account.accountId,
-      peer: {
-        kind: params.isDirect ? "direct" : "channel",
-        id: params.target,
-      },
-    }),
+    dmScope,
+    sessionKey,
+    mainSessionKey,
+    lastRoutePolicy: sessionKey === mainSessionKey ? "main" : "session",
   };
 }
 
@@ -59,6 +83,7 @@ async function dispatchModelReply(params: {
   message: ClickClackMessage;
   route: { agentId: string };
   target: string;
+  correlationId?: string;
 }) {
   const runtime = getClickClackRuntime();
   const result = await runtime.llm.complete({
@@ -85,6 +110,7 @@ async function dispatchModelReply(params: {
     text,
     threadId: params.message.parent_message_id ? params.message.thread_root_id : undefined,
     replyToId: params.message.id,
+    correlationId: params.correlationId,
   });
 }
 
@@ -97,6 +123,7 @@ export async function handleClickClackInbound(params: {
   config: CoreConfig;
   message: ClickClackMessage;
   access?: ClickClackInboundAccess;
+  correlationId?: string;
 }) {
   const runtime = getClickClackRuntime();
   const message = params.message;
@@ -129,6 +156,7 @@ export async function handleClickClackInbound(params: {
       message,
       route,
       target,
+      correlationId: params.correlationId,
     });
     return;
   }
@@ -145,6 +173,7 @@ export async function handleClickClackInbound(params: {
       client: createClickClackClient({
         baseUrl: params.account.baseUrl,
         token: params.account.token,
+        correlationId: params.correlationId,
       }),
       target: message.channel_id
         ? { channelId: message.channel_id }
@@ -205,6 +234,25 @@ export async function handleClickClackInbound(params: {
     OriginatingTo: target,
     CommandAuthorized: access.commandAuthorized,
   });
+  const runId = resolveClickClackAgentRunId(message.id);
+  const activityReplyOptions = activity
+    ? {
+        onModelSelected: (ctx: { provider: string; model: string; thinkLevel?: string }) => {
+          turnProvenance = {
+            model: ctx.provider && ctx.model ? `${ctx.provider}/${ctx.model}` : ctx.model,
+            thinking: ctx.thinkLevel,
+          };
+          activity?.setProvenance(turnProvenance);
+        },
+        onItemEvent: activity.onItemEvent,
+        commentaryProgressEnabled: true,
+        // The durable activity rows are ClickClack's own progress
+        // rendering, so item events must flow even when session verbose
+        // mode is off and the default tool-progress texts stay suppressed.
+        suppressDefaultToolProgressMessages: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+      }
+    : undefined;
   const dispatchPromise = runtime.channel.inbound.dispatchReply({
     cfg: params.config as OpenClawConfig,
     channel: CHANNEL_ID,
@@ -220,24 +268,13 @@ export async function handleClickClackInbound(params: {
     // Provenance stamping shares the agentActivity opt-in: with the flag off
     // the extension's wire payloads stay byte-identical to pre-activity
     // builds, which is the documented contract for stock setups.
-    replyOptions: activity
-      ? {
-          onModelSelected: (ctx: { provider: string; model: string; thinkLevel?: string }) => {
-            turnProvenance = {
-              model: ctx.provider && ctx.model ? `${ctx.provider}/${ctx.model}` : ctx.model,
-              thinking: ctx.thinkLevel,
-            };
-            activity?.setProvenance(turnProvenance);
-          },
-          onItemEvent: activity.onItemEvent,
-          commentaryProgressEnabled: true,
-          // The durable activity rows are ClickClack's own progress
-          // rendering, so item events must flow even when session verbose
-          // mode is off and the default tool-progress texts stay suppressed.
-          suppressDefaultToolProgressMessages: true,
-          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-        }
-      : undefined,
+    replyOptions:
+      runId || activityReplyOptions
+        ? {
+            ...(runId ? { runId } : {}),
+            ...activityReplyOptions,
+          }
+        : undefined,
     delivery: {
       deliver: async (payload) => {
         const text =
@@ -255,6 +292,7 @@ export async function handleClickClackInbound(params: {
           threadId: message.parent_message_id ? message.thread_root_id : undefined,
           replyToId: message.id,
           provenance: turnProvenance,
+          correlationId: params.correlationId,
         });
       },
       onError: (error) => {

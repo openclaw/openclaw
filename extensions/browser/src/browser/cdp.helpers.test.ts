@@ -20,7 +20,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-import { assertCdpEndpointAllowed, fetchJson, fetchOk } from "./cdp.helpers.js";
+import {
+  assertCdpEndpointAllowed,
+  fetchJson,
+  fetchOk,
+  scopeCdpPolicyToConfiguredEndpoint,
+} from "./cdp.helpers.js";
 
 describe("cdp helpers", () => {
   afterEach(() => {
@@ -84,13 +89,68 @@ describe("cdp helpers", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("still enforces hostname allowlist for loopback CDP endpoints", async () => {
+  it("adds exact loopback hosts to the CDP hostname allowlist", async () => {
     await expect(
       assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
         dangerouslyAllowPrivateNetwork: false,
         hostnameAllowlist: ["*.corp.example"],
       }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("still enforces hostname allowlist for non-loopback CDP endpoints", async () => {
+    await expect(
+      assertCdpEndpointAllowed("http://172.29.128.1:9222/json/version", {
+        dangerouslyAllowPrivateNetwork: false,
+        hostnameAllowlist: ["*.corp.example"],
+      }),
     ).rejects.toThrow("browser endpoint blocked by policy");
+  });
+
+  it("does not let a returned loopback URL replace an exact remote CDP host", async () => {
+    await expect(
+      assertCdpEndpointAllowed(
+        "ws://127.0.0.1:9222/devtools/browser/remote",
+        {
+          allowPrivateNetwork: true,
+          allowedHostnames: ["browserless.example.com"],
+          hostnameAllowlist: ["browserless.example.com"],
+        },
+        {
+          source: "discovered",
+          configuredUrl: "wss://browserless.example.com:9222",
+        },
+      ),
+    ).rejects.toThrow("browser endpoint blocked by policy");
+  });
+
+  it("allows a discovered endpoint on the configured loopback CDP host", async () => {
+    const policy = scopeCdpPolicyToConfiguredEndpoint("http://127.0.0.1:9222", {});
+    await expect(
+      assertCdpEndpointAllowed("ws://127.0.0.1:9222/devtools/browser/local", policy, {
+        source: "discovered",
+        configuredUrl: "http://127.0.0.1:9222",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("blocks a discovered endpoint on another port in strict SSRF mode", async () => {
+    const policy = scopeCdpPolicyToConfiguredEndpoint("http://127.0.0.1:9222", {});
+    await expect(
+      assertCdpEndpointAllowed("ws://127.0.0.1:22/devtools/browser/local", policy, {
+        source: "discovered",
+        configuredUrl: "http://127.0.0.1:9222",
+      }),
+    ).rejects.toThrow("browser endpoint blocked by policy");
+  });
+
+  it("still grants configured loopback for same-shaped strict navigation policy", async () => {
+    await expect(
+      assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
+        allowedHostnames: ["api.example.com"],
+        hostnameAllowlist: ["api.example.com"],
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("releases guarded CDP fetches for bodyless requests", async () => {
@@ -134,6 +194,7 @@ describe("cdp helpers", () => {
     expect(request?.policy).toEqual({
       dangerouslyAllowPrivateNetwork: false,
       allowedHostnames: ["127.0.0.1"],
+      hostnameAllowlist: ["127.0.0.1"],
     });
     expect(release).toHaveBeenCalledTimes(1);
   });
@@ -182,7 +243,7 @@ describe("cdp helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves hostname allowlist while allowing exact loopback CDP fetches", async () => {
+  it("replaces navigation grants with the exact loopback CDP host", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: {
@@ -203,7 +264,7 @@ describe("cdp helpers", () => {
     expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
     expect(request?.policy).toEqual({
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["*.corp.example"],
+      hostnameAllowlist: ["127.0.0.1"],
       allowedHostnames: ["127.0.0.1"],
     });
     expect(release).toHaveBeenCalledTimes(1);
@@ -308,6 +369,7 @@ describe("CDP reachability policy", () => {
 
     expect(resolveCdpReachabilityPolicy(profile, browserPolicy)).toEqual({
       allowedHostnames: ["172.29.128.1"],
+      hostnameAllowlist: ["172.29.128.1"],
     });
     expect(browserPolicy).toStrictEqual({});
     await expect(
@@ -318,7 +380,7 @@ describe("CDP reachability policy", () => {
     ).rejects.toThrow(/private\/internal\/special-use ip address/i);
   });
 
-  it("merges the selected remote profile CDP host with existing CDP policy hostnames", () => {
+  it("restricts remote CDP policy to the selected profile host", () => {
     const profile = createProfile({});
 
     expect(
@@ -326,7 +388,84 @@ describe("CDP reachability policy", () => {
         allowedHostnames: ["metadata.internal"],
       }),
     ).toEqual({
-      allowedHostnames: ["metadata.internal", "172.29.128.1"],
+      allowedHostnames: ["172.29.128.1"],
+      hostnameAllowlist: ["172.29.128.1"],
+    });
+  });
+
+  it("narrows permissive private-network policy to the selected CDP host", () => {
+    const profile = createProfile({});
+    const browserPolicy = {
+      allowPrivateNetwork: true,
+      allowedHostnames: ["metadata.internal"],
+      allowedOrigins: ["https://navigation.example"],
+    };
+
+    expect(resolveCdpReachabilityPolicy(profile, browserPolicy)).toEqual({
+      allowPrivateNetwork: true,
+      allowedHostnames: ["172.29.128.1"],
+      hostnameAllowlist: ["172.29.128.1"],
+    });
+    expect(browserPolicy).toStrictEqual({
+      allowPrivateNetwork: true,
+      allowedHostnames: ["metadata.internal"],
+      allowedOrigins: ["https://navigation.example"],
+    });
+  });
+
+  it("preserves a restrictive hostname allowlist that rejects the remote CDP host", async () => {
+    const profile = createProfile({});
+    const browserPolicy = { hostnameAllowlist: ["browserless.example.com"] };
+
+    expect(resolveCdpReachabilityPolicy(profile, browserPolicy)).toBe(browserPolicy);
+    expect(browserPolicy).toStrictEqual({ hostnameAllowlist: ["browserless.example.com"] });
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "http://172.29.128.1/",
+        ssrfPolicy: browserPolicy,
+      }),
+    ).rejects.toThrow(/not in allowlist/i);
+  });
+
+  it("narrows an allowlisted remote CDP host to that exact control host", () => {
+    const profile = createProfile({});
+
+    expect(
+      resolveCdpReachabilityPolicy(profile, {
+        hostnameAllowlist: ["browserless.example.com", "172.29.128.1"],
+        allowedOrigins: ["https://navigation.example"],
+      }),
+    ).toEqual({
+      hostnameAllowlist: ["172.29.128.1"],
+      allowedHostnames: ["172.29.128.1"],
+    });
+  });
+
+  it("normalizes the selected CDP host before narrowing wildcard policy", () => {
+    const profile = createProfile({
+      cdpUrl: "https://browser.corp.example.:9222",
+      cdpHost: "browser.corp.example.",
+    });
+
+    expect(
+      resolveCdpReachabilityPolicy(profile, {
+        hostnameAllowlist: ["*.corp.example"],
+      }),
+    ).toEqual({
+      hostnameAllowlist: ["browser.corp.example"],
+      allowedHostnames: ["browser.corp.example"],
+    });
+  });
+
+  it.each(["*", "*."])("narrows the global %s allowlist to the selected CDP host", (pattern) => {
+    const profile = createProfile({
+      cdpUrl: "https://browser.example:9222",
+      cdpHost: "browser.example",
+    });
+
+    expect(resolveCdpReachabilityPolicy(profile, { hostnameAllowlist: [pattern] })).toEqual({
+      hostnameAllowlist: ["browser.example"],
+      allowedHostnames: ["browser.example"],
     });
   });
 
@@ -338,5 +477,23 @@ describe("CDP reachability policy", () => {
     });
 
     expect(resolveCdpReachabilityPolicy(profile, {})).toBeUndefined();
+  });
+
+  it("narrows configured extension loopback outside navigation allowlist", () => {
+    const profile = createProfile({
+      cdpUrl: "http://127.0.0.1:18792",
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+      driver: "extension",
+    });
+
+    expect(
+      resolveCdpReachabilityPolicy(profile, {
+        hostnameAllowlist: ["*.corp.example"],
+      }),
+    ).toEqual({
+      hostnameAllowlist: ["127.0.0.1"],
+      allowedHostnames: ["127.0.0.1"],
+    });
   });
 });

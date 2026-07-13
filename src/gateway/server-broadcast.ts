@@ -37,6 +37,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   tick: [],
   "talk.event": [READ_SCOPE],
   "talk.mode": [WRITE_SCOPE],
+  task: [READ_SCOPE],
+  "task.suggestion": [READ_SCOPE],
   "update.available": [],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
@@ -44,7 +46,9 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "device.pair.resolved": [PAIRING_SCOPE],
   "node.pair.requested": [PAIRING_SCOPE],
   "node.pair.resolved": [PAIRING_SCOPE],
+  "node.presence": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],
+  "session.approval": [APPROVALS_SCOPE],
   "session.message": [READ_SCOPE],
   "session.operation": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
@@ -69,6 +73,9 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
 }
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
+  if (client.connectionKind === "worker") {
+    return false;
+  }
   const required = EVENT_SCOPE_GUARDS[event];
   // Plugin-defined gateway broadcast events (plugin.* namespace) are allowed
   // for operator.write and operator.admin scopes. Explicit plugin.* entries

@@ -5,6 +5,39 @@ import UIKit
 
 @MainActor
 struct RootTabsPresentationTests {
+    @Test func `configured gateway bypasses launch request and stale onboarding markers`() {
+        let route = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: false,
+            onboardingComplete: false,
+            hasExistingGatewayConfig: true,
+            shouldPresentOnLaunch: true)
+
+        #expect(route == .none)
+    }
+
+    @Test func `fresh install presents onboarding`() {
+        let route = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: false,
+            onboardingComplete: false,
+            hasExistingGatewayConfig: false,
+            shouldPresentOnLaunch: false)
+
+        #expect(route == .onboarding)
+    }
+
+    @Test func `completed setup without gateway opens settings`() {
+        let route = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: true,
+            onboardingComplete: true,
+            hasExistingGatewayConfig: false,
+            shouldPresentOnLaunch: false)
+
+        #expect(route == .settings)
+    }
+
     @Test func `quick setup does not present when gateway already configured`() {
         let shouldPresent = RootTabs.shouldPresentQuickSetup(
             quickSetupDismissed: false,
@@ -76,6 +109,7 @@ struct RootTabsPresentationTests {
             .skillWorkshop,
             .instances,
             .sessions,
+            .files,
             .dreaming,
             .usage,
             .cron,
@@ -93,6 +127,7 @@ struct RootTabsPresentationTests {
             "skillWorkshop",
             "instances",
             "sessions",
+            "files",
             "dreaming",
             "usage",
             "cron",
@@ -336,6 +371,24 @@ struct RootTabsPresentationTests {
         #expect(ChatProTab.transportAgentID(" Main ") == "main")
     }
 
+    @Test func `chat view model rebuilds only when its transport owner changes`() {
+        #expect(!ChatProTab.requiresViewModelRebuild(
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-a",
+            currentTransportAgentID: "main",
+            nextTransportAgentID: "main"))
+        #expect(ChatProTab.requiresViewModelRebuild(
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-b",
+            currentTransportAgentID: "main",
+            nextTransportAgentID: "main"))
+        #expect(ChatProTab.requiresViewModelRebuild(
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-a",
+            currentTransportAgentID: "main",
+            nextTransportAgentID: "work"))
+    }
+
     @Test func `agent routes can open gateway settings from header pill`() {
         let standalone = AgentProTab()
         let routed = AgentProTab(
@@ -373,7 +426,7 @@ struct RootTabsPresentationTests {
     @Test func `talk sidebar destination can receive reveal action`() {
         let action = OpenClawSidebarHeaderAction(
             systemName: "sidebar.left",
-            accessibilityLabel: "Show Sidebar",
+            accessibilityLabel: .verbatim("Show Sidebar"),
             action: {})
         let routed = TalkProTab(headerLeadingAction: action, openSettings: {})
         let embedded = TalkProTab(
@@ -382,7 +435,11 @@ struct RootTabsPresentationTests {
             openSettings: {})
 
         #expect(routed.headerLeadingAction?.systemName == "sidebar.left")
-        #expect(routed.headerLeadingAction?.accessibilityLabel == "Show Sidebar")
+        guard case let .verbatim(accessibilityLabel)? = routed.headerLeadingAction?.accessibilityLabel else {
+            Issue.record("expected routed sidebar action to preserve its verbatim accessibility label")
+            return
+        }
+        #expect(accessibilityLabel == "Show Sidebar")
         #expect(routed.ownsNavigationStack)
         #expect(!embedded.ownsNavigationStack)
     }
@@ -393,6 +450,30 @@ struct RootTabsPresentationTests {
 
         #expect(standalone.ownsNavigationStack)
         #expect(!embedded.ownsNavigationStack)
+    }
+
+    @Test func `localized QR status matcher accepts positional placeholders`() {
+        #expect(SettingsProTab.localizedFormat(
+            "qr loaded. connecting to %1$@:%2$@...",
+            matches: "qr loaded. connecting to gateway.local:18789..."))
+        #expect(!SettingsProTab.localizedFormat(
+            "qr loaded. connecting to %1$@:%2$@...",
+            matches: "qr loaded. connecting to gateway.local..."))
+    }
+
+    @Test func `settings sidebar route follows navigation top then direct base`() {
+        #expect(RootTabs.visibleSettingsRoute(
+            navigationPath: [.approvals],
+            baseRoute: nil) == .approvals)
+        #expect(RootTabs.visibleSettingsRoute(
+            navigationPath: [.approvals, .notifications],
+            baseRoute: .gateway) == .notifications)
+        #expect(RootTabs.visibleSettingsRoute(
+            navigationPath: [],
+            baseRoute: .approvals) == .approvals)
+        #expect(RootTabs.visibleSettingsRoute(
+            navigationPath: [],
+            baseRoute: nil) == nil)
     }
 
     @Test func `i pad portrait uses hidden drawer sidebar`() {

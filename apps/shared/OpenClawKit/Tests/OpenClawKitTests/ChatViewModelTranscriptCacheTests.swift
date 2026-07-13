@@ -151,7 +151,11 @@ private final class GatedHistoryChatTransport: @unchecked Sendable, OpenClawChat
         OpenClawChatSendResponse(runId: idempotencyKey, status: "accepted")
     }
 
-    func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
+    func listSessions(
+        limit _: Int?,
+        search _: String?,
+        archived _: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
         OpenClawChatSessionsListResponse(ts: nil, path: nil, count: 0, defaults: nil, sessions: [])
     }
 

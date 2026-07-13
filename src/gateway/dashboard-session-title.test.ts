@@ -46,6 +46,10 @@ describe("normalizeDashboardSessionTitle", () => {
     );
     expect(normalizeDashboardSessionTitle("Title:  Release   planning ")).toBe("Release planning");
   });
+
+  it("keeps normalized titles on a UTF-16 boundary", () => {
+    expect(normalizeDashboardSessionTitle(`${"a".repeat(59)}🚀tail`)).toBe("a".repeat(59));
+  });
 });
 
 describe("maybeGenerateDashboardSessionTitle", () => {
@@ -80,6 +84,17 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(await update?.({ ...baseEntry })).toEqual({
       displayName: "Release Planning",
     });
+  });
+
+  it("keeps utility title prompt input on a UTF-16 boundary", async () => {
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...titleParams(),
+        userMessage: `${"m".repeat(999)}🚀tail`,
+      }),
+    ).resolves.toBe(true);
+
+    expect(generateConversationLabel.mock.calls[0]?.[0]?.userMessage).toBe("m".repeat(999));
   });
 
   it.each([

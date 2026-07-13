@@ -91,7 +91,7 @@ not install or modify anything on the remote host.
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: only Node is offered interactively. Bun can corrupt memory on WhatsApp/Telegram reconnect and is not a supported daemon runtime for those channels; pass `--daemon-runtime bun` only outside that combination.
+    - Runtime selection: Node is required because OpenClaw's canonical runtime state store uses `node:sqlite`.
 
   </Step>
   <Step title="Health check">
@@ -157,6 +157,10 @@ Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and T
 
 ## Auth and model options
 
+If a provider setup step fails in interactive onboarding (for example a CLI reuse option
+without a local sign-in), the wizard shows the error and returns to the provider picker
+instead of exiting. Explicit `--auth-choice` runs still fail fast for automation.
+
 <AccordionGroup>
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
@@ -167,19 +171,26 @@ Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and T
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
+    On a fresh setup with no primary model, sets `agents.defaults.model` to
+    `openai/gpt-5.6-sol` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI Code subscription (device pairing)">
     Browser pairing flow with a short-lived device code.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
+    On a fresh setup with no primary model, sets `agents.defaults.model` to
+    `openai/gpt-5.6-sol` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or legacy Codex model refs.
+    On a fresh setup with no primary model, sets `agents.defaults.model` to
+    `openai/gpt-5.6`; the bare direct-API model id resolves to the Sol tier.
+
+    Adding or reauthenticating OpenAI preserves an existing explicit primary
+    model, including `openai/gpt-5.5`. If the account does not expose GPT-5.6,
+    select `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade it.
 
   </Accordion>
   <Accordion title="xAI (Grok) OAuth">
@@ -330,7 +341,10 @@ Typical fields in `~/.openclaw/openclaw.json`:
 `openclaw agents add` writes `agents.list[]` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
-Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
+Active sessions and transcripts are stored in
+`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. The
+`~/.openclaw/agents/<agentId>/sessions/` directory is used for legacy migration
+inputs and archive/support artifacts.
 
 <Note>
 Some channels are delivered as plugins. When selected during setup, the wizard

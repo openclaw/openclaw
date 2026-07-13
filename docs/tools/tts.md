@@ -634,7 +634,7 @@ directive warnings.
 - `speakerVoice` / `speakerVoiceId` (legacy aliases: `voice`, `voiceName`, `voice_name`, `google_voice`, `voiceId`)
 - `model` / `google_model`
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
-- `vol` / `volume` (MiniMax volume, 0–10)
+- `vol` / `volume` (MiniMax volume, `(0, 10]`)
 - `pitch` (MiniMax integer pitch, −12 to 12; fractional values are truncated)
 - `emotion` (Volcengine emotion tag)
 - `applyTextNormalization` (`auto|on|off`)
@@ -800,7 +800,7 @@ Reply -> TTS enabled?
       Provider-owned settings keyed by speech provider id. Legacy direct blocks (`messages.tts.openai`, `.elevenlabs`, `.microsoft`, `.edge`) are rewritten by `openclaw doctor --fix`; commit only `messages.tts.providers.<id>`.
     </ParamField>
     <ParamField path="maxTextLength" type="number" default="4096">
-      Hard cap for TTS input characters. `/tts audio` and `tts.convert` fail if exceeded.
+      Hard cap for TTS input characters. `/tts audio`, `tts.convert`, and `tts.speak` fail if exceeded.
     </ParamField>
     <ParamField path="timeoutMs" type="number" default="30000">
       Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `messages.tts.timeoutMs` wins over any plugin-authored provider default.
@@ -846,7 +846,7 @@ Reply -> TTS enabled?
 
   <Accordion title="Gradium">
     <ParamField path="apiKey" type="string">Env: `GRADIUM_API_KEY`.</ParamField>
-    <ParamField path="baseUrl" type="string">Default `https://api.gradium.ai`.</ParamField>
+    <ParamField path="baseUrl" type="string">HTTPS Gradium API URL on `api.gradium.ai`. Default `https://api.gradium.ai`.</ParamField>
     <ParamField path="speakerVoiceId" type="string">Default Emma (`YTpq7expH9539ERJ`). Legacy alias: `voiceId`.</ParamField>
   </Accordion>
 
@@ -868,6 +868,9 @@ Reply -> TTS enabled?
     <ParamField path="timeoutMs" type="number">Command timeout in milliseconds. Default `120000`.</ParamField>
     <ParamField path="cwd" type="string">Optional command working directory.</ParamField>
     <ParamField path="env" type="Record<string, string>">Optional environment overrides for the command.</ParamField>
+
+    Command stdout and generated or converted audio are limited to 50 MiB. Diagnostic stderr is limited to 1 MiB. OpenClaw terminates the command and fails synthesis when either limit is exceeded.
+
   </Accordion>
 
   <Accordion title="Microsoft (no API key)">
@@ -926,7 +929,7 @@ Reply -> TTS enabled?
   <Accordion title="xAI">
     <ParamField path="apiKey" type="string">Env: `XAI_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.x.ai/v1`. Env: `XAI_BASE_URL`.</ParamField>
-    <ParamField path="speakerVoiceId" type="string">Default `eve`. Live voices: `ara`, `eve`, `leo`, `rex`, `sal`, `una`. Legacy alias: `voiceId`.</ParamField>
+    <ParamField path="speakerVoiceId" type="string">Default `eve`. With auth, `openclaw infer tts voices --provider xai` fetches the current built-in catalog; without auth it lists offline fallbacks `ara`, `eve`, `leo`, `rex`, and `sal`. Account custom voice IDs are forwarded even when absent from the built-in list. Legacy alias: `voiceId`.</ParamField>
     <ParamField path="language" type="string">BCP-47 language code or `auto`. Default `en`.</ParamField>
     <ParamField path="responseFormat" type='"mp3" | "wav" | "pcm" | "mulaw" | "alaw"'>Default `mp3`.</ParamField>
     <ParamField path="speed" type="number">Provider-native speed override, `0.7..1.5`.</ParamField>

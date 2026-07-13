@@ -2,6 +2,7 @@
 // Parses transcript JSONL files for messages, previews, counts, and usage metadata.
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
@@ -13,6 +14,7 @@ import {
   normalizeUsage,
   type ContextUsage,
 } from "../agents/usage.js";
+import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -20,6 +22,7 @@ import {
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
@@ -36,7 +39,7 @@ import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
-  normalizeOptionalString,
+  readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -192,12 +195,14 @@ export type ReadRecentSessionMessagesOptions = {
   maxBytes?: number;
   maxLines?: number;
   allowResetArchiveFallback?: boolean;
+  resetArchiveOnly?: boolean;
 };
 
 export type ReadSessionMessagesPageOptions = {
   offset: number;
   maxMessages: number;
   allowResetArchiveFallback?: boolean;
+  resetArchiveOnly?: boolean;
 };
 
 export type ReadSessionMessagesAsyncOptions =
@@ -205,12 +210,13 @@ export type ReadSessionMessagesAsyncOptions =
       mode: "full";
       reason: string;
       allowResetArchiveFallback?: boolean;
+      resetArchiveOnly?: boolean;
     }
   | ({
       mode: "recent";
     } & ReadRecentSessionMessagesOptions);
 
-type ReadRecentSessionMessagesResult = {
+export type ReadRecentSessionMessagesResult = {
   messages: unknown[];
   totalMessages: number;
   transcriptPath?: string;
@@ -324,7 +330,7 @@ function isOversizedTranscriptLine(line: string): boolean {
 
 function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
   for (let index = tokenIndex - 1; index >= 0; index--) {
-    const char = source[index];
+    const char = source.charAt(index);
     if (/\s/.test(char)) {
       continue;
     }
@@ -356,7 +362,7 @@ function extractJsonStringFieldWindow(
     }
     try {
       const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-      return normalizeOptionalString(decoded);
+      return readNonBlankStringPreservingWhitespace(decoded);
     } catch {
       return undefined;
     }
@@ -634,7 +640,9 @@ export async function readSessionMessagesWithSourceAsync(
   }
   const filePath =
     opts.allowResetArchiveFallback === true
-      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId)
+      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId, {
+          resetArchiveOnly: opts.resetArchiveOnly === true,
+        })
       : findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return { messages: [] };
@@ -651,7 +659,7 @@ export async function readSessionMessageByIdAsync(
   storePath: string | undefined,
   sessionFile: string | undefined,
   messageId: string,
-  opts?: { allowResetArchiveFallback?: boolean; agentId?: string },
+  opts?: { allowResetArchiveFallback?: boolean; agentId?: string; resetArchiveOnly?: boolean },
 ): Promise<{ message?: unknown; seq?: number; oversized: boolean; found: boolean }> {
   const filePath =
     opts?.allowResetArchiveFallback === true
@@ -660,6 +668,7 @@ export async function readSessionMessageByIdAsync(
           storePath,
           sessionFile,
           opts.agentId,
+          { resetArchiveOnly: opts.resetArchiveOnly === true },
         )
       : findExistingTranscriptPath(sessionId, storePath, sessionFile, opts?.agentId);
   if (!filePath) {
@@ -766,7 +775,9 @@ async function readRecentSessionMessagesWithSourceAsync(
 
   const filePath =
     opts?.allowResetArchiveFallback === true
-      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId)
+      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId, {
+          resetArchiveOnly: opts.resetArchiveOnly === true,
+        })
       : findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return { messages: [] };
@@ -807,7 +818,9 @@ export async function readRecentSessionMessagesWithStatsAsync(
 ): Promise<ReadRecentSessionMessagesResult> {
   const filePath =
     opts.allowResetArchiveFallback === true
-      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId)
+      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId, {
+          resetArchiveOnly: opts.resetArchiveOnly === true,
+        })
       : findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return { messages: [], totalMessages: 0 };
@@ -936,7 +949,7 @@ function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown
   return parsedSessionEntryToMessage(entry.record, entry.seq);
 }
 
-function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
+export function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
   const message = indexedTranscriptEntryToMessage(entry);
   return message ? [message] : [];
 }
@@ -946,7 +959,6 @@ export {
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
   resolveSessionTranscriptCandidates,
-  resolveSessionTranscriptResetArchiveCandidatesAsync,
 } from "./session-transcript-files.fs.js";
 
 export function capArrayByJsonBytes<T>(
@@ -960,7 +972,7 @@ export function capArrayByJsonBytes<T>(
   let bytes = 2 + parts.reduce((a, b) => a + b, 0) + (items.length - 1);
   let start = 0;
   while (bytes > maxBytes && start < items.length - 1) {
-    bytes -= parts[start] + 1;
+    bytes -= expectDefined(parts[start], "parts entry at start") + 1;
     start += 1;
   }
   const next = start > 0 ? items.slice(start) : items;
@@ -1183,7 +1195,7 @@ function extractFirstUserMessageFromTranscriptChunk(
   return null;
 }
 
-function findExistingTranscriptPath(
+export function findExistingTranscriptPath(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
@@ -1198,10 +1210,13 @@ async function findExistingTranscriptHistoryPathAsync(
   storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
+  opts?: { resetArchiveOnly?: boolean },
 ): Promise<string | null> {
-  const activePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (activePath) {
-    return activePath;
+  if (opts?.resetArchiveOnly !== true) {
+    const activePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+    if (activePath) {
+      return activePath;
+    }
   }
   for (const archivePath of await resolveSessionTranscriptResetArchiveCandidatesAsync(
     sessionId,
@@ -1211,16 +1226,25 @@ async function findExistingTranscriptHistoryPathAsync(
   )) {
     const stat = await fs.promises.stat(archivePath).catch(() => null);
     if (stat?.isFile()) {
-      const refreshedActivePath = findExistingTranscriptPath(
-        sessionId,
-        storePath,
-        sessionFile,
-        agentId,
-      );
-      if (refreshedActivePath) {
-        return refreshedActivePath;
+      if (opts?.resetArchiveOnly !== true) {
+        const refreshedActivePath = findExistingTranscriptPath(
+          sessionId,
+          storePath,
+          sessionFile,
+          agentId,
+        );
+        if (refreshedActivePath) {
+          return refreshedActivePath;
+        }
       }
-      return archivePath;
+      // Compressed archives materialize to a plain JSONL cache once (archives
+      // are write-once) so every downstream reader — index, tail chunks,
+      // header probes — keeps working without knowing about zstd.
+      try {
+        return materializeSessionArchiveForRead(archivePath);
+      } catch {
+        continue;
+      }
     }
   }
   return null;
@@ -1706,6 +1730,9 @@ function hasInvalidLeafControl(lines: Iterable<string>): boolean {
   return tree.hasInvalidLeafControl;
 }
 
+// File-tier only (#88838): this module is the file backend behind the
+// session-transcript-readers seam, and the index read operates on an already
+// resolved transcript artifact path, never on live session identity.
 async function extractLatestUsageFromTranscriptIndex(
   filePath: string,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
@@ -1916,13 +1943,11 @@ function normalizeRole(role: string | undefined, isTool: boolean): SessionPrevie
 }
 
 function truncatePreviewText(text: string, maxChars: number): string {
-  if (maxChars <= 0 || text.length <= maxChars) {
+  if (text.length <= maxChars) {
     return text;
   }
-  if (maxChars <= 3) {
-    return text.slice(0, maxChars);
-  }
-  return `${text.slice(0, maxChars - 3)}...`;
+  // The preview entry point clamps maxChars to at least 20, so the suffix budget stays positive.
+  return `${truncateUtf16Safe(text, maxChars - 3)}...`;
 }
 
 function extractPreviewText(message: TranscriptPreviewMessage): string | null {
@@ -1978,18 +2003,22 @@ function extractMediaSummary(message: TranscriptPreviewMessage): string | null {
   return null;
 }
 
-function buildPreviewItems(
-  messages: TranscriptPreviewMessage[],
+export function buildSessionPreviewItems(
+  messages: readonly unknown[],
   maxItems: number,
   maxChars: number,
 ): SessionPreviewItem[] {
   const items: SessionPreviewItem[] = [];
   for (const message of messages) {
-    const toolCall = isToolCall(message);
-    const role = normalizeRole(message.role, toolCall);
-    let text = extractPreviewText(message);
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const previewMessage = message as TranscriptPreviewMessage;
+    const toolCall = isToolCall(previewMessage);
+    const role = normalizeRole(previewMessage.role, toolCall);
+    let text = extractPreviewText(previewMessage);
     if (!text) {
-      const toolNames = extractToolNames(message);
+      const toolNames = extractToolNames(previewMessage);
       if (toolNames.length > 0) {
         const shown = toolNames.slice(0, 2);
         const overflow = toolNames.length - shown.length;
@@ -2000,7 +2029,7 @@ function buildPreviewItems(
       }
     }
     if (!text) {
-      text = extractMediaSummary(message);
+      text = extractMediaSummary(previewMessage);
     }
     if (!text) {
       continue;
@@ -2047,7 +2076,7 @@ function readRecentMessagesFromTranscript(
 
     const collected: TranscriptPreviewMessage[] = [];
     for (let i = tailLines.length - 1; i >= 0; i--) {
-      const line = tailLines[i];
+      const line = expectDefined(tailLines[i], "tail lines entry at i");
       try {
         const parsed = JSON.parse(line);
         const msg = parsed?.message as TranscriptPreviewMessage | undefined;
@@ -2091,7 +2120,7 @@ export function readSessionPreviewItemsFromTranscript(
   for (const readSize of PREVIEW_READ_SIZES) {
     const messages = readRecentMessagesFromTranscript(filePath, boundedItems, readSize);
     if (messages.length > 0 || readSize === PREVIEW_READ_SIZES[PREVIEW_READ_SIZES.length - 1]) {
-      return buildPreviewItems(messages, boundedItems, boundedChars);
+      return buildSessionPreviewItems(messages, boundedItems, boundedChars);
     }
   }
 

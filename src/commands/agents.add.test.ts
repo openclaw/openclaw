@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -85,9 +86,9 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../cli/plugins-install-record-commit.js", async () => ({
-  ...(await vi.importActual<typeof import("../cli/plugins-install-record-commit.js")>(
-    "../cli/plugins-install-record-commit.js",
+vi.mock("../plugins/install-record-commit.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/install-record-commit.js")>(
+    "../plugins/install-record-commit.js",
   )),
   commitConfigWithPendingPluginInstalls: commitConfigWithPendingPluginInstallsMock,
   transformConfigWithPendingPluginInstalls: transformConfigWithPendingPluginInstallsMock,
@@ -237,6 +238,11 @@ describe("agents add command", () => {
               provider: "openai",
               key: "sk-test",
             },
+            "openai:backup": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-backup",
+            },
             "github-copilot:default": {
               type: "token",
               provider: "github-copilot",
@@ -250,6 +256,12 @@ describe("agents add command", () => {
               expires: Date.now() + 60_000,
             },
           },
+          order: {
+            openai: ["openai:oauth", "openai:backup", "openai:default"],
+            "github-copilot": ["github-copilot:default"],
+          },
+          lastGood: { openai: "openai:default" },
+          usageStats: { "openai:default": { lastUsed: 1_000 } },
         },
         sourceAgentDir,
       );
@@ -259,10 +271,21 @@ describe("agents add command", () => {
         destAgentDir,
       });
 
-      expect(result).toEqual({ copied: 2, skipped: 1 });
+      expect(result).toEqual({ copied: 3, skipped: 1 });
       const copied = loadPersistedAuthProfileStore(destAgentDir);
       expect(Object.keys(copied?.profiles ?? {}).toSorted()).toEqual([
         "github-copilot:default",
+        "openai:backup",
+        "openai:default",
+      ]);
+      expect(copied?.order).toEqual({
+        openai: ["openai:backup", "openai:default"],
+        "github-copilot": ["github-copilot:default"],
+      });
+      expect(copied?.lastGood).toBeUndefined();
+      expect(copied?.usageStats).toBeUndefined();
+      expect(resolveAuthProfileOrder({ store: copied!, provider: "openai" })).toEqual([
+        "openai:backup",
         "openai:default",
       ]);
     });

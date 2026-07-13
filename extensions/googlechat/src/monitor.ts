@@ -16,7 +16,7 @@ import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js
 import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
-import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
+import { deliverGoogleChatReply, type GoogleChatTypingMessage } from "./monitor-reply-delivery.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -29,7 +29,8 @@ import type {
 } from "./monitor-types.js";
 import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
-import type { GoogleChatAttachment, GoogleChatEvent, GoogleChatSpace } from "./types.js";
+import { isGoogleChatGroupSpace } from "./targets.js";
+import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
 
@@ -60,20 +61,6 @@ function resolveGoogleChatTimestampMs(eventTime?: string): number | undefined {
   }
   const parsed = Date.parse(eventTime);
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function isGoogleChatGroupSpace(space: GoogleChatSpace): boolean {
-  const spaceType = (space.spaceType ?? "").toUpperCase();
-  // Google Chat deprecates `type` in favor of `spaceType`; known modern
-  // values must win if the fields disagree. Fall back to the bot-DM flag and
-  // legacy type so incomplete payloads retain their existing direct routing.
-  if (spaceType === "DIRECT_MESSAGE") {
-    return false;
-  }
-  if (spaceType === "SPACE" || spaceType === "GROUP_CHAT") {
-    return true;
-  }
-  return space.singleUserBotDm !== true && (space.type ?? "").toUpperCase() !== "DM";
 }
 
 function resolveGoogleChatBotLoopProtection(params: {
@@ -279,8 +266,8 @@ async function processMessageWithPipeline(params: {
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
-  if (attachments.length > 0) {
-    const first = attachments[0];
+  const first = attachments.at(0);
+  if (first) {
     const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
     if (attachmentData) {
       mediaPath = attachmentData.path;
@@ -367,7 +354,11 @@ async function processMessageWithPipeline(params: {
     );
     typingIndicator = "message";
   }
-  let typingMessageName: string | undefined;
+  let typingMessage: GoogleChatTypingMessage | undefined;
+  const typingMessageThreadName =
+    account.config.replyToMode && account.config.replyToMode !== "off"
+      ? replyThreadName
+      : undefined;
 
   // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
@@ -381,9 +372,11 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: replyThreadName,
+        thread: typingMessageThreadName,
       });
-      typingMessageName = result?.messageName;
+      if (result?.messageName) {
+        typingMessage = { name: result.messageName, thread: typingMessageThreadName };
+      }
     } catch (err) {
       runtime.error?.(`Failed sending typing message: ${String(err)}`);
     }
@@ -419,7 +412,7 @@ async function processMessageWithPipeline(params: {
               payload,
               infoKind: info.kind,
               spaceId,
-              typingMessageName,
+              hasTypingMessage: Boolean(typingMessage),
             }),
           deliver: async (payload) => {
             await deliverGoogleChatReply({
@@ -430,10 +423,10 @@ async function processMessageWithPipeline(params: {
               core,
               config,
               statusSink,
-              typingMessageName,
+              typingMessage,
             });
             // Only use typing message for first delivery
-            typingMessageName = undefined;
+            typingMessage = undefined;
           },
           onDelivered: () => {
             statusSink?.({ lastOutboundAt: Date.now() });
@@ -541,4 +534,3 @@ export function resolveGoogleChatWebhookPath(params: {
     }) ?? "/googlechat"
   );
 }
-export { testing as __testing };

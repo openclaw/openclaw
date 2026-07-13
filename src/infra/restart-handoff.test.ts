@@ -162,6 +162,36 @@ describe("gateway restart handoff", () => {
     expect(persisted?.reason).toBe("plugin source changed");
   });
 
+  it("keeps truncated restart reasons free of lone surrogates", () => {
+    const env = createHandoffEnv();
+    const handoff = expectWrittenHandoff({
+      env,
+      pid: 1,
+      reason: `${"a".repeat(199)}😀tail`,
+      restartKind: "full-process",
+      supervisorMode: "external",
+    });
+
+    expect(handoff.reason).toHaveLength(199);
+    expect(Buffer.from(handoff.reason ?? "").toString()).toBe(handoff.reason);
+    expect(readGatewayRestartHandoffSync(env)?.reason).toBe(handoff.reason);
+  });
+
+  it("keeps persisted intent IDs free of lone surrogates", () => {
+    const env = createHandoffEnv();
+    const expectedIntentId = "a".repeat(119);
+    insertHandoffRow(env, {
+      intentId: ` ${expectedIntentId}😀tail `,
+      createdAt: 1_000,
+      expiresAt: 61_000,
+    });
+
+    const handoff = readGatewayRestartHandoffSync(env, 1_500);
+
+    expect(handoff?.intentId).toBe(expectedIntentId);
+    expect(Buffer.from(handoff?.intentId ?? "").toString()).toBe(handoff?.intentId);
+  });
+
   it("persists restart trace timing for supervised process handoff", () => {
     const env = createHandoffEnv();
 

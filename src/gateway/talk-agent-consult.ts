@@ -1,6 +1,7 @@
 // Gateway Talk realtime agent-consult bridge.
 // Starts chat.send runs that answer realtime Talk tool calls.
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   ErrorCodes,
   errorShape,
@@ -76,36 +77,66 @@ export async function startTalkRealtimeAgentConsult(params: {
   }
   const idempotencyKey = `talk-${params.callId}-${randomUUID()}`;
   const normalizedTalk = normalizeTalkSection(params.context.getRuntimeConfig().talk);
-  let chatResponse: { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined;
-  await chatHandlers["chat.send"]({
-    req: {
-      type: "req",
-      id: `${params.requestId}:talk-tool-call`,
-      method: "chat.send",
-    },
-    client: params.client,
-    isWebchatConnect: params.isWebchatConnect,
-    context: params.context,
-    params: {
-      sessionKey: params.sessionKey,
-      message,
-      idempotencyKey,
-      ...(normalizedTalk?.consultThinkingLevel
-        ? { thinking: normalizedTalk.consultThinkingLevel }
-        : {}),
-      ...(typeof normalizedTalk?.consultFastMode === "boolean"
-        ? { fastMode: normalizedTalk.consultFastMode }
-        : {}),
-    },
-    respond: (ok: boolean, result?: unknown, error?: ErrorShape) => {
-      chatResponse = ok
-        ? { ok: true, result }
-        : {
-            ok: false,
-            error: error ?? errorShape(ErrorCodes.UNAVAILABLE, "chat.send failed without error"),
-          };
-    },
-  } as Parameters<GatewayRequestHandlers[string]>[0]);
+  const chatResponse = await new Promise<
+    { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined
+  >((resolve) => {
+    let acknowledged = false;
+    const chatSendResult = expectDefined(
+      chatHandlers["chat.send"],
+      "chat.send handler",
+    )({
+      req: {
+        type: "req",
+        id: `${params.requestId}:talk-tool-call`,
+        method: "chat.send",
+      },
+      client: params.client,
+      isWebchatConnect: params.isWebchatConnect,
+      context: params.context,
+      params: {
+        sessionKey: params.sessionKey,
+        message,
+        idempotencyKey,
+        ...(normalizedTalk?.consultThinkingLevel
+          ? { thinking: normalizedTalk.consultThinkingLevel }
+          : {}),
+        ...(typeof normalizedTalk?.consultFastMode === "boolean"
+          ? { fastMode: normalizedTalk.consultFastMode }
+          : {}),
+      },
+      respond: (ok: boolean, result?: unknown, error?: ErrorShape) => {
+        acknowledged = true;
+        resolve(
+          ok
+            ? { ok: true, result }
+            : {
+                ok: false,
+                error:
+                  error ?? errorShape(ErrorCodes.UNAVAILABLE, "chat.send failed without error"),
+              },
+        );
+      },
+    } as Parameters<GatewayRequestHandlers[string]>[0]);
+    void Promise.resolve(chatSendResult).then(
+      () => {
+        if (!acknowledged) {
+          resolve(undefined);
+        }
+      },
+      (error: unknown) => {
+        if (acknowledged) {
+          params.context.logGateway.warn(
+            `realtime Talk agent consult failed after acknowledgement: ${formatForLog(error)}`,
+          );
+          return;
+        }
+        resolve({
+          ok: false,
+          error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)),
+        });
+      },
+    );
+  });
 
   if (!chatResponse) {
     return {
@@ -132,9 +163,9 @@ export async function startTalkRealtimeAgentConsult(params: {
       relaySessionId: params.relaySessionId,
       connId: params.connId,
       sessionKey: params.sessionKey,
-      runId,
+      runId: expectDefined(runId, "talk agent run id"),
       callId: params.callId,
     });
   }
-  return { ok: true, runId, idempotencyKey };
+  return { ok: true, runId: expectDefined(runId, "talk agent run id"), idempotencyKey };
 }

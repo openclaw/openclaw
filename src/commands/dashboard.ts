@@ -2,8 +2,9 @@
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { copyToClipboard } from "../infra/clipboard.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { isSameProcessSpecificIpv4WithLoopbackListeners } from "../infra/ports-format.js";
+import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
 import {
   detectBrowserOpenSupport,
@@ -13,8 +14,15 @@ import {
 } from "./onboard-helpers.js";
 
 type DashboardOptions = {
+  json?: boolean;
   noOpen?: boolean;
   yes?: boolean;
+};
+
+const quietRuntime: RuntimeEnv = {
+  log: () => {},
+  error: () => {},
+  exit: () => {},
 };
 
 async function resolveDashboardTarget() {
@@ -31,15 +39,45 @@ async function resolveDashboardTarget() {
   });
   const token = resolvedToken.token ?? "";
 
-  // LAN URLs fail secure-context checks in browsers.
-  // Coerce only lan->loopback and preserve other bind modes.
-  const links = resolveControlUiLinks({
+  const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+  // A wildcard LAN address is not a browser destination, while plain HTTP on a
+  // specific interface fails secure-context checks. Same-host launches use loopback;
+  // TLS keeps specific hosts so certificate names continue to match.
+  const customBindIsWildcard = bind === "custom" && customBindHost?.trim() === "0.0.0.0";
+  const dashboardBind =
+    bind === "lan" ||
+    customBindIsWildcard ||
+    (!tlsEnabled && (bind === "tailnet" || bind === "custom"))
+      ? "loopback"
+      : bind;
+  const configuredLinks = resolveControlUiLinks({
     port,
-    bind: bind === "lan" ? "loopback" : bind,
+    bind,
     customBindHost,
     basePath,
-    tlsEnabled: cfg.gateway?.tls?.enabled === true,
+    tlsEnabled,
   });
+  const links =
+    dashboardBind === bind
+      ? configuredLinks
+      : resolveControlUiLinks({
+          port,
+          bind: dashboardBind,
+          customBindHost,
+          basePath,
+          tlsEnabled,
+        });
+  const loopbackAliasHost = (() => {
+    if (dashboardBind !== "loopback" || (bind !== "tailnet" && bind !== "custom")) {
+      return undefined;
+    }
+    try {
+      const host = new URL(configuredLinks.wsUrl).hostname;
+      return host === "127.0.0.1" || host === "0.0.0.0" ? undefined : host;
+    } catch {
+      return undefined;
+    }
+  })();
   // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
   const includeTokenInUrl = token.length > 0 && !resolvedToken.secretRefConfigured;
   // Prefer URL fragment to avoid leaking auth tokens via query params.
@@ -55,7 +93,86 @@ async function resolveDashboardTarget() {
     token,
     includeTokenInUrl,
     dashboardUrl,
+    probeUrl: loopbackAliasHost ? configuredLinks.wsUrl : links.wsUrl,
+    loopbackAliasHost,
   };
+}
+
+async function hasVerifiedLoopbackAlias(
+  target: Awaited<ReturnType<typeof resolveDashboardTarget>>,
+): Promise<boolean> {
+  const expectedHost = target.loopbackAliasHost;
+  if (!expectedHost) {
+    return true;
+  }
+  const portUsage = await inspectPortUsage(target.port).catch(() => undefined);
+  // The configured-address probe establishes Gateway identity. This local PID check only proves
+  // that the process also owns the loopback endpoint before credentials are delivered there.
+  return Boolean(
+    portUsage &&
+    isSameProcessSpecificIpv4WithLoopbackListeners(portUsage.listeners, target.port, expectedHost),
+  );
+}
+
+async function ensureDashboardTargetReady(params: {
+  target: Awaited<ReturnType<typeof resolveDashboardTarget>>;
+  runtime: RuntimeEnv;
+  yes?: boolean;
+  allowRecovery?: boolean;
+}) {
+  return ensureGatewayReadyForOperation({
+    runtime: params.runtime,
+    operation: "open the dashboard",
+    yes: params.yes,
+    probeUrl: params.target.probeUrl,
+    // First-time CLI probes intentionally lack paired operator scope. Gateway
+    // handshake evidence plus the same-PID alias check below proves the target.
+    readyWhenReachable: true,
+    ...(params.allowRecovery === false ? { allowInstall: false, interactive: false } : {}),
+  });
+}
+
+function dashboardJsonFailure(runtime: RuntimeEnv, reason: string): void {
+  writeRuntimeJson(runtime, { ok: false, reason }, 0);
+  runtime.exit(1);
+}
+
+async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
+  try {
+    const target = await resolveDashboardTarget();
+    const readiness = await ensureDashboardTargetReady({
+      target,
+      runtime: quietRuntime,
+      allowRecovery: false,
+    });
+    if (!readiness.ready) {
+      dashboardJsonFailure(runtime, readiness.reason);
+      return;
+    }
+    if (!(await hasVerifiedLoopbackAlias(target))) {
+      dashboardJsonFailure(
+        runtime,
+        "Dashboard loopback listener could not be verified as the configured Gateway.",
+      );
+      return;
+    }
+
+    writeRuntimeJson(
+      runtime,
+      {
+        ok: true,
+        url: target.dashboardUrl,
+        httpUrl: target.links.httpUrl,
+        wsUrl: target.links.wsUrl,
+        port: target.port,
+        tokenIncluded: target.includeTokenInUrl,
+      },
+      0,
+    );
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    dashboardJsonFailure(runtime, reason || "Dashboard target resolution failed.");
+  }
 }
 
 /** Open or print the Control UI dashboard URL after ensuring the Gateway is reachable. */
@@ -63,19 +180,42 @@ export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DashboardOptions = {},
 ) {
+  if (options.json) {
+    await dashboardJsonCommand(runtime);
+    return;
+  }
+
   const initialTarget = await resolveDashboardTarget();
-  const readiness = await ensureGatewayReadyForOperation({
+  const readiness = await ensureDashboardTargetReady({
+    target: initialTarget,
     runtime,
-    operation: "open the dashboard",
     yes: options.yes,
-    probeUrl: initialTarget.links.wsUrl,
-    readyWhenReachable: true,
   });
   if (!readiness.ready) {
     return;
   }
 
   const target = readiness.recovered ? await resolveDashboardTarget() : initialTarget;
+  const recoveryChangedProbe = target.probeUrl !== initialTarget.probeUrl;
+  if (readiness.recovered && recoveryChangedProbe) {
+    // Recovery may install or start against a changed config. Prove the final
+    // endpoint without triggering a second lifecycle action before URL delivery.
+    const finalReadiness = await ensureDashboardTargetReady({
+      target,
+      runtime,
+      allowRecovery: false,
+    });
+    if (!finalReadiness.ready) {
+      return;
+    }
+  }
+  if (!(await hasVerifiedLoopbackAlias(target))) {
+    runtime.error(
+      "Dashboard loopback listener could not be verified as the configured Gateway; refusing to copy or open an authenticated URL.",
+    );
+    runtime.log("Restart the Gateway, then run `openclaw gateway status --deep` for details.");
+    return;
+  }
   const { port, basePath, links, resolvedToken, token, includeTokenInUrl, dashboardUrl } = target;
 
   runtime.log(`Dashboard URL: ${links.httpUrl}`);

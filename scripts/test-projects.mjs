@@ -2,6 +2,7 @@
 // full local suite.
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
+import pMap from "p-map";
 import { formatMs } from "./lib/check-timing-summary.mjs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
 import {
@@ -25,6 +26,7 @@ import {
   applyDefaultVitestNoOutputTimeout,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
+  createVitestPreflightPnpmArgs,
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
@@ -84,16 +86,13 @@ function cleanupVitestRunSpec(spec) {
   }
 }
 
-function runVitestSpec(spec) {
-  if (spec.includeFilePath && spec.includePatterns) {
-    writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
-  }
+function runPnpmSpecCommand(spec, pnpmArgs, label) {
   let noOutputTimedOut = false;
   return new Promise((resolve, reject) => {
     const { child, getForwardedSignal, teardown } = spawnWatchedVitestProcess({
-      pnpmArgs: spec.pnpmArgs,
+      pnpmArgs,
       env: spec.env,
-      label: spec.config,
+      label,
       onNoOutputTimeout: () => {
         noOutputTimedOut = true;
       },
@@ -105,7 +104,6 @@ function runVitestSpec(spec) {
 
     child.on("exit", (code, signal) => {
       teardown();
-      cleanupVitestRunSpec(spec);
       const forwardedSignal = getForwardedSignal();
       if (forwardedSignal) {
         forceKillVitestProcessGroup(child);
@@ -117,10 +115,33 @@ function runVitestSpec(spec) {
 
     child.on("error", (error) => {
       teardown();
-      cleanupVitestRunSpec(spec);
-      reject(error);
+      reject(error instanceof Error ? error : new Error(String(error)));
     });
   });
+}
+
+async function runVitestSpec(spec) {
+  if (spec.includeFilePath && spec.includePatterns) {
+    writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns, {
+      expandGlobs: !spec.watchMode,
+    });
+  }
+  try {
+    if (spec.preflightPnpmArgs) {
+      console.error(`[test] preflight ${spec.config}`);
+      const preflightResult = await runPnpmSpecCommand(
+        spec,
+        spec.preflightPnpmArgs,
+        `${spec.config}:preflight`,
+      );
+      if (preflightResult.code !== 0 || preflightResult.signal) {
+        return preflightResult;
+      }
+    }
+    return await runPnpmSpecCommand(spec, spec.pnpmArgs, spec.config);
+  } finally {
+    cleanupVitestRunSpec(spec);
+  }
 }
 
 function applyDefaultParallelVitestWorkerBudget(specs, env) {
@@ -189,21 +210,21 @@ function printNoChangedTestTargets(args, cwd, baseEnv) {
 }
 
 async function runVitestSpecsParallel(specs, concurrency) {
-  let nextIndex = 0;
   let exitCode = 0;
+  let stopScheduling = false;
   const failures = [];
   const timings = [];
 
-  const runWorker = async () => {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const spec = specs[index];
-      if (!spec) {
+  await pMap(
+    specs,
+    async (spec, index) => {
+      if (stopScheduling) {
         return;
       }
       const result = await runLoggedVitestSpec(spec);
       if (!result) {
+        // A forwarded termination signal must not admit replacement shards during shutdown.
+        stopScheduling = true;
         return;
       }
       if (result.code !== 0) {
@@ -220,10 +241,9 @@ async function runVitestSpecsParallel(specs, concurrency) {
       if (result.timing) {
         timings.push(result.timing);
       }
-    }
-  };
-
-  await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
+    },
+    { concurrency, stopOnError: true },
+  );
   return { exitCode, failures, timings };
 }
 
@@ -270,6 +290,7 @@ async function main() {
             plan.config,
             ...plan.forwardedArgs,
           ],
+          preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
           watchMode: plan.watchMode,
         }))
       : createVitestRunSpecs(args, {

@@ -10,23 +10,80 @@ on:
       - apps/macos/Sources/**
       - apps/macos/Package.swift
       - apps/shared/OpenClawKit/Sources/**
+      - apps/.i18n/native/**
       - apps/.i18n/native-source.json
       - scripts/control-ui-i18n.ts
+      - scripts/android-app-i18n.ts
+      - scripts/apple-app-i18n.ts
       - scripts/native-app-i18n.ts
       - ui/src/i18n/.i18n/glossary.*.json
+      - .github/actions/create-generated-pr-tokens/action.yml
+      - .github/actions/publish-generated-pr/action.yml
       - .github/workflows/native-app-locale-refresh.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: native-app-locale-refresh-${{ github.event_name == 'push' && github.ref || format('manual-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]' }}
+  group: native-app-locale-refresh
+  # Finish the active full refresh; GitHub retains only the newest pending run for this group.
+  # Publisher overlap checks defer stale generated paths to that queued reconciliation run.
+  cancel-in-progress: false
 
 jobs:
+  resolve-base:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.base.outputs.sha }}
+    steps:
+      - name: Resolve default branch head
+        id: base
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha="$(
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha
+          )"
+          if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unable to resolve ${DEFAULT_BRANCH} to an exact commit." >&2
+            exit 1
+          fi
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+
+  publisher-preflight:
+    name: Verify generated PR App permissions
+    needs: resolve-base
+    if: needs.resolve-base.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.resolve-base.outputs.sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Create generated PR tokens
+        uses: ./.github/actions/create-generated-pr-tokens
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+
   refresh:
-    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && (github.event_name != 'push' || github.actor != 'github-actions[bot]')
+    needs: [resolve-base, publisher-preflight]
+    if: >-
+      needs.resolve-base.result == 'success' &&
+      needs.publisher-preflight.result == 'success'
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -61,7 +118,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          ref: ${{ needs.resolve-base.outputs.sha }}
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -87,7 +145,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: claude-opus-4-8
-          OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.5' }}
+          OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.6-sol' }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
           OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
           LOCALE: ${{ matrix.locale }}
@@ -167,15 +225,19 @@ jobs:
 
   finalize:
     name: Commit native locale refresh
-    needs: refresh
-    if: needs.refresh.result == 'success'
+    needs: [resolve-base, publisher-preflight, refresh]
+    if: >-
+      needs.resolve-base.result == 'success' &&
+      needs.publisher-preflight.result == 'success' &&
+      needs.refresh.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          ref: ${{ needs.resolve-base.outputs.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Download locale artifacts
@@ -204,34 +266,71 @@ jobs:
       - name: Refresh shared native inventory
         run: node --import tsx scripts/native-app-i18n.ts sync --write
 
+      - name: Refresh Android native resources
+        run: node --import tsx scripts/android-app-i18n.ts sync
+
+      - name: Refresh Apple native resources
+        run: node --import tsx scripts/apple-app-i18n.ts sync-ios --write
+
       - name: Validate native locale refresh
-        run: node --import tsx scripts/native-app-i18n.ts check
-
-      - name: Commit and push aggregate locale refresh
-        env:
-          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          set -euo pipefail
-          if ! git status --porcelain -- apps/.i18n/native apps/.i18n/native-source.json | grep -q .; then
-            echo "No native locale changes."
-            exit 0
-          fi
+          node --import tsx scripts/native-app-i18n.ts check
+          node --import tsx scripts/android-app-i18n.ts check
+          node --import tsx scripts/apple-app-i18n.ts check
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A apps/.i18n/native apps/.i18n/native-source.json
-          git commit --no-verify -m "chore(i18n): refresh native locales"
+      - name: Open or update generated locale PR
+        uses: ./.github/actions/publish-generated-pr
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          base-branch: ${{ github.event.repository.default_branch }}
+          head-branch: automation/native-app-locale-refresh
+          commit-message: "chore(i18n): refresh native locales"
+          pr-title: "chore(i18n): refresh native locales"
+          generated-paths: |
+            apps/.i18n/native
+            apps/.i18n/native-source.json
+            apps/.i18n/apple-translation-contradictions.json
+            apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt
+            apps/android/app/src/main/res/values*/assistant.xml
+            apps/android/app/src/main/res/values*/strings.xml
+            apps/ios/Resources/Localizable.xcstrings
+            apps/ios/Sources/*.lproj/InfoPlist.strings
+            apps/ios/WatchApp/*.lproj/InfoPlist.strings
+            apps/ios/ShareExtension/*.lproj/InfoPlist.strings
+            apps/ios/ActivityWidget/*.lproj/InfoPlist.strings
+          invalidation-paths: |
+            apps/android/app/src/main
+            apps/ios
+            apps/macos/Sources
+            apps/macos/Package.swift
+            apps/shared/OpenClawKit/Sources
+            scripts/control-ui-i18n.ts
+            scripts/android-app-i18n.ts
+            scripts/apple-app-i18n.ts
+            scripts/native-app-i18n.ts
+            ui/src/i18n/.i18n/glossary.*.json
+            .github/actions/create-generated-pr-tokens/action.yml
+            .github/actions/publish-generated-pr/action.yml
+            .github/workflows/native-app-locale-refresh.yml
+          pr-body: |
+            ## What Problem This Solves
 
-          for attempt in 1 2 3 4 5; do
-            git fetch origin "${TARGET_BRANCH}"
-            git rebase "origin/${TARGET_BRANCH}"
-            if git push origin HEAD:"${TARGET_BRANCH}"; then
-              exit 0
-            fi
-            git rebase --abort >/dev/null 2>&1 || true
-            echo "Aggregate push attempt ${attempt} failed; retrying."
-            sleep $((attempt * 2))
-          done
+            Keeps generated native app locales synchronized without bypassing protected-branch checks.
 
-          echo "Failed to push aggregate native locale update after retries."
-          exit 1
+            ## Why This Change Was Made
+
+            The Native App Locale Refresh workflow generated this update from `${{ needs.resolve-base.outputs.sha }}` and published it through a reviewable automation branch.
+
+            ## User Impact
+
+            No direct user-facing change beyond refreshed translations.
+
+            ## Evidence
+
+            - [Locale refresh run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - `node --import tsx scripts/native-app-i18n.ts check`
+            - `node --import tsx scripts/android-app-i18n.ts check`
+            - `node --import tsx scripts/apple-app-i18n.ts check`

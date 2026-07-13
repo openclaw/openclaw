@@ -25,7 +25,11 @@ import {
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
-import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
+import {
+  appendIMessageCliStderrTail,
+  appendIMessageCliStdout,
+  listenForIMessageCliStreamErrors,
+} from "./cli-output.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
@@ -64,6 +68,7 @@ type IMessageSendOpts = {
   client?: IMessageRpcClient;
   config: OpenClawConfig;
   account?: ResolvedIMessageAccount;
+  approvalKind?: "exec" | "plugin";
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
@@ -86,7 +91,7 @@ type IMessageSendOpts = {
   }) => Promise<string | null> | string | null;
 };
 
-export type IMessageSendResult = {
+type IMessageSendResult = {
   /**
    * Generic identifier returned by the bridge. May be a GUID string, a
    * numeric ROWID stringified, or the literal "ok"/"unknown" placeholders
@@ -647,6 +652,11 @@ async function runIMessageCliJson(
     child.stderr.on("data", (chunk) => {
       stderr = appendIMessageCliStderrTail(stderr, chunk);
     });
+    listenForIMessageCliStreamErrors({
+      child,
+      isSettled: () => settled,
+      fail,
+    });
     child.on("error", (error) => {
       if (settled) {
         clearTimers();
@@ -913,7 +923,8 @@ export async function sendMessageIMessage(
       : typeof account.config.mediaMaxMb === "number"
         ? account.config.mediaMaxMb * 1024 * 1024
         : 16 * 1024 * 1024;
-  let message = text ? appendIMessageApprovalReactionHintForOutboundMessage(text) : "";
+  let message =
+    text && opts.approvalKind ? appendIMessageApprovalReactionHintForOutboundMessage(text) : text;
   let filePath: string | undefined;
   let mediaContentType: string | undefined;
 
@@ -1165,7 +1176,7 @@ export async function sendMessageIMessage(
         isFromMe: true,
       });
     }
-    if (message && approvalBindingMessageId) {
+    if (message && approvalBindingMessageId && opts.approvalKind) {
       const handleForKey =
         target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
       const conversation: IMessageApprovalConversationKey = {
@@ -1179,6 +1190,7 @@ export async function sendMessageIMessage(
         conversation,
         messageId: approvalBindingMessageId,
         text: message,
+        approvalKind: opts.approvalKind,
       });
     }
     return {

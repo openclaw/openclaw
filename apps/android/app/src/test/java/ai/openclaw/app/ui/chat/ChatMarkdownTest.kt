@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.font.FontStyle
@@ -15,6 +16,89 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatMarkdownTest {
+  @Test
+  fun displayMathSegmentsOwnLineAndSameLineDollarBlocks() {
+    val sameLine = segmentChatMarkdown("before\n$$ x^2 + y^2 $$\nafter", isStreaming = false)
+    val ownLine = segmentChatMarkdown("$$\nx + y\n$$", isStreaming = false)
+
+    assertEquals(
+      listOf(
+        ChatMarkdownSourceBlock.Markdown("before"),
+        ChatMarkdownSourceBlock.Math("x^2 + y^2"),
+        ChatMarkdownSourceBlock.Markdown("after"),
+      ),
+      sameLine,
+    )
+    assertEquals(listOf(ChatMarkdownSourceBlock.Math("x + y")), ownLine)
+  }
+
+  @Test
+  fun displayMathSegmentsBracketBlocks() {
+    assertEquals(
+      listOf(ChatMarkdownSourceBlock.Math("\\frac{a}{b}")),
+      segmentChatMarkdown("\\[\\frac{a}{b}\\]", isStreaming = false),
+    )
+  }
+
+  @Test
+  fun displayMathIgnoresFencedAndInlineCode() {
+    val fenced = "```tex\n$$\nx + y\n$$\n```"
+    val inline = "`$$ x + y $$`"
+
+    assertEquals(listOf(ChatMarkdownSourceBlock.Markdown(fenced)), segmentChatMarkdown(fenced, isStreaming = false))
+    assertEquals(listOf(ChatMarkdownSourceBlock.Markdown(inline)), segmentChatMarkdown(inline, isStreaming = false))
+  }
+
+  @Test
+  fun fencedDelimiterCannotCloseStreamingDisplayMath() {
+    val source = "$$\nx\n```text\n$$\n```"
+
+    assertEquals(
+      listOf(ChatMarkdownSourceBlock.Markdown(source)),
+      segmentChatMarkdown(source, isStreaming = true),
+    )
+  }
+
+  @Test
+  fun displayMathDoesNotSplitSpanningInlineMarkup() {
+    val emphasized = "*before\n$$ x + y $$\nafter*"
+
+    assertEquals(
+      listOf(ChatMarkdownSourceBlock.Markdown(emphasized)),
+      segmentChatMarkdown(emphasized, isStreaming = false),
+    )
+  }
+
+  @Test
+  fun displayMathDoesNotExposeHardBreakEscape() {
+    val hardBreak = "before\\\n$$ x + y $$\nafter"
+
+    assertEquals(
+      listOf(ChatMarkdownSourceBlock.Markdown(hardBreak)),
+      segmentChatMarkdown(hardBreak, isStreaming = false),
+    )
+  }
+
+  @Test
+  fun unclosedStreamingDisplayMathStaysMarkdown() {
+    val source = "before\n$$\nx + y"
+
+    assertEquals(
+      listOf(ChatMarkdownSourceBlock.Markdown(source)),
+      segmentChatMarkdown(source, isStreaming = true),
+    )
+  }
+
+  @Test
+  fun oversizedDisplayMathUsesCodeFallback() {
+    val latex = "é".repeat(CHAT_MATH_MAX_BYTES / 2 + 1)
+
+    assertEquals(
+      listOf(ChatMarkdownSourceBlock.MathFallback(latex)),
+      segmentChatMarkdown("$$\n$latex\n$$", isStreaming = false),
+    )
+  }
+
   @Test
   fun bareUrlsCarryClickableUrlAnnotations() {
     val url = "https://www.amazon.it/GAZEBO-CANOPY-ACCIAIO-BIANCO-IMPERMEABILE/dp/B01G5R9FCK"

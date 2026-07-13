@@ -33,8 +33,12 @@ vi.mock("../plugins/install-security-scan.js", () => ({
 
 vi.resetModules();
 
-const { installHooksFromArchive, installHooksFromNpmSpec, installHooksFromPath } =
-  await import("./install.js");
+const {
+  HOOK_INSTALL_ERROR_CODE,
+  installHooksFromArchive,
+  installHooksFromNpmSpec,
+  installHooksFromPath,
+} = await import("./install.js");
 const hookInstallRuntime = await import("./install.runtime.js");
 
 const fixtureRoot = path.join(process.cwd(), ".tmp", `openclaw-hook-install-${randomUUID()}`);
@@ -322,6 +326,29 @@ describe("installHooksFromArchive", () => {
 });
 
 describe("installHooksFromPath", () => {
+  it.each([
+    {
+      openclaw: {},
+      error: "package.json missing openclaw.hooks",
+      code: HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS,
+    },
+    {
+      openclaw: { hooks: [] },
+      error: "package.json openclaw.hooks is empty",
+      code: HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS,
+    },
+  ])("returns a stable code for $error", async ({ openclaw, error, code }) => {
+    const pkgDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/test-hooks", openclaw }),
+    );
+
+    const result = await installHooksFromPath({ path: pkgDir, hooksDir: makeTempDir() });
+
+    expect(result).toEqual({ ok: false, error, code });
+  });
+
   it("uses --ignore-scripts for dependency install", async () => {
     const workDir = makeTempDir();
     const stateDir = makeTempDir();
@@ -437,6 +464,34 @@ describe("installHooksFromPath", () => {
     };
     expect(scanCall.packageDir).toContain(".openclaw-install-stage-");
     expect(fs.existsSync(path.join(hooksDir, "my-hook"))).toBe(false);
+  });
+
+  it("rejects an oversized HOOK.md to prevent OOM during frontmatter parsing", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const hookDir = path.join(workDir, "my-hook");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "x".repeat(1024 * 1024 + 1), "utf8");
+    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+
+    await expect(
+      installHooksFromPath({ path: hookDir, hooksDir: path.join(stateDir, "hooks") }),
+    ).rejects.toThrow(/File exceeds 1048576 bytes/);
+  });
+
+  it.runIf(process.platform !== "win32")("rejects a symlinked HOOK.md", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const hookDir = path.join(workDir, "my-hook");
+    const externalHookMd = path.join(workDir, "external-HOOK.md");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(externalHookMd, "---\nname: external\n---\n", "utf8");
+    fs.symlinkSync(externalHookMd, path.join(hookDir, "HOOK.md"), "file");
+    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+
+    await expect(
+      installHooksFromPath({ path: hookDir, hooksDir: path.join(stateDir, "hooks") }),
+    ).rejects.toThrow(/path must be a regular file/);
   });
 
   it("classifies hook packages that also declare plugin extensions", async () => {

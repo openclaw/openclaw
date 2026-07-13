@@ -127,15 +127,13 @@ function extractHostname(hostHeader: string): string | null {
     return null;
   }
 
-  let hostname: string;
-
   // Handle IPv6 addresses: [::1]:8080
   if (hostHeader.startsWith("[")) {
     const endBracket = hostHeader.indexOf("]");
     if (endBracket === -1) {
       return null; // Malformed IPv6
     }
-    hostname = hostHeader.slice(1, endBracket);
+    const hostname = hostHeader.slice(1, endBracket);
     return normalizeLowercaseStringOrEmpty(hostname);
   }
 
@@ -145,10 +143,10 @@ function extractHostname(hostHeader: string): string | null {
     return null; // Reject potential injection: attacker.com:80@legitimate.com
   }
 
-  hostname = hostHeader.split(":")[0];
+  const hostname = hostHeader.split(":").at(0);
 
   // Validate the extracted hostname
-  if (!isValidHostname(hostname)) {
+  if (!hostname || !isValidHostname(hostname)) {
     return null;
   }
 
@@ -310,6 +308,21 @@ function buildTwilioVerificationUrl(
   }
 }
 
+function redactTwilioVerificationUrlForDiagnostics(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.username = parsed.username ? "***" : "";
+    parsed.password = parsed.password ? "***" : "";
+    parsed.hash = parsed.hash ? "#***" : "";
+    for (const key of Array.from(parsed.searchParams.keys())) {
+      parsed.searchParams.set(key, "***");
+    }
+    return parsed.toString();
+  } catch {
+    return "<invalid verification URL>";
+  }
+}
+
 function stripPortFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -351,7 +364,7 @@ function extractPortFromHostHeader(hostHeader?: string): string | undefined {
 interface TwilioVerificationResult {
   ok: boolean;
   reason?: string;
-  /** The URL that was used for verification (for debugging) */
+  /** The original URL that passed signature verification; never set on failures. */
   verificationUrl?: string;
   /** Whether we're running behind ngrok free tier */
   isNgrokFreeTier?: boolean;
@@ -619,11 +632,11 @@ export function verifyTwilioWebhook(
   // Check if this is ngrok free tier - the URL might have different format
   const isNgrokFreeTier =
     verificationUrl.includes(".ngrok-free.app") || verificationUrl.includes(".ngrok.io");
+  const diagnosticVerificationUrl = redactTwilioVerificationUrlForDiagnostics(verificationUrl);
 
   return {
     ok: false,
-    reason: `Invalid signature for URL: ${verificationUrl}`,
-    verificationUrl,
+    reason: `Invalid signature for URL: ${diagnosticVerificationUrl}`,
     isNgrokFreeTier,
   };
 }
@@ -706,8 +719,11 @@ function toParamMapFromSearchParams(sp: URLSearchParams): PlivoParamMap {
 
 function sortedQueryString(params: PlivoParamMap): string {
   const parts: string[] = [];
-  for (const key of Object.keys(params).toSorted()) {
-    const values = [...params[key]].toSorted();
+  const entries = Object.entries(params).toSorted(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  for (const [key, entryValues] of entries) {
+    const values = [...entryValues].toSorted();
     for (const value of values) {
       parts.push(`${key}=${value}`);
     }
@@ -717,8 +733,11 @@ function sortedQueryString(params: PlivoParamMap): string {
 
 function sortedParamsString(params: PlivoParamMap): string {
   const parts: string[] = [];
-  for (const key of Object.keys(params).toSorted()) {
-    const values = [...params[key]].toSorted();
+  const entries = Object.entries(params).toSorted(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  for (const [key, entryValues] of entries) {
+    const values = [...entryValues].toSorted();
     for (const value of values) {
       parts.push(`${key}${value}`);
     }

@@ -24,7 +24,7 @@ export const MATRIX_RECOVERY_KEY_FILENAME = "recovery-key.json";
 export const MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME = "legacy-crypto-migration.json";
 export const MATRIX_IDB_SNAPSHOT_FILENAME = "crypto-idb-snapshot.json";
 
-export type MatrixLegacyCryptoCounts = {
+type MatrixLegacyCryptoCounts = {
   total: number;
   backedUp: number;
 };
@@ -120,17 +120,6 @@ function readMatrixRecoveryKeyStateWithKey(params: {
   );
 }
 
-export function writeMatrixRecoveryKeyState(params: {
-  storageRootDir: string;
-  payload: MatrixStoredRecoveryKey;
-}): void {
-  writeMatrixRecoveryKeyStateWithKey({
-    storageRootDir: params.storageRootDir,
-    stateKey: STATE_KEY,
-    payload: params.payload,
-  });
-}
-
 export function writeMatrixRecoveryKeyStateForPath(params: {
   recoveryKeyPath: string;
   payload: MatrixStoredRecoveryKey;
@@ -183,7 +172,7 @@ export function readMatrixLegacyCryptoMigrationState(
   );
 }
 
-export function writeMatrixLegacyCryptoMigrationState(params: {
+function writeMatrixLegacyCryptoMigrationState(params: {
   storageRootDir: string;
   state: MatrixLegacyCryptoMigrationState;
 }): void {
@@ -219,7 +208,7 @@ export function readMatrixIdbSnapshotJson(storageRootDir: string): string | null
   );
 }
 
-export function hasMatrixIdbSnapshotState(storageRootDir: string): boolean {
+function hasMatrixIdbSnapshotState(storageRootDir: string): boolean {
   return isIdbSnapshotMeta(
     openSyncStore<MatrixIdbSnapshotRecord>(
       openMatrixIdbSnapshotStoreOptions(storageRootDir),
@@ -352,7 +341,7 @@ function resolveRecoveryKeyStateKeyForPath(recoveryKeyPath: string): string {
   return `file:${createHash("sha256").update(basename, "utf8").digest("hex").slice(0, 32)}`;
 }
 
-export function normalizeMatrixStoredRecoveryKey(value: unknown): MatrixStoredRecoveryKey | null {
+function normalizeMatrixStoredRecoveryKey(value: unknown): MatrixStoredRecoveryKey | null {
   if (
     !isRecord(value) ||
     value.version !== 1 ||
@@ -383,7 +372,7 @@ export function normalizeMatrixStoredRecoveryKey(value: unknown): MatrixStoredRe
   };
 }
 
-export function normalizeMatrixLegacyCryptoMigrationState(
+function normalizeMatrixLegacyCryptoMigrationState(
   value: unknown,
 ): MatrixLegacyCryptoMigrationState | null {
   if (!isRecord(value) || value.version !== 1 || typeof value.accountId !== "string") {

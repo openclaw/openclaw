@@ -1,14 +1,27 @@
-// @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/** @vitest-environment node */
 import {
+  ConnectErrorDetailCodes,
+  GATEWAY_CLIENT_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-} from "../../../packages/gateway-protocol/src/version.js";
+} from "@openclaw/gateway-client/browser";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../lib/nodes/index.ts";
-import { loadDeviceAuthToken, storeDeviceAuthToken } from "../lib/nodes/index.ts";
+import {
+  loadDeviceAuthToken as loadScopedDeviceAuthToken,
+  storeDeviceAuthToken as storeScopedDeviceAuthToken,
+} from "../lib/nodes/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
+const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
+const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
+const DEFAULT_DEVICE_AUTH_STORAGE_KEY = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:${DEFAULT_GATEWAY_URL}`;
+const STORED_CRED = "stored-device-token";
+const ROSITA_CRED = "rosita-device-token";
+const WILFRED_CRED = "wilfred-device-token";
+const TENANT_A_CRED = "tenant-a-device-token";
+const TENANT_B_CRED = "tenant-b-device-token";
 const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
   vi.fn(
     async (): Promise<DeviceIdentity> => ({
@@ -21,6 +34,19 @@ const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
 const signDevicePayloadMock = vi.hoisted(() =>
   vi.fn(async (_privateKeyBase64Url: string, _payload: string) => "signature"),
 );
+
+function loadDeviceAuthToken(params: { deviceId: string; role: string }) {
+  return loadScopedDeviceAuthToken({ ...params, gatewayUrl: DEFAULT_GATEWAY_URL });
+}
+
+function storeDeviceAuthToken(params: {
+  deviceId: string;
+  role: string;
+  token: string;
+  scopes?: string[];
+}) {
+  return storeScopedDeviceAuthToken({ ...params, gatewayUrl: DEFAULT_GATEWAY_URL });
+}
 
 type HandlerMap = {
   close: MockWebSocketHandler[];
@@ -100,9 +126,12 @@ vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
 }));
 
 const {
+  CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OPERATOR_SCOPES,
   GatewayBrowserClient,
   GatewayRequestError,
+  isNonRecoverableConnectError,
+  resolveGatewayErrorDetailCode,
   shouldRetryWithDeviceToken,
 } = await import("./gateway.ts");
 
@@ -110,9 +139,10 @@ type ConnectFrame = {
   id?: string;
   method?: string;
   params?: {
-    auth?: { token?: string; password?: string; deviceToken?: string };
+    auth?: { token?: string; bootstrapToken?: string; password?: string; deviceToken?: string };
     maxProtocol?: number;
     minProtocol?: number;
+    caps?: string[];
     scopes?: string[];
   };
 };
@@ -310,6 +340,13 @@ async function expectRetriedDeviceTokenConnect(params: {
   token: string;
   retryNonce?: string;
 }) {
+  storeScopedDeviceAuthToken({
+    deviceId: "device-1",
+    gatewayUrl: params.url,
+    role: "operator",
+    token: STORED_CRED,
+    scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+  });
   const client = new GatewayBrowserClient({
     url: params.url,
     token: params.token,
@@ -330,7 +367,7 @@ async function expectRetriedDeviceTokenConnect(params: {
     params.retryNonce ?? "nonce-2",
   );
   expect(secondConnect.params?.auth?.token).toBe(params.token);
-  expect(secondConnect.params?.auth?.deviceToken).toBe("stored-device-token");
+  expect(secondConnect.params?.auth?.deviceToken).toBe(STORED_CRED);
 
   return { client, firstWs, secondWs, firstConnect, secondConnect };
 }
@@ -378,7 +415,31 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
+    expect(connectFrame.params?.caps).toEqual([
+      GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+    ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("requests handoff scopes with bootstrap token auth", async () => {
+    const client = new GatewayBrowserClient({
+      url: "wss://gateway.example",
+      bootstrapToken: "boot-1",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.token).toBeUndefined();
+    expect(connectFrame.params?.auth?.bootstrapToken).toBe("boot-1");
+    expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]);
+    const [, signedPayload] = requireFirstSignCall();
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES],
+      token: "boot-1",
+      nonce: "nonce-1",
+    });
   });
 
   it("adds the current Control UI protocol to bare protocol mismatch errors", () => {
@@ -388,6 +449,8 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(error.message).toBe(`protocol mismatch: Control UI v${PROTOCOL_VERSION}`);
+    expect(resolveGatewayErrorDetailCode(error)).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
+    expect(isNonRecoverableConnectError(error)).toBe(true);
   });
 
   it("reuses cached device token scopes when connecting from bootstrap handoff", async () => {
@@ -583,6 +646,9 @@ describe("GatewayBrowserClient", () => {
 
   it("reports connect phase timing without credentials or nonce values", async () => {
     const onConnectTiming = vi.fn();
+    vi.stubGlobal("performance", {
+      now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(35).mockReturnValue(40),
+    });
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -598,6 +664,7 @@ describe("GatewayBrowserClient", () => {
       "connect-plan-ready",
       "request-sent",
     ]);
+    expect([sentPayloads[0]?.durationMs, sentPayloads[0]?.phaseDurationMs]).toEqual([25, 25]);
     for (const payload of sentPayloads) {
       expect(payload.generation).toBe(1);
       expect(payload.durationMs).toBeTypeOf("number");
@@ -925,6 +992,99 @@ describe("GatewayBrowserClient", () => {
     });
   });
 
+  it("uses a scoped device token when legacy cleanup fails", async () => {
+    vi.spyOn(localStorage, "removeItem").mockImplementation(() => {
+      throw new Error("storage cleanup blocked");
+    });
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.token).toBe(STORED_CRED);
+  });
+
+  it("migrates the legacy device token store to the first gateway opened after upgrade", async () => {
+    const legacyStore = localStorage.getItem(DEFAULT_DEVICE_AUTH_STORAGE_KEY);
+    expect(legacyStore).not.toBeNull();
+    localStorage.clear();
+    localStorage.setItem(LEGACY_DEVICE_AUTH_STORAGE_KEY, legacyStore ?? "");
+
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+    });
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.token).toBe(STORED_CRED);
+    expect(localStorage.getItem(LEGACY_DEVICE_AUTH_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(DEFAULT_DEVICE_AUTH_STORAGE_KEY)).toBe(legacyStore);
+  });
+
+  it("keeps cached device tokens separate for gateways on the same origin", async () => {
+    localStorage.clear();
+    storeScopedDeviceAuthToken({
+      deviceId: "device-1",
+      gatewayUrl: "wss://gateway.example/rosita/",
+      role: "operator",
+      token: ROSITA_CRED,
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+    });
+    storeScopedDeviceAuthToken({
+      deviceId: "device-1",
+      gatewayUrl: "wss://gateway.example/wilfred",
+      role: "operator",
+      token: WILFRED_CRED,
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+    });
+
+    const rositaClient = new GatewayBrowserClient({
+      url: "wss://gateway.example/rosita",
+    });
+    const { connectFrame: rositaConnect } = await startConnect(rositaClient);
+    expect(rositaConnect.params?.auth?.token).toBe(ROSITA_CRED);
+    rositaClient.stop();
+
+    const wilfredClient = new GatewayBrowserClient({
+      url: "wss://gateway.example/wilfred",
+    });
+    const { connectFrame: wilfredConnect } = await startConnect(wilfredClient, "nonce-2");
+    expect(wilfredConnect.params?.auth?.token).toBe(WILFRED_CRED);
+    wilfredClient.stop();
+  });
+
+  it("keeps cached device tokens separate for gateway query routes", async () => {
+    localStorage.clear();
+    storeScopedDeviceAuthToken({
+      deviceId: "device-1",
+      gatewayUrl: "wss://gateway.example/control?tenant=a",
+      role: "operator",
+      token: TENANT_A_CRED,
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+    });
+    storeScopedDeviceAuthToken({
+      deviceId: "device-1",
+      gatewayUrl: "wss://gateway.example/control?tenant=b",
+      role: "operator",
+      token: TENANT_B_CRED,
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+    });
+
+    const tenantAClient = new GatewayBrowserClient({
+      url: "wss://gateway.example/control?tenant=a",
+    });
+    const { connectFrame: tenantAConnect } = await startConnect(tenantAClient);
+    expect(tenantAConnect.params?.auth?.token).toBe(TENANT_A_CRED);
+    tenantAClient.stop();
+
+    const tenantBClient = new GatewayBrowserClient({
+      url: "wss://gateway.example/control?tenant=b",
+    });
+    const { connectFrame: tenantBConnect } = await startConnect(tenantBClient, "nonce-2");
+    expect(tenantBConnect.params?.auth?.token).toBe(TENANT_B_CRED);
+    tenantBClient.stop();
+  });
+
   it("ignores cached operator device tokens that do not include read access", async () => {
     localStorage.clear();
     storeDeviceAuthToken({
@@ -969,9 +1129,12 @@ describe("GatewayBrowserClient", () => {
     });
     await expectSocketClosed(secondWs);
     secondWs.emitClose(4008, "connect failed");
-    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.token).toBe(
-      "stored-device-token",
-    );
+    expect(
+      loadDeviceAuthToken({
+        deviceId: "device-1",
+        role: "operator",
+      })?.token,
+    ).toBe("stored-device-token");
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(2);
 
@@ -1051,6 +1214,41 @@ describe("GatewayBrowserClient", () => {
       expect(wsInstances).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(wsInstances).toHaveLength(2);
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves structured connect errors for pending requests", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      const pendingRequest = client.request("cron.list", { quiet: true });
+
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "unauthorized",
+          details: { code: "PAIRING_REQUIRED" },
+        },
+      });
+      await expectSocketClosed(ws);
+      ws.emitClose(4008, "connect failed");
+
+      await expect(pendingRequest).rejects.toMatchObject({
+        name: "GatewayRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: { code: "PAIRING_REQUIRED" },
+      });
     } finally {
       client.stop();
       vi.useRealTimers();
@@ -1232,6 +1430,35 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("does not auto-reconnect on PROTOCOL_MISMATCH", async () => {
+    useNodeFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    const { ws: ws1, connectFrame: connect } = await startConnect(client);
+
+    ws1.emitMessage({
+      type: "res",
+      id: connect.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "protocol mismatch",
+        details: { code: "PROTOCOL_MISMATCH" },
+      },
+    });
+    await expectSocketClosed(ws1);
+    ws1.emitClose(4008, "connect failed");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
   it("keeps reconnecting on PAIRING_REQUIRED when retry hints keep reconnect active", async () => {
     useNodeFakeTimers();
     localStorage.clear();
@@ -1293,7 +1520,12 @@ describe("GatewayBrowserClient", () => {
     await expectSocketClosed(ws);
     ws.emitClose(4008, "connect failed");
 
-    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })).toBeNull();
+    expect(
+      loadDeviceAuthToken({
+        deviceId: "device-1",
+        role: "operator",
+      }),
+    ).toBeNull();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
 
@@ -1323,9 +1555,12 @@ describe("GatewayBrowserClient", () => {
     await expectSocketClosed(ws);
     ws.emitClose(4008, "connect failed");
 
-    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.token).toBe(
-      "stored-device-token",
-    );
+    expect(
+      loadDeviceAuthToken({
+        deviceId: "device-1",
+        role: "operator",
+      })?.token,
+    ).toBe("stored-device-token");
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
 
@@ -1335,11 +1570,13 @@ describe("GatewayBrowserClient", () => {
   it("reports willRetry=false on credential rejections so the UI can fall back to the login gate", async () => {
     useNodeFakeTimers();
     const onClose = vi.fn();
+    const onConnectTiming = vi.fn();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       password: "wrong-password",
       onClose,
+      onConnectTiming,
     });
 
     const { ws, connectFrame } = await startConnect(client);
@@ -1358,6 +1595,12 @@ describe("GatewayBrowserClient", () => {
 
     const close = requireFirstMockArg(onClose, "close");
     expect(close.willRetry).toBe(false);
+    expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+      phase: "failed",
+      errorCode: "INVALID_REQUEST",
+      hasDeviceIdentity: true,
+      hasPassword: true,
+    });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
 

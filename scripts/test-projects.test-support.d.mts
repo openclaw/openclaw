@@ -1,3 +1,5 @@
+import type { VitestHostInfo } from "./lib/vitest-local-scheduling.mjs";
+
 export type VitestRunPlan = {
   config: string;
   forwardedArgs: string[];
@@ -11,7 +13,17 @@ export type VitestRunSpec = {
   includeFilePath: string | null;
   includePatterns: string[] | null;
   pnpmArgs: string[];
+  preflightPnpmArgs: string[] | null;
   watchMode: boolean;
+};
+
+export type FailedVitestShard = {
+  code?: number | null;
+  config: string;
+  includePatterns?: string[] | null;
+  noOutputTimedOut?: boolean;
+  order?: number;
+  signal?: string | null;
 };
 
 export type ChangedTestTargetOptions = {
@@ -28,6 +40,14 @@ export type ChangedTestTargetPlan = {
 
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS: string;
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS: string;
+export const CHANNEL_CONTRACT_CONFIG_PATTERNS: ReadonlyMap<string, readonly string[]>;
+
+export function orderFullSuiteSpecsForParallelRun<T extends { config: string }>(
+  specs: T[],
+  shardTimings?: ReadonlyMap<string, number>,
+): T[];
+
+export function formatNoChangedTestTargetLines(skippedBroadFallbackPaths: string[]): string[];
 
 export function parseTestProjectsArgs(
   args: string[],
@@ -44,6 +64,22 @@ export function buildVitestRunPlans(
   listChangedPaths?: (baseRef: string, cwd: string) => string[],
   options?: ChangedTestTargetOptions,
 ): VitestRunPlan[];
+
+export function buildFullSuiteVitestRunPlans(args: string[], cwd?: string): VitestRunPlan[];
+
+export function shouldUseLocalFullSuiteParallelByDefault(
+  env?: Record<string, string | undefined>,
+): boolean;
+
+export function shouldExpandLocalFullSuiteShardsByDefault(
+  env?: Record<string, string | undefined>,
+): boolean;
+
+export function resolveParallelFullSuiteConcurrency(
+  specCount: number,
+  env?: Record<string, string | undefined>,
+  hostInfo?: VitestHostInfo,
+): number;
 
 export function resolveChangedTargetArgs(
   args: string[],
@@ -75,6 +111,8 @@ export function createVitestRunSpecs(
   },
 ): VitestRunSpec[];
 
+export function createVitestPreflightPnpmArgs(config: string): string[] | null;
+
 export function findUnmatchedExplicitTestTargets(
   args: string[],
   cwd?: string,
@@ -84,21 +122,49 @@ export function findUnmatchedExplicitTestTargets(
   includePattern?: string;
 }>;
 
-export function applyDefaultVitestNoOutputTimeout(
-  specs: VitestRunSpec[],
+export function applyDefaultVitestNoOutputTimeout<
+  T extends { config: string; env: NodeJS.ProcessEnv; watchMode: boolean },
+>(
+  specs: T[],
   params?: {
     env?: Record<string, string | undefined>;
   },
-): VitestRunSpec[];
+): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }>;
 
-export function applyDefaultMultiSpecVitestCachePaths(
-  specs: VitestRunSpec[],
+export function applyDefaultMultiSpecVitestCachePaths<
+  T extends { config: string; env: NodeJS.ProcessEnv; watchMode: boolean },
+>(
+  specs: T[],
   params?: {
     cwd?: string;
     env?: Record<string, string | undefined>;
   },
-): VitestRunSpec[];
+): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }>;
 
-export function writeVitestIncludeFile(filePath: string, includePatterns: string[]): void;
+export function applyParallelVitestCachePaths<T extends { config: string; env: NodeJS.ProcessEnv }>(
+  specs: T[],
+  params?: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }>;
+
+export function shouldRetryVitestNoOutputTimeout(env?: Record<string, string | undefined>): boolean;
+
+export function shouldAcquireLocalHeavyCheckLock(
+  runSpecs: Array<Pick<VitestRunSpec, "config" | "includePatterns" | "watchMode">>,
+  env?: Record<string, string | undefined>,
+): boolean;
+
+export function writeVitestIncludeFile(
+  filePath: string,
+  includePatterns: string[],
+  options?: { cwd?: string; expandGlobs?: boolean },
+): void;
+
+export function formatFailedShardDigest(
+  failures: FailedVitestShard[],
+  options?: { limit?: number },
+): string[];
 
 export function buildVitestArgs(args: string[], cwd?: string): string[];

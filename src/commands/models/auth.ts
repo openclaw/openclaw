@@ -7,6 +7,7 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalString,
@@ -41,6 +42,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { callGateway } from "../../gateway/call.js";
 import { isRemoteEnvironment } from "../../infra/remote-env.js";
 import {
   applyProviderAuthConfigPatch,
@@ -71,6 +73,19 @@ import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-r
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+// CLI auth writes occur outside the gateway process, which may retain an older runtime snapshot.
+async function refreshRunningGatewayAuthState(): Promise<void> {
+  try {
+    await callGateway({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  } catch {
+    // Auth writes must still succeed when no local gateway is running.
+  }
+}
 
 function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
   const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
@@ -493,6 +508,8 @@ async function persistProviderAuthResult(params: {
     logConfigUpdated(params.runtime);
   }
 
+  await refreshRunningGatewayAuthState();
+
   for (const profile of profiles) {
     params.runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
@@ -713,6 +730,8 @@ export async function modelsAuthPasteTokenCommand(
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
 
+  await refreshRunningGatewayAuthState();
+
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
   if (provider === "anthropic") {
@@ -770,6 +789,8 @@ export async function modelsAuthPasteApiKeyCommand(
   await updateConfig((cfg) =>
     applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
   );
+
+  await refreshRunningGatewayAuthState();
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
@@ -979,7 +1000,7 @@ export function resolveLoginProfiles(params: {
   }
 
   const [profile] = params.result.profiles;
-  return [{ ...profile, profileId: requestedProfileId }];
+  return [{ ...expectDefined(profile, "auth profile"), profileId: requestedProfileId }];
 }
 
 function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {

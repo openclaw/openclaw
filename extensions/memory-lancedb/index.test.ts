@@ -11,6 +11,7 @@
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import {
   clearMemoryPluginState,
@@ -85,6 +86,10 @@ function createRuntimeLoader(
 }
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+
+function registerTestPlugin(plugin: { register: (api: never) => void }, api: unknown): void {
+  plugin.register(api as never);
+}
 
 function firstMockArg(source: MockCallSource, label: string, argIndex = 0) {
   const [call] = source.mock.calls;
@@ -311,7 +316,7 @@ describe("memory plugin e2e", () => {
       resolvePath: (filePath: string) => filePath,
     };
 
-    memoryPlugin.register(mockApi as any);
+    registerTestPlugin(memoryPlugin, mockApi);
     const service = firstObjectArg(registerService as unknown as MockCallSource, "service");
     expect(service.id).toBe("memory-lancedb");
     expect(service.start).toBeTypeOf("function");
@@ -354,7 +359,7 @@ describe("memory plugin e2e", () => {
       resolvePath: (filePath: string) => filePath,
     };
 
-    memoryPlugin.register(mockApi as any);
+    registerTestPlugin(memoryPlugin, mockApi);
 
     expectHookRegistered(on, "before_prompt_build");
     expectHookNotRegistered(on, "before_agent_start");
@@ -395,7 +400,7 @@ describe("memory plugin e2e", () => {
       resolvePath: (filePath: string) => filePath,
     };
 
-    memoryPlugin.register(mockApi as any);
+    registerTestPlugin(memoryPlugin, mockApi);
     const capability = firstObjectArg(
       registerMemoryCapabilityLocal as unknown as MockCallSource,
       "memory capability",
@@ -490,7 +495,7 @@ describe("memory plugin e2e", () => {
       resolvePath: (filePath: string) => filePath,
     };
 
-    memoryPlugin.register(mockApi as any);
+    registerTestPlugin(memoryPlugin, mockApi);
 
     expect(registerMemoryCapabilityForPlugin).toHaveBeenCalledOnce();
     expect(
@@ -606,7 +611,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (filePath: string) => filePath,
       };
 
-      dynamicMemoryPlugin.register(mockApi as any);
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
       const recallTool = registerTool.mock.calls
         .map(([tool]) => tool)
         .find((tool) => tool.name === "memory_recall");
@@ -695,7 +700,7 @@ describe("memory plugin e2e", () => {
           resolvePath: (filePath: string) => filePath,
         };
 
-        dynamicMemoryPlugin.register(mockApi as any);
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
         const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
         if (!recallTool) {
           throw new Error("memory_recall tool was not registered");
@@ -792,7 +797,7 @@ describe("memory plugin e2e", () => {
           resolvePath: (filePath: string) => filePath,
         };
 
-        dynamicMemoryPlugin.register(mockApi as any);
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
         const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
         if (!recallTool) {
           throw new Error("memory_recall tool was not registered");
@@ -881,7 +886,7 @@ describe("memory plugin e2e", () => {
             resolvePath: (filePath: string) => filePath,
           };
 
-          dynamicMemoryPlugin.register(mockApi as any);
+          registerTestPlugin(dynamicMemoryPlugin, mockApi);
           const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
           if (!recallTool) {
             throw new Error("memory_recall tool was not registered");
@@ -972,7 +977,7 @@ describe("memory plugin e2e", () => {
         };
         const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
         try {
-          dynamicMemoryPlugin.register(mockApi as any);
+          registerTestPlugin(dynamicMemoryPlugin, mockApi);
           const registrar = firstMockArg(registerCli as unknown as MockCallSource, "cli registrar");
           const program = new Command();
           (registrar as (params: { program: Command }) => void)({ program });
@@ -1017,7 +1022,7 @@ describe("memory plugin e2e", () => {
       resolvePath: (filePath: string) => filePath,
     };
 
-    memoryPlugin.register(mockApi as any);
+    registerTestPlugin(memoryPlugin, mockApi);
 
     const beforePromptBuild = on.mock.calls.find(
       ([hookName]) => hookName === "before_prompt_build",
@@ -1059,7 +1064,7 @@ describe("memory plugin e2e", () => {
       resolvePath: (filePath: string) => filePath,
     };
 
-    memoryPlugin.register(mockApi as any);
+    registerTestPlugin(memoryPlugin, mockApi);
 
     expectHookRegistered(on, "before_prompt_build");
     const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
@@ -1142,7 +1147,7 @@ describe("memory plugin e2e", () => {
           resolvePath: (p: string) => p,
         };
 
-        dynamicMemoryPlugin.register(mockApi as any);
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
         const beforePromptBuild = on.mock.calls.find(
           ([hookName]) => hookName === "before_prompt_build",
@@ -1247,7 +1252,7 @@ describe("memory plugin e2e", () => {
             resolvePath: (p: string) => p,
           };
 
-          dynamicMemoryPlugin.register(mockApi as any);
+          registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
           const beforePromptBuild = on.mock.calls.find(
             ([hookName]) => hookName === "before_prompt_build",
@@ -1413,7 +1418,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      dynamicMemoryPlugin.register(mockApi as any);
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
       configFile = {
         plugins: {
@@ -1542,7 +1547,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      dynamicMemoryPlugin.register(mockApi as any);
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
       configFile = {
         plugins: {
@@ -1667,7 +1672,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      dynamicMemoryPlugin.register(mockApi as any);
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
       configFile = {
         plugins: {
@@ -1764,7 +1769,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      dynamicMemoryPlugin.register(mockApi as any);
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
       const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
       expect(agentEnd).toBeTypeOf("function");
@@ -1892,7 +1897,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      dynamicMemoryPlugin.register(mockApi as any);
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
       configFile = {
         plugins: {
@@ -2026,7 +2031,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      dynamicMemoryPlugin.register(mockApi as any);
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
       configFile = {
         plugins: {
@@ -2153,7 +2158,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      dynamicMemoryPlugin.register(mockApi as any);
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
       configFile = {
         plugins: {
@@ -2256,7 +2261,7 @@ describe("memory plugin e2e", () => {
       resolvePath: (p: string) => p,
     };
 
-    dynamicMemoryPlugin.register(mockApi as any);
+    registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
     const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
     const sessionEnd = on.mock.calls.find(([hookName]) => hookName === "session_end")?.[1];
@@ -2509,7 +2514,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      memoryPluginItem.register(mockApi as any);
+      registerTestPlugin(memoryPluginItem, mockApi);
       const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
       if (!recallTool) {
         throw new Error("memory_recall tool was not registered");
@@ -2518,8 +2523,13 @@ describe("memory plugin e2e", () => {
 
       expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
       expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
-      expect(ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0]).toBeLessThan(
-        embeddingsCreate.mock.invocationCallOrder[0],
+      expect(
+        expectDefined(
+          ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
+          "LanceDB proxy dispatcher invocation",
+        ),
+      ).toBeLessThan(
+        expectDefined(embeddingsCreate.mock.invocationCallOrder[0], "LanceDB embedding invocation"),
       );
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
@@ -2605,7 +2615,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      dynamicMemoryPlugin.register(mockApi as any);
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
       const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
       if (!recallTool) {
         throw new Error("memory_recall tool was not registered");
@@ -2887,7 +2897,7 @@ describe("memory plugin e2e", () => {
           resolvePath: (filePath: string) => filePath,
         };
 
-        dynamicMemoryPlugin.register(mockApi as any);
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
         const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")?.tool;
         if (!storeTool) {
           throw new Error("memory_store tool was not registered");
@@ -2955,7 +2965,7 @@ describe("memory plugin e2e", () => {
     const fakeRows = [
       {
         id: fakeUuid1,
-        text: "User prefers dark mode",
+        text: `${"x".repeat(59)}🚀tail`,
         category: "preference",
         vector: [0.1],
         importance: 0.8,
@@ -3022,7 +3032,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      memoryPluginLocal.register(mockApi as any);
+      registerTestPlugin(memoryPluginLocal, mockApi);
       const forgetTool = registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool;
       if (!forgetTool) {
         throw new Error("expected memory_forget tool registration");
@@ -3035,6 +3045,8 @@ describe("memory plugin e2e", () => {
       const text = result.content?.[0]?.text ?? "";
       expect(text).toContain(fakeUuid1);
       expect(text).toContain(fakeUuid2);
+      expect(text).toContain(`- [${fakeUuid1}] ${"x".repeat(59)}...`);
+      expect(text).not.toContain("\uD83D");
       // Ensure truncated 8-char prefix alone is NOT the format used
       expect(text).not.toMatch(/\[890e1fae\]/);
       expect(text).not.toMatch(/\[a1b2c3d4\]/);

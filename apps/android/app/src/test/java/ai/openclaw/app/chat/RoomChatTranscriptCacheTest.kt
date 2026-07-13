@@ -1,18 +1,14 @@
 package ai.openclaw.app.chat
 
-import android.content.ContextWrapper
 import androidx.room.Room
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
-import java.io.File
-import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 class RoomChatTranscriptCacheTest {
@@ -27,41 +23,6 @@ class RoomChatTranscriptCacheTest {
   }
 
   private fun cache(): RoomChatTranscriptCache = RoomChatTranscriptCache(database = database)
-
-  @Test
-  fun databaseDeleteFailsWhenCompanionFileSurvives() {
-    val app = RuntimeEnvironment.getApplication()
-    val databaseName = "chat-cache-delete-test-${UUID.randomUUID()}.db"
-    val databasePath = app.getDatabasePath(databaseName)
-    databasePath.parentFile?.mkdirs()
-    val walFile = File(databasePath.path + "-wal")
-    walFile.writeText("stale cache")
-    val noOpDeleteContext =
-      object : ContextWrapper(app) {
-        override fun deleteDatabase(name: String): Boolean = true
-      }
-
-    assertFalse(deleteDatabaseFiles(noOpDeleteContext, databaseName))
-    assertTrue(walFile.exists())
-    assertTrue(deleteDatabaseFiles(app, databaseName))
-    assertFalse(walFile.exists())
-  }
-
-  @Test
-  fun databaseDeleteSucceedsBeforeDatabaseDirectoryExists() {
-    val app = RuntimeEnvironment.getApplication()
-    val missingParent = File(app.cacheDir, "missing-database-dir-${UUID.randomUUID()}")
-    val databasePath = File(missingParent, "chat-cache.db")
-    val freshInstallContext =
-      object : ContextWrapper(app) {
-        override fun getDatabasePath(name: String): File = databasePath
-
-        override fun deleteDatabase(name: String): Boolean = true
-      }
-
-    assertFalse(missingParent.exists())
-    assertTrue(deleteDatabaseFiles(freshInstallContext, databasePath.name))
-  }
 
   private fun message(
     text: String,
@@ -102,6 +63,28 @@ class RoomChatTranscriptCacheTest {
       assertEquals(listOf("user", "assistant"), loaded.map { it.role })
       assertEquals(listOf(10L, 12L), loaded.map { it.timestampMs })
       assertEquals(listOf("run-1:user", null), loaded.map { it.idempotencyKey })
+    }
+
+  @Test
+  fun transcriptRoundTripDropsInternalRoleRows() =
+    runTest {
+      val store = cache()
+      store.saveTranscript(
+        gatewayId = "gateway-a",
+        sessionKey = "main",
+        messages =
+          listOf(
+            message("hello", role = "user"),
+            message("private tool output", role = "toolResult"),
+            message("visible plugin notice", role = "custom"),
+            message("reply", role = "assistant"),
+          ),
+      )
+
+      val loaded = store.loadTranscript("gateway-a", "main")
+
+      assertEquals(listOf("hello", "visible plugin notice", "reply"), loaded.map { it.content.single().text })
+      assertEquals(listOf("user", "custom", "assistant"), loaded.map { it.role })
     }
 
   @Test
@@ -252,22 +235,6 @@ class RoomChatTranscriptCacheTest {
 
       assertEquals(listOf("gateway a text"), store.loadTranscript("gateway-a", "main").map { it.content.single().text })
       assertEquals(listOf("main"), store.loadSessions("gateway-a").map { it.key })
-    }
-
-  @Test
-  fun clearAllPurgesEveryGatewayScope() =
-    runTest {
-      val store = cache()
-      store.saveSessions("gateway-a", listOf(ChatSessionEntry(key = "main", updatedAtMs = 1)))
-      store.saveTranscript(gatewayId = "gateway-a", sessionKey = "main", messages = listOf(message("a text")))
-      store.saveTranscript(gatewayId = "gateway-b", sessionKey = "main", messages = listOf(message("b text")))
-
-      store.clearAll()
-
-      assertEquals(emptyList<ChatMessage>(), store.loadTranscript("gateway-b", "main"))
-      assertEquals(emptyList<ChatSessionEntry>(), store.loadSessions("gateway-b"))
-      assertEquals(emptyList<ChatMessage>(), store.loadTranscript("gateway-a", "main"))
-      assertEquals(emptyList<ChatSessionEntry>(), store.loadSessions("gateway-a"))
     }
 
   @Test

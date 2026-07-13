@@ -1,515 +1,152 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.chat.ChatCommandEntry
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentBorderStrong
-import ai.openclaw.app.ui.mobileAccentSoft
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileHeadline
-import ai.openclaw.app.ui.mobileSurface
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
-import ai.openclaw.app.ui.mobileTextTertiary
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
+import ai.openclaw.app.ChatDraft
+import ai.openclaw.app.ChatDraftPlacement
+import ai.openclaw.app.ChatShareDraft
+import ai.openclaw.app.chat.OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+import ai.openclaw.app.chat.VoiceNoteRecorderState
+import android.net.Uri
+import kotlinx.coroutines.CancellationException
 
-/** Result of applying a stored chat draft to the current composer input. */
-internal data class DraftApplication(
-  val input: String,
-  val lastAppliedDraft: String?,
-  val consumed: Boolean,
-)
-
-internal data class SheetSlashCommandSelection(
-  val input: String,
-)
-
-internal data class SheetComposerSendAction(
-  val sendMessage: Boolean,
-)
-
-internal fun resolveSheetSlashCommandSelection(command: ChatCommandEntry): SheetSlashCommandSelection =
-  SheetSlashCommandSelection(input = slashCommandCompletion(command))
-
-internal fun resolveSheetComposerSendAction(input: String): SheetComposerSendAction =
-  SheetComposerSendAction(sendMessage = input.trim().isNotEmpty())
-
-/** Applies a draft exactly once so restored prompts do not overwrite user edits. */
-internal fun applyDraftText(
-  draftText: String?,
+internal fun mergeChatDraft(
+  draft: ChatDraft?,
   currentInput: String,
-  lastAppliedDraft: String?,
-): DraftApplication {
-  val draft =
-    draftText?.trim()?.ifEmpty { null } ?: return DraftApplication(
-      input = currentInput,
-      lastAppliedDraft = null,
-      consumed = false,
-    )
-  if (draft == lastAppliedDraft) {
-    return DraftApplication(
-      input = currentInput,
-      lastAppliedDraft = lastAppliedDraft,
-      consumed = false,
-    )
+): String? {
+  val text = draft?.text?.takeIf { it.isNotBlank() } ?: return null
+  return when (draft.placement) {
+    ChatDraftPlacement.Replace -> text
+    ChatDraftPlacement.BeforeExisting -> text + currentInput
   }
-  return DraftApplication(
-    input = draft,
-    lastAppliedDraft = draft,
-    consumed = true,
+}
+
+/** Appends system shares so existing drafts stay first and queued shares remain FIFO. */
+internal fun mergeSharedChatText(
+  sharedText: String?,
+  currentInput: String,
+): String {
+  val shared = sharedText?.trim()?.takeIf { it.isNotEmpty() } ?: return currentInput
+  return if (currentInput.isEmpty()) shared else listOf(currentInput, shared).joinToString(separator = "\n\n")
+}
+
+internal data class StagedChatShare(
+  val text: String?,
+  val attachments: List<PendingAttachment>,
+  val failedImageCount: Int,
+  val droppedImageCount: Int,
+)
+
+internal const val CHAT_COMPOSER_MAX_ATTACHMENTS = 8
+internal const val CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+internal const val CHAT_COMPOSER_MAX_BASE64_CHARS = ((CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES + 2) / 3) * 4
+
+internal data class ChatAttachmentAdmission(
+  val accepted: List<PendingAttachment>,
+  val omittedCount: Int,
+)
+
+internal fun admitChatAttachments(
+  currentAttachments: List<PendingAttachment>,
+  candidates: List<PendingAttachment>,
+  maxAttachmentCount: Int = CHAT_COMPOSER_MAX_ATTACHMENTS,
+  maxBase64Chars: Long = CHAT_COMPOSER_MAX_BASE64_CHARS,
+  maxDecodedBytes: Long = CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES,
+): ChatAttachmentAdmission {
+  require(maxAttachmentCount >= 0 && maxBase64Chars >= 0 && maxDecodedBytes >= 0)
+  val accepted = mutableListOf<PendingAttachment>()
+  var base64Chars = currentAttachments.sumOf { it.base64.length.toLong() }
+  var decodedBytes = currentAttachments.sumOf { decodedBase64ByteCount(it.base64) }
+  var omittedCount = 0
+  for (candidate in candidates) {
+    val candidateBase64Chars = candidate.base64.length.toLong()
+    val candidateDecodedBytes = decodedBase64ByteCount(candidate.base64)
+    val withinCount = currentAttachments.size + accepted.size < maxAttachmentCount
+    val withinBase64 = candidateBase64Chars <= maxBase64Chars - base64Chars
+    val withinDecoded = candidateDecodedBytes <= maxDecodedBytes - decodedBytes
+    if (withinCount && withinBase64 && withinDecoded) {
+      accepted += candidate
+      base64Chars += candidateBase64Chars
+      decodedBytes += candidateDecodedBytes
+    } else {
+      omittedCount += 1
+    }
+  }
+  return ChatAttachmentAdmission(accepted = accepted, omittedCount = omittedCount)
+}
+
+private fun decodedBase64ByteCount(base64: String): Long {
+  val padding =
+    when {
+      base64.endsWith("==") -> 2
+      base64.endsWith('=') -> 1
+      else -> 0
+    }
+  return ((base64.length.toLong() * 3) / 4 - padding).coerceAtLeast(0)
+}
+
+/** Loads a complete queue head before any part of it becomes visible in the composer. */
+internal suspend fun stageChatShareDraft(
+  draft: ChatShareDraft,
+  currentAttachments: List<PendingAttachment>,
+  loadImage: suspend (Uri) -> PendingAttachment,
+): StagedChatShare {
+  val attachments = mutableListOf<PendingAttachment>()
+  var failedImageCount = 0
+  var droppedImageCount = draft.droppedImageCount
+  for (uri in draft.imageUris) {
+    try {
+      val candidate = loadImage(uri)
+      val admission = admitChatAttachments(currentAttachments + attachments, listOf(candidate))
+      attachments += admission.accepted
+      droppedImageCount += admission.omittedCount
+    } catch (error: CancellationException) {
+      // Screen disposal must leave the queue head unacknowledged for the next ChatScreen.
+      throw error
+    } catch (_: Exception) {
+      failedImageCount += 1
+    }
+  }
+  return StagedChatShare(
+    text = draft.text,
+    attachments = attachments,
+    failedImageCount = failedImageCount,
+    droppedImageCount = droppedImageCount,
   )
 }
 
-/** Chat input surface for text, image attachments, thinking level, and run controls. */
-@Composable
-fun ChatComposer(
-  draftText: String?,
-  healthOk: Boolean,
-  thinkingLevel: String,
+internal data class ChatShareComposerMerge(
+  val input: String,
+  val attachments: List<PendingAttachment>,
+  val failedImageCount: Int,
+  val droppedImageCount: Int,
+)
+
+internal fun mergeStagedChatShare(
+  staged: StagedChatShare,
+  currentInput: String,
+  currentAttachments: List<PendingAttachment>,
+): ChatShareComposerMerge {
+  val admission = admitChatAttachments(currentAttachments, staged.attachments)
+  return ChatShareComposerMerge(
+    input = mergeSharedChatText(sharedText = staged.text, currentInput = currentInput),
+    attachments = currentAttachments + admission.accepted,
+    failedImageCount = staged.failedImageCount,
+    droppedImageCount = staged.droppedImageCount + admission.omittedCount,
+  )
+}
+
+internal fun canCommitStagedChatShare(
+  stagedId: Long,
+  currentHead: ChatShareDraft?,
+): Boolean = currentHead?.id == stagedId
+
+internal fun chatComposerSendEnabled(
+  voiceNoteState: VoiceNoteRecorderState,
   pendingRunCount: Int,
-  commands: List<ChatCommandEntry>,
-  attachments: List<PendingImageAttachment>,
-  onDraftApplied: () -> Unit,
-  onPickImages: () -> Unit,
-  onRemoveAttachment: (id: String) -> Unit,
-  onSetThinkingLevel: (level: String) -> Unit,
-  onRefresh: () -> Unit,
-  onAbort: () -> Unit,
-  /** Returns whether the send/enqueue was accepted; refusals restore the cleared draft. */
-  onSend: suspend (text: String) -> Boolean,
-) {
-  var input by rememberSaveable { mutableStateOf("") }
-  var lastAppliedDraft by rememberSaveable { mutableStateOf<String?>(null) }
-  var showThinkingMenu by remember { mutableStateOf(false) }
-  val sendScope = rememberCoroutineScope()
-  val slashCommands =
-    remember(input, commands) {
-      matchingSlashCommands(input = input, commands = commands)
-    }
-
-  LaunchedEffect(draftText) {
-    val next = applyDraftText(draftText = draftText, currentInput = input, lastAppliedDraft = lastAppliedDraft)
-    input = next.input
-    lastAppliedDraft = next.lastAppliedDraft
-    if (next.consumed) {
-      // Consume only after the composer state has accepted the draft so
-      // recomposition cannot reapply it over user edits.
-      onDraftApplied()
-    }
-  }
-
-  // One in-flight run owns the composer actions; attachments alone are enough to send when the
-  // gateway is healthy. Offline, only text can be sent (it is queued durably; text-only v1).
-  val canSend =
+  hasContent: Boolean,
+  shareStaging: Boolean,
+): Boolean =
+  !shareStaging &&
+    voiceNoteState !is VoiceNoteRecorderState.Recording &&
+    voiceNoteState !is VoiceNoteRecorderState.Preparing &&
     pendingRunCount == 0 &&
-      if (healthOk) {
-        input.trim().isNotEmpty() || attachments.isNotEmpty()
-      } else {
-        input.trim().isNotEmpty() && attachments.isEmpty()
-      }
-  val sendBusy = pendingRunCount > 0
-
-  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    if (attachments.isNotEmpty()) {
-      AttachmentsStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
-    }
-
-    if (shouldShowSlashCommandMenu(input)) {
-      SheetSlashCommandPanel(
-        commands = slashCommands,
-        onSelect = { command ->
-          val selection = resolveSheetSlashCommandSelection(command = command)
-          input = selection.input
-        },
-      )
-    }
-
-    OutlinedTextField(
-      value = input,
-      onValueChange = { input = it },
-      modifier = Modifier.fillMaxWidth(),
-      placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
-      minLines = 2,
-      maxLines = 5,
-      textStyle = mobileBodyStyle().copy(color = mobileText),
-      shape = RoundedCornerShape(14.dp),
-      colors = chatTextFieldColors(),
-    )
-
-    if (!healthOk) {
-      Text(
-        text = "Gateway is offline. Text messages are queued and sent after reconnecting.",
-        style = mobileCallout,
-        color = ai.openclaw.app.ui.mobileWarning,
-      )
-    }
-
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      Box {
-        Surface(
-          onClick = { showThinkingMenu = true },
-          shape = RoundedCornerShape(14.dp),
-          color = mobileCardSurface,
-          border = BorderStroke(1.dp, mobileBorderStrong),
-        ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Text(
-              text = thinkingLabel(thinkingLevel),
-              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-              color = mobileTextSecondary,
-            )
-            Icon(
-              Icons.Default.ArrowDropDown,
-              contentDescription = "Select thinking level",
-              modifier = Modifier.size(18.dp),
-              tint = mobileTextTertiary,
-            )
-          }
-        }
-
-        DropdownMenu(
-          expanded = showThinkingMenu,
-          onDismissRequest = { showThinkingMenu = false },
-          shape = RoundedCornerShape(16.dp),
-          containerColor = mobileCardSurface,
-          tonalElevation = 0.dp,
-          shadowElevation = 8.dp,
-          border = BorderStroke(1.dp, mobileBorder),
-        ) {
-          ThinkingMenuItem("off", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-          ThinkingMenuItem("low", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-          ThinkingMenuItem("medium", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-          ThinkingMenuItem("high", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-        }
-      }
-
-      SecondaryActionButton(
-        label = "Attach",
-        icon = Icons.Default.AttachFile,
-        enabled = true,
-        compact = true,
-        onClick = onPickImages,
-      )
-
-      SecondaryActionButton(
-        label = "Refresh",
-        icon = Icons.Default.Refresh,
-        enabled = true,
-        compact = true,
-        onClick = onRefresh,
-      )
-
-      SecondaryActionButton(
-        label = "Abort",
-        icon = Icons.Default.Stop,
-        enabled = pendingRunCount > 0,
-        compact = true,
-        onClick = onAbort,
-      )
-
-      Spacer(modifier = Modifier.weight(1f))
-
-      Button(
-        onClick = {
-          val message = input.trim()
-          val action = resolveSheetComposerSendAction(input = message)
-          if (action.sendMessage || attachments.isNotEmpty()) {
-            input = ""
-            sendScope.launch {
-              val accepted = onSend(message)
-              // Refused sends (offline queue full, enqueue failure) must not eat the draft;
-              // restore it unless the user already started typing something new.
-              if (!accepted && input.isEmpty()) {
-                input = message
-              }
-            }
-          }
-        },
-        enabled = canSend,
-        modifier = Modifier.height(44.dp),
-        shape = RoundedCornerShape(14.dp),
-        contentPadding = PaddingValues(horizontal = 20.dp),
-        colors =
-          ButtonDefaults.buttonColors(
-            containerColor = mobileAccent,
-            contentColor = Color.White,
-            disabledContainerColor = mobileBorderStrong,
-            disabledContentColor = mobileTextTertiary,
-          ),
-        border = BorderStroke(1.dp, if (canSend) mobileAccentBorderStrong else mobileBorderStrong),
-      ) {
-        if (sendBusy) {
-          CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
-        } else {
-          Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
-        }
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-          text = "Send",
-          style = mobileHeadline.copy(fontWeight = FontWeight.Bold),
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun SheetSlashCommandPanel(
-  commands: List<ChatCommandEntry>,
-  onSelect: (ChatCommandEntry) -> Unit,
-) {
-  Surface(
-    modifier = Modifier.fillMaxWidth(),
-    color = mobileCardSurface,
-    shape = RoundedCornerShape(14.dp),
-    border = BorderStroke(1.dp, mobileBorderStrong),
-    tonalElevation = 0.dp,
-    shadowElevation = 0.dp,
-  ) {
-    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      if (commands.isEmpty()) {
-        Text(
-          text = "No commands found",
-          style = mobileCaption1,
-          color = mobileTextTertiary,
-        )
-      } else {
-        for (command in commands) {
-          Surface(
-            onClick = { onSelect(command) },
-            shape = RoundedCornerShape(10.dp),
-            color = Color.Transparent,
-            contentColor = mobileText,
-          ) {
-            Row(
-              modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-              Text(
-                text = slashCommandText(command),
-                style = mobileCaption1.copy(fontWeight = FontWeight.Bold),
-                color = mobileText,
-                modifier = Modifier.width(76.dp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text(
-                  text = command.description.ifBlank { command.category ?: "Command" },
-                  style = mobileCaption1,
-                  color = mobileTextSecondary,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun SecondaryActionButton(
-  label: String,
-  icon: androidx.compose.ui.graphics.vector.ImageVector,
-  enabled: Boolean,
-  compact: Boolean = false,
-  onClick: () -> Unit,
-) {
-  Button(
-    onClick = onClick,
-    enabled = enabled,
-    modifier = if (compact) Modifier.size(44.dp) else Modifier.height(44.dp),
-    shape = RoundedCornerShape(14.dp),
-    colors =
-      ButtonDefaults.buttonColors(
-        containerColor = mobileCardSurface,
-        contentColor = mobileTextSecondary,
-        disabledContainerColor = mobileCardSurface,
-        disabledContentColor = mobileTextTertiary,
-      ),
-    border = BorderStroke(1.dp, mobileBorderStrong),
-    contentPadding = if (compact) PaddingValues(0.dp) else ButtonDefaults.ContentPadding,
-  ) {
-    Icon(icon, contentDescription = label, modifier = Modifier.size(14.dp))
-    if (!compact) {
-      Spacer(modifier = Modifier.width(5.dp))
-      Text(
-        text = label,
-        style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
-        color = if (enabled) mobileTextSecondary else mobileTextTertiary,
-      )
-    }
-  }
-}
-
-@Composable
-private fun ThinkingMenuItem(
-  value: String,
-  current: String,
-  onSet: (String) -> Unit,
-  onDismiss: () -> Unit,
-) {
-  DropdownMenuItem(
-    text = { Text(thinkingLabel(value), style = mobileCallout, color = mobileText) },
-    onClick = {
-      onSet(value)
-      onDismiss()
-    },
-    trailingIcon = {
-      if (value == current.trim().lowercase()) {
-        Text("✓", style = mobileCallout, color = mobileAccent)
-      } else {
-        Spacer(modifier = Modifier.width(10.dp))
-      }
-    },
-  )
-}
-
-private fun thinkingLabel(raw: String): String =
-  when (raw.trim().lowercase()) {
-    "low" -> "Low"
-    "medium" -> "Medium"
-    "high" -> "High"
-    else -> "Off"
-  }
-
-@Composable
-private fun AttachmentsStrip(
-  attachments: List<PendingImageAttachment>,
-  onRemoveAttachment: (id: String) -> Unit,
-) {
-  Row(
-    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    for (att in attachments) {
-      AttachmentChip(
-        fileName = att.fileName,
-        onRemove = { onRemoveAttachment(att.id) },
-      )
-    }
-  }
-}
-
-@Composable
-private fun AttachmentChip(
-  fileName: String,
-  onRemove: () -> Unit,
-) {
-  Surface(
-    shape = RoundedCornerShape(999.dp),
-    color = mobileAccentSoft,
-    border = BorderStroke(1.dp, mobileBorderStrong),
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      Text(
-        text = fileName,
-        style = mobileCaption1,
-        color = mobileText,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-      Surface(
-        onClick = onRemove,
-        shape = RoundedCornerShape(999.dp),
-        color = mobileCardSurface,
-        border = BorderStroke(1.dp, mobileBorderStrong),
-      ) {
-        Text(
-          text = "×",
-          style = mobileCaption1.copy(fontWeight = FontWeight.Bold),
-          color = mobileTextSecondary,
-          modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun chatTextFieldColors() =
-  OutlinedTextFieldDefaults.colors(
-    focusedContainerColor = mobileSurface,
-    unfocusedContainerColor = mobileSurface,
-    focusedBorderColor = mobileAccent,
-    unfocusedBorderColor = mobileBorder,
-    focusedTextColor = mobileText,
-    unfocusedTextColor = mobileText,
-    cursorColor = mobileAccent,
-  )
-
-@Composable
-private fun mobileBodyStyle() =
-  MaterialTheme.typography.bodyMedium.copy(
-    fontFamily = ai.openclaw.app.ui.mobileFontFamily,
-    fontWeight = FontWeight.Medium,
-    fontSize = 15.sp,
-    lineHeight = 22.sp,
-  )
+    hasContent

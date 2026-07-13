@@ -8,6 +8,7 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
@@ -22,6 +23,9 @@ export {
   listProfilesForProvider,
   resolveSubscriptionAuthModeForProfiles,
 } from "./profile-list.js";
+export { upsertAuthProfileWithLock } from "./upsert-with-lock.js";
+
+const authProfileProfilesLog = createSubsystemLogger("agent/embedded");
 
 // Auth profile order/lastGood keys may be stored as aliases. Resolve through
 // auth provider normalization before updating per-provider state.
@@ -172,26 +176,6 @@ export function upsertAuthProfile(params: {
   });
 }
 
-/** Upserts an auth profile under the auth store lock. */
-export async function upsertAuthProfileWithLock(params: {
-  profileId: string;
-  credential: AuthProfileCredential;
-  agentDir?: string;
-}): Promise<AuthProfileStore | null> {
-  const credential = normalizeAuthProfileCredential(params.credential);
-  return await updateAuthProfileStoreWithLock({
-    agentDir: params.agentDir,
-    saveOptions: {
-      filterExternalAuthProfiles: false,
-      syncExternalCli: false,
-    },
-    updater: (store) => {
-      store.profiles[params.profileId] = credential;
-      return true;
-    },
-  });
-}
-
 /** Removes all auth profiles and related state for a provider. */
 export async function removeProviderAuthProfilesWithLock(params: {
   provider: string;
@@ -286,11 +270,15 @@ export async function markAuthProfileSuccess(params: {
     store.usageStats = updated.usageStats;
     return;
   }
-  const profile = store.profiles[profileId];
-  if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
-    return;
+  if (updated === null) {
+    authProfileProfilesLog.warn(
+      "dropped auth profile bookkeeping after locked store update failed",
+      {
+        event: "auth_profile_bookkeeping_dropped",
+        kind: "success",
+        profileId,
+        tags: ["auth_profiles", "persistence"],
+      },
+    );
   }
-  store.lastGood = { ...store.lastGood, [providerKey]: profileId };
-  updateSuccessfulUsageStatsEntry(store, profileId, lastUsed);
-  saveAuthProfileStore(store, agentDir);
 }

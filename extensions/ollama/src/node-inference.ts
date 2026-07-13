@@ -1,5 +1,6 @@
-// Ollama node inference exposes local models to agents through paired node hosts.
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+// Ollama node inference exposes local models to agents through paired node hosts.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   readFiniteNumberParam,
   readPositiveIntegerParam,
@@ -25,10 +26,10 @@ import {
   resolveOllamaApiBase,
 } from "./provider-models.js";
 
-export const OLLAMA_NODE_INFERENCE_CAPABILITY = "local-inference";
+const OLLAMA_NODE_INFERENCE_CAPABILITY = "local-inference";
 export const OLLAMA_MODELS_COMMAND = "ollama.models";
 export const OLLAMA_CHAT_COMMAND = "ollama.chat";
-export const OLLAMA_NODE_INFERENCE_COMMANDS = [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] as const;
+const OLLAMA_NODE_INFERENCE_COMMANDS = [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] as const;
 
 const DEFAULT_INFERENCE_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 512;
@@ -179,7 +180,7 @@ async function fetchLoadedModelNames(baseUrl: string): Promise<Set<string>> {
   }
 }
 
-export async function discoverOllamaNodeModels(
+async function discoverOllamaNodeModels(
   baseUrl = OLLAMA_DEFAULT_BASE_URL,
 ): Promise<OllamaModelsPayload> {
   const apiBase = resolveOllamaApiBase(baseUrl);
@@ -388,7 +389,7 @@ function findNode(nodes: NodeSummary[], query: string): NodeSummary {
   if (matches.length > 1) {
     throw new Error(`node ${JSON.stringify(query)} is ambiguous; use its nodeId`);
   }
-  return matches[0];
+  return expectDefined(matches[0], "single matching Ollama inference node");
 }
 
 function parseInvokePayload(raw: unknown): Record<string, unknown> {
@@ -420,7 +421,7 @@ async function invokeNode(
   return parseInvokePayload(raw);
 }
 
-export const ollamaNodeInferenceToolDefinition = {
+const ollamaNodeInferenceToolDefinition = {
   name: "node_inference",
   label: "Node Inference",
   description:
