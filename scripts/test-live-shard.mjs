@@ -13,6 +13,14 @@ import {
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
+  [
+    "extensions/codex/src/app-server/native-subagent-monitor.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_NATIVE_SUBAGENT"],
+  ],
+  [
+    "extensions/codex/src/native-thread-coexistence.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_THREAD_COEXISTENCE"],
+  ],
   ["src/agents/agent-mcp-style.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/cli-runner/bundle-mcp.gemini.live.test.ts", ["OPENCLAW_LIVE_CLI_MCP_GEMINI"]],
   ["src/agents/embedded-agent-runner.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
@@ -21,6 +29,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/agents/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
   ["src/agents/tools/image-tool.ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA_IMAGE"]],
   ["src/agents/tools/image-tool.providers.live.test.ts", ["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]],
+  ["src/skills/workshop/experience-review.live.test.ts", ["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]],
   ["src/crestodian/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_CRESTODIAN_RESCUE_CHANNEL"]],
   ["src/gateway/android-node.capabilities.live.test.ts", ["OPENCLAW_LIVE_ANDROID_NODE"]],
   ["src/gateway/gateway-acp-bind.live.test.ts", ["OPENCLAW_LIVE_ACP_BIND"]],
@@ -248,7 +257,12 @@ function isMoonshotLiveTest(file) {
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
-      return files.filter((file) => file.startsWith("src/agents/") || file.startsWith("src/llm/"));
+      return files.filter(
+        (file) =>
+          file.startsWith("src/agents/") ||
+          file.startsWith("src/llm/") ||
+          file.startsWith("src/skills/"),
+      );
     case "native-live-src-agents-zai-coding":
       return files.filter((file) => file === "src/agents/zai.live.test.ts");
     case "native-live-src-gateway":

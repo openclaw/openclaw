@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals.js";
 
@@ -34,7 +35,10 @@ describe("exec approvals gateway methods", () => {
     );
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.get"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.get"],
+      'execApprovalsHandlers["exec.approvals.get"] test invariant',
+    )({
       req: { type: "req", id: "req-1", method: "exec.approvals.get", params: {} },
       params: {},
       client: null,
@@ -59,7 +63,10 @@ describe("exec approvals gateway methods", () => {
     updateExecApprovalsMock.mockRejectedValueOnce(new Error("disk full while saving approvals"));
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.set"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.set"],
+      'execApprovalsHandlers["exec.approvals.set"] test invariant',
+    )({
       req: { type: "req", id: "req-2", method: "exec.approvals.set", params: {} },
       params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
       client: null,
@@ -86,7 +93,10 @@ describe("exec approvals gateway methods", () => {
     updateExecApprovalsMock.mockResolvedValueOnce(null);
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.set"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.set"],
+      'execApprovalsHandlers["exec.approvals.set"] test invariant',
+    )({
       req: { type: "req", id: "req-conflict", method: "exec.approvals.set", params: {} },
       params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
       client: null,
@@ -102,6 +112,99 @@ describe("exec approvals gateway methods", () => {
         code: "INVALID_REQUEST",
         message: expect.stringContaining("exec approvals changed since last load"),
       }),
+    );
+  });
+
+  it("rejects a stale local save without recreating a deleted approvals file", async () => {
+    ensureExecApprovalsSnapshotMock.mockClear();
+    readExecApprovalsSnapshotMock.mockClear();
+    updateExecApprovalsMock.mockClear();
+    const missingSnapshot = {
+      ...makeSnapshot(),
+      exists: false,
+      raw: null,
+      hash: "sha256:missing",
+    };
+    readExecApprovalsSnapshotMock.mockReturnValueOnce(missingSnapshot);
+    const respond = vi.fn();
+
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.set"],
+      'execApprovalsHandlers["exec.approvals.set"] test invariant',
+    )({
+      req: { type: "req", id: "req-deleted", method: "exec.approvals.set", params: {} },
+      params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(readExecApprovalsSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(ensureExecApprovalsSnapshotMock).not.toHaveBeenCalled();
+    expect(updateExecApprovalsMock).not.toHaveBeenCalled();
+    expect(missingSnapshot.file.socket).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("exec approvals changed since last load"),
+      }),
+    );
+  });
+
+  it("lets the locked update perform the first write for a missing approvals file", async () => {
+    ensureExecApprovalsSnapshotMock.mockClear();
+    readExecApprovalsSnapshotMock.mockClear();
+    updateExecApprovalsMock.mockReset();
+    const missingSnapshot = {
+      ...makeSnapshot(),
+      exists: false,
+      raw: null,
+      hash: "sha256:missing",
+    };
+    readExecApprovalsSnapshotMock.mockReturnValueOnce(missingSnapshot);
+    let createdFile: ExecApprovalsFile | undefined;
+    updateExecApprovalsMock.mockImplementationOnce(
+      async (params: {
+        baseHash?: string;
+        update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
+      }) => {
+        createdFile = params.update(missingSnapshot.file) ?? undefined;
+        if (!createdFile) {
+          throw new Error("expected first write");
+        }
+        return { ...makeSnapshot(createdFile), hash: "sha256:created" };
+      },
+    );
+    const respond = vi.fn();
+
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.set"],
+      'execApprovalsHandlers["exec.approvals.set"] test invariant',
+    )({
+      req: { type: "req", id: "req-bootstrap", method: "exec.approvals.set", params: {} },
+      params: { file: { version: 1, agents: { main: {} } } },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(ensureExecApprovalsSnapshotMock).not.toHaveBeenCalled();
+    expect(updateExecApprovalsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ baseHash: missingSnapshot.hash }),
+    );
+    expect(createdFile?.socket?.path).toBeTruthy();
+    expect(createdFile?.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        hash: "sha256:created",
+        file: expect.objectContaining({ socket: { path: createdFile?.socket?.path } }),
+      }),
+      undefined,
     );
   });
 
@@ -128,7 +231,10 @@ describe("exec approvals gateway methods", () => {
     const invoke = vi.fn();
     const respond = vi.fn();
 
-    await execApprovalsHandlers[testCase.method]({
+    await expectDefined(
+      execApprovalsHandlers[testCase.method],
+      "execApprovalsHandlers[testCase.method] test invariant",
+    )({
       req: {
         type: "req",
         id: "req-node-blocked",
@@ -183,7 +289,10 @@ describe("exec approvals gateway methods", () => {
     const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.node.get"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.node.get"],
+      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
+    )({
       req: {
         type: "req",
         id: "req-node-allowed",
@@ -267,7 +376,10 @@ describe("exec approvals gateway methods", () => {
     const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.node.get"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.node.get"],
+      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
+    )({
       req: {
         type: "req",
         id: "req-node-legacy-params",
@@ -320,7 +432,10 @@ describe("exec approvals gateway methods", () => {
       baseHash: "sha256:current",
     };
 
-    await execApprovalsHandlers["exec.approvals.node.set"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.node.set"],
+      'execApprovalsHandlers["exec.approvals.node.set"] test invariant',
+    )({
       req: {
         type: "req",
         id: "req-native-set",
@@ -363,7 +478,10 @@ describe("exec approvals gateway methods", () => {
     const command = "system.execApprovals.get";
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.node.get"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.node.get"],
+      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
+    )({
       req: {
         type: "req",
         id: "req-invalid-native-get",
@@ -407,7 +525,10 @@ describe("exec approvals gateway methods", () => {
     });
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.node.get"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.node.get"],
+      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
+    )({
       req: {
         type: "req",
         id: "req-node-missing",

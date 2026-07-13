@@ -15,6 +15,11 @@ import {
   resolveMainSessionKeyFromConfig,
   type SessionEntry,
 } from "../config/sessions.js";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntries,
+} from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -31,17 +36,20 @@ import { __testing as restartTesting } from "../infra/restart.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   DEFAULT_AGENT_ID,
+  normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
-import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-runtime-internal.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -205,10 +213,15 @@ export async function writeSessionStore(params: {
   if (!storePath) {
     throw new Error("writeSessionStore requires testState.sessionStorePath");
   }
-  const agentId = params.agentId ?? DEFAULT_AGENT_ID;
-  const store: Record<string, Partial<SessionEntry>> = {};
+  const upsertsByAgentId = new Map<string, Array<{ sessionKey: string; entry: SessionEntry }>>();
   for (const [requestKey, entry] of Object.entries(params.entries)) {
     const rawKey = requestKey.trim();
+    if (typeof entry.sessionId !== "string" || entry.sessionId.trim().length === 0) {
+      continue;
+    }
+    const agentId = normalizeAgentId(
+      params.agentId ?? parseAgentSessionKey(rawKey)?.agentId ?? DEFAULT_AGENT_ID,
+    );
     const storeKey =
       rawKey === "global" || rawKey === "unknown"
         ? rawKey
@@ -217,15 +230,40 @@ export async function writeSessionStore(params: {
             requestKey,
             mainKey: params.mainKey,
           });
-    store[storeKey] = entry;
+    const upserts = upsertsByAgentId.get(agentId) ?? [];
+    upserts.push({
+      sessionKey: storeKey,
+      entry: {
+        ...entry,
+        sessionId: entry.sessionId,
+        updatedAt: entry.updatedAt ?? 0,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId,
+          sessionId: entry.sessionId,
+          storePath,
+        }),
+      },
+    });
+    upsertsByAgentId.set(agentId, upserts);
   }
-  // Gateway suites often reuse the same store path across tests while writing the
-  // file directly; clear the in-process cache so handlers reload the seeded state.
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
-  const serializedStore = JSON.stringify(store, null, 2);
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, serializedStore, "utf-8");
+  if (upsertsByAgentId.size === 0) {
+    upsertsByAgentId.set(normalizeAgentId(params.agentId ?? DEFAULT_AGENT_ID), []);
+  }
+  for (const [agentId, upserts] of upsertsByAgentId) {
+    const removals = listSessionEntries({ agentId, storePath }).map(({ sessionKey }) => ({
+      sessionKey,
+    }));
+    await applySessionEntryLifecycleMutation({
+      agentId,
+      storePath,
+      removals,
+      upserts,
+      skipMaintenance: true,
+    });
+  }
   clearSessionStoreCacheForTest();
 }
 
@@ -606,10 +644,12 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
   const mod = await getServerModule();
-  const resolvedOpts =
-    opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+  const resolvedOpts = {
+    ...opts,
+    controlUiEnabled: opts?.controlUiEnabled ?? false,
+  };
   if (
-    resolvedOpts?.controlUiEnabled === true &&
+    resolvedOpts.controlUiEnabled &&
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&
     tempControlUiRoot &&
     typeof (testState.gatewayControlUi as { root?: unknown } | undefined)?.root !== "string"

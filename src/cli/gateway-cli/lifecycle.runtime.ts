@@ -22,6 +22,7 @@ export {
   markGatewaySigusr1RestartHandled,
   peekGatewaySigusr1RestartReason,
   resetGatewayRestartStateForInProcessRestart,
+  requestGatewayRestartWithSignalAdmission,
   rollbackGatewayRestartSignalAdmission,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
@@ -46,6 +47,7 @@ export {
   resetAllLanes,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
+export { waitForActiveGatewayRootWork } from "../../process/gateway-work-admission.js";
 export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
-export { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";
+export { reloadTaskRuntimeStateFromStore } from "../../tasks/runtime-internal.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-handlers.js";

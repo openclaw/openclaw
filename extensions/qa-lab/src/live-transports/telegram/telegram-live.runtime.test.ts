@@ -1,4 +1,5 @@
 // Qa Lab tests cover telegram live plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -381,7 +382,7 @@ describe("telegram live qa runtime", () => {
     });
 
     expect(next.agents?.defaults?.skipBootstrap).toBe(true);
-    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime).toEqual({
       id: "openclaw",
     });
     expect(next.plugins?.allow).toContain("telegram");
@@ -666,10 +667,13 @@ describe("telegram live qa runtime", () => {
     ).steps[0];
     expect(otherBotStep?.expectReply).toBe(false);
     expect(otherBotStep?.input).toBe("/status@OpenClawQaOtherBot");
+    const mentionedReplyRun = requireScenario(
+      scenarios,
+      "telegram-mentioned-message-reply",
+    ).buildRun("sut_bot");
     expect(
-      scenarios
-        .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
-        ?.buildRun("sut_bot").steps[0].replyToLatestSutMessage,
+      expectDefined(mentionedReplyRun.steps[0], "mentioned-message reply step")
+        .replyToLatestSutMessage,
     ).toBe(true);
     expect(
       scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply")
@@ -1364,5 +1368,11 @@ describe("telegram live qa runtime", () => {
 
     expect(message).toContain("Phase: unknown");
     expect(message).toContain("boom");
+  });
+
+  it("keeps bounded telegram QA progress details on UTF-16 boundaries", () => {
+    const prefix = "a".repeat(236);
+    expect(testing.formatTelegramQaProgressDetails(`${prefix}😀after`)).toBe(`${prefix}...`);
+    expect(testing.formatTelegramQaProgressDetails("a".repeat(241))).toBe(`${"a".repeat(237)}...`);
   });
 });

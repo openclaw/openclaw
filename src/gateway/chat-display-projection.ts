@@ -1,6 +1,7 @@
 // Gateway chat display projection.
 // Converts raw transcript messages into bounded Control UI/history display records.
 import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   asFiniteNumber,
   asPositiveSafeInteger,
@@ -12,7 +13,7 @@ import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { extractCanvasFromText } from "../chat/canvas-render.js";
+import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
@@ -91,15 +92,37 @@ function isToolResultHistoryBlockType(type: unknown): boolean {
   return normalized === "toolresult" || normalized === "tool_result";
 }
 
-function projectToolResultDiffDetails(
+function projectToolResultDetails(
   details: unknown,
   maxChars: number,
-): { diff: string } | undefined {
+): Record<string, unknown> | undefined {
   const record = readRecord(details);
-  if (!record || typeof record.diff !== "string" || !record.diff.trim()) {
+  if (!record) {
     return undefined;
   }
-  return { diff: truncateChatHistoryText(record.diff, maxChars).text };
+  const projected: Record<string, unknown> = {};
+  if (typeof record.diff === "string" && record.diff.trim()) {
+    projected.diff = truncateChatHistoryText(record.diff, maxChars).text;
+  }
+  const preview = extractCanvasFromDetails(record);
+  if (preview?.mcpApp && preview.viewId) {
+    projected.mcpAppPreview = {
+      kind: "canvas",
+      view: {
+        id: preview.viewId,
+        ...(preview.url ? { url: preview.url } : {}),
+        ...(preview.title ? { title: preview.title } : {}),
+      },
+      presentation: {
+        target: "assistant_message",
+        ...(preview.title ? { title: preview.title } : {}),
+        ...(preview.preferredHeight ? { preferred_height: preview.preferredHeight } : {}),
+        ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
+      },
+      mcpApp: preview.mcpApp,
+    };
+  }
+  return Object.keys(projected).length > 0 ? projected : undefined;
 }
 
 function messageHasToolResultShape(message: Record<string, unknown>): boolean {
@@ -158,6 +181,23 @@ function extractChatHistoryBlockText(message: unknown): string | undefined {
     })
     .filter((value): value is string => typeof value === "string");
   return textParts.length > 0 ? textParts.join("\n") : undefined;
+}
+
+function extractChatHistoryCanvasPreview(message: Record<string, unknown>) {
+  const direct = extractCanvasFromDetails(message.details);
+  if (direct) {
+    return direct;
+  }
+  if (!Array.isArray(message.content)) {
+    return undefined;
+  }
+  for (const block of message.content) {
+    const preview = extractCanvasFromDetails(readRecord(block)?.details);
+    if (preview) {
+      return preview;
+    }
+  }
+  return undefined;
 }
 
 function appendCanvasBlockToAssistantHistoryMessage(params: {
@@ -278,13 +318,14 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
           ? entry.tool_name
           : undefined;
     const text = extractChatHistoryBlockText(entry);
-    const preview = extractCanvasFromText(text, toolName);
+    const detailsPreview = extractChatHistoryCanvasPreview(entry);
+    const preview = detailsPreview ?? extractCanvasFromText(text, toolName);
     if (!preview) {
       continue;
     }
     pending.push({
       preview,
-      rawText: text ?? null,
+      rawText: detailsPreview ? null : (text ?? null),
     });
   }
   if (pending.length > 0) {
@@ -319,7 +360,7 @@ function sanitizeChatHistoryContentBlock(
     opts?.preserveExactToolPayload === true || isToolHistoryBlockType(entry.type);
   const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   if (isToolResultHistoryBlockType(entry.type) && "details" in entry) {
-    const projectedDetails = projectToolResultDiffDetails(entry.details, maxChars);
+    const projectedDetails = projectToolResultDetails(entry.details, maxChars);
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
@@ -543,7 +584,7 @@ function sanitizeChatHistoryMessage(
 
   if ("details" in entry) {
     const projectedDetails = messageHasToolResultShape(entry)
-      ? projectToolResultDiffDetails(entry.details, maxChars)
+      ? projectToolResultDetails(entry.details, maxChars)
       : undefined;
     if (projectedDetails) {
       entry.details = projectedDetails;
@@ -1407,13 +1448,17 @@ function mergeTtsSupplementMessages(
     if (marker && isAssistantTtsSupplementMessage(message)) {
       let targetIndex = -1;
       for (let i = merged.length - 1; i >= 0; i--) {
-        if (ttsSupplementMatchesAssistant(marker, merged[i])) {
+        const candidate = merged[i];
+        if (candidate && ttsSupplementMatchesAssistant(marker, candidate)) {
           targetIndex = i;
           break;
         }
       }
       if (targetIndex >= 0) {
-        merged[targetIndex] = mergeTtsSupplementContent(merged[targetIndex], message);
+        merged[targetIndex] = mergeTtsSupplementContent(
+          expectDefined(merged[targetIndex], "merged entry at target index"),
+          message,
+        );
         changed = true;
         continue;
       }
@@ -1643,6 +1688,7 @@ function filterVisibleProjectedHistoryMessages(
     const nextRoleContent = next ? asRoleContentMessage(next) : null;
     if (
       currentRoleContent &&
+      next &&
       nextRoleContent &&
       isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) &&
       isHeartbeatOkResponse(nextRoleContent) &&

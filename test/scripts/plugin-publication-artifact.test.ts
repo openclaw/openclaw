@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+/* oxlint-disable typescript/no-base-to-string -- fetch mocks normalize standard RequestInfo inputs exactly as the production fetch boundary does. */
 import {
   existsSync,
   mkdirSync,
@@ -794,7 +795,7 @@ describe("plugin publication artifact", () => {
         callCounts.archive += 1;
         return callCounts.archive === 1
           ? new Response("retry", { status: 502 })
-          : new Response(zip, {
+          : new Response(zip as unknown as BodyInit, {
               status: 200,
               headers: { "content-length": String(zip.length) },
             });
@@ -888,7 +889,7 @@ describe("plugin publication artifact", () => {
           return Response.json(workflowJobs);
         }
         if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}/zip`)) {
-          return new Response(zip, {
+          return new Response(zip as unknown as BodyInit, {
             status: 200,
             headers: { "content-length": String(zip.length) },
           });
@@ -964,7 +965,7 @@ describe("plugin publication artifact", () => {
 
     const tamperFixture = createFixture();
     const tampered = Buffer.from(tamperFixture.zip);
-    tampered[35] ^= 0xff;
+    tampered[35] = tampered.readUInt8(35) ^ 0xff;
     writeFileSync(tamperFixture.zipPath, tampered);
     expect(() => verifyFixture(tamperFixture)).toThrow(/digest/u);
   });
@@ -1089,7 +1090,7 @@ describe("plugin publication artifact", () => {
   it("caps publication JSON and tarball members before ZIP expansion", () => {
     const fixture = createFixture();
     const manifest = readFileSync(fixture.created.manifestPath);
-    const oversizedManifest = Buffer.alloc(2 * 1024 * 1024 + 1, 0x20);
+    const oversizedManifest = Buffer.alloc(4 * 1024 * 1024 + 1, 0x20);
 
     replaceArtifactZip(fixture, [
       { bytes: fixture.tarball, name: TARBALL_NAME },

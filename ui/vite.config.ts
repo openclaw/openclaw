@@ -4,11 +4,13 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { Plugin, UserConfig } from "vite";
 import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
 import {
   deriveControlUiBuildId,
   normalizeControlUiBuildId,
+  normalizeControlUiBranch,
   normalizeControlUiBuildTimestamp,
   normalizeControlUiCommit,
   type ControlUiBuildInfo,
@@ -40,6 +42,42 @@ const commonJsOptimizeDeps = [
   "highlight.js/lib/languages/xml",
   "highlight.js/lib/languages/yaml",
 ] as const;
+// npm excludes dist/**/*.map; sidecars would bypass that rule and ship source
+// maps that the browser never needs during normal runtime.
+const controlUiPrecompressedAssetExtensions = new Set([
+  ".css",
+  ".js",
+  ".json",
+  ".svg",
+  ".txt",
+  ".wasm",
+  ".webmanifest",
+]);
+
+export function createControlUiPrecompressedAssetVariants(
+  fileName: string,
+  source: string | Uint8Array,
+): Array<{ fileName: string; source: Buffer }> {
+  if (
+    !fileName.startsWith("assets/") ||
+    !controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
+  ) {
+    return [];
+  }
+  const body = typeof source === "string" ? Buffer.from(source) : Buffer.from(source);
+  return [
+    {
+      fileName: `${fileName}.br`,
+      source: brotliCompressSync(body, {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
+      }),
+    },
+    {
+      fileName: `${fileName}.gz`,
+      source: gzipSync(body, { level: 9 }),
+    },
+  ];
+}
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
@@ -79,11 +117,37 @@ function readGitCommit(): string | null {
   }
 }
 
+function readGitBranch(): string | null {
+  try {
+    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return raw.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function readGitDirty(): boolean | null {
+  try {
+    const raw = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return Boolean(raw.trim());
+  } catch {
+    return null;
+  }
+}
+
 type ControlUiBuildInfoSources = {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   readPackageVersion?: () => string | null;
   readGitCommit?: () => string | null;
+  readGitBranch?: () => string | null;
+  readGitDirty?: () => boolean | null;
 };
 
 function normalizeBuildTimestamp(value: string | undefined, now: () => Date): string | null {
@@ -131,10 +195,21 @@ export function resolveControlUiBuildInfo(
     env.OPENCLAW_BUILD_TIMESTAMP,
     sources.now ?? (() => new Date()),
   );
+  // Branch/dirty identity is advisory: the readers return null instead of
+  // throwing, so malformed environment or Git state never blocks a build.
+  // Tags must not be presented as branches in GitHub-built artifacts.
+  const githubBranch = env.GITHUB_REF_TYPE === "branch" ? env.GITHUB_REF_NAME : null;
+  const branch =
+    normalizeControlUiBranch(env.GIT_BRANCH) ??
+    normalizeControlUiBranch(githubBranch) ??
+    normalizeControlUiBranch((sources.readGitBranch ?? readGitBranch)());
+  const dirty = (sources.readGitDirty ?? readGitDirty)();
   const metadata = { version, commit, builtAt };
   const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
   return {
     ...metadata,
+    branch,
+    dirty,
     buildId: explicitBuildId
       ? normalizeControlUiBuildId(explicitBuildId)
       : deriveControlUiBuildId(metadata),
@@ -299,6 +374,24 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
   };
 }
 
+function controlUiPrecompressedAssetsPlugin(): Plugin {
+  return {
+    name: "control-ui-precompressed-assets",
+    apply: "build",
+    writeBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        // Vite's post-build import analysis rewrites lazy preload markers in a
+        // later generateBundle hook. Read from disk here so sidecars always
+        // encode the exact final bytes that the identity response serves.
+        const source = fs.readFileSync(path.join(outDir, output.fileName));
+        for (const variant of createControlUiPrecompressedAssetVariants(output.fileName, source)) {
+          fs.writeFileSync(path.join(outDir, variant.fileName), variant.source);
+        }
+      }
+    },
+  };
+}
+
 export default function controlUiViteConfig(): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
@@ -346,6 +439,7 @@ export default function controlUiViteConfig(): UserConfig {
     },
     plugins: [
       controlUiBrowserOnlySharedModuleAliases(),
+      controlUiPrecompressedAssetsPlugin(),
       controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",

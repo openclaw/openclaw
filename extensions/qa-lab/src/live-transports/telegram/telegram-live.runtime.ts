@@ -12,6 +12,7 @@ import {
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import {
@@ -481,7 +482,7 @@ function formatTelegramQaProgressDetails(details: string): string {
   if (sanitized.length <= TELEGRAM_QA_PROGRESS_DETAIL_LIMIT) {
     return sanitized;
   }
-  return `${sanitized.slice(0, TELEGRAM_QA_PROGRESS_DETAIL_LIMIT - 3).trimEnd()}...`;
+  return `${truncateUtf16Safe(sanitized, TELEGRAM_QA_PROGRESS_DETAIL_LIMIT - 3).trimEnd()}...`;
 }
 
 function resolveTelegramQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): TelegramQaRuntimeEnv {
@@ -677,8 +678,8 @@ function buildTelegramQaConfig(
         ...baseCfg.agents?.defaults,
         models: {
           ...baseCfg.agents?.defaults?.models,
-          "openai/gpt-5.5": {
-            ...baseCfg.agents?.defaults?.models?.["openai/gpt-5.5"],
+          "openai/gpt-5.6-luna": {
+            ...baseCfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"],
             agentRuntime: { id: "openclaw" },
           },
         },
@@ -1338,7 +1339,8 @@ async function runTelegramQaRttChecks(params: {
       sutUsername: params.sutUsername,
     });
     const steps = resolveTelegramQaScenarioSteps(run);
-    if (steps.length !== 1) {
+    const step = steps[0];
+    if (steps.length !== 1 || !step) {
       throw new Error(`Telegram QA RTT check ${params.scenario.id} must have one step.`);
     }
     try {
@@ -1352,7 +1354,7 @@ async function runTelegramQaRttChecks(params: {
         observedMessages: params.observedMessages,
         replyTimeoutMs: params.rttOptions.timeoutMs,
         scenario: params.scenario,
-        step: steps[0],
+        step,
         sutBotId: params.sutBotId,
       });
       if (!stepResult.matched) {

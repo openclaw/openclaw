@@ -56,7 +56,7 @@ The returned view is intentionally bounded and safety-filtered:
 
 Both tools accept either a **session key** (like `"main"`) or a **session ID** from a previous list call.
 
-If you need the exact byte-for-byte transcript, inspect the transcript file on disk instead of treating `sessions_history` as a raw dump.
+If you need the exact raw transcript, inspect the scoped SQLite transcript rows instead of treating `sessions_history` as an unfiltered dump.
 
 ## Sending cross-session messages
 
@@ -71,6 +71,8 @@ Messages and A2A follow-up replies are marked as inter-session data in the recei
 
 After the target responds, OpenClaw can run a **reply-back loop** where the agents alternate messages (up to `session.agentToAgent.maxPingPongTurns`, range 0-20, default 5). The target agent can reply `REPLY_SKIP` to stop early.
 
+Pass `watch: true` to also register the sender as a state-change watcher of the target: when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince`. Registration happens after successful dispatch, targets the session that actually received the message, and starts at its current state version, so only later changes produce notices. The result reports `watched: true` when registration succeeded. See [Session state awareness](/concepts/session-state).
+
 ## Status and orchestration helpers
 
 `session_status` is the lightweight `/status`-equivalent tool for the current or another visible session. It reports usage, time, model/runtime state, and linked background-task context when present. Like `/status`, it can backfill sparse token/cache counters from the latest transcript usage entry, and `model=default` clears a per-session override. Use `sessionKey="current"` for the caller's current session; visible client labels such as `openclaw-tui` are not session keys.
@@ -80,6 +82,12 @@ When route metadata is available, `session_status` also includes a visible `Rout
 - `origin` is where the session was created, or the provider inferred from a deliverable session-key prefix when older state lacks stored origin metadata.
 - `active` is the current live-run route. It is only reported for the live or current session being handled now.
 - `deliveryContext` is the persisted delivery route stored on the session, which OpenClaw can reuse for later delivery even when the active surface differs.
+
+## Session state changes
+
+OpenClaw keeps a durable signal log of material session state changes (direct human messages to watched sessions, child-run outcomes, goal changes, compaction). `sessions_list` rows and `session_status` expose the session's `stateVersion`, and `session_status` accepts `changesSince: <version>` to return the typed events after that version, with exact `historyGap` signaling when the requested version predates retained history. Watchers — spawn parents automatically, `sessions_send watch: true` explicitly — receive one coalesced stale-state notice when another actor changes a watched session.
+
+See [Session state awareness](/concepts/session-state) for the full model: event kinds, watcher registration, the anti-spam notice protocol, reconciliation flow, and current limits.
 
 `sessions_yield` intentionally ends the current turn so the next message can be the follow-up event you are waiting for. Use it after spawning sub-agents when you want completion results to arrive as the next message instead of building poll loops.
 
@@ -119,6 +127,7 @@ Default is `tree`. Sandboxed sessions are clamped to `tree` regardless of config
 ## Further reading
 
 - [Session Management](/concepts/session): routing, lifecycle, maintenance
+- [Sub-agents](/tools/subagents): child-session lifecycle and delivery
 - [ACP Agents](/tools/acp-agents): external harness spawning
 - [Multi-agent](/concepts/multi-agent): multi-agent architecture
 - [Gateway Configuration](/gateway/configuration): session tool config knobs

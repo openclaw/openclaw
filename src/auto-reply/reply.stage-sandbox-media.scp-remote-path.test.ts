@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { basename, join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { slugifySessionKey } from "../agents/sandbox/shared.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -98,6 +99,15 @@ describe("stageSandboxMedia scp remote paths", () => {
     expect(stderr).not.toContain("start-");
   });
 
+  it("keeps scp stderr tail UTF-16 safe when the boundary bisects an emoji", () => {
+    const stderr = appendScpStderrTail("prefix", "🤖tail", 5);
+
+    expect(stderr).toBe("tail");
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(stderr),
+    ).toBe(false);
+  });
+
   it("rejects remote attachment filenames with shell metacharacters before spawning scp", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sessionKey, remoteCacheDir } = createRemoteStageParams(home);
@@ -162,7 +172,10 @@ describe("stageSandboxMedia scp remote paths", () => {
       sessionCtx.MediaPaths = [remotePath];
       childProcessMocks.spawn.mockImplementation((_command, argsUnknown) => {
         const args = argsUnknown as string[];
-        const localPath = args[args.length - 1];
+        const localPath = expectDefined(
+          args[args.length - 1],
+          "args[args.length - 1] test invariant",
+        );
         const child = new EventEmitter() as EventEmitter & {
           stderr: EventEmitter & { setEncoding: (_encoding: string) => void };
         };
@@ -221,7 +234,10 @@ describe("stageSandboxMedia scp remote paths", () => {
       sessionCtx.MediaPaths = [remotePath];
       childProcessMocks.spawn.mockImplementation((_command, argsUnknown) => {
         const args = argsUnknown as string[];
-        const localPath = args[args.length - 1];
+        const localPath = expectDefined(
+          args[args.length - 1],
+          "args[args.length - 1] test invariant",
+        );
         const child = new EventEmitter() as EventEmitter & {
           stderr: EventEmitter & { setEncoding: (_encoding: string) => void };
         };

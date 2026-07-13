@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildChannelProgressDraftLine,
   formatChannelProgressDraftText,
+  resolveChannelPreviewStreamMode,
+  resolveChannelStreamingBlockCoalesce,
+  resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingChunkMode,
+  resolveChannelStreamingNativeTransport,
+  resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingProgressNarration,
 } from "./streaming.js";
 
@@ -88,7 +94,81 @@ describe("buildChannelProgressDraftLine", () => {
   });
 });
 
+describe("streaming config resolution", () => {
+  // Flat delivery keys stay canonical for channels without a nested streaming
+  // schema and for SDK plugins; mode-family aliases (streamMode, scalar
+  // streaming, nativeStreaming) are doctor-migrated and unread at runtime.
+  it("resolves flat delivery keys while ignoring mode-family aliases", () => {
+    const legacyEntry = {
+      streamMode: "block",
+      chunkMode: "newline",
+      blockStreaming: true,
+      draftChunk: { minChars: 10 },
+      blockStreamingCoalesce: { idleMs: 5 },
+      nativeStreaming: false,
+    } as never;
+
+    expect(resolveChannelPreviewStreamMode(legacyEntry, "partial")).toBe("partial");
+    expect(resolveChannelStreamingChunkMode(legacyEntry)).toBe("newline");
+    expect(resolveChannelStreamingBlockEnabled(legacyEntry)).toBe(true);
+    expect(resolveChannelStreamingPreviewChunk(legacyEntry)).toEqual({ minChars: 10 });
+    expect(resolveChannelStreamingBlockCoalesce(legacyEntry)).toEqual({ idleMs: 5 });
+    expect(resolveChannelStreamingNativeTransport(legacyEntry)).toBeUndefined();
+  });
+
+  it("resolves the canonical nested streaming shape", () => {
+    const entry = {
+      streaming: {
+        mode: "block",
+        chunkMode: "newline",
+        preview: { chunk: { minChars: 10 } },
+        block: { enabled: true, coalesce: { idleMs: 5 } },
+        nativeTransport: false,
+      },
+    };
+
+    expect(resolveChannelPreviewStreamMode(entry, "partial")).toBe("block");
+    expect(resolveChannelStreamingChunkMode(entry)).toBe("newline");
+    expect(resolveChannelStreamingBlockEnabled(entry)).toBe(true);
+    expect(resolveChannelStreamingPreviewChunk(entry)).toEqual({ minChars: 10 });
+    expect(resolveChannelStreamingBlockCoalesce(entry)).toEqual({ idleMs: 5 });
+    expect(resolveChannelStreamingNativeTransport(entry)).toBe(false);
+  });
+
+  it("keeps scalar streaming support for channels whose schema allows it", () => {
+    // Mattermost's schema accepts a scalar mode string or boolean as canonical.
+    expect(resolveChannelPreviewStreamMode({ streaming: "block" }, "partial")).toBe("block");
+    expect(resolveChannelPreviewStreamMode({ streaming: true }, "off")).toBe("partial");
+    expect(resolveChannelPreviewStreamMode({ streaming: false }, "partial")).toBe("off");
+  });
+});
+
 describe("progress narration", () => {
+  it("omits the implicit progress label when narration is available", () => {
+    const text = formatChannelProgressDraftText({
+      entry: { streaming: { mode: "progress" } },
+      lines: ["🛠️ Exec"],
+      narration: "Counting lines in the workspace files.",
+    });
+
+    expect(text).toBe("Counting lines in the workspace files.");
+  });
+
+  it("keeps an explicitly configured automatic label above narration", () => {
+    const text = formatChannelProgressDraftText({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "auto", labels: ["Clawing"] },
+        },
+      },
+      lines: ["🛠️ Exec"],
+      narration: "Counting lines in the workspace files.",
+    });
+
+    expect(text).toBe("Clawing\n\nCounting lines in the workspace files.");
+  });
+
   it("renders narration instead of tool lines", () => {
     const text = formatChannelProgressDraftText({
       entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },

@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
@@ -8,6 +9,8 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
   return {
     loading: false,
     nodes: [],
+    presence: [],
+    gatewayVersion: null,
     lastError: null,
     devicesLoading: false,
     devicesError: null,
@@ -29,7 +32,6 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
     execApprovalsSelectedAgent: null,
     execApprovalsTarget: "gateway",
     execApprovalsTargetNodeId: null,
-    onRefresh: () => undefined,
     onDevicePairSetupOpen: () => undefined,
     onDeviceApprove: () => undefined,
     onDeviceReject: () => undefined,
@@ -61,8 +63,7 @@ function renderNodesContainer(overrides: Partial<NodesProps>): HTMLDivElement {
 
 function getInventoryCard(container: Element): Element {
   const card = Array.from(container.querySelectorAll(".card")).find(
-    (candidate) =>
-      candidate.querySelector(".card-title")?.textContent?.trim() === "Nodes & devices",
+    (candidate) => candidate.querySelector(".card-title")?.textContent?.trim() === "Paired devices",
   );
   expect(card).toBeInstanceOf(Element);
   if (!(card instanceof Element)) {
@@ -211,6 +212,33 @@ describe("nodes devices pending rendering", () => {
 });
 
 describe("nodes inventory rendering", () => {
+  it("pins the Gateway self beacon before paired devices", () => {
+    const container = renderNodesContainer({
+      presence: [
+        {
+          instanceId: "gateway-1",
+          host: "gateway-host",
+          mode: "gateway",
+          platform: "linux",
+          version: "2026.7.11",
+          lastInputSeconds: 5,
+        },
+      ],
+      devicesList: {
+        pending: [],
+        paired: [{ deviceId: "device-1", displayName: "Device One", roles: ["operator"] }],
+      },
+    });
+    const entries = getInventoryCard(container).querySelectorAll(".nodes-entry");
+    const gatewayEntry = expectDefined(entries[0], "gateway inventory entry");
+
+    expect(gatewayEntry.classList.contains("nodes-entry--gateway")).toBe(true);
+    expect(gatewayEntry.textContent).toContain("gateway-host");
+    expect(gatewayEntry.textContent).toContain("Linux · 2026.7.11 · input 5s ago");
+    expect(gatewayEntry.querySelector("button")).toBeNull();
+    expect(gatewayEntry.querySelector("details")).toBeNull();
+  });
+
   it("renders one row per machine with duplicates collapsed", () => {
     const container = renderNodesContainer({
       devicesList: {
@@ -290,6 +318,122 @@ describe("nodes inventory rendering", () => {
     expect(approvals).toEqual(["node-req-1"]);
   });
 
+  it("shows node and Gateway version drift", () => {
+    const container = renderNodesContainer({
+      gatewayVersion: "2026.7.2",
+      nodes: [
+        {
+          nodeId: "node-old",
+          displayName: "Older Mac",
+          version: "19.4",
+          coreVersion: "2026.6.11",
+          uiVersion: "19.4",
+          connected: true,
+          paired: true,
+        },
+        {
+          nodeId: "node-current",
+          displayName: "Current Mac",
+          version: "19.5",
+          coreVersion: "2026.7.2",
+          uiVersion: "19.5",
+          connected: true,
+          paired: true,
+        },
+        {
+          nodeId: "node-newer",
+          displayName: "Newer Mac",
+          version: "19.6",
+          coreVersion: "2026.8.1",
+          uiVersion: "19.6",
+          connected: true,
+          paired: true,
+        },
+        {
+          nodeId: "legacy-linux",
+          displayName: "Legacy Linux",
+          platform: "linux",
+          version: "2026.6.10",
+          connected: true,
+          paired: true,
+        },
+      ],
+    });
+    const driftChips = Array.from(getInventoryCard(container).querySelectorAll(".chip")).filter(
+      (chip) => chip.textContent?.trim() === "version drift",
+    );
+
+    expect(driftChips).toHaveLength(3);
+    expect(
+      driftChips
+        .map((chip) => chip.getAttribute("title"))
+        .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+    ).toEqual([
+      "Node 2026.6.10; Gateway 2026.7.2. Update the older component to align the fleet.",
+      "Node 2026.6.11; Gateway 2026.7.2. Update the older component to align the fleet.",
+      "Node 2026.8.1; Gateway 2026.7.2. Update the older component to align the fleet.",
+    ]);
+  });
+
+  it("shows when an offline Windows node requires manual wake", () => {
+    const container = renderNodesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "windows-browser",
+            displayName: "Windows browser",
+            platform: "Win32",
+            roles: ["operator"],
+          },
+        ],
+      },
+      nodes: [
+        {
+          nodeId: "windows-node",
+          displayName: "Windows node",
+          platform: "win32",
+          connected: false,
+          paired: true,
+        },
+        {
+          nodeId: "windows-node-online",
+          displayName: "Online Windows node",
+          platform: "Windows 11",
+          connected: true,
+          paired: true,
+        },
+        {
+          nodeId: "windows-node-pending",
+          displayName: "Pending Windows node",
+          platform: "win32",
+          connected: false,
+          paired: true,
+          approvalState: "pending-approval",
+          pendingRequestId: "pending-windows",
+        },
+        {
+          nodeId: "windows-node-unapproved",
+          displayName: "Unapproved Windows node",
+          platform: "windows",
+          connected: false,
+          paired: true,
+          approvalState: "unapproved",
+        },
+      ],
+    });
+    const card = getInventoryCard(container);
+    const wakeChips = Array.from(card.querySelectorAll(".chip")).filter(
+      (chip) => chip.textContent?.trim() === "manual wake required",
+    );
+
+    expect(card.querySelector('[aria-label="offline"]')).not.toBeNull();
+    expect(wakeChips).toHaveLength(1);
+    expect(wakeChips[0]?.getAttribute("title")).toBe(
+      "The Gateway cannot wake an offline Windows node. Start the machine or restore its network connection.",
+    );
+  });
+
   it("shows token rows with rotate and revoke inside entry details", () => {
     const rotations: Array<{ deviceId: string; role: string }> = [];
     const revocations: Array<{ deviceId: string; role: string }> = [];
@@ -315,6 +459,78 @@ describe("nodes inventory rendering", () => {
     expect(rotations).toEqual([{ deviceId: "device-1", role: "operator" }]);
     findButton(card, "Revoke").click();
     expect(revocations).toEqual([{ deviceId: "device-1", role: "operator" }]);
+  });
+
+  it("always renders private identifiers in Details and status as an accessible dot", () => {
+    const container = renderNodesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "device-private-id",
+            displayName: "Device One",
+            platform: "macos 26.5.2",
+            remoteIp: "192.0.2.10",
+            roles: ["operator"],
+          },
+        ],
+      },
+    });
+    const entry = getInventoryCard(container).querySelector(".nodes-entry");
+
+    expect(entry?.querySelector(".list-sub")?.textContent).toContain("macOS 26.5.2");
+    expect(entry?.querySelector(".list-sub")?.textContent).not.toContain("device-private-id");
+    expect(entry?.querySelector(".list-sub")?.textContent).not.toContain("192.0.2.10");
+    expect(entry?.querySelector('.status-dot[aria-label="offline"]')).not.toBeNull();
+    expect(entry?.querySelector("details")?.textContent).toContain("Device ID: device-private-id");
+    expect(entry?.querySelector("details")?.textContent).toContain("Remote IP: 192.0.2.10");
+  });
+
+  it("lists live unpaired presence beacons as display-only rows", () => {
+    const container = renderNodesContainer({
+      presence: [
+        {
+          instanceId: "webchat-1",
+          host: "browser-session",
+          mode: "webchat",
+          roles: ["operator"],
+          platform: "macos 26.5.2",
+          lastInputSeconds: 90,
+        },
+        { instanceId: "left-1", host: "gone", mode: "webchat", reason: "disconnect" },
+      ],
+    });
+    const card = getInventoryCard(container);
+
+    expect(card.textContent).toContain("Connected without pairing");
+    expect(card.textContent).not.toContain("gone");
+    const entry = Array.from(card.querySelectorAll(".nodes-entry")).find((candidate) =>
+      candidate.textContent?.includes("browser-session"),
+    );
+    expect(entry?.textContent).toContain("unpaired");
+    expect(entry?.textContent).toContain("macOS 26.5.2");
+    expect(entry?.querySelector('.status-dot[aria-label="connected"]')).not.toBeNull();
+    expect(entry?.querySelector("button")).toBeNull();
+  });
+
+  it("brands platform names instead of naive capitalization", () => {
+    const container = renderNodesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          { deviceId: "ios-1", displayName: "iPhone", platform: "iOS 26.4", roles: ["operator"] },
+          { deviceId: "mac-1", displayName: "Mac", platform: "darwin", roles: ["operator"] },
+        ],
+      },
+    });
+    const subs = Array.from(
+      getInventoryCard(container).querySelectorAll(".nodes-entry .list-sub"),
+      (node) => node.textContent ?? "",
+    );
+
+    expect(subs.some((text) => text.includes("iOS 26.4"))).toBe(true);
+    expect(subs.some((text) => text.includes("IOS"))).toBe(false);
+    expect(subs.some((text) => text.includes("macOS"))).toBe(true);
   });
 });
 

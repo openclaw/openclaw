@@ -3,6 +3,7 @@
  * Exercises exec and process behavior through the shared exported tool factory.
  */
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -80,7 +81,6 @@ vi.mock("../utils/delivery-context.js", () => ({
 }));
 
 vi.mock("./bash-tools.exec-approval-followup.js", () => ({
-  buildExecApprovalFollowupPrompt: (text: string) => text,
   sendExecApprovalFollowup: vi.fn(async () => false),
 }));
 
@@ -709,29 +709,21 @@ describe("tool descriptions", () => {
     const processWithCron = createProcessTool({ hasCronTool: true });
 
     expect(execWithCron.description).toContain(
-      "rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
+      "automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion",
     );
-    expect(processWithCron.description).toContain(
-      "completion confirmation when automatic completion wake is unavailable.",
-    );
-    expect(processWithCron.description).toContain(
-      "Use write/send-keys/submit/paste/kill for input or intervention.",
-    );
+    expect(processWithCron.description).toContain("completion without auto-wake");
+    expect(processWithCron.description).toContain("write, send-keys, submit, paste, kill");
     expect(execWithCron.description).toContain(
-      "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead.",
+      "No sleep/delay loops for reminders/follow-ups; use cron.",
     );
     expect(processWithCron.description).toContain(
-      "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
+      "No polling as timer/reminder; scheduled follow-up uses cron.",
     );
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
-    expect(execTool.description).toContain("otherwise use process to confirm completion");
-    expect(processTool.description).toContain(
-      "completion confirmation when automatic completion wake is unavailable",
-    );
-    expect(processTool.description).toContain(
-      "Use write/send-keys/submit/paste/kill for input or intervention.",
-    );
+    expect(execTool.description).toContain("otherwise process confirms completion");
+    expect(processTool.description).toContain("completion without auto-wake");
+    expect(processTool.description).toContain("write, send-keys, submit, paste, kill");
   });
 });
 
@@ -915,7 +907,9 @@ describe("exec PATH handling", () => {
       expect(index).toBeGreaterThanOrEqual(0);
     }
     for (let i = 1; i < prependIndexes.length; i += 1) {
-      expect(prependIndexes[i]).toBeGreaterThan(prependIndexes[i - 1]);
+      expect(prependIndexes[i]).toBeGreaterThan(
+        expectDefined(prependIndexes[i - 1], "prependIndexes[i - 1] test invariant"),
+      );
     }
     const baseIndex = entries.indexOf(basePath);
     expect(baseIndex).toBeGreaterThanOrEqual(0);
@@ -980,7 +974,7 @@ describe("applyPathPrepend with case-insensitive PATH key", () => {
     const existingPath = existing.join(delim);
     const env: Record<string, string> = { Path: existingPath };
     applyPathPrepend(env, prepend);
-    const parts = env.Path.split(delim);
+    const parts = expectDefined(env.Path, "env.Path test invariant").split(delim);
     expect(parts[0]).toBe(prepend[0]);
     for (const entry of existing) {
       expect(parts).toContain(entry);

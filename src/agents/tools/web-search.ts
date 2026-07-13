@@ -89,7 +89,7 @@ export function createWebSearchTool(options?: {
   return {
     label: "Web Search",
     name: "web_search",
-    description: "Search web for current info; returns normalized provider results.",
+    description: "Search current web; normalized provider results.",
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args, signal) => {
       // Late binding lets long-lived agents pick up runtime web-search credentials/config without
@@ -125,4 +125,3 @@ export const testing = {
   resolveSearchProvider: (search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"]) =>
     resolveWebSearchProviderId({ search }),
 };
-export { testing as __testing };

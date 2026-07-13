@@ -102,6 +102,7 @@ describe("ensureConfigReady", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-"));
     tempRoots.push(root);
     setTestEnvValue("OPENCLAW_HOME", root);
+    deleteTestEnvValue("OPENCLAW_PROFILE");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
     return root;
   }
@@ -126,7 +127,7 @@ describe("ensureConfigReady", () => {
   }
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+    envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR"]);
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
     for (const root of tempRoots.splice(0)) {
@@ -360,10 +361,21 @@ describe("ensureConfigReady", () => {
     },
   );
 
+  it("keeps named profiles isolated from default-profile approval migrations", async () => {
+    const root = useTempOpenClawHome();
+    setTestEnvValue("OPENCLAW_PROFILE", "work");
+    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(root, ".openclaw-work"));
+    writeStateMarker(root, "exec-approvals.json");
+    writeStateMarker(root, "plugin-binding-approvals.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["Discord model picker preferences", "discord/model-picker-preferences.json"],
     ["Discord thread bindings", "discord/thread-bindings.json"],
-    ["Feishu dedupe sidecar", "feishu/dedup/default.json"],
     ["Telegram bot info cache", "telegram/bot-info-default.json"],
     ["Telegram update offset", "telegram/update-offset-default.json"],
     ["Telegram sticker cache", "telegram/sticker-cache.json"],

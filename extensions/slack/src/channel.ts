@@ -485,6 +485,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     },
   },
   shouldTreatDeliveredTextAsVisible: shouldTreatSlackDeliveredTextAsVisible,
+  preferFinalAssistantVisibleText: true,
   shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
     shouldSuppressLocalSlackExecApprovalPrompt({
       cfg,
@@ -564,6 +565,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         deps: ctx.deps,
         send,
         tokenOverride,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
       }),
     });
   },

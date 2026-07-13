@@ -272,12 +272,15 @@ enum ExecApprovalsConditionalSaveResult {
 
 enum ExecApprovalsMutationError: Error, Equatable, Sendable {
     case invalidPattern(ExecAllowlistPatternValidationReason)
+    case entryNotOwned
     case unavailable
 
     var message: String {
         switch self {
         case let .invalidPattern(reason):
             reason.message
+        case .entryNotOwned:
+            "This allowlist entry is inherited. Edit its owning scope and retry."
         case .unavailable:
             "Could not save exec approvals. Last known settings are shown; retry the change."
         }
@@ -355,28 +358,6 @@ enum ExecApprovalHelpers {
 
     static func patternHasPathSelector(_ pattern: String) -> Bool {
         pattern.contains("/") || pattern.contains("~") || pattern.contains("\\")
-    }
-}
-
-struct ExecEventPayload: Codable {
-    var sessionKey: String
-    var runId: String
-    var host: String
-    var command: String?
-    var exitCode: Int?
-    var timedOut: Bool?
-    var success: Bool?
-    var output: String?
-    var reason: String?
-
-    static func truncateOutput(_ raw: String, maxChars: Int = 20000) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.count <= maxChars {
-            return trimmed
-        }
-        let suffix = trimmed.suffix(maxChars)
-        return "... (truncated) \(suffix)"
     }
 }
 

@@ -4,6 +4,8 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import {
@@ -25,7 +27,6 @@ import {
   sendGroupMessageWithStory,
 } from "./urbit/send.js";
 import { uploadImageFromUrl } from "./urbit/upload.js";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 
 type ResolvedTlonAccount = ReturnType<typeof resolveTlonAccount>;
 type ConfiguredTlonAccount = ResolvedTlonAccount & {
@@ -67,7 +68,7 @@ async function createHttpPokeApi(params: {
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
-            Cookie: cookie.split(";")[0],
+            Cookie: expectDefined(cookie.split(";").at(0), "cookie first segment"),
           },
           body: JSON.stringify([pokeData]),
         },

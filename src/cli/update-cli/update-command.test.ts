@@ -12,17 +12,20 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
+  resolvePostSyncPluginUpdateSkipIds,
+  updatePluginsAfterCoreUpdate,
+} from "./update-command-plugins.js";
+import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
+import {
   formatPostUpdateGatewayRecoveryInstructions,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
-  resolvePostCoreUpdateChildStdio,
-  resolvePostUpdateServiceStateReadEnv,
   resolvePostInstallDoctorEnv,
-  shouldPrepareUpdatedInstallRestart,
+  resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
+  shouldPrepareUpdatedInstallRestart,
   shouldUseLegacyProcessRestartAfterUpdate,
-  updatePluginsAfterCoreUpdate,
-} from "./update-command.js";
+} from "./update-command-service.js";
 
 describe("resolveGatewayInstallEntrypointCandidates", () => {
   it("prefers index.js before legacy entry.js", () => {
@@ -538,6 +541,18 @@ describe("collectMissingPluginInstallPayloads", () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolvePostSyncPluginUpdateSkipIds", () => {
+  it("skips plugins already switched through ClawHub or npm and repaired payloads", () => {
+    expect(
+      resolvePostSyncPluginUpdateSkipIds({
+        switchedToClawHub: ["whatsapp"],
+        switchedToNpm: ["voice-call"],
+        repairedMissingPayloadIds: new Set(["telegram"]),
+      }),
+    ).toStrictEqual(new Set(["whatsapp", "voice-call", "telegram"]));
   });
 });
 

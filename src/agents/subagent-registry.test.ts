@@ -3,6 +3,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type {
@@ -116,6 +117,13 @@ const mocks = vi.hoisted(() => ({
     >;
     return store[scope.sessionKey];
   }),
+  listSessionEntries: vi.fn((scope: Omit<SessionAccessScope, "sessionKey">) => {
+    const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
+      string,
+      SessionEntry
+    >;
+    return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+  }),
   loadSessionStore: vi.fn((_storePath?: string, _options?: { clone?: boolean }) => ({})),
   patchSessionEntry: vi.fn(
     async (
@@ -175,7 +183,7 @@ const mocks = vi.hoisted(() => ({
     (params: { childSessionKey?: string }, context?: unknown) => Promise<void>
   >(async () => {}),
   runSubagentEnded: vi.fn(async () => {}),
-  removeInternalSessionEffectsTranscript: vi.fn(async () => {}),
+  removeInternalSessionEffectsSession: vi.fn(async () => {}),
   resolveAgentTimeoutMs: vi.fn(() => 1_000),
   scheduleOrphanRecovery: vi.fn(),
 }));
@@ -203,6 +211,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: mocks.listSessionEntries,
   loadSessionEntry: mocks.loadSessionEntry,
   patchSessionEntry: mocks.patchSessionEntry,
 }));
@@ -249,7 +258,7 @@ vi.mock("./subagent-orphan-recovery.js", () => ({
 }));
 
 vi.mock("./internal-session-effects.js", () => ({
-  removeInternalSessionEffectsTranscript: mocks.removeInternalSessionEffectsTranscript,
+  removeInternalSessionEffectsSession: mocks.removeInternalSessionEffectsSession,
 }));
 
 describe("subagent registry seam flow", () => {
@@ -3750,7 +3759,12 @@ describe("subagent registry seam flow", () => {
     const attachmentsDir = path.join(attachmentsRootDir, "child");
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
-    const oldTranscriptFile = "/tmp/internal-agent-runs/run-old-tombstone.jsonl";
+    const oldTranscriptTarget = {
+      agentId: "main",
+      sessionId: "internal-run-old-tombstone",
+      sessionKey: "agent:main:internal-session-effects:run-old-tombstone",
+      storePath: "/tmp/test-store",
+    };
     mod.addSubagentRunForTests({
       runId: "run-old-tombstone",
       childSessionKey: "agent:main:subagent:reused",
@@ -3776,7 +3790,7 @@ describe("subagent registry seam flow", () => {
         status: "terminal",
         startedAt: oldStartedAt,
         endedAt: oldEndedAt,
-        transcriptFile: oldTranscriptFile,
+        transcriptTarget: oldTranscriptTarget,
       },
     });
     mod.addSubagentRunForTests({
@@ -3805,7 +3819,7 @@ describe("subagent registry seam flow", () => {
         ([params]) => params.childSessionKey === "agent:main:subagent:reused",
       ),
     ).toBe(false);
-    expect(mocks.removeInternalSessionEffectsTranscript).toHaveBeenCalledWith(oldTranscriptFile);
+    expect(mocks.removeInternalSessionEffectsSession).toHaveBeenCalledWith(oldTranscriptTarget);
     await expectPathMissing(attachmentsDir);
     expect(
       mocks.callGateway.mock.calls.some(
@@ -3922,7 +3936,10 @@ describe("subagent registry seam flow", () => {
           string,
           SessionEntry
         >;
-        const current = store[scope.sessionKey];
+        const current = expectDefined(
+          store[scope.sessionKey],
+          "store[scope.sessionKey] test invariant",
+        );
         const patch = await update(current, { existingEntry: { ...current } });
         if (patch) {
           mocks.updateSessionStore(scope.storePath, () => {});

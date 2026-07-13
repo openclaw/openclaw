@@ -375,8 +375,8 @@ describe("qa suite", () => {
           createReportNotes: () => [],
         } as unknown as QaTransportAdapter,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         concurrency: 1,
       });
@@ -411,8 +411,8 @@ describe("qa suite", () => {
           createReportNotes: () => [],
         } as unknown as QaTransportAdapter,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         concurrency: 1,
         writeEvidenceFile: false,
@@ -464,8 +464,8 @@ describe("qa suite", () => {
           createReportNotes: () => [],
         } as unknown as QaTransportAdapter,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         concurrency: 1,
         channelDriverSelection: {
@@ -476,8 +476,25 @@ describe("qa suite", () => {
         },
       });
 
+      const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
+        run?: {
+          channelCapabilityMatrixPath?: string;
+          channelDriverSmokePath?: string;
+        };
+      };
+      const capabilityMatrixPath = summary.run?.channelCapabilityMatrixPath;
+      const smokeArtifactPath = summary.run?.channelDriverSmokePath;
+      if (typeof capabilityMatrixPath !== "string" || typeof smokeArtifactPath !== "string") {
+        throw new Error("Crabline generation artifact paths missing from QA summary.");
+      }
+      const artifactGenerationDirectory = path.dirname(capabilityMatrixPath);
+      expect(path.dirname(artifactGenerationDirectory)).toBe(".crabline-smoke-artifacts");
+      expect(path.basename(artifactGenerationDirectory)).toMatch(/^generation-[^/\\]+$/u);
+      expect(path.basename(capabilityMatrixPath)).toBe("crabline-fake-provider-capabilities.json");
+      expect(path.dirname(smokeArtifactPath)).toBe(artifactGenerationDirectory);
+      expect(path.basename(smokeArtifactPath)).toBe("crabline-fake-provider-smoke.json");
       const matrix = JSON.parse(
-        await fs.readFile(path.join(outputDir, "crabline-fake-provider-capabilities.json"), "utf8"),
+        await fs.readFile(path.resolve(outputDir, capabilityMatrixPath), "utf8"),
       ) as {
         report?: { result?: { selectedChannel?: string; supportedChannels?: string[] } };
       };
@@ -486,7 +503,7 @@ describe("qa suite", () => {
         [...CRABLINE_SERVER_CHANNELS].toSorted(),
       );
       const smoke = JSON.parse(
-        await fs.readFile(path.join(outputDir, "crabline-fake-provider-smoke.json"), "utf8"),
+        await fs.readFile(path.resolve(outputDir, smokeArtifactPath), "utf8"),
       ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };
       expect(smoke.smoke?.result).toMatchObject({ ok: true, provider: "telegram" });
       const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
@@ -499,6 +516,119 @@ describe("qa suite", () => {
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });
     }
+  });
+
+  it("uses Crabline generation artifact paths without rewriting them", async () => {
+    const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-generation-");
+    const capabilityMatrixPath = path.join(
+      outputDir,
+      ".crabline-smoke-artifacts",
+      "generation-11111111-1111-4111-8111-111111111111",
+      "capabilities.json",
+    );
+    const smokeArtifactPath = path.join(
+      outputDir,
+      ".crabline-smoke-artifacts",
+      "generation-11111111-1111-4111-8111-111111111111",
+      "smoke.json",
+    );
+    const providerReadinessArtifactPath = path.join(
+      path.dirname(smokeArtifactPath),
+      "provider-readiness.json",
+    );
+    await fs.mkdir(path.dirname(capabilityMatrixPath), { recursive: true });
+    await fs.writeFile(capabilityMatrixPath, "authoritative capabilities\n", "utf8");
+    await fs.writeFile(smokeArtifactPath, "authoritative smoke\n", "utf8");
+    await fs.writeFile(providerReadinessArtifactPath, "authoritative provider readiness\n", "utf8");
+
+    const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
+      outputDir,
+      startedAt: new Date("2026-07-12T00:00:00.000Z"),
+      finishedAt: new Date("2026-07-12T00:01:00.000Z"),
+      scenarios: [{ name: "Telegram DM", status: "pass", steps: [] }],
+      scenarioDefinitions: [
+        {
+          ...makeQaSuiteTestScenario("telegram-dm", {
+            surface: "channel",
+          }),
+          coverage: {
+            primary: ["channels.dm"],
+          },
+        },
+      ],
+      transport: {
+        id: "qa-channel",
+        createReportNotes: () => [],
+      } as unknown as QaTransportAdapter,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      fastMode: true,
+      concurrency: 1,
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      },
+      runCrablineChannelDriverSmoke: vi.fn(async () => ({
+        artifactPointerPath: path.join(outputDir, ".crabline-smoke-artifacts", "current.json"),
+        capabilityMatrixPath,
+        capabilityReport: {},
+        generation: "generation-11111111-1111-4111-8111-111111111111",
+        manifestPath: path.join(
+          outputDir,
+          ".crabline-smoke-artifacts",
+          "generation-11111111-1111-4111-8111-111111111111",
+          "manifest.json",
+        ),
+        providerReadiness: {},
+        providerReadinessArtifactPath,
+        smoke: {},
+        smokeArtifactPath,
+      })),
+    });
+
+    await expect(fs.readFile(capabilityMatrixPath, "utf8")).resolves.toBe(
+      "authoritative capabilities\n",
+    );
+    await expect(fs.readFile(smokeArtifactPath, "utf8")).resolves.toBe("authoritative smoke\n");
+    await expect(fs.readFile(providerReadinessArtifactPath, "utf8")).resolves.toBe(
+      "authoritative provider readiness\n",
+    );
+    await expect(
+      fs.access(path.join(outputDir, "crabline-fake-provider-capabilities.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.access(path.join(outputDir, "crabline-fake-provider-smoke.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
+      entries?: Array<{ execution?: { artifacts?: Array<{ kind?: string; path?: string }> } }>;
+    };
+    expect(evidence.entries?.[0]?.execution?.artifacts).toEqual(
+      expect.arrayContaining([
+        { kind: "channel-capability-matrix", path: capabilityMatrixPath, source: "qa-suite" },
+        { kind: "channel-driver-smoke", path: smokeArtifactPath, source: "qa-suite" },
+      ]),
+    );
+    const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
+      run?: {
+        channelCapabilityMatrixPath?: string;
+        channelDriverSmokePath?: string;
+      };
+    };
+    expect(summary.run).toMatchObject({
+      channelCapabilityMatrixPath: capabilityMatrixPath,
+      channelDriverSmokePath: smokeArtifactPath,
+    });
+    expect(artifacts.report).toContain(`Generation capability filename: ${capabilityMatrixPath}.`);
+    expect(artifacts.report).toContain(
+      `Generation provider-readiness filename: ${providerReadinessArtifactPath}.`,
+    );
+    expect(artifacts.report).not.toContain("crabline-fake-provider-capabilities.json");
+    expect(artifacts.report).not.toContain("crabline-fake-provider-smoke.json");
   });
 
   it("arms gateway heap checkpoint env only when requested", () => {
@@ -584,8 +714,8 @@ describe("qa suite", () => {
         outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
         providerMode: "mock-openai",
         transportId: "qa-channel",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         scenario,
         startLab,
@@ -680,18 +810,18 @@ describe("qa suite", () => {
   it("remaps mock-openai model refs onto the app-server OpenAI provider for codex cells only", () => {
     expect(
       qaSuiteProgressTesting.remapModelRefForForcedRuntime({
-        modelRef: "mock-openai/gpt-5.5",
+        modelRef: "mock-openai/gpt-5.6-luna",
         providerMode: "mock-openai",
         forcedRuntime: "codex",
       }),
-    ).toBe("openai/gpt-5.5");
+    ).toBe("openai/gpt-5.6-luna");
     expect(
       qaSuiteProgressTesting.remapModelRefForForcedRuntime({
-        modelRef: "mock-openai/gpt-5.5",
+        modelRef: "mock-openai/gpt-5.6-luna",
         providerMode: "mock-openai",
         forcedRuntime: "openclaw",
       }),
-    ).toBe("mock-openai/gpt-5.5");
+    ).toBe("mock-openai/gpt-5.6-luna");
   });
 });
 
