@@ -38,6 +38,32 @@ describe("supportsCliJsonlToolEvents", () => {
 });
 
 describe("parseCliJson", () => {
+  it("preserves Claude max-turn terminal context in JSON mode", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: "session-json-max-turns",
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (3)"],
+      }),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-json-max-turns",
+      usage: undefined,
+      errorText: "Reached maximum number of turns (3)",
+      terminalFailure: { reason: "max_turns", limit: 3 },
+    });
+  });
+
   it("classifies Claude is_error JSON results as provider errors", () => {
     const result = parseCliJson(
       JSON.stringify({

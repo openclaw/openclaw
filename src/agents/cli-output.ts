@@ -578,6 +578,21 @@ export function parseCliJson(
   for (const parsed of parsedRecords) {
     sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
     usage = readCliUsage(parsed) ?? usage;
+    const terminalFailure = isClaudeStreamJsonDialect({
+      backend,
+      providerId: providerId ?? "",
+    })
+      ? readClaudeMaxTurnsFailure(parsed)
+      : undefined;
+    if (terminalFailure) {
+      return {
+        text: "",
+        sessionId,
+        usage,
+        errorText: resolveCliTerminalErrorText(parsed, terminalFailure),
+        terminalFailure,
+      };
+    }
     const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
     const shouldClassifyError =
       parsed.is_error === true ||

@@ -1770,6 +1770,32 @@ export async function executePreparedCliRun(
 
           const streamedJsonlOutput =
             outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
+          const parsedStructuredOutput =
+            streamedJsonlOutput ??
+            (outputMode === "json" && !stdoutParseExceeded
+              ? parseCliOutput({
+                  raw: stdout,
+                  backend,
+                  providerId: context.backendResolved.id,
+                  outputMode,
+                  fallbackSessionId: resolvedSessionId,
+                })
+              : null);
+          // A completed terminal record is authoritative even if the CLI hangs
+          // afterward. Reclassifying it as a timeout could replay completed tools.
+          if (parsedStructuredOutput?.terminalFailure) {
+            const terminalError = createCliOutputFailoverError({
+              output: parsedStructuredOutput,
+              provider: params.provider,
+              model: context.modelId,
+              runId: params.runId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+            });
+            if (terminalError) {
+              throw terminalError;
+            }
+          }
 
           if (result.exitCode !== 0 || result.reason !== "exit") {
             if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
@@ -1837,19 +1863,6 @@ export async function executePreparedCliRun(
                 code: "cli_overall_timeout",
               });
             }
-            if (streamedJsonlOutput?.terminalFailure) {
-              const terminalError = createCliOutputFailoverError({
-                output: streamedJsonlOutput,
-                provider: params.provider,
-                model: context.modelId,
-                runId: params.runId,
-                sessionId: params.sessionId,
-                lane: params.lane,
-              });
-              if (terminalError) {
-                throw terminalError;
-              }
-            }
             const errorCandidates = [stderr, stdout, stderrDiagnostic, stdoutDiagnostic].filter(
               (candidate) => candidate.length > 0,
             );
@@ -1908,7 +1921,7 @@ export async function executePreparedCliRun(
           }
 
           const parsed =
-            streamedJsonlOutput ??
+            parsedStructuredOutput ??
             parseCliOutput({
               raw: stdout,
               backend,
