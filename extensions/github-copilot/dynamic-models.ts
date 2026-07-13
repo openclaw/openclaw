@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  type ProviderCatalogContext,
-  type ProviderCatalogResult,
-  type ProviderPrepareDynamicModelContext,
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
+import type {
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderPrepareDynamicModelContext,
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { resolveFirstGithubToken } from "./auth.js";

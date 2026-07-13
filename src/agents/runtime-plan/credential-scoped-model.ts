@@ -192,7 +192,7 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
             params.requestedProfileId,
             params.providerUsesProfileScopedModelMetadata,
           ),
-        resolveModel: params.resolveModel,
+        resolveModel: (request) => params.resolveModel(request),
       })) ?? model
     );
   };
