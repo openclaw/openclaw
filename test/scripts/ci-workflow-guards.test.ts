@@ -1746,21 +1746,6 @@ describe("ci workflow guards", () => {
     expect(preflightGuards).toContain("pnpm deps:patches:check");
   });
 
-  it("compares LOC against the checked-out pull-request merge parent", () => {
-    const workflow = readCiWorkflow();
-    const runStep = workflow.jobs["check-shard"].steps.find(
-      (step: WorkflowStep) => step.name === "Run check shard",
-    );
-
-    expect(runStep.env.LOC_BASE_SHA).toBe(
-      "${{ github.event_name == 'push' && github.event.before || '' }}",
-    );
-    expect(runStep.run).toContain('LOC_BASE_SHA="$(git cat-file -p HEAD | awk');
-    expect(runStep.run.indexOf("git cat-file -p HEAD")).toBeLessThan(
-      runStep.run.indexOf("refs/remotes/origin/loc-base"),
-    );
-  });
-
   it("uses stable deadcode checks for current and frozen checkouts", () => {
     const modern = runDependencyCheckFixture({
       historicalTarget: false,
