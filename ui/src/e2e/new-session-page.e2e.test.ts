@@ -710,13 +710,21 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => pathInput.inputValue()).toBe(NODE_UNC);
       // Close without applying; the draft keeps the node home default.
       await page.keyboard.press("Escape");
-      await expect.poll(() => folderSelect.evaluate((element) => element.open)).toBe(false);
+      await expect
+        .poll(() =>
+          folderSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+        )
+        .toBe(false);
 
       // Back on the Gateway, the browser super-root lists every node.
       await whereSelect.evaluate((element) => {
         (element as HTMLElement & { open: boolean }).open = true;
       });
-      await expect.poll(() => whereSelect.evaluate((element) => element.open)).toBe(true);
+      await expect
+        .poll(() =>
+          whereSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+        )
+        .toBe(true);
       await whereSelect.getByRole("menuitemcheckbox", { name: "Gateway · local" }).click();
       await expect.poll(() => whereLabel.textContent()).toBe("Gateway · local");
       await folderSelect.locator(".new-session-page__trigger").click();
