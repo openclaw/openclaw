@@ -135,7 +135,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
-  compat: 152,
+  compat: 155,
   "direct-dm": 9,
   "direct-dm-access": 5,
   discord: 48,
@@ -214,7 +214,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3282,
+      // Main accounts for 3282; the shared channel helper barrels add one
+      // deprecated compat export.
+      3283,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
