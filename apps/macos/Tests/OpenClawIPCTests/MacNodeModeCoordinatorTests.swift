@@ -129,7 +129,9 @@ struct MacNodeModeCoordinatorTests {
             if await condition() {
                 return
             }
-            await Task.yield()
+            // Some callers run on MainActor; a real suspension lets the
+            // notification task make progress instead of polling it out.
+            try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("timed out waiting for \(description)")
     }
