@@ -1,12 +1,12 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } from "./load.ts";
 import type { ModelProvidersRouteData } from "./model-providers-page.ts";
 
 async function loadModelProvidersRouteData(
   context: ApplicationContext,
 ): Promise<ModelProvidersRouteData> {
+  const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
   const gatewaySnapshot = context.gateway.snapshot;
   const client = gatewaySnapshot.connected ? gatewaySnapshot.client : null;
   if (!client) {

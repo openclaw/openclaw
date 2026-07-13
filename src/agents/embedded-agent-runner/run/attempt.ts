@@ -62,10 +62,7 @@ import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js"
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { createAgentSession, SessionManager } from "../../sessions/index.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
-import {
-  ackPendingAgentSteeringItems,
-  releasePendingAgentSteeringItems,
-} from "../../subagent-registry.js";
+import { releasePendingAgentSteeringItems } from "../../subagent-registry.js";
 import {
   clearToolSearchCatalog,
   resolveToolSearchCatalogTool,
@@ -81,21 +78,17 @@ import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
-import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   markActiveEmbeddedRunAbandoned,
-  updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import {
   cloneToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
-  hasSessionUserTurnBeenSent,
-  markSessionUserTurnsSent,
 } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
@@ -115,7 +108,7 @@ import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
-import { snapshotRecentMessages, summarizeSessionContext } from "./attempt-context-summary.js";
+import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import {
   replayTrailingEntriesForOrphanRepair,
@@ -126,6 +119,7 @@ import {
   handleEmbeddedAttemptMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight,
 } from "./attempt-prompt-preflight.js";
+import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -157,8 +151,6 @@ import {
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
-  installModelPromptTransform,
-  installRuntimeContextMessageForPrompt,
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForCurrentPromptBoundary,
   normalizeMessagesForLlmBoundary,
@@ -190,7 +182,6 @@ import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
-import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   detachPrePersistedCurrentUserTurn,
@@ -2046,114 +2037,35 @@ export async function runEmbeddedAttempt(
           } = promptPreflight);
 
           if (!skipPromptSubmission) {
-            const normalizedReplayMessages = normalizeAssistantReplayContent(
-              activeSession.messages,
-            );
-            if (normalizedReplayMessages !== activeSession.messages) {
-              activeSession.agent.state.messages = normalizedReplayMessages;
-            }
-            const installProviderPromptHistoryTransform = (): (() => void) => {
-              const baseStreamFn = activeSession.agent.streamFn;
-              const providerPromptStreamFn = wrapStreamFnWithMessageTransform(
-                baseStreamFn,
-                (messages) => {
-                  const providerPromptHistoryTruncation = truncateOversizedToolResultsInMessages(
-                    messages,
-                    contextTokenBudget,
-                    promptToolResultMaxChars,
-                    promptToolResultAggregateMaxChars,
-                    toolResultPromptProjectionState,
-                  );
-                  const providerMessages =
-                    providerPromptHistoryTruncation.messages !== messages
-                      ? providerPromptHistoryTruncation.messages
-                      : messages;
-                  // This provider-dispatch transform marks the current turn sent so late
-                  // media appends instead of rewriting its prompt-cache slot (#99495).
-                  markSessionUserTurnsSent(sessionPromptState, providerMessages);
-                  const recorder = params.userTurnTranscriptRecorder;
-                  if (
-                    recorder &&
-                    hasSessionUserTurnBeenSent(sessionPromptState, recorder.message) !== false
-                  ) {
-                    recorder.markSentToProvider?.();
-                  }
-                  return providerMessages;
-                },
-              );
-              activeSession.agent.streamFn = providerPromptStreamFn;
-              return () => {
-                if (activeSession.agent.streamFn === providerPromptStreamFn) {
-                  activeSession.agent.streamFn = baseStreamFn;
-                }
-              };
-            };
-            finalPromptText = promptForSession;
-            trajectoryRecorder?.recordEvent("prompt.submitted", {
-              prompt: promptForModel,
-              systemPrompt: systemPromptForHook,
-              messages: activeSession.messages,
-              imagesCount: imageResult.images.length,
-            });
-            const btwSnapshotMessages = snapshotRecentMessages(normalizedReplayMessages);
-            updateActiveEmbeddedRunSnapshot(params.sessionId, {
-              transcriptLeafId,
-              messages: btwSnapshotMessages,
-              inFlightPrompt: promptForSession,
-            });
-            let captureCurrentPromptForModel = false;
-            const cleanupModelPromptTransform = installModelPromptTransform({
-              session: activeSession,
-              transcriptPrompt: promptForSession,
+            await submitEmbeddedAttemptPrompt({
+              attempt: params,
+              activeSession,
+              ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
+              contextTokenBudget,
+              images: imageResult.images,
+              ...(leasedSteering ? { leasedSteering } : {}),
               modelPrompt: promptForModel,
-              prependContext: promptBuildPrependContext,
-              appendContext: promptBuildAppendContext,
-              shouldCapturePrompt: () => captureCurrentPromptForModel,
-            });
-            const armModelPromptTransform = (submitted: boolean) => {
-              if (submitted) {
-                captureCurrentPromptForModel = true;
-              }
-            };
-            const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
-            try {
-              if (promptSubmission.runtimeOnly) {
-                await promptActiveSession(promptForSession, {
-                  preflightResult: armModelPromptTransform,
-                });
-              } else {
-                const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
-                  session: activeSession,
-                  message: runtimeContextMessageForCurrentTurn,
-                });
-                try {
-                  // Only pass images option if there are actually images to pass
-                  // This avoids potential issues with models that don't expect the images parameter
-                  if (imageResult.images.length > 0) {
-                    await promptActiveSession(promptForSession, {
-                      images: imageResult.images,
-                      preflightResult: armModelPromptTransform,
-                    });
-                  } else {
-                    await promptActiveSession(promptForSession, {
-                      preflightResult: armModelPromptTransform,
-                    });
-                  }
-                } finally {
-                  cleanupRuntimeContextMessage();
-                }
-              }
-              if (leasedSteering) {
-                ackPendingAgentSteeringItems({
-                  runIds: leasedSteering.runIds,
-                  leaseId: leasedSteering.leaseId,
-                });
+              onFinalPromptText: (prompt) => {
+                finalPromptText = prompt;
+              },
+              onSteeringAcknowledged: () => {
                 leasedSteering = undefined;
-              }
-            } finally {
-              cleanupProviderPromptHistoryTransform();
-              cleanupModelPromptTransform();
-            }
+              },
+              ...(promptBuildPrependContext ? { prependContext: promptBuildPrependContext } : {}),
+              promptActiveSession,
+              ...(runtimeContextMessageForCurrentTurn
+                ? { runtimeContextMessage: runtimeContextMessageForCurrentTurn }
+                : {}),
+              runtimeOnly: promptSubmission.runtimeOnly === true,
+              sessionPromptState,
+              systemPrompt: systemPromptForHook,
+              toolResultAggregateMaxChars: promptToolResultAggregateMaxChars,
+              toolResultMaxChars: promptToolResultMaxChars,
+              toolResultPromptProjectionState,
+              trajectoryRecorder,
+              transcriptLeafId,
+              transcriptPrompt: promptForSession,
+            });
           } else {
             releaseLeasedSteering(promptError ?? "prompt submission skipped");
           }
