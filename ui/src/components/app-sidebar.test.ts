@@ -19,7 +19,6 @@ import {
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
 import type {
   SessionCapability,
-  SessionGroupMutationResult,
   SessionState,
 } from "../lib/sessions/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -29,6 +28,8 @@ import {
   createLobsterPetLook,
   type LobsterLogoVisitDetail,
 } from "./lobster-pet.ts";
+
+type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
 
 // Keep the attention widget inert: it fires its own health RPCs (cron.list,
 // models.authStatus) on connect, which would interleave with the nth-call

@@ -62,7 +62,7 @@ export type SessionState = {
   groups: readonly string[];
 };
 
-export type SessionGroupMutationResult = "completed" | "stale";
+type SessionGroupMutationResult = "completed" | "stale";
 
 export type SessionListOptions = {
   agentId?: string;
