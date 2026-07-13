@@ -1980,4 +1980,3 @@ export const testing = {
   hasSessionFileChangedAnnounceError,
   isSessionFileChangedAnnounceError,
 };
-export { testing as __testing };

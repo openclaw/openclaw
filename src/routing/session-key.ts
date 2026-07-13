@@ -13,7 +13,6 @@ import {
 import { normalizeAccountId } from "./account-id.js";
 
 export {
-  getSubagentDepth,
   isCronSessionKey,
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -21,7 +20,6 @@ export {
   parseSessionDeliveryRoute,
   parseThreadSessionSuffix,
   type ParsedAgentSessionKey,
-  type ParsedSessionDeliveryRoute,
 } from "../sessions/session-key-utils.js";
 export {
   DEFAULT_ACCOUNT_ID,
@@ -31,7 +29,7 @@ export {
 
 export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
-export type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
+type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
 // Pre-compiled regex
 const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;

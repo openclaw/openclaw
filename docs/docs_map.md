@@ -530,6 +530,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Text formatting
   - H2: Context fields
+  - H2: Outbound payloads
   - H2: Channel notes
   - H2: Related
 
@@ -1263,6 +1264,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw backup
   - H2: Notes
+  - H2: SQLite snapshots
+  - H3: Verify and restore
   - H2: What gets backed up
   - H2: Invalid config behavior
   - H2: Size and performance
@@ -1507,6 +1510,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tenant IDs
   - H2: fleet create
   - H3: Create options
+  - H3: Pinning by digest
   - H3: Disk limits
   - H3: Egress policy
   - H2: fleet list
@@ -1651,6 +1655,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: OAuth workflow
   - H3: Streamable HTTP transport
   - H2: Control UI
+  - H2: MCP Apps
   - H2: Current limits
   - H2: Related
 
@@ -2854,6 +2859,26 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Enable or disable
   - H2: Pruning vs compaction
   - H2: Further reading
+  - H2: Related
+
+## concepts/session-search.md
+
+- Route: /concepts/session-search
+- Headings:
+  - H1: Session search
+  - H2: Visibility and output
+  - H2: Index lifecycle
+  - H2: Session search vs. memory search
+
+## concepts/session-state.md
+
+- Route: /concepts/session-state
+- Headings:
+  - H2: The signal log
+  - H2: Watchers
+  - H2: Notices: one, not many
+  - H2: Reconciling
+  - H2: Storage and limits
   - H2: Related
 
 ## concepts/session-tool.md
@@ -4860,6 +4885,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## nodes/presence.md
+
+- Route: /nodes/presence
+- Headings:
+  - H2: Requirements
+  - H2: Check the active computer
+  - H2: How activity becomes presence
+  - H2: Privacy and model context
+  - H2: How connection alerts are routed
+  - H2: Troubleshooting
+  - H2: Related
+
 ## nodes/talk.md
 
 - Route: /nodes/talk
@@ -5032,6 +5069,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does
   - H2: Requirements
   - H2: Quick start (pair + connect)
+  - H2: Health summaries
   - H2: Review command approvals
   - H2: Optional direct Apple Watch node
   - H2: Relay-backed push for official builds
@@ -8304,7 +8342,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: Multi-surface operator approvals
   - H2: Goals
   - H2: Non-goals
-  - H2: Existing system and evidence map
+  - H2: Pre-rollout baseline and evidence map
   - H2: Prior art
   - H2: Architecture and ownership
   - H2: Persistent record
@@ -8322,7 +8360,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: PR 2: typed actions and channel callbacks
   - H3: PR 3: Control UI deep link
   - H3: PR 4: native clients
-  - H3: PR 5: propagation and fail-closed behavior
+  - H3: PR 5: ancestor lifecycle propagation
+  - H3: PR 6: fail-closed behavior
+  - H3: Follow-up: durable remote-message cleanup
   - H2: Tests
   - H2: Observability
   - H2: Open decisions

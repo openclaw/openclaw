@@ -8,7 +8,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { mcpContentBlockToAgentContent } from "../agents/mcp-content.js";
-import { GatewayClient } from "../gateway/client.js";
 import {
   analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
@@ -33,18 +32,20 @@ import {
   extractShellWrapperCommand,
   isShellWrapperInvocation,
 } from "../infra/exec-wrapper-resolution.js";
+import { listHostDirectories } from "../infra/host-directory-listing.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
+import { NODE_FS_LIST_DIR_COMMAND, NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { logWarn } from "../logger.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
+import type { NodeHostClient } from "./client.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -225,7 +226,7 @@ type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
-type NodeInvokeRequestPayload = {
+export type NodeInvokeRequestPayload = {
   id: string;
   nodeId: string;
   command: string;
@@ -539,7 +540,7 @@ function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
 
 async function sendExecFinishedEvent(
   params: ExecFinishedEventParams & {
-    client: GatewayClient;
+    client: NodeHostClient;
   },
 ) {
   const combined = [params.result.stdout, params.result.stderr, params.result.error]
@@ -575,7 +576,7 @@ async function runViaMacAppExecHost(params: {
 }
 
 async function sendJsonPayloadResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   payload: unknown,
 ) {
@@ -586,7 +587,7 @@ async function sendJsonPayloadResult(
 }
 
 async function sendMcpPayloadResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   payload: unknown,
 ) {
@@ -594,7 +595,7 @@ async function sendMcpPayloadResult(
 }
 
 async function sendRawPayloadResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   payloadJSON: string,
 ) {
@@ -605,7 +606,7 @@ async function sendRawPayloadResult(
 }
 
 async function sendErrorResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   code: string,
   message: string,
@@ -617,7 +618,7 @@ async function sendErrorResult(
 }
 
 async function sendInvalidRequestResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   err: unknown,
 ) {
@@ -631,7 +632,7 @@ function classifyExecApprovalsStorageError(err: unknown): "TIMEOUT" | "UNAVAILAB
 }
 
 async function sendExecApprovalsStorageErrorResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   err: unknown,
 ) {
@@ -641,7 +642,7 @@ async function sendExecApprovalsStorageErrorResult(
 /** Handles one node-host command invocation payload and returns serialized results. */
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
-  client: GatewayClient,
+  client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
 ) {
@@ -667,7 +668,7 @@ export async function handleInvoke(
 
 async function dispatchInvoke(
   frame: NodeInvokeRequestPayload,
-  client: GatewayClient,
+  client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
 ) {
@@ -758,6 +759,19 @@ async function dispatchInvoke(
       const env = sanitizeEnv(undefined);
       const payload = await handleSystemWhich(params, env);
       await sendJsonPayloadResult(client, frame, payload);
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
+  }
+
+  if (command === NODE_FS_LIST_DIR_COMMAND) {
+    try {
+      const params = decodeParams<{ path?: unknown }>(frame.paramsJSON);
+      if (params.path !== undefined && typeof params.path !== "string") {
+        throw new Error("INVALID_REQUEST: path must be a string");
+      }
+      await sendJsonPayloadResult(client, frame, await listHostDirectories(params.path));
     } catch (err) {
       await sendInvalidRequestResult(client, frame, err);
     }
@@ -1032,7 +1046,7 @@ function mcpToolErrorMessage(result: { content: readonly unknown[] }): string {
 
 async function handleMcpToolsCall(
   frame: NodeInvokeRequestPayload,
-  client: GatewayClient,
+  client: NodeHostClient,
   mcpManager: NodeHostMcpManager | undefined,
 ): Promise<void> {
   if (!mcpManager) {
@@ -1112,7 +1126,7 @@ export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayl
 }
 
 async function sendInvokeResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   result: {
     ok: boolean;
@@ -1179,7 +1193,7 @@ export function buildNodeEventParams(
   };
 }
 
-async function sendNodeEvent(client: GatewayClient, event: string, payload: unknown) {
+async function sendNodeEvent(client: NodeHostClient, event: string, payload: unknown) {
   try {
     await client.request("node.event", buildNodeEventParams(event, payload));
   } catch {

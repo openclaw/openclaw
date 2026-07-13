@@ -12,6 +12,7 @@
     "moduleResolution": "NodeNext",
     "noImplicitOverride": true,
     "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "noEmitOnError": true,
     "noUncheckedSideEffectImports": true,
@@ -115,9 +116,6 @@
         "./packages/media-core/src/read-byte-stream-with-limit.ts"
       ],
       "@openclaw/media-core/*": ["./packages/media-core/src/*"],
-      "@openclaw/media-understanding-common": [
-        "./packages/media-understanding-common/src/index.ts"
-      ],
       "@openclaw/media-understanding-common/*": [
         "./packages/media-understanding-common/src/*"
       ],
@@ -226,7 +224,6 @@
       "@openclaw/net-policy/url-protocol": ["./packages/net-policy/src/url-protocol.ts"],
       "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
       "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
-      "@openclaw/web-content-core": ["./packages/web-content-core/src/index.ts"],
       "@openclaw/web-content-core/provider-runtime-shared": [
         "./packages/web-content-core/src/provider-runtime-shared.ts"
       ],

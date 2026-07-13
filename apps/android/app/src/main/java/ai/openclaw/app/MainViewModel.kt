@@ -141,11 +141,18 @@ internal class CronEditorDraftMemory {
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class MainViewModel(
+class MainViewModel private constructor(
   app: Application,
+  private val prefs: SecurePrefs,
 ) : AndroidViewModel(app) {
+  constructor(app: Application) : this(app, (app as NodeApp).prefs)
+
+  internal constructor(
+    app: NodeApp,
+    prefs: SecurePrefs,
+  ) : this(app as Application, prefs)
+
   private val nodeApp = app as NodeApp
-  private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private val gatewayConfigOperationSeq = AtomicLong()
   private val gatewayConfigOperationMutex = Mutex()
@@ -223,6 +230,11 @@ class MainViewModel(
       runCatching { ensureRuntime() }
       runtimeStartupQueued = false
     }
+  }
+
+  internal fun resumeNodeServiceForConnection() {
+    if (!prefs.onboardingCompleted.value) return
+    NodeForegroundService.resume(context = nodeApp, startNow = true)
   }
 
   /**
@@ -305,6 +317,11 @@ class MainViewModel(
   val skillsSummary: StateFlow<GatewaySkillsSummary> = runtimeState(initial = GatewaySkillsSummary(skills = emptyList())) { it.skillsSummary }
   val skillsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillsRefreshing }
   val skillsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillsErrorText }
+  val clawHubSkillMethodsAvailable: StateFlow<Boolean> =
+    runtimeState(initial = false) { it.clawHubSkillMethodsAvailable }
+  val skillMutationKeys: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.skillMutationKeys }
+  val clawHubSkillSearchState: StateFlow<GatewayClawHubSkillSearchState> =
+    runtimeState(initial = GatewayClawHubSkillSearchState()) { it.clawHubSkillSearchState }
   val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> =
     runtimeState(initial = GatewaySkillWorkshopSummary(proposals = emptyList())) { it.skillWorkshopSummary }
   val skillWorkshopRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillWorkshopRefreshing }
@@ -415,7 +432,6 @@ class MainViewModel(
   ) {
     val runtime = runtimeRef.value ?: return
     runtime.camera.attachLifecycleOwner(owner)
-    runtime.camera.attachPermissionRequester(permissionRequester)
     runtime.sms.attachPermissionRequester(permissionRequester)
     this.permissionRequester = permissionRequester
   }
@@ -444,11 +460,11 @@ class MainViewModel(
   }
 
   fun setCameraEnabled(value: Boolean) {
-    prefs.setCameraEnabled(value)
+    runtimeRef.value?.setCameraEnabled(value) ?: prefs.setCameraEnabled(value)
   }
 
   fun setLocationMode(mode: LocationMode) {
-    prefs.setLocationMode(mode)
+    runtimeRef.value?.setLocationMode(mode) ?: prefs.setLocationMode(mode)
   }
 
   fun setLocationPreciseEnabled(value: Boolean) {
@@ -483,6 +499,7 @@ class MainViewModel(
   }
 
   internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
+    resumeNodeServiceForConnection()
     val operation = gatewayConfigOperationSeq.incrementAndGet()
     // Gateway pairing touches encrypted prefs, identity files, and sockets; keep
     // the whole sequence off the Compose thread so retries cannot trigger ANRs.
@@ -550,10 +567,14 @@ class MainViewModel(
       ensureRuntime()
     }
     prefs.setOnboardingCompleted(value)
+    if (value) {
+      NodeForegroundService.resume(nodeApp, startNow = true)
+    }
   }
 
   /** Re-enters gateway setup after disconnecting and clearing one-time setup credentials. */
   fun pairNewGateway() {
+    NodeForegroundService.stop(nodeApp)
     val operation = gatewayConfigOperationSeq.incrementAndGet()
     viewModelScope.launch(Dispatchers.Default) {
       gatewayConfigOperationMutex.withLock {
@@ -746,6 +767,7 @@ class MainViewModel(
   }
 
   fun refreshGatewayConnection() {
+    resumeNodeServiceForConnection()
     viewModelScope.launch(Dispatchers.Default) {
       ensureRuntime().refreshGatewayConnection()
     }
@@ -756,6 +778,7 @@ class MainViewModel(
   }
 
   fun connect(endpoint: GatewayEndpoint) {
+    resumeNodeServiceForConnection()
     viewModelScope.launch(Dispatchers.Default) {
       ensureRuntime().connectSwitchingGateway(endpoint)
     }
@@ -767,6 +790,7 @@ class MainViewModel(
     bootstrapToken: String?,
     password: String?,
   ) {
+    resumeNodeServiceForConnection()
     viewModelScope.launch(Dispatchers.Default) {
       ensureRuntime().connectSwitchingGateway(
         endpoint,
@@ -780,10 +804,12 @@ class MainViewModel(
   }
 
   fun connectManual() {
+    resumeNodeServiceForConnection()
     ensureRuntime().connectManual()
   }
 
   fun switchToGateway(stableId: String) {
+    resumeNodeServiceForConnection()
     val operation = gatewayConfigOperationSeq.incrementAndGet()
     viewModelScope.launch(Dispatchers.Default) {
       gatewayConfigOperationMutex.withLock {
@@ -806,6 +832,7 @@ class MainViewModel(
   }
 
   fun disconnect() {
+    NodeForegroundService.stop(nodeApp)
     val operation = gatewayConfigOperationSeq.incrementAndGet()
     viewModelScope.launch(Dispatchers.Default) {
       gatewayConfigOperationMutex.withLock {
@@ -950,6 +977,37 @@ class MainViewModel(
 
   fun clearSkillWorkshopMessage() {
     ensureRuntime().clearSkillWorkshopMessage()
+  }
+
+  fun setSkillEnabled(
+    skillKey: String,
+    enabled: Boolean,
+  ) {
+    ensureRuntime().setSkillEnabled(skillKey, enabled)
+  }
+
+  fun searchClawHubSkills(query: String) {
+    ensureRuntime().searchClawHubSkills(query)
+  }
+
+  fun reviewClawHubSkillInstall(skill: GatewayClawHubSkillSummary) {
+    ensureRuntime().reviewClawHubSkillInstall(skill)
+  }
+
+  fun dismissClawHubSkillInstallReview() {
+    ensureRuntime().dismissClawHubSkillInstallReview()
+  }
+
+  fun installClawHubSkill(
+    slug: String,
+    acknowledgeClawHubRisk: Boolean = false,
+    version: String? = null,
+  ) {
+    ensureRuntime().installClawHubSkill(slug, acknowledgeClawHubRisk, version)
+  }
+
+  fun clearClawHubSkillMessage() {
+    ensureRuntime().clearClawHubSkillMessage()
   }
 
   fun refreshNodesDevices() {

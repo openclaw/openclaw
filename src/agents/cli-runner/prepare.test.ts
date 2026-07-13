@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1267,14 +1268,13 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       name: "full guidance for a backend with native file tools",
       nativeToolMode: "always-on" as const,
       transportsSystemPrompt: true,
-      expectedText:
-        "BOOTSTRAP.md is included below in Project Context; follow it before replying normally.",
+      expectedText: "BOOTSTRAP.md below; follow before normal reply.",
     },
     {
       name: "limited guidance for a backend without native file tools",
       nativeToolMode: undefined,
       transportsSystemPrompt: true,
-      expectedText: "this run cannot safely complete the full BOOTSTRAP.md workflow here",
+      expectedText: "this run cannot safely finish full BOOTSTRAP.md",
     },
     {
       name: "no guidance for a backend without system-prompt transport",
@@ -1451,7 +1451,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.params.prompt).toBe("history:2\n\nlatest ask");
       expect(context.contextEngineTurnPrompt).toBe("latest ask");
       expect(context.systemPrompt).toBe(
-        `${wrappedPluginSystemContext("prepend system")}\n\nhook system\n\n${wrappedPluginSystemContext("append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
+        `${wrappedPluginSystemContext("prepend system")}\n\nhook system\n\n${wrappedPluginSystemContext("append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. Model question: answer this current-run value.`,
       );
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
       const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
@@ -1752,7 +1752,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.params.prompt).toBe("prompt prepend\n\nlegacy prepend\n\nlatest ask");
       expect(context.systemPrompt).toBe(
-        `${wrappedPluginSystemContext("prompt prepend system")}\n\n${wrappedPluginSystemContext("legacy prepend system")}\n\nprompt system\n\n${wrappedPluginSystemContext("prompt append system")}\n\n${wrappedPluginSystemContext("legacy append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
+        `${wrappedPluginSystemContext("prompt prepend system")}\n\n${wrappedPluginSystemContext("legacy prepend system")}\n\nprompt system\n\n${wrappedPluginSystemContext("prompt append system")}\n\n${wrappedPluginSystemContext("legacy append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. Model question: answer this current-run value.`,
       );
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
       expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledOnce();
@@ -2142,8 +2142,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.cwd).toBe(taskDir);
-      expect(context.systemPrompt).toContain(`Your working directory is: ${taskDir}`);
-      expect(context.systemPrompt).not.toContain(`Your working directory is: ${dir}`);
+      expect(context.systemPrompt).toContain(`Working directory: ${taskDir}`);
+      expect(context.systemPrompt).not.toContain(`Working directory: ${dir}`);
     } finally {
       fs.rmSync(taskDir, { recursive: true, force: true });
       fs.rmSync(dir, { recursive: true, force: true });
@@ -2182,8 +2182,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.systemPrompt).toContain("channel=telegram");
-      expect(context.systemPrompt).toContain("Telegram rich text is available");
-      expect(context.systemPrompt).toContain("This is not legacy MarkdownV2/parse_mode");
+      expect(context.systemPrompt).toContain("Telegram rich ON");
+      expect(context.systemPrompt).toContain("Not MarkdownV2/parse_mode");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2385,12 +2385,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
         if (expectedStrongPrompt) {
           expect(first.systemPrompt).toContain(
-            "you MUST call `message(action=send)` for visible source-channel output",
+            "Current source visible reply MUST use `message(action=send)`",
           );
         } else {
-          expect(first.systemPrompt).toContain("final text normally routes to the source channel");
           expect(first.systemPrompt).toContain(
-            "if current-turn context says final text stays private, use `message(action=send)`",
+            "Current-session final text normally routes to source",
+          );
+          expect(first.systemPrompt).toContain(
+            "If turn says final private, visible output uses `message(action=send)`",
           );
         }
         expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
@@ -2740,7 +2742,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.systemPrompt).toBe(
-        `${wrappedPluginSystemContext("hook prepend system")}\n\nhook system${SYSTEM_PROMPT_CACHE_BOUNDARY}active image task\n\nactive video task\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
+        `${wrappedPluginSystemContext("hook prepend system")}\n\nhook system${SYSTEM_PROMPT_CACHE_BOUNDARY}active image task\n\nactive video task\n\nCurrent model identity: test-cli/test-model. Model question: answer this current-run value.`,
       );
       expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
         "agent:main:test",
@@ -3243,11 +3245,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         }),
       );
       expect(context.systemPrompt).toContain(
-        "include `target` and `message`; `target` is required for this turn",
+        "`send`: `target` + `message`; target required this turn",
       );
-      expect(context.systemPrompt).not.toContain(
-        "The target defaults to the current source channel",
-      );
+      expect(context.systemPrompt).not.toContain("current source is default target");
       await context.preparedBackend.cleanup?.();
       expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
     } finally {
@@ -3415,7 +3415,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         native: [],
         mcp: ["mcp__openclaw__crestodian"],
       });
-      const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
+      const mcpConfigPath = expectDefined(
+        args[args.indexOf("--mcp-config") + 1],
+        'args[args.indexOf("--mcp-config") + 1] test invariant',
+      );
       const raw = JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8")) as {
         mcpServers?: Record<string, { env?: Record<string, string> }>;
       };

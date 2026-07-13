@@ -8,20 +8,19 @@ import {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
-import {
-  resolvePluginApprovalRequestAllowedDecisions,
-  type PluginApprovalRequestPayload,
-} from "../infra/plugin-approvals.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
   type CommandSecretAssignment,
 } from "../secrets/runtime-command-secrets.js";
 import {
   getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-import { resolveApprovalSessionAudience } from "./approval-session-audience.js";
+import { resolveApprovalSessionAudienceWithFallback } from "./approval-session-audience.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -29,7 +28,10 @@ import {
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
-import { ExecApprovalManager } from "./exec-approval-manager.js";
+import {
+  ExecApprovalManager,
+  type OperatorApprovalLifecycleEvent,
+} from "./exec-approval-manager.js";
 import {
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
@@ -37,9 +39,14 @@ import {
 import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./server-methods/types.js";
 import {
+  captureSharedGatewaySessionGenerationOwnership,
+  claimSharedGatewaySessionGenerationIfOwned,
   disconnectStaleSharedGatewayAuthClients,
-  setCurrentSharedGatewaySessionGeneration,
+  finalizeOwnedSharedGatewaySessionGeneration,
+  isSharedGatewaySessionGenerationOwnershipCurrent,
+  replaceOwnedSharedGatewaySessionGenerationState,
   type SharedGatewayAuthClient,
+  type SharedGatewaySessionGenerationOwnership,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
@@ -55,11 +62,37 @@ type ReloadSecretsResult = {
   warningCount: number;
 };
 
-async function activateSecretsRuntimeSnapshot(
+async function activateSecretsRuntimeSnapshotIfCurrent(
   snapshot: PreparedSecretsRuntimeSnapshot,
-): Promise<void> {
+  expectedRevision: number,
+  options?: {
+    canActivate?: () => boolean;
+    onActivated?: () => void;
+  },
+): Promise<number | null> {
   const runtime = await import("../secrets/runtime.js");
-  runtime.activateSecretsRuntimeSnapshot(snapshot);
+  if (options?.canActivate && !options.canActivate()) {
+    return null;
+  }
+  if (!runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision)) {
+    return null;
+  }
+  options?.onActivated?.();
+  return runtime.getActiveSecretsRuntimeSnapshotRevision();
+}
+
+async function restoreSecretsRuntimeSnapshotIfCurrent(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+  expectedRevision: number,
+  ownedSnapshot: PreparedSecretsRuntimeSnapshot,
+  options?: { onActivated?: () => void },
+): Promise<number | null> {
+  const runtime = await import("../secrets/runtime.js");
+  if (!runtime.restoreSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, ownedSnapshot)) {
+    return null;
+  }
+  options?.onActivated?.();
+  return runtime.getActiveSecretsRuntimeSnapshotRevision();
 }
 
 function createLazyHandler(
@@ -88,6 +121,7 @@ export function createGatewayAuxHandlers(params: {
   stopChannel: (name: ChannelKind) => Promise<void>;
   getChannelAutostartSuppression?: () => ChannelAutostartSuppression | null;
   logChannels: { info: (msg: string) => void };
+  onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
 }) {
   // Both approval kinds share one durable first-answer-wins registry and
   // Gateway-lifetime epoch while retaining separate in-process waiter maps.
@@ -103,8 +137,9 @@ export function createGatewayAuxHandlers(params: {
   const execApprovalManager = new ExecApprovalManager<ExecApprovalRequestPayload>({
     approvalKind: "exec",
     persistence: approvalPersistence,
+    resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
     resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-    resolveAudienceSessionKeys: resolveApprovalSessionAudience,
+    onLifecycle: params.onApprovalLifecycle,
     onError: (error, context) => {
       params.log.error?.(
         `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
@@ -127,8 +162,9 @@ export function createGatewayAuxHandlers(params: {
   const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>({
     approvalKind: "plugin",
     persistence: approvalPersistence,
-    resolveAllowedDecisions: (request) => resolvePluginApprovalRequestAllowedDecisions(request),
-    resolveAudienceSessionKeys: resolveApprovalSessionAudience,
+    resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
+    resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
+    onLifecycle: params.onApprovalLifecycle,
     onError: (error, context) => {
       params.log.error?.(
         `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
@@ -183,42 +219,134 @@ export function createGatewayAuxHandlers(params: {
         createSecretsHandlers({
           reloadSecrets: () =>
             runExclusiveReload(async () => {
-              const previousSnapshot = getActiveSecretsRuntimeSnapshot();
-              if (!previousSnapshot) {
-                throw new Error("Secrets runtime snapshot is not active.");
-              }
-              // Snapshot both `current` and `required` because
-              // `setCurrentSharedGatewaySessionGeneration` can clear `required` as
-              // a side effect of activating a new generation. Restoring only
-              // `current` on rollback would leave `required` cleared and weaken
-              // shared-gateway auth-generation enforcement after a failed reload.
-              const previousSharedGatewaySessionGeneration =
-                params.sharedGatewaySessionGenerationState.current;
-              const previousSharedGatewaySessionGenerationRequired =
-                params.sharedGatewaySessionGenerationState.required;
-              let nextSharedGatewaySessionGeneration;
-              let sharedGatewaySessionGenerationChanged = false;
+              let transaction:
+                | {
+                    previousSnapshot: PreparedSecretsRuntimeSnapshot;
+                    previousSharedGatewaySessionGeneration: string | undefined;
+                    previousSharedGatewaySessionGenerationRequired: string | undefined | null;
+                    prepared: PreparedSecretsRuntimeSnapshot;
+                    plan: GatewayReloadPlan;
+                    nextSharedGatewaySessionGeneration: string | undefined;
+                    sharedGatewaySessionGenerationChanged: boolean;
+                    generationOwnership: SharedGatewaySessionGenerationOwnership;
+                    publishedSnapshotRevision: number;
+                  }
+                | undefined;
               const stoppedChannels: ChannelKind[] = [];
               const restartedChannels = new Set<ChannelKind>();
               try {
-                const prepared = await params.activateRuntimeSecrets(
-                  previousSnapshot.sourceConfig,
-                  {
-                    reason: "reload",
-                    activate: true,
-                  },
-                );
-                nextSharedGatewaySessionGeneration =
-                  params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
-                const plan = buildReloadPlan(
-                  diffConfigPaths(previousSnapshot.config, prepared.config),
-                );
-                setCurrentSharedGatewaySessionGeneration(
-                  params.sharedGatewaySessionGenerationState,
+                for (;;) {
+                  const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+                  if (!previousSnapshot) {
+                    throw new Error("Secrets runtime snapshot is not active.");
+                  }
+                  const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                  const previousGenerationOwnership =
+                    captureSharedGatewaySessionGenerationOwnership(
+                      params.sharedGatewaySessionGenerationState,
+                    );
+                  // Snapshot both generation fields with the candidate revision.
+                  // A stale preparation retries all three owners together.
+                  const previousSharedGatewaySessionGeneration =
+                    previousGenerationOwnership.generation;
+                  const previousSharedGatewaySessionGenerationRequired =
+                    params.sharedGatewaySessionGenerationState.required;
+                  const prepared = await params.activateRuntimeSecrets(
+                    previousSnapshot.sourceConfig,
+                    {
+                      reason: "reload",
+                      activate: false,
+                    },
+                  );
+                  const plan = buildReloadPlan(
+                    diffConfigPaths(previousSnapshot.config, prepared.config),
+                  );
+                  const nextSharedGatewaySessionGeneration =
+                    params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+                  let publishedSnapshotRevision: number | null = null;
+                  let generationOwnership: SharedGatewaySessionGenerationOwnership | null = null;
+                  const activateIfCurrent =
+                    params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
+                  if (activateIfCurrent) {
+                    const activated = await activateIfCurrent(
+                      prepared,
+                      previousSnapshotRevision,
+                      {
+                        reason: "reload",
+                        activate: true,
+                      },
+                      async () => {
+                        publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                        generationOwnership = claimSharedGatewaySessionGenerationIfOwned(
+                          params.sharedGatewaySessionGenerationState,
+                          previousGenerationOwnership,
+                          nextSharedGatewaySessionGeneration,
+                        );
+                      },
+                      () =>
+                        isSharedGatewaySessionGenerationOwnershipCurrent(
+                          params.sharedGatewaySessionGenerationState,
+                          previousGenerationOwnership,
+                        ),
+                    );
+                    if (!activated) {
+                      continue;
+                    }
+                  } else {
+                    publishedSnapshotRevision = await activateSecretsRuntimeSnapshotIfCurrent(
+                      prepared,
+                      previousSnapshotRevision,
+                      {
+                        canActivate: () =>
+                          isSharedGatewaySessionGenerationOwnershipCurrent(
+                            params.sharedGatewaySessionGenerationState,
+                            previousGenerationOwnership,
+                          ),
+                        onActivated: () => {
+                          generationOwnership = claimSharedGatewaySessionGenerationIfOwned(
+                            params.sharedGatewaySessionGenerationState,
+                            previousGenerationOwnership,
+                            nextSharedGatewaySessionGeneration,
+                          );
+                        },
+                      },
+                    );
+                    if (publishedSnapshotRevision === null) {
+                      continue;
+                    }
+                  }
+                  if (publishedSnapshotRevision === null || generationOwnership === null) {
+                    throw new Error("Secrets runtime activation did not publish ownership.");
+                  }
+                  transaction = {
+                    previousSnapshot,
+                    previousSharedGatewaySessionGeneration,
+                    previousSharedGatewaySessionGenerationRequired,
+                    prepared,
+                    plan,
+                    nextSharedGatewaySessionGeneration,
+                    sharedGatewaySessionGenerationChanged:
+                      previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration,
+                    generationOwnership,
+                    publishedSnapshotRevision,
+                  };
+                  if (
+                    !isSharedGatewaySessionGenerationOwnershipCurrent(
+                      params.sharedGatewaySessionGenerationState,
+                      generationOwnership,
+                    )
+                  ) {
+                    throw new Error("secrets.reload was superseded by a newer config write");
+                  }
+                  break;
+                }
+                const {
+                  prepared,
+                  plan,
+                  generationOwnership,
                   nextSharedGatewaySessionGeneration,
-                );
-                sharedGatewaySessionGenerationChanged =
-                  previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration;
+                  sharedGatewaySessionGenerationChanged,
+                } = transaction;
                 if (sharedGatewaySessionGenerationChanged) {
                   disconnectStaleSharedGatewayAuthClients({
                     clients: params.clients,
@@ -242,17 +370,38 @@ export function createGatewayAuxHandlers(params: {
                   }
                   const restartFailures: ChannelKind[] = [];
                   for (const channel of restartChannels) {
+                    if (
+                      !isSharedGatewaySessionGenerationOwnershipCurrent(
+                        params.sharedGatewaySessionGenerationState,
+                        generationOwnership,
+                      )
+                    ) {
+                      throw new Error("secrets.reload was superseded by a newer config write");
+                    }
                     params.logChannels.info(`restarting ${channel} channel after secrets reload`);
                     // Track for rollback before awaiting stopChannel: if stopChannel
-                    // throws after partially stopping the channel (for example, a
-                    // plugin hook rejects after the runtime already closed the
-                    // socket), we still need the outer catch to attempt restart so
-                    // the channel is not left down after a failed reload.
+                    // throws after partially stopping the channel, still attempt recovery.
                     stoppedChannels.push(channel);
                     try {
                       await params.stopChannel(channel);
+                      if (
+                        !isSharedGatewaySessionGenerationOwnershipCurrent(
+                          params.sharedGatewaySessionGenerationState,
+                          generationOwnership,
+                        )
+                      ) {
+                        throw new Error("secrets.reload was superseded by a newer config write");
+                      }
                       await params.startChannel(channel);
                       restartedChannels.add(channel);
+                      if (
+                        !isSharedGatewaySessionGenerationOwnershipCurrent(
+                          params.sharedGatewaySessionGenerationState,
+                          generationOwnership,
+                        )
+                      ) {
+                        throw new Error("secrets.reload was superseded by a newer config write");
+                      }
                     } catch {
                       params.logChannels.info(
                         `failed to restart ${channel} channel after secrets reload`,
@@ -266,19 +415,48 @@ export function createGatewayAuxHandlers(params: {
                     );
                   }
                 }
+                if (
+                  !finalizeOwnedSharedGatewaySessionGeneration(
+                    params.sharedGatewaySessionGenerationState,
+                    generationOwnership,
+                  )
+                ) {
+                  throw new Error("secrets.reload was superseded by a newer config write");
+                }
                 return { warningCount: prepared.warnings.length };
               } catch (err) {
-                await activateSecretsRuntimeSnapshot(previousSnapshot);
-                params.sharedGatewaySessionGenerationState.current =
-                  previousSharedGatewaySessionGeneration;
-                params.sharedGatewaySessionGenerationState.required =
-                  previousSharedGatewaySessionGenerationRequired;
-                if (sharedGatewaySessionGenerationChanged) {
-                  disconnectStaleSharedGatewayAuthClients({
-                    clients: params.clients,
-                    expectedGeneration: previousSharedGatewaySessionGeneration,
-                  });
+                let generationRestored = false;
+                if (transaction) {
+                  const failedTransaction = transaction;
+                  await restoreSecretsRuntimeSnapshotIfCurrent(
+                    failedTransaction.previousSnapshot,
+                    failedTransaction.publishedSnapshotRevision,
+                    failedTransaction.prepared,
+                    {
+                      onActivated: () => {
+                        generationRestored = replaceOwnedSharedGatewaySessionGenerationState(
+                          params.sharedGatewaySessionGenerationState,
+                          failedTransaction.generationOwnership,
+                          {
+                            current: failedTransaction.previousSharedGatewaySessionGeneration,
+                            required:
+                              failedTransaction.previousSharedGatewaySessionGenerationRequired,
+                          },
+                        );
+                      },
+                    },
+                  );
                 }
+                if (generationRestored && transaction) {
+                  if (transaction.sharedGatewaySessionGenerationChanged) {
+                    disconnectStaleSharedGatewayAuthClients({
+                      clients: params.clients,
+                      expectedGeneration: transaction.previousSharedGatewaySessionGeneration,
+                    });
+                  }
+                }
+                // Generation ownership fences state rollback, not liveness.
+                // Restart stopped channels against whichever runtime is current now.
                 for (const channel of stoppedChannels) {
                   params.logChannels.info(
                     `rolling back ${channel} channel after secrets reload failure`,

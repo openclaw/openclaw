@@ -11,6 +11,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.MainSessionBinding
 import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
@@ -40,6 +41,12 @@ import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeLocaleChanges
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveOptionalNativeText
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.A2UIHandler
 import ai.openclaw.app.node.CalendarHandler
 import ai.openclaw.app.node.CallLogHandler
@@ -88,6 +95,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
@@ -99,6 +107,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -124,15 +133,15 @@ private const val NODE_APPROVAL_COMMAND_FRESH_MS = 30_000L
 private const val CRON_RUN_TRACKING_POLL_MS = 2_000L
 private const val OperatorAdminScope = "operator.admin"
 
-private fun execApprovalOutcomeUnknownMessage(): String = "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified."
+private fun execApprovalOutcomeUnknownMessage(): String = nativeText("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.").source
 
-private fun execApprovalStillPendingMessage(): String = "The Gateway still shows this approval as pending. Review it before trying again."
+private fun execApprovalStillPendingMessage(): String = nativeText("The Gateway still shows this approval as pending. Review it before trying again.").source
 
-private fun execApprovalLoadDetailsFailureMessage(): String = "Could not load approval details. Refresh and try again."
+private fun execApprovalLoadDetailsFailureMessage(): String = nativeText("Could not load approval details. Refresh and try again.").source
 
-private fun execApprovalLoadFailureMessage(): String = "Could not load approvals."
+private fun execApprovalLoadFailureMessage(): String = nativeText("Could not load approvals.").source
 
-private fun execApprovalResolveFailureMessage(): String = "Could not resolve approval. Refresh and try again."
+private fun execApprovalResolveFailureMessage(): String = nativeText("Could not resolve approval. Refresh and try again.").source
 
 internal typealias GatewayDataRequestOverride =
   suspend (stableId: String, method: String, paramsJson: String?) -> String
@@ -141,16 +150,34 @@ private class ExecApprovalWriteOutcomeUnknown : IllegalStateException("approval 
 
 private class GatewayApprovalRpcUnavailable : IllegalStateException("Gateway approval RPC catalog is inconsistent")
 
-private enum class SkillWorkshopGatewayAction(
+internal enum class SkillWorkshopGatewayAction(
   val methodSuffix: String,
   val expectedStatus: String,
-  val notice: String,
-  val verb: String,
+  val notice: NativeText,
+  val verb: NativeText,
 ) {
-  Apply("apply", "applied", "Proposal applied.", "apply"),
-  Reject("reject", "rejected", "Proposal rejected.", "reject"),
-  Quarantine("quarantine", "quarantined", "Proposal quarantined.", "quarantine"),
+  Apply("apply", "applied", nativeText("Proposal applied."), nativeText("apply")),
+  Reject("reject", "rejected", nativeText("Proposal rejected."), nativeText("reject")),
+  Quarantine("quarantine", "quarantined", nativeText("Proposal quarantined."), nativeText("quarantine")),
 }
+
+internal fun skillWorkshopUnexpectedStatusText(
+  status: String?,
+  action: SkillWorkshopGatewayAction,
+): NativeText {
+  val statusText = status?.takeIf { it.isNotBlank() }?.let(::verbatimText) ?: nativeText("unknown")
+  return nativeText(
+    "Gateway returned status '\$statusLabel' after \${action.verb}.",
+    statusText,
+    action.verb,
+  )
+}
+
+internal fun skillWorkshopActionFailureText(action: SkillWorkshopGatewayAction): NativeText =
+  nativeText(
+    "Could not \${action.verb} Skill Workshop proposal.",
+    action.verb,
+  )
 
 internal data class PendingNotificationNodeEvent(
   val event: String,
@@ -317,6 +344,37 @@ data class GatewayConnectionDisplay(
   val problem: GatewayConnectionProblem?,
 )
 
+private const val GATEWAY_STATUS_OFFLINE = "Offline"
+private const val GATEWAY_STATUS_CONNECTED = "Connected"
+private const val GATEWAY_STATUS_NODE_OFFLINE = "Connected (node offline)"
+private const val GATEWAY_STATUS_OPERATOR_OFFLINE = "Connected (operator offline)"
+
+private fun gatewayOperatorConnectionState(operator: String): String = "Connected (operator: $operator)"
+
+internal fun gatewayConnectionStatusForDisplay(statusText: String): String {
+  val status = statusText.trim()
+  return when {
+    status.isEmpty() || status == GATEWAY_STATUS_OFFLINE -> nativeString("Offline")
+    status == GATEWAY_STATUS_CONNECTED -> nativeString("Connected")
+    status == GATEWAY_STATUS_NODE_OFFLINE -> nativeString("Connected (node offline)")
+    status == GATEWAY_STATUS_OPERATOR_OFFLINE -> nativeString("Connected (operator offline)")
+    status == "Connecting…" -> nativeString("Connecting…")
+    status == "Reconnecting…" -> nativeString("Reconnecting…")
+    status == "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected." ->
+      nativeString("Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.")
+    status == "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry." ->
+      nativeString("Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.")
+    status == "Failed: couldn't reach the secure gateway endpoint for this host." ->
+      nativeString("Failed: couldn't reach the secure gateway endpoint for this host.")
+    status.startsWith("Connected (operator: ") && status.endsWith(")") ->
+      nativeString(
+        "Connected (operator: \$operator)",
+        status.removePrefix("Connected (operator: ").dropLast(1),
+      )
+    else -> status
+  }
+}
+
 private fun gatewayProblemAfterDisconnect(
   problem: GatewayConnectionProblem?,
   statusText: String,
@@ -335,16 +393,16 @@ internal fun gatewayConnectionDisplay(
   val operator = operatorStatusText.trim()
   val node = nodeStatusText.trim()
   return when {
-    operatorConnected && nodeConnected -> GatewayConnectionDisplay(true, "Connected", null)
-    operatorConnected -> GatewayConnectionDisplay(true, "Connected (node offline)", nodeProblem)
+    operatorConnected && nodeConnected -> GatewayConnectionDisplay(true, GATEWAY_STATUS_CONNECTED, null)
+    operatorConnected -> GatewayConnectionDisplay(true, GATEWAY_STATUS_NODE_OFFLINE, nodeProblem)
     nodeConnected ->
       GatewayConnectionDisplay(
         isConnected = false,
         statusText =
           if (operator.isNotEmpty() && operator != "Offline") {
-            "Connected (operator: $operator)"
+            gatewayOperatorConnectionState(operator)
           } else {
-            "Connected (operator offline)"
+            GATEWAY_STATUS_OPERATOR_OFFLINE
           },
         problem = operatorProblem,
       )
@@ -407,12 +465,15 @@ class NodeRuntime private constructor(
     val stableId: String,
     val id: String,
     val decision: String,
+    // Captured at registration: canonical readback needs it after a refresh has
+    // already replaced the visible rows, or the legacy get parse drops the row.
+    val createdAtMs: Long?,
   ) {
     @Volatile var requestInFlight: Boolean = true
   }
 
   private data class CronActionResult(
-    val message: String,
+    val message: NativeText,
     val kind: GatewayCronNoticeKind,
     val refresh: Boolean,
     val deleted: Boolean = false,
@@ -692,9 +753,9 @@ class NodeRuntime private constructor(
   private val _nodeCapabilityApproval = MutableStateFlow<GatewayNodeCapabilityApproval>(GatewayNodeCapabilityApproval.Loading)
   val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> = _nodeCapabilityApproval.asStateFlow()
 
-  private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, "Offline", null))
+  private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, GATEWAY_STATUS_OFFLINE, null))
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> = _gatewayConnectionDisplay.asStateFlow()
-  private val _statusText = MutableStateFlow("Offline")
+  private val _statusText = MutableStateFlow(GATEWAY_STATUS_OFFLINE)
   val statusText: StateFlow<String> = _statusText.asStateFlow()
   private val _gatewayConnectionProblem = MutableStateFlow<GatewayConnectionProblem?>(null)
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = _gatewayConnectionProblem.asStateFlow()
@@ -728,8 +789,8 @@ class NodeRuntime private constructor(
   val canvasA2uiHydrated: StateFlow<Boolean> = _canvasA2uiHydrated.asStateFlow()
   private val _canvasRehydratePending = MutableStateFlow(false)
   val canvasRehydratePending: StateFlow<Boolean> = _canvasRehydratePending.asStateFlow()
-  private val _canvasRehydrateErrorText = MutableStateFlow<String?>(null)
-  val canvasRehydrateErrorText: StateFlow<String?> = _canvasRehydrateErrorText.asStateFlow()
+  private val _canvasRehydrateErrorText = MutableStateFlow<NativeText?>(null)
+  val canvasRehydrateErrorText: StateFlow<String?> = _canvasRehydrateErrorText.resolveOptionalNativeText()
 
   private val _serverName = MutableStateFlow<String?>(null)
   val serverName: StateFlow<String?> = _serverName.asStateFlow()
@@ -751,15 +812,15 @@ class NodeRuntime private constructor(
   val providerModelCatalog: StateFlow<List<GatewayModelSummary>> = _providerModelCatalog.asStateFlow()
   private val _providerModelCatalogRefreshing = MutableStateFlow(false)
   val providerModelCatalogRefreshing: StateFlow<Boolean> = _providerModelCatalogRefreshing.asStateFlow()
-  private val _providerModelCatalogErrorText = MutableStateFlow<String?>(null)
-  val providerModelCatalogErrorText: StateFlow<String?> = _providerModelCatalogErrorText.asStateFlow()
+  private val _providerModelCatalogErrorText = MutableStateFlow<NativeText?>(null)
+  val providerModelCatalogErrorText: StateFlow<String?> = _providerModelCatalogErrorText.resolveOptionalNativeText()
   private val providerModelCatalogRefreshGuard = LatestGatewayRefreshGuard()
   private val _modelAuthProviders = MutableStateFlow<List<GatewayModelProviderSummary>>(emptyList())
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = _modelAuthProviders.asStateFlow()
   private val _modelCatalogRefreshing = MutableStateFlow(false)
   val modelCatalogRefreshing: StateFlow<Boolean> = _modelCatalogRefreshing.asStateFlow()
-  private val _modelCatalogErrorText = MutableStateFlow<String?>(null)
-  val modelCatalogErrorText: StateFlow<String?> = _modelCatalogErrorText.asStateFlow()
+  private val _modelCatalogErrorText = MutableStateFlow<NativeText?>(null)
+  val modelCatalogErrorText: StateFlow<String?> = _modelCatalogErrorText.resolveOptionalNativeText()
   private val _talkSetupReadiness = MutableStateFlow(GatewayTalkSetupReadiness.unverified())
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> = _talkSetupReadiness.asStateFlow()
   private val _gatewayDefaultAgentId = MutableStateFlow<String?>(null)
@@ -776,8 +837,8 @@ class NodeRuntime private constructor(
   val cronJobs: StateFlow<List<GatewayCronJobSummary>> = _cronJobs.asStateFlow()
   private val _cronRefreshing = MutableStateFlow(false)
   val cronRefreshing: StateFlow<Boolean> = _cronRefreshing.asStateFlow()
-  private val _cronErrorText = MutableStateFlow<String?>(null)
-  val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
+  private val _cronErrorText = MutableStateFlow<NativeText?>(null)
+  val cronErrorText: StateFlow<String?> = _cronErrorText.resolveOptionalNativeText()
   private val _cronJobDetailState = MutableStateFlow<GatewayCronJobDetailState>(GatewayCronJobDetailState.Idle)
   val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = _cronJobDetailState.asStateFlow()
   private val _cronRunHistoryState = MutableStateFlow<GatewayCronRunHistoryState>(GatewayCronRunHistoryState.Idle)
@@ -795,22 +856,32 @@ class NodeRuntime private constructor(
   val usageSummary: StateFlow<GatewayUsageSummary> = _usageSummary.asStateFlow()
   private val _usageRefreshing = MutableStateFlow(false)
   val usageRefreshing: StateFlow<Boolean> = _usageRefreshing.asStateFlow()
-  private val _usageErrorText = MutableStateFlow<String?>(null)
-  val usageErrorText: StateFlow<String?> = _usageErrorText.asStateFlow()
+  private val _usageErrorText = MutableStateFlow<NativeText?>(null)
+  val usageErrorText: StateFlow<String?> = _usageErrorText.resolveOptionalNativeText()
   private val _skillsSummary = MutableStateFlow(GatewaySkillsSummary(skills = emptyList()))
   val skillsSummary: StateFlow<GatewaySkillsSummary> = _skillsSummary.asStateFlow()
   private val _skillsRefreshing = MutableStateFlow(false)
   val skillsRefreshing: StateFlow<Boolean> = _skillsRefreshing.asStateFlow()
-  private val _skillsErrorText = MutableStateFlow<String?>(null)
-  val skillsErrorText: StateFlow<String?> = _skillsErrorText.asStateFlow()
+  private val _skillsErrorText = MutableStateFlow<NativeText?>(null)
+  val skillsErrorText: StateFlow<String?> = _skillsErrorText.resolveOptionalNativeText()
+  private val _clawHubSkillMethodsAvailable = MutableStateFlow(false)
+  val clawHubSkillMethodsAvailable: StateFlow<Boolean> = _clawHubSkillMethodsAvailable.asStateFlow()
+  private val _skillMutationKeys = MutableStateFlow<Set<String>>(emptySet())
+  val skillMutationKeys: StateFlow<Set<String>> = _skillMutationKeys.asStateFlow()
+  private val _clawHubSkillSearchState = MutableStateFlow(GatewayClawHubSkillSearchState())
+  val clawHubSkillSearchState: StateFlow<GatewayClawHubSkillSearchState> =
+    _clawHubSkillSearchState.asStateFlow()
+  private val clawHubSkillSearchSeq = AtomicLong(0)
+  private val clawHubSkillReviewSeq = AtomicLong(0)
+  private val clawHubSkillInstallMutex = Mutex()
   private val _skillWorkshopSummary = MutableStateFlow(GatewaySkillWorkshopSummary(proposals = emptyList()))
   val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> = _skillWorkshopSummary.asStateFlow()
   private val _skillWorkshopRefreshing = MutableStateFlow(false)
   val skillWorkshopRefreshing: StateFlow<Boolean> = _skillWorkshopRefreshing.asStateFlow()
-  private val _skillWorkshopErrorText = MutableStateFlow<String?>(null)
-  val skillWorkshopErrorText: StateFlow<String?> = _skillWorkshopErrorText.asStateFlow()
-  private val _skillWorkshopNoticeText = MutableStateFlow<String?>(null)
-  val skillWorkshopNoticeText: StateFlow<String?> = _skillWorkshopNoticeText.asStateFlow()
+  private val _skillWorkshopErrorText = MutableStateFlow<NativeText?>(null)
+  val skillWorkshopErrorText: StateFlow<String?> = _skillWorkshopErrorText.resolveOptionalNativeText()
+  private val _skillWorkshopNoticeText = MutableStateFlow<NativeText?>(null)
+  val skillWorkshopNoticeText: StateFlow<String?> = _skillWorkshopNoticeText.resolveOptionalNativeText()
   private val _skillWorkshopInspectingProposalId = MutableStateFlow<String?>(null)
   val skillWorkshopInspectingProposalId: StateFlow<String?> = _skillWorkshopInspectingProposalId.asStateFlow()
   private val _skillWorkshopMutatingProposalId = MutableStateFlow<String?>(null)
@@ -829,8 +900,8 @@ class NodeRuntime private constructor(
   val nodesDevicesSummary: StateFlow<GatewayNodesDevicesSummary> = _nodesDevicesSummary.asStateFlow()
   private val _nodesDevicesRefreshing = MutableStateFlow(false)
   val nodesDevicesRefreshing: StateFlow<Boolean> = _nodesDevicesRefreshing.asStateFlow()
-  private val _nodesDevicesErrorText = MutableStateFlow<String?>(null)
-  val nodesDevicesErrorText: StateFlow<String?> = _nodesDevicesErrorText.asStateFlow()
+  private val _nodesDevicesErrorText = MutableStateFlow<NativeText?>(null)
+  val nodesDevicesErrorText: StateFlow<String?> = _nodesDevicesErrorText.resolveOptionalNativeText()
   private val nodeApprovalRefreshGuard = LatestGatewayRefreshGuard()
   private val _execApprovals = MutableStateFlow<List<GatewayExecApprovalSummary>>(emptyList())
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = _execApprovals.asStateFlow()
@@ -852,24 +923,28 @@ class NodeRuntime private constructor(
   private var gatewayMethodsEpoch = 0L
 
   @Volatile internal var gatewayDataRequestOverrideForTests: GatewayDataRequestOverride? = null
+
+  @Volatile internal var gatewayDataRequestTimeoutObserverForTests: ((method: String, timeoutMs: Long) -> Unit)? = null
+
+  @Volatile internal var clawHubSkillInstallBeforeClaimObserverForTests: (() -> Unit)? = null
   private val _channelsSummary = MutableStateFlow(GatewayChannelsSummary(channels = emptyList()))
   val channelsSummary: StateFlow<GatewayChannelsSummary> = _channelsSummary.asStateFlow()
   private val _channelsRefreshing = MutableStateFlow(false)
   val channelsRefreshing: StateFlow<Boolean> = _channelsRefreshing.asStateFlow()
-  private val _channelsErrorText = MutableStateFlow<String?>(null)
-  val channelsErrorText: StateFlow<String?> = _channelsErrorText.asStateFlow()
+  private val _channelsErrorText = MutableStateFlow<NativeText?>(null)
+  val channelsErrorText: StateFlow<String?> = _channelsErrorText.resolveOptionalNativeText()
   private val _dreamingSummary = MutableStateFlow(GatewayDreamingSummary())
   val dreamingSummary: StateFlow<GatewayDreamingSummary> = _dreamingSummary.asStateFlow()
   private val _dreamingRefreshing = MutableStateFlow(false)
   val dreamingRefreshing: StateFlow<Boolean> = _dreamingRefreshing.asStateFlow()
-  private val _dreamingErrorText = MutableStateFlow<String?>(null)
-  val dreamingErrorText: StateFlow<String?> = _dreamingErrorText.asStateFlow()
+  private val _dreamingErrorText = MutableStateFlow<NativeText?>(null)
+  val dreamingErrorText: StateFlow<String?> = _dreamingErrorText.resolveOptionalNativeText()
   private val _healthLogsSummary = MutableStateFlow(GatewayHealthLogsSummary())
   val healthLogsSummary: StateFlow<GatewayHealthLogsSummary> = _healthLogsSummary.asStateFlow()
   private val _healthLogsRefreshing = MutableStateFlow(false)
   val healthLogsRefreshing: StateFlow<Boolean> = _healthLogsRefreshing.asStateFlow()
-  private val _healthLogsErrorText = MutableStateFlow<String?>(null)
-  val healthLogsErrorText: StateFlow<String?> = _healthLogsErrorText.asStateFlow()
+  private val _healthLogsErrorText = MutableStateFlow<NativeText?>(null)
+  val healthLogsErrorText: StateFlow<String?> = _healthLogsErrorText.resolveOptionalNativeText()
 
   private val _isForeground = MutableStateFlow(initialForeground)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
@@ -915,9 +990,11 @@ class NodeRuntime private constructor(
         replaceGatewayMethods(hello.methods)
         _operatorScopes.value = normalizeOperatorScopes(hello.authScopes)
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
-        // Every successful connection refreshes history; reconnects preserve local run ownership.
-        chat.onGatewayConnected()
+        val mainSessionKey =
+          prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+        // Create/adopt before history refresh; this keeps the first connected read on the
+        // device-owned session without changing the shipped key or its existing transcript.
+        chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
         refreshGatewayControlPage()
         updateStatus {
           operatorConnectionProblem = null
@@ -994,6 +1071,10 @@ class NodeRuntime private constructor(
     _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
     _skillsRefreshing.value = false
     _skillsErrorText.value = null
+    _skillMutationKeys.value = emptySet()
+    clawHubSkillSearchSeq.incrementAndGet()
+    clawHubSkillReviewSeq.incrementAndGet()
+    _clawHubSkillSearchState.value = GatewayClawHubSkillSearchState()
     _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(proposals = emptyList())
     _skillWorkshopRefreshing.value = false
     _skillWorkshopErrorText.value = null
@@ -1381,15 +1462,44 @@ class NodeRuntime private constructor(
 
   private fun syncMainSessionKey(agentId: String?) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
-    // Always push the resolved session key into TalkMode, even when the
-    // state flow value is unchanged, so lazy TalkMode instances do not
-    // stay on the default "main" session key.
     talkMode.setMainSessionKey(resolvedKey)
     if (_mainSessionKey.value == resolvedKey) return
     _mainSessionKey.value = resolvedKey
-    chat.applyMainSessionKey(resolvedKey)
+    if (operatorConnected) {
+      chat.prepareMainSessionKey(resolvedKey)
+      chat.onGatewayConnected(mainSessionBinding(resolvedKey))
+    } else {
+      chat.applyMainSessionKey(resolvedKey)
+    }
     updateHomeCanvasState()
   }
+
+  private fun prepareMainSessionKey(agentId: String?): String {
+    val resolvedKey = resolveNodeMainSessionKey(agentId)
+    // Always push into TalkMode so a lazy instance cannot retain the "main" alias.
+    talkMode.setMainSessionKey(resolvedKey)
+    if (_mainSessionKey.value != resolvedKey) {
+      _mainSessionKey.value = resolvedKey
+      updateHomeCanvasState()
+    }
+    chat.prepareMainSessionKey(resolvedKey)
+    return resolvedKey
+  }
+
+  private fun selectMainSessionKey(agentId: String) {
+    val resolvedKey = resolveNodeMainSessionKey(agentId)
+    talkMode.setMainSessionKey(resolvedKey)
+    _mainSessionKey.value = resolvedKey
+    chat.prepareAndSelectMainSessionKey(resolvedKey)
+    chat.onGatewayConnected(mainSessionBinding(resolvedKey))
+    updateHomeCanvasState()
+  }
+
+  private fun mainSessionBinding(sessionKey: String): MainSessionBinding =
+    MainSessionBinding(
+      key = sessionKey,
+      label = buildAndroidAppSessionLabel(prefs.displayName.value, identityStore.loadOrCreate().deviceId),
+    )
 
   private fun updateStatus(update: () -> Unit = {}) {
     synchronized(gatewayStatusLock) {
@@ -1563,7 +1673,7 @@ class NodeRuntime private constructor(
       _cronActionState.value =
         GatewayCronActionState.Notice(
           id = jobId,
-          message = "This cron job already has a queued run.",
+          message = nativeText("This cron job already has a queued run."),
           kind = GatewayCronNoticeKind.Warning,
         )
       return
@@ -1593,20 +1703,20 @@ class NodeRuntime private constructor(
             }
           }
           CronActionResult(
-            message = if (outcome.runId == null) "Cron job started." else "Cron run queued.",
+            message = if (outcome.runId == null) nativeText("Cron job started.") else nativeText("Cron run queued."),
             kind = GatewayCronNoticeKind.Success,
             refresh = cronRunShouldRefresh(outcome),
           )
         }
         is GatewayCronRunOutcome.Skipped ->
           CronActionResult(
-            message = outcome.reason.message,
+            message = outcome.reason.messageText,
             kind = GatewayCronNoticeKind.Warning,
             refresh = cronRunShouldRefresh(outcome),
           )
         GatewayCronRunOutcome.Rejected ->
           CronActionResult(
-            message = "Gateway rejected the cron run.",
+            message = nativeText("Gateway rejected the cron run."),
             kind = GatewayCronNoticeKind.Error,
             refresh = false,
           )
@@ -1637,7 +1747,7 @@ class NodeRuntime private constructor(
         }.toString(),
       )
       CronActionResult(
-        message = if (enabled) "Cron job enabled." else "Cron job disabled.",
+        message = if (enabled) nativeText("Cron job enabled.") else nativeText("Cron job disabled."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
       )
@@ -1659,13 +1769,13 @@ class NodeRuntime private constructor(
         if (!isCronJobRevisionConflict(err.gatewayError)) throw err
         reloadCronJobIfSelected(original.id)
         return@launchCronAction CronActionResult(
-          message = "This cron job changed on the gateway. Review the latest version before saving again.",
+          message = nativeText("This cron job changed on the gateway. Review the latest version before saving again."),
           kind = GatewayCronNoticeKind.Warning,
           refresh = false,
         )
       }
       CronActionResult(
-        message = "Cron job updated.",
+        message = nativeText("Cron job updated."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
       )
@@ -1680,7 +1790,7 @@ class NodeRuntime private constructor(
         buildJsonObject { put("id", JsonPrimitive(jobId)) }.toString(),
       )
       CronActionResult(
-        message = "Cron job deleted.",
+        message = nativeText("Cron job deleted."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
         deleted = true,
@@ -1700,6 +1810,59 @@ class NodeRuntime private constructor(
     scope.launch {
       refreshSkillsFromGateway()
     }
+  }
+
+  fun setSkillEnabled(
+    skillKey: String,
+    enabled: Boolean,
+  ) {
+    val normalized = skillKey.trim()
+    if (normalized.isEmpty()) return
+    scope.launch { setSkillEnabledOnGateway(normalized, enabled) }
+  }
+
+  fun searchClawHubSkills(query: String) {
+    scope.launch { searchClawHubSkillsFromGateway(query) }
+  }
+
+  fun reviewClawHubSkillInstall(skill: GatewayClawHubSkillSummary) {
+    if (skill.slug.isBlank()) return
+    scope.launch { reviewClawHubSkillInstallFromGateway(skill.copy(slug = skill.slug.trim())) }
+  }
+
+  fun dismissClawHubSkillInstallReview() {
+    clawHubSkillReviewSeq.incrementAndGet()
+    _clawHubSkillSearchState.value =
+      _clawHubSkillSearchState.value.copy(reviewingSlug = null, installReview = null)
+  }
+
+  internal fun installClawHubSkill(
+    slug: String,
+    acknowledgeClawHubRisk: Boolean = false,
+    version: String? = null,
+  ): Job? {
+    val normalized = slug.trim()
+    if (normalized.isEmpty()) return null
+    return scope.launch {
+      installClawHubSkillFromGateway(
+        slug = normalized,
+        acknowledgeClawHubRisk = acknowledgeClawHubRisk,
+        version = version,
+      )
+    }
+  }
+
+  fun clearClawHubSkillMessage() {
+    clawHubSkillReviewSeq.incrementAndGet()
+    _clawHubSkillSearchState.value =
+      _clawHubSkillSearchState.value.copy(
+        reviewingSlug = null,
+        installReview = null,
+        acknowledgeSlug = null,
+        acknowledgeVersion = null,
+        errorText = null,
+        messageText = null,
+      )
   }
 
   fun refreshSkillWorkshopProposals(agentId: String? = null) {
@@ -1832,7 +1995,7 @@ class NodeRuntime private constructor(
     scope.launch {
       if (gatewayId == null || !_nodeConnected.value) {
         _canvasRehydratePending.value = false
-        _canvasRehydrateErrorText.value = "Node offline. Reconnect and retry."
+        _canvasRehydrateErrorText.value = nativeText("Node offline. Reconnect and retry.")
         return@launch
       }
       if (!force && didAutoRequestCanvasRehydrate) return@launch
@@ -1864,7 +2027,7 @@ class NodeRuntime private constructor(
         }
         if (canvasRehydrateSeq.get() == requestId) {
           _canvasRehydratePending.value = false
-          _canvasRehydrateErrorText.value = "Failed to request restore. Tap to retry."
+          _canvasRehydrateErrorText.value = nativeText("Failed to request restore. Tap to retry.")
         }
         Log.w("OpenClawCanvas", "canvas rehydrate request failed ($source): transport unavailable")
         return@launch
@@ -1875,7 +2038,7 @@ class NodeRuntime private constructor(
         if (!_canvasRehydratePending.value) return@launch
         if (_canvasA2uiHydrated.value) return@launch
         _canvasRehydratePending.value = false
-        _canvasRehydrateErrorText.value = "No canvas update yet. Tap to retry."
+        _canvasRehydrateErrorText.value = nativeText("No canvas update yet. Tap to retry.")
       }
     }
   }
@@ -1966,6 +2129,8 @@ class NodeRuntime private constructor(
 
   private var didAutoConnect = false
 
+  @Volatile private var preferredGatewayReconnectSuppressed = false
+
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   val chatSessionId: StateFlow<String?> = chat.sessionId
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
@@ -2048,7 +2213,7 @@ class NodeRuntime private constructor(
     cronJobDetailRequestGuard.publishIfCurrent(detailRequest) {
       _cronJobDetailState.value =
         detail?.let(GatewayCronJobDetailState::Loaded)
-          ?: GatewayCronJobDetailState.Error(detailRequest.id, "Gateway returned an invalid cron job.")
+          ?: GatewayCronJobDetailState.Error(detailRequest.id, nativeText("Gateway returned an invalid cron job."))
     }
     publishScreenshotCronHistory(historyRequest)
   }
@@ -2097,6 +2262,12 @@ class NodeRuntime private constructor(
           if (!debugEnabled) return@collect
           canvas.setDebugStatus(status, server ?: remote)
         }
+    }
+
+    scope.launch {
+      nativeLocaleChanges.drop(1).collect {
+        updateHomeCanvasState()
+      }
     }
 
     updateHomeCanvasState()
@@ -2159,7 +2330,7 @@ class NodeRuntime private constructor(
         sentAtMs = nowMs,
         displayName = client.displayName?.trim()?.takeIf { it.isNotEmpty() } ?: "Android",
         version = client.version,
-        platform = NodePresenceAliveBeacon.androidPlatformLabel(),
+        platform = NodePresenceAliveBeacon.androidPlatformMetadata(),
         deviceFamily = client.deviceFamily,
         modelIdentifier = client.modelIdentifier,
       )
@@ -2230,6 +2401,7 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint,
     explicitAuth: GatewayConnectAuth? = null,
   ): Boolean {
+    preferredGatewayReconnectSuppressed = false
     val intent = gatewayLifecycleIntentSeq.incrementAndGet()
     return gatewaySwitchMutex.withLock {
       if (intent != gatewayLifecycleIntentSeq.get()) return@withLock false
@@ -2261,6 +2433,7 @@ class NodeRuntime private constructor(
   }
 
   private fun autoConnectIfNeeded() {
+    if (preferredGatewayReconnectSuppressed) return
     if (didAutoConnect) return
     if (gatewayConnectionDisplay.value.isConnected) return
     val endpoint = resolvePreferredGatewayEndpoint() ?: return
@@ -2275,6 +2448,7 @@ class NodeRuntime private constructor(
   }
 
   private fun reconnectPreferredGatewayOnForeground() {
+    if (preferredGatewayReconnectSuppressed) return
     if (gatewayConnectionDisplay.value.isConnected) return
     if (_pendingGatewayTrust.value != null) return
     if (connectedEndpoint != null) {
@@ -2289,11 +2463,15 @@ class NodeRuntime private constructor(
   }
 
   fun setCameraEnabled(value: Boolean) {
+    if (prefs.cameraEnabled.value == value) return
     prefs.setCameraEnabled(value)
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setLocationMode(mode: LocationMode) {
+    if (prefs.locationMode.value == mode) return
     prefs.setLocationMode(mode)
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setLocationPreciseEnabled(value: Boolean) {
@@ -2327,13 +2505,13 @@ class NodeRuntime private constructor(
   fun grantInstalledAppsDisclosureConsent() {
     if (prefs.installedAppsSharingEnabled.value) return
     prefs.grantInstalledAppsDisclosureConsent()
-    refreshNodeSurfaceAfterSharingChange()
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun revokeInstalledAppsDisclosureConsent() {
     if (!prefs.installedAppsSharingEnabled.value) return
     prefs.revokeInstalledAppsDisclosureConsent()
-    refreshNodeSurfaceAfterSharingChange()
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
@@ -2913,6 +3091,7 @@ class NodeRuntime private constructor(
     }
 
   fun refreshGatewayConnection() {
+    preferredGatewayReconnectSuppressed = false
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchGatewayLifecycle {
       val endpoint = connectedEndpoint
@@ -2934,8 +3113,9 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun refreshNodeSurfaceAfterSharingChange() {
+  private fun refreshNodeSurfaceAfterSettingsChange() {
     launchGatewayLifecycle {
+      if (preferredGatewayReconnectSuppressed) return@launchGatewayLifecycle
       val endpoint = connectedEndpoint ?: return@launchGatewayLifecycle
       connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
     }
@@ -3166,6 +3346,7 @@ class NodeRuntime private constructor(
   }
 
   fun connect(endpoint: GatewayEndpoint) {
+    preferredGatewayReconnectSuppressed = false
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchConnect(endpoint, explicitAuth = null)
   }
@@ -3174,6 +3355,7 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
+    preferredGatewayReconnectSuppressed = false
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchConnect(endpoint, explicitAuth = auth)
   }
@@ -3244,11 +3426,15 @@ class NodeRuntime private constructor(
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String =
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
-        "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected."
+        nativeText(
+          "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
+        ).source
       GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
-        "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry."
+        nativeText(
+          "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
+        ).source
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
-        "Failed: couldn't reach the secure gateway endpoint for this host."
+        nativeText("Failed: couldn't reach the secure gateway endpoint for this host.").source
     }
 
   private fun hasRecordAudioPermission(): Boolean =
@@ -3314,6 +3500,7 @@ class NodeRuntime private constructor(
 
   fun disconnect() {
     synchronized(gatewayLifecycleIntentLock) {
+      preferredGatewayReconnectSuppressed = true
       gatewayLifecycleIntentSeq.incrementAndGet()
       disconnect(retireRunState = false)
     }
@@ -3321,6 +3508,7 @@ class NodeRuntime private constructor(
 
   fun prepareForGatewaySetup() {
     synchronized(gatewayLifecycleIntentLock) {
+      preferredGatewayReconnectSuppressed = true
       gatewayLifecycleIntentSeq.incrementAndGet()
       disconnect(retireRunState = true)
     }
@@ -3642,8 +3830,7 @@ class NodeRuntime private constructor(
     // Agent selection owns every main-session consumer; switching chat alone would
     // leave Talk mode and the home canvas bound to the previous agent.
     selectedChatAgentId = normalizedAgentId
-    syncMainSessionKey(normalizedAgentId)
-    chat.switchSession(_mainSessionKey.value)
+    selectMainSessionKey(normalizedAgentId)
   }
 
   suspend fun fetchChatSessionList(
@@ -3799,10 +3986,12 @@ class NodeRuntime private constructor(
     gatewayScope: GatewayDataScope,
     method: String,
     paramsJson: String?,
+    timeoutMs: Long = 15_000,
   ): String {
+    gatewayDataRequestTimeoutObserverForTests?.invoke(method, timeoutMs)
     val response =
       gatewayDataRequestOverrideForTests?.invoke(gatewayScope.stableId, method, paramsJson)
-        ?: operatorSession.requestForEndpoint(gatewayScope.stableId, method, paramsJson)
+        ?: operatorSession.requestForEndpoint(gatewayScope.stableId, method, paramsJson, timeoutMs)
     if (!isGatewayDataScopeCurrent(gatewayScope)) throw CancellationException("gateway scope changed")
     return response
   }
@@ -3991,7 +4180,7 @@ class NodeRuntime private constructor(
         _modelCatalog.value = models
       }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _modelCatalogErrorText.value = "Could not load provider catalog." }
+      publishGatewayData(gatewayScope) { _modelCatalogErrorText.value = nativeText("Could not load provider catalog.") }
     } finally {
       publishGatewayData(gatewayScope) { _modelCatalogRefreshing.value = false }
     }
@@ -4022,9 +4211,9 @@ class NodeRuntime private constructor(
         publishProviderModelRefresh(gatewayScope, refreshGeneration) {
           _providerModelCatalogErrorText.value =
             if (err is ProviderModelConfigUnsupported) {
-              "Update your Gateway to view provider model config."
+              nativeText("Update your Gateway to view provider model config.")
             } else {
-              "Could not load provider model config."
+              nativeText("Could not load provider model config.")
             }
         }
       }
@@ -4040,7 +4229,7 @@ class NodeRuntime private constructor(
         publishProviderModelRefresh(gatewayScope, refreshGeneration) {
           if (_providerModelCatalogErrorText.value == null) {
             _providerModelCatalogErrorText.value =
-              "Provider models loaded, but readiness is unavailable."
+              nativeText("Provider models loaded, but readiness is unavailable.")
           }
         }
       }
@@ -4116,7 +4305,7 @@ class NodeRuntime private constructor(
       }
     } catch (_: Throwable) {
       publishCronRefresh(gatewayScope, refreshGeneration) {
-        _cronErrorText.value = "Could not load cron jobs."
+        _cronErrorText.value = nativeText("Could not load cron jobs.")
       }
     } finally {
       publishCronRefresh(gatewayScope, refreshGeneration) {
@@ -4129,7 +4318,7 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Connect the gateway to inspect cron jobs.")
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Connect the gateway to inspect cron jobs."))
       }
       return
     }
@@ -4139,11 +4328,11 @@ class NodeRuntime private constructor(
       cronJobDetailRequestGuard.publishIfCurrent(request) {
         _cronJobDetailState.value =
           parseGatewayCronJobDetail(root)?.let(GatewayCronJobDetailState::Loaded)
-            ?: GatewayCronJobDetailState.Error(request.id, "Gateway returned an invalid cron job.")
+            ?: GatewayCronJobDetailState.Error(request.id, nativeText("Gateway returned an invalid cron job."))
       }
     } catch (_: Throwable) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Could not load cron job.")
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Could not load cron job."))
       }
     }
   }
@@ -4155,7 +4344,7 @@ class NodeRuntime private constructor(
         _cronRunHistoryState.value =
           GatewayCronRunHistoryState.Error(
             id = request.id,
-            message = "Connect the gateway to inspect cron run history.",
+            message = nativeString("Connect the gateway to inspect cron run history."),
           )
       }
       return
@@ -4186,7 +4375,7 @@ class NodeRuntime private constructor(
           _cronRunHistoryState.value =
             GatewayCronRunHistoryState.Error(
               id = request.id,
-              message = "Could not load cron run history.",
+              message = nativeString("Could not load cron run history."),
             )
         }
       }
@@ -4203,7 +4392,7 @@ class NodeRuntime private constructor(
       _cronActionState.value =
         GatewayCronActionState.Notice(
           id = jobId,
-          message = "Cron changes require operator.admin access.",
+          message = nativeText("Cron changes require operator.admin access."),
           kind = GatewayCronNoticeKind.Error,
         )
       return
@@ -4212,7 +4401,7 @@ class NodeRuntime private constructor(
       _cronActionState.value =
         GatewayCronActionState.Notice(
           id = jobId,
-          message = "Connect the gateway to manage cron jobs.",
+          message = nativeText("Connect the gateway to manage cron jobs."),
           kind = GatewayCronNoticeKind.Error,
         )
       return
@@ -4224,7 +4413,7 @@ class NodeRuntime private constructor(
         _cronActionState.value =
           GatewayCronActionState.Notice(
             id = jobId,
-            message = "Another cron action is still finishing.",
+            message = nativeText("Another cron action is still finishing."),
             kind = GatewayCronNoticeKind.Warning,
           )
       }
@@ -4266,7 +4455,12 @@ class NodeRuntime private constructor(
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
-        val message = err.message?.trim()?.takeIf { it.isNotEmpty() } ?: "Cron action failed."
+        val message =
+          err.message
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let(::verbatimText)
+            ?: nativeText("Cron action failed.")
         completionState =
           GatewayCronActionState.Notice(
             id = jobId,
@@ -4393,14 +4587,14 @@ class NodeRuntime private constructor(
         )
       publishGatewayData(gatewayScope) { _usageSummary.value = summary }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _usageErrorText.value = "Could not load usage." }
+      publishGatewayData(gatewayScope) { _usageErrorText.value = nativeText("Could not load usage.") }
     } finally {
       publishGatewayData(gatewayScope) { _usageRefreshing.value = false }
     }
   }
 
-  private suspend fun refreshSkillsFromGateway() {
-    val gatewayScope = captureGatewayDataScope() ?: return
+  private suspend fun refreshSkillsFromGateway(): Boolean {
+    val gatewayScope = captureGatewayDataScope() ?: return false
     publishGatewayData(gatewayScope) {
       _skillsRefreshing.value = true
       _skillsErrorText.value = null
@@ -4408,7 +4602,7 @@ class NodeRuntime private constructor(
     if (!operatorConnected) {
       _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
       _skillsRefreshing.value = false
-      return
+      return false
     }
     try {
       val res = requestGatewayData(gatewayScope, "skills.status", "{}")
@@ -4423,11 +4617,328 @@ class NodeRuntime private constructor(
               ?.isNotEmpty() == true,
           skills = parseSkillSummaries(root?.get("skills") as? JsonArray),
         )
-      publishGatewayData(gatewayScope) { _skillsSummary.value = summary }
+      publishGatewayData(gatewayScope) {
+        _skillsSummary.value = summary
+      }
+      return true
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _skillsErrorText.value = "Could not load skills." }
+      publishGatewayData(gatewayScope) { _skillsErrorText.value = nativeText("Could not load skills.") }
+      return false
     } finally {
       publishGatewayData(gatewayScope) { _skillsRefreshing.value = false }
+    }
+  }
+
+  private suspend fun setSkillEnabledOnGateway(
+    skillKey: String,
+    enabled: Boolean,
+  ) {
+    val gatewayScope = captureGatewayDataScope()
+    if (gatewayScope == null || !operatorConnected) {
+      _skillsErrorText.value = nativeText("Connect the gateway to update skills.")
+      return
+    }
+    if (!operatorAdminScopeAvailable.value) {
+      _skillsErrorText.value = nativeText("This gateway connection needs operator.admin to update skills.")
+      return
+    }
+    publishGatewayData(gatewayScope) {
+      _skillMutationKeys.value = _skillMutationKeys.value + skillKey
+      _skillsErrorText.value = null
+    }
+    try {
+      requestGatewayData(gatewayScope, "skills.update", skillEnabledParams(skillKey, enabled))
+      refreshSkillsFromGateway()
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        _skillsErrorText.value =
+          nativeText(if (enabled) "Could not enable skill." else "Could not disable skill.")
+      }
+    } finally {
+      publishGatewayData(gatewayScope) {
+        _skillMutationKeys.value = _skillMutationKeys.value - skillKey
+      }
+    }
+  }
+
+  private suspend fun searchClawHubSkillsFromGateway(query: String) {
+    val normalized = query.trim()
+    val searchSeq = clawHubSkillSearchSeq.incrementAndGet()
+    clawHubSkillReviewSeq.incrementAndGet()
+    val gatewayScope = captureGatewayDataScope()
+    if (gatewayScope == null || !operatorConnected) {
+      _clawHubSkillSearchState.value =
+        GatewayClawHubSkillSearchState(
+          query = normalized,
+          errorText = nativeString("Connect the gateway to search ClawHub skills."),
+        )
+      return
+    }
+    if (!clawHubSkillMethodsAvailable.value) {
+      publishGatewayData(gatewayScope) {
+        _clawHubSkillSearchState.value =
+          _clawHubSkillSearchState.value.copy(errorText = CLAWHUB_SKILL_GATEWAY_UNAVAILABLE)
+      }
+      return
+    }
+    publishGatewayData(gatewayScope) {
+      _clawHubSkillSearchState.value =
+        _clawHubSkillSearchState.value.copy(
+          query = normalized,
+          searching = true,
+          results = emptyList(),
+          reviewingSlug = null,
+          installReview = null,
+          acknowledgeSlug = null,
+          acknowledgeVersion = null,
+          errorText = null,
+          messageText = null,
+        )
+    }
+    try {
+      val response = requestGatewayData(gatewayScope, "skills.search", clawHubSearchParams(normalized))
+      val results = parseClawHubSearchResults(response, json)
+      publishGatewayData(gatewayScope) {
+        if (clawHubSkillSearchSeq.get() == searchSeq) {
+          _clawHubSkillSearchState.value =
+            _clawHubSkillSearchState.value.copy(
+              searching = false,
+              results = results,
+              messageText = if (results.isEmpty()) "No ClawHub skills matched." else null,
+            )
+        }
+      }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        if (clawHubSkillSearchSeq.get() == searchSeq) {
+          _clawHubSkillSearchState.value =
+            _clawHubSkillSearchState.value.copy(
+              searching = false,
+              errorText = nativeString("Could not search ClawHub skills."),
+            )
+        }
+      }
+    }
+  }
+
+  private suspend fun reviewClawHubSkillInstallFromGateway(skill: GatewayClawHubSkillSummary) {
+    val reviewSeq = clawHubSkillReviewSeq.incrementAndGet()
+    val gatewayScope = captureGatewayDataScope()
+    if (gatewayScope == null || !operatorConnected) {
+      _clawHubSkillSearchState.value =
+        _clawHubSkillSearchState.value.copy(
+          errorText = nativeString("Connect the gateway to inspect ClawHub skills."),
+        )
+      return
+    }
+    if (!clawHubSkillMethodsAvailable.value) {
+      publishGatewayData(gatewayScope) {
+        _clawHubSkillSearchState.value =
+          _clawHubSkillSearchState.value.copy(errorText = CLAWHUB_SKILL_GATEWAY_UNAVAILABLE)
+      }
+      return
+    }
+    publishGatewayData(gatewayScope) {
+      _clawHubSkillSearchState.value =
+        _clawHubSkillSearchState.value.copy(
+          reviewingSlug = skill.slug,
+          installReview = null,
+          acknowledgeSlug = null,
+          acknowledgeVersion = null,
+          errorText = null,
+          messageText = null,
+        )
+    }
+    try {
+      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.slug))
+      val review = parseClawHubInstallReview(response, skill, json)
+      publishGatewayData(gatewayScope) {
+        if (clawHubSkillReviewSeq.get() == reviewSeq) {
+          _clawHubSkillSearchState.value =
+            _clawHubSkillSearchState.value.copy(
+              reviewingSlug = null,
+              installReview = review,
+              errorText =
+                if (review == null) {
+                  "ClawHub did not return an installable version for ${skill.slug}."
+                } else {
+                  null
+                },
+            )
+        }
+      }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        if (clawHubSkillReviewSeq.get() == reviewSeq) {
+          _clawHubSkillSearchState.value =
+            _clawHubSkillSearchState.value.copy(
+              reviewingSlug = null,
+              errorText =
+                nativeString("Could not load ClawHub details for \${skill.slug}.", skill.slug),
+            )
+        }
+      }
+    }
+  }
+
+  private suspend fun installClawHubSkillFromGateway(
+    slug: String,
+    acknowledgeClawHubRisk: Boolean,
+    version: String?,
+  ) {
+    val gatewayScope = captureGatewayDataScope()
+    if (gatewayScope == null || !operatorConnected) {
+      _clawHubSkillSearchState.value =
+        _clawHubSkillSearchState.value.copy(
+          errorText = nativeString("Connect the gateway to install ClawHub skills."),
+        )
+      return
+    }
+    if (!clawHubSkillMethodsAvailable.value) {
+      publishGatewayData(gatewayScope) {
+        _clawHubSkillSearchState.value =
+          _clawHubSkillSearchState.value.copy(errorText = CLAWHUB_SKILL_GATEWAY_UNAVAILABLE)
+      }
+      return
+    }
+    if (!operatorAdminScopeAvailable.value) {
+      publishGatewayData(gatewayScope) {
+        _clawHubSkillSearchState.value =
+          _clawHubSkillSearchState.value.copy(
+            errorText =
+              nativeString(
+                "This gateway connection needs operator.admin to install ClawHub skills.",
+              ),
+          )
+      }
+      return
+    }
+    clawHubSkillInstallBeforeClaimObserverForTests?.invoke()
+    val claimed =
+      clawHubSkillInstallMutex.withLock {
+        var published = false
+        // Gateway switches reset this shared UI state while installs can wait
+        // on the mutex. Claim under the scope lock so stale work cannot leak in.
+        publishGatewayData(gatewayScope) {
+          val current = _clawHubSkillSearchState.value
+          if (slug !in current.installingSlugs) {
+            _clawHubSkillSearchState.value =
+              current.copy(installingSlugs = current.installingSlugs + slug)
+            published = true
+          }
+        }
+        published
+      }
+    if (!claimed) return
+    val attemptedVersion = version?.trim()?.takeIf(String::isNotEmpty)
+    publishGatewayData(gatewayScope) {
+      _clawHubSkillSearchState.value =
+        _clawHubSkillSearchState.value.copy(
+          installReview = null,
+          acknowledgeSlug = null,
+          acknowledgeVersion = null,
+          errorText = null,
+          messageText = null,
+        )
+    }
+    try {
+      val response =
+        requestGatewayData(
+          gatewayScope,
+          "skills.install",
+          clawHubInstallParams(slug, attemptedVersion, acknowledgeClawHubRisk),
+          timeoutMs = CLAWHUB_INSTALL_REQUEST_TIMEOUT_MS,
+        )
+      val root = json.parseToJsonElement(response).asObjectOrNull()
+      val message =
+        root
+          ?.get("message")
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf(String::isNotEmpty)
+      val warning =
+        root
+          ?.get("warning")
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf(String::isNotEmpty)
+      val refreshed = refreshSkillsFromGateway()
+      publishGatewayData(gatewayScope) {
+        _clawHubSkillSearchState.value =
+          _clawHubSkillSearchState.value.copy(
+            messageText =
+              formatClawHubInstallMessage(
+                message ?: "Installed $slug.",
+                listOfNotNull(
+                  warning,
+                  if (refreshed) null else "Installed, but the skills list could not be refreshed.",
+                ).joinToString("\n").ifBlank { null },
+              ),
+          )
+      }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: GatewayRequestOutcomeUnknown) {
+      val confirmed = refreshAndConfirmClawHubInstall(gatewayScope, slug, attemptedVersion)
+      publishGatewayData(gatewayScope) {
+        _clawHubSkillSearchState.value =
+          _clawHubSkillSearchState.value.copy(
+            errorText = if (confirmed) null else clawHubInstallOutcomeUnknownMessage(slug),
+            messageText = if (confirmed) "Installed $slug." else null,
+          )
+      }
+    } catch (err: GatewayRequestRejected) {
+      val confirmed = refreshAndConfirmClawHubInstall(gatewayScope, slug, attemptedVersion)
+      val rejection = if (confirmed) null else clawHubInstallRejection(err.gatewayError, attemptedVersion)
+      publishGatewayData(gatewayScope) {
+        _clawHubSkillSearchState.value =
+          _clawHubSkillSearchState.value.copy(
+            acknowledgeSlug = if (rejection?.requiresAcknowledgement == true) slug else null,
+            acknowledgeVersion = rejection?.acknowledgeVersion,
+            errorText = rejection?.let { formatClawHubInstallMessage(it.message, it.warning) },
+            messageText = if (confirmed) "Installed $slug." else null,
+          )
+      }
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        _clawHubSkillSearchState.value =
+          _clawHubSkillSearchState.value.copy(
+            errorText = nativeString("Could not install \${slug} from ClawHub.", slug),
+          )
+      }
+    } finally {
+      releaseClawHubInstallClaim(slug, gatewayScope)
+    }
+  }
+
+  private suspend fun refreshAndConfirmClawHubInstall(
+    gatewayScope: GatewayDataScope,
+    slug: String,
+    version: String?,
+  ): Boolean {
+    val exactVersion = version ?: return false
+    if (!refreshSkillsFromGateway() || !isGatewayDataScopeCurrent(gatewayScope)) return false
+    return isClawHubSkillInstalled(_skillsSummary.value.skills, slug, exactVersion)
+  }
+
+  private suspend fun releaseClawHubInstallClaim(
+    slug: String,
+    gatewayScope: GatewayDataScope? = null,
+  ) {
+    clawHubSkillInstallMutex.withLock {
+      val release = {
+        _clawHubSkillSearchState.value =
+          _clawHubSkillSearchState.value.copy(
+            installingSlugs = _clawHubSkillSearchState.value.installingSlugs - slug,
+          )
+      }
+      if (gatewayScope == null) release() else publishGatewayData(gatewayScope, release)
     }
   }
 
@@ -4438,7 +4949,7 @@ class NodeRuntime private constructor(
     if (gatewayScope == null || !operatorConnected) {
       _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(agentId = requestAgentId, proposals = emptyList())
       _skillWorkshopRefreshing.value = false
-      _skillWorkshopErrorText.value = "Connect the gateway to load Skill Workshop proposals."
+      _skillWorkshopErrorText.value = nativeText("Connect the gateway to load Skill Workshop proposals.")
       return
     }
     publishGatewayData(gatewayScope) {
@@ -4478,7 +4989,7 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (skillWorkshopListSeq.get() == listSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = "Could not load Skill Workshop proposals."
+          _skillWorkshopErrorText.value = nativeText("Could not load Skill Workshop proposals.")
         }
       }
     } finally {
@@ -4498,7 +5009,7 @@ class NodeRuntime private constructor(
     val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
     val gatewayScope = captureGatewayDataScope()
     if (gatewayScope == null || !operatorConnected) {
-      _skillWorkshopErrorText.value = "Connect the gateway to inspect Skill Workshop proposals."
+      _skillWorkshopErrorText.value = nativeText("Connect the gateway to inspect Skill Workshop proposals.")
       return
     }
     var inspectStarted = false
@@ -4550,7 +5061,7 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (skillWorkshopInspectSeq.get() == inspectSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = "Could not inspect Skill Workshop proposal."
+          _skillWorkshopErrorText.value = nativeText("Could not inspect Skill Workshop proposal.")
         }
       }
     } finally {
@@ -4570,12 +5081,12 @@ class NodeRuntime private constructor(
     var mutationSeq = 0L
     val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
     if (!operatorAdminScopeAvailable.value) {
-      _skillWorkshopErrorText.value = "Skill Workshop proposal actions require operator.admin scope."
+      _skillWorkshopErrorText.value = nativeText("Skill Workshop proposal actions require operator.admin scope.")
       return
     }
     val gatewayScope = captureGatewayDataScope()
     if (gatewayScope == null || !operatorConnected) {
-      _skillWorkshopErrorText.value = "Connect the gateway to update Skill Workshop proposals."
+      _skillWorkshopErrorText.value = nativeText("Connect the gateway to update Skill Workshop proposals.")
       return
     }
     var mutationStarted = false
@@ -4625,9 +5136,7 @@ class NodeRuntime private constructor(
             _skillWorkshopNoticeText.value = action.notice
             mutationConfirmed = true
           } else {
-            val statusLabel = updatedProposal?.status?.takeIf { it.isNotBlank() } ?: "unknown"
-            _skillWorkshopErrorText.value =
-              "Gateway returned status '$statusLabel' after ${action.verb}."
+            _skillWorkshopErrorText.value = skillWorkshopUnexpectedStatusText(updatedProposal?.status, action)
           }
         }
       }
@@ -4646,7 +5155,7 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = "Could not ${action.verb} Skill Workshop proposal."
+          _skillWorkshopErrorText.value = skillWorkshopActionFailureText(action)
         }
       }
     } finally {
@@ -4762,7 +5271,7 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
-          _nodesDevicesErrorText.value = "Could not load nodes and devices."
+          _nodesDevicesErrorText.value = nativeText("Could not load nodes and devices.")
         }
       }
     } finally {
@@ -4985,7 +5494,13 @@ class NodeRuntime private constructor(
           val currentRows = _execApprovals.value
           if (currentRows.none { it.id == id && it.resolvingDecision == null }) return@synchronized
           if (pendingExecApprovalWrites.containsKey(id)) return@synchronized
-          val pendingWrite = PendingExecApprovalWrite(gatewayScope.stableId, id, decision)
+          val pendingWrite =
+            PendingExecApprovalWrite(
+              gatewayScope.stableId,
+              id,
+              decision,
+              currentRows.firstOrNull { it.id == id }?.createdAtMs,
+            )
           pendingExecApprovalWrites[id] = pendingWrite
           registeredWrite = pendingWrite
           invalidateExecApprovalRefreshes()
@@ -5201,7 +5716,9 @@ class NodeRuntime private constructor(
           gatewayScope = gatewayScope,
           methodsSnapshot = methodsSnapshot,
           id = pendingWrite.id,
-          createdAtMs = _execApprovals.value.firstOrNull { it.id == pendingWrite.id }?.createdAtMs,
+          createdAtMs =
+            pendingWrite.createdAtMs
+              ?: _execApprovals.value.firstOrNull { it.id == pendingWrite.id }?.createdAtMs,
         )
       } catch (_: Throwable) {
         return
@@ -5263,6 +5780,7 @@ class NodeRuntime private constructor(
   private fun replaceGatewayMethods(methods: Set<String>) {
     synchronized(gatewayMethodsLock) {
       gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(methods)
+      _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(methods)
       gatewayMethodsEpoch += 1
     }
   }
@@ -5411,7 +5929,7 @@ class NodeRuntime private constructor(
         )
       publishGatewayData(gatewayScope) { _channelsSummary.value = summary }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _channelsErrorText.value = "Could not load channels." }
+      publishGatewayData(gatewayScope) { _channelsErrorText.value = nativeText("Could not load channels.") }
     } finally {
       publishGatewayData(gatewayScope) { _channelsRefreshing.value = false }
     }
@@ -5441,7 +5959,7 @@ class NodeRuntime private constructor(
         )
       publishGatewayData(gatewayScope) { _dreamingSummary.value = summary }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _dreamingErrorText.value = "Could not load dreaming." }
+      publishGatewayData(gatewayScope) { _dreamingErrorText.value = nativeText("Could not load dreaming.") }
     } finally {
       publishGatewayData(gatewayScope) { _dreamingRefreshing.value = false }
     }
@@ -5478,7 +5996,7 @@ class NodeRuntime private constructor(
         )
       publishGatewayData(gatewayScope) { _healthLogsSummary.value = summary }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _healthLogsErrorText.value = "Could not load gateway logs." }
+      publishGatewayData(gatewayScope) { _healthLogsErrorText.value = nativeText("Could not load gateway logs.") }
     } finally {
       publishGatewayData(gatewayScope) { _healthLogsRefreshing.value = false }
     }
@@ -5613,6 +6131,7 @@ class NodeRuntime private constructor(
         val name = obj["name"].asStringOrNull()?.trim().orEmpty()
         if (name.isEmpty()) return@mapNotNull null
         val missing = obj["missing"].asObjectOrNull()
+        val clawHub = obj["clawhub"].asObjectOrNull()
         GatewaySkillSummary(
           skillKey = obj["skillKey"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: name,
           name = name,
@@ -5622,9 +6141,23 @@ class NodeRuntime private constructor(
           disabled = obj.boolean("disabled"),
           eligible = obj.boolean("eligible"),
           blockedByAllowlist = obj.boolean("blockedByAllowlist"),
+          blockedByAgentFilter = obj.boolean("blockedByAgentFilter"),
           bundled = obj.boolean("bundled"),
           missingCount = skillMissingCount(missing),
           installCount = (obj["install"] as? JsonArray)?.size ?: 0,
+          clawHubSlug =
+            clawHub
+              ?.get("slug")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf(String::isNotEmpty),
+          clawHubValid = clawHub?.boolean("valid") == true,
+          clawHubInstalledVersion =
+            clawHub
+              ?.get("installedVersion")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf(String::isNotEmpty),
         )
       }.orEmpty()
 
@@ -5902,29 +6435,9 @@ class NodeRuntime private constructor(
     val body = raw.substringAfter("<!-- openclaw:dreaming:diary:start -->", raw).substringBefore("<!-- openclaw:dreaming:diary:end -->")
     return body
       .split(Regex("\\n---\\n"))
-      .mapNotNull(::parseDreamDiaryEntry)
+      .mapNotNull(::parseGatewayDreamDiaryEntry)
       .asReversed()
       .take(4)
-  }
-
-  private fun parseDreamDiaryEntry(block: String): GatewayDreamDiaryEntry? {
-    val lines = block.trim().lines()
-    val date =
-      lines
-        .firstOrNull { line ->
-          val trimmed = line.trim()
-          trimmed.length > 2 && trimmed.startsWith("*") && trimmed.endsWith("*")
-        }?.trim()
-        ?.trim('*')
-        ?.takeIf { it.isNotEmpty() }
-    val text =
-      lines
-        .map { it.trim() }
-        .filter { line -> line.isNotEmpty() && !line.startsWith("#") && !line.startsWith("<!--") && !(line.startsWith("*") && line.endsWith("*")) }
-        .joinToString(" ")
-        .replace(Regex("\\s+"), " ")
-        .takeIf { it.isNotEmpty() }
-    return text?.let { GatewayDreamDiaryEntry(date = date ?: "Dream", text = it) }
   }
 
   private fun parseStringArray(items: JsonArray?): List<String> =
@@ -5932,27 +6445,46 @@ class NodeRuntime private constructor(
       ?.mapNotNull { item -> item.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } }
       .orEmpty()
 
-  private fun cronScheduleLabel(schedule: JsonObject?): String =
+  private fun cronScheduleLabel(schedule: JsonObject?): NativeText =
     when (schedule?.get("kind").asStringOrNull()) {
-      "at" -> "One time"
-      "every" -> schedule.long("everyMs")?.let(::formatCronInterval) ?: "Repeating"
+      "at" -> nativeText("One time")
+      "every" -> schedule.long("everyMs")?.let(::cronIntervalText) ?: nativeText("Repeating")
       "cron" ->
         schedule
           ?.get("expr")
           .asStringOrNull()
           ?.trim()
-          ?.takeIf { it.isNotEmpty() } ?: "Cron"
-      else -> "Scheduled"
+          ?.takeIf { it.isNotEmpty() }
+          ?.let(::verbatimText)
+          ?: nativeText("Cron")
+      else -> nativeText("Scheduled")
     }
 
-  private fun cronPayloadPreview(payload: JsonObject?): String {
+  private fun cronIntervalText(everyMs: Long): NativeText {
+    val minutes = everyMs / 60_000L
+    val hours = minutes / 60L
+    val days = hours / 24L
+    return when {
+      days >= 1 && hours % 24L == 0L -> nativeText("Every \${days}d", days)
+      hours >= 1 && minutes % 60L == 0L -> nativeText("Every \${hours}h", hours)
+      minutes >= 1 -> nativeText("Every \${minutes}m", minutes)
+      else -> nativeText("Repeating")
+    }
+  }
+
+  private fun cronPayloadPreview(payload: JsonObject?): NativeText {
     val text =
       when (payload?.get("kind").asStringOrNull()) {
         "systemEvent" -> payload?.get("text").asStringOrNull()
         "agentTurn" -> payload?.get("message").asStringOrNull()
         else -> null
       }
-    return text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() } ?: "No prompt"
+    return text
+      ?.trim()
+      ?.replace(Regex("\\s+"), " ")
+      ?.takeIf { it.isNotEmpty() }
+      ?.let(::verbatimText)
+      ?: nativeText("No prompt")
   }
 
   private fun updateHomeCanvasState() {
@@ -5969,7 +6501,7 @@ class NodeRuntime private constructor(
     val state = resolveHomeCanvasGatewayState()
     val gatewayName = normalized(_serverName.value)
     val gatewayAddress = normalized(_remoteAddress.value)
-    val gatewayLabel = gatewayName ?: gatewayAddress ?: "Gateway"
+    val gatewayLabel = gatewayName ?: gatewayAddress ?: nativeString("Gateway")
     val activeAgentId = resolveActiveAgentId()
     val agents = homeCanvasAgents(activeAgentId)
 
@@ -5977,47 +6509,47 @@ class NodeRuntime private constructor(
       HomeCanvasGatewayState.Connected ->
         HomeCanvasPayload(
           gatewayState = "connected",
-          eyebrow = "Connected to $gatewayLabel",
-          title = "Your agents are ready",
+          eyebrow = nativeString("Connected to \$gatewayLabel", gatewayLabel),
+          title = nativeString("Your agents are ready"),
           subtitle =
-            "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
+            nativeString("This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep."),
           gatewayLabel = gatewayLabel,
           activeAgentName = resolveActiveAgentName(activeAgentId),
           activeAgentBadge = agents.firstOrNull { it.isActive }?.badge ?: "OC",
-          activeAgentCaption = "Selected on this phone",
+          activeAgentCaption = nativeString("Selected on this phone"),
           agentCount = agents.size,
           agents = agents.take(6),
-          footer = "The overview refreshes on reconnect and when this screen opens.",
+          footer = nativeString("The overview refreshes on reconnect and when this screen opens."),
         )
       HomeCanvasGatewayState.Connecting ->
         HomeCanvasPayload(
           gatewayState = "connecting",
-          eyebrow = "Reconnecting",
-          title = "OpenClaw is syncing back up",
+          eyebrow = nativeString("Reconnecting"),
+          title = nativeString("OpenClaw is syncing back up"),
           subtitle =
-            "The gateway session is coming back online. Agent shortcuts should settle automatically in a moment.",
+            nativeString("The gateway session is coming back online. Agent shortcuts should settle automatically in a moment."),
           gatewayLabel = gatewayLabel,
           activeAgentName = resolveActiveAgentName(activeAgentId),
           activeAgentBadge = "OC",
-          activeAgentCaption = "Gateway session in progress",
+          activeAgentCaption = nativeString("Gateway session in progress"),
           agentCount = agents.size,
           agents = agents.take(4),
-          footer = "If the gateway is reachable, reconnect should complete without intervention.",
+          footer = nativeString("If the gateway is reachable, reconnect should complete without intervention."),
         )
       HomeCanvasGatewayState.Error, HomeCanvasGatewayState.Offline ->
         HomeCanvasPayload(
           gatewayState = if (state == HomeCanvasGatewayState.Error) "error" else "offline",
-          eyebrow = "Welcome to OpenClaw",
-          title = "Your phone stays quiet until it is needed",
+          eyebrow = nativeString("Welcome to OpenClaw"),
+          title = nativeString("Your phone stays quiet until it is needed"),
           subtitle =
-            "Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.",
+            nativeString("Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops."),
           gatewayLabel = gatewayLabel,
-          activeAgentName = "Main",
+          activeAgentName = nativeString("Main"),
           activeAgentBadge = "OC",
-          activeAgentCaption = "Connect to load your agents",
+          activeAgentCaption = nativeString("Connect to load your agents"),
           agentCount = agents.size,
           agents = agents.take(4),
-          footer = "When connected, the gateway can wake the phone with a silent push instead of holding an always-on session.",
+          footer = nativeString("When connected, the gateway can wake the phone with a silent push instead of holding an always-on session."),
         )
     }
   }
@@ -6049,7 +6581,7 @@ class NodeRuntime private constructor(
       }
       return activeAgentId
     }
-    return gatewayAgents.value.firstOrNull()?.let { normalized(it.name) ?: it.id } ?: "Main"
+    return gatewayAgents.value.firstOrNull()?.let { normalized(it.name) ?: it.id } ?: nativeString("Main")
   }
 
   private fun homeCanvasAgents(activeAgentId: String): List<HomeCanvasAgentCard> {
@@ -6064,9 +6596,9 @@ class NodeRuntime private constructor(
           badge = homeCanvasBadge(agent),
           caption =
             when {
-              isActive -> "Active on this phone"
-              isDefault -> "Default agent"
-              else -> "Ready"
+              isActive -> nativeString("Active on this phone")
+              isDefault -> nativeString("Default agent")
+              else -> nativeString("Ready")
             },
           isActive = isActive,
         )
@@ -6286,8 +6818,8 @@ data class GatewayCronJobSummary(
   val id: String,
   val name: String,
   val enabled: Boolean,
-  val scheduleLabel: String,
-  val promptPreview: String,
+  val scheduleLabel: NativeText,
+  val promptPreview: NativeText,
   val nextRunAtMs: Long?,
   val lastRunStatus: String?,
 )
@@ -6356,9 +6888,13 @@ data class GatewaySkillSummary(
   val disabled: Boolean,
   val eligible: Boolean,
   val blockedByAllowlist: Boolean,
+  val blockedByAgentFilter: Boolean,
   val bundled: Boolean,
   val missingCount: Int,
   val installCount: Int,
+  val clawHubSlug: String? = null,
+  val clawHubValid: Boolean = false,
+  val clawHubInstalledVersion: String? = null,
 )
 
 data class GatewayNodesDevicesSummary(
@@ -6597,9 +7133,34 @@ data class GatewayDreamingSummary(
 )
 
 data class GatewayDreamDiaryEntry(
-  val date: String,
+  val date: NativeText,
   val text: String,
 )
+
+internal fun parseGatewayDreamDiaryEntry(block: String): GatewayDreamDiaryEntry? {
+  val lines = block.trim().lines()
+  val date =
+    lines
+      .firstOrNull { line ->
+        val trimmed = line.trim()
+        trimmed.length > 2 && trimmed.startsWith("*") && trimmed.endsWith("*")
+      }?.trim()
+      ?.trim('*')
+      ?.takeIf { it.isNotEmpty() }
+  val text =
+    lines
+      .map { it.trim() }
+      .filter { line -> line.isNotEmpty() && !line.startsWith("#") && !line.startsWith("<!--") && !(line.startsWith("*") && line.endsWith("*")) }
+      .joinToString(" ")
+      .replace(Regex("\\s+"), " ")
+      .takeIf { it.isNotEmpty() }
+  return text?.let {
+    GatewayDreamDiaryEntry(
+      date = date?.let(::verbatimText) ?: nativeText("Dream"),
+      text = it,
+    )
+  }
+}
 
 data class GatewayHealthLogsSummary(
   val fileName: String? = null,

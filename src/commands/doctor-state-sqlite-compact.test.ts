@@ -10,6 +10,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
 import {
   type DoctorStateSqliteCompactReport,
   runDoctorStateSqliteCompact,
@@ -46,11 +47,7 @@ function seedStateDatabase(params: {
     database.exec(`
       PRAGMA auto_vacuum = NONE;
       PRAGMA journal_mode = WAL;
-      CREATE TABLE schema_meta (
-        meta_key TEXT PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL
-      );
+      ${OPENCLAW_STATE_SCHEMA_SQL}
       CREATE TABLE compact_payload (
         id INTEGER PRIMARY KEY,
         payload TEXT NOT NULL
@@ -58,7 +55,19 @@ function seedStateDatabase(params: {
       PRAGMA user_version = ${schemaVersion};
     `);
     database
-      .prepare("INSERT INTO schema_meta (meta_key, role, schema_version) VALUES (?, ?, ?)")
+      .prepare(
+        `
+          INSERT INTO schema_meta (
+            meta_key,
+            role,
+            schema_version,
+            agent_id,
+            app_version,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, ?, NULL, NULL, 1, 1)
+        `,
+      )
       .run("primary", params.role ?? "global", schemaVersion);
     if (params.withBloat) {
       const insert = database.prepare("INSERT INTO compact_payload (payload) VALUES (?)");
@@ -237,7 +246,10 @@ describe("runDoctorStateSqliteCompact", () => {
       reader.exec("BEGIN; SELECT COUNT(*) FROM compact_payload;");
       writer.exec("INSERT INTO compact_payload (payload) VALUES ('newer wal frame');");
 
-      expect(() => runDoctorStateSqliteCompact({ env })).toThrow(/checkpoint remained busy/);
+      // Exercise the real busy checkpoint result without waiting the production lock timeout.
+      expect(() => runDoctorStateSqliteCompact({ env }, { busyTimeoutMs: 0 })).toThrow(
+        /checkpoint remained busy/,
+      );
       expect(readPragma(writer, "auto_vacuum")).toBe(0);
     } finally {
       reader.exec("ROLLBACK;");
@@ -280,6 +292,54 @@ describe("runDoctorStateSqliteCompact", () => {
           }),
         ]),
       );
+    } finally {
+      after.close();
+    }
+  });
+
+  it("rejects foreign-key violations before mutating the database", () => {
+    const env = createStateEnv();
+    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+    const sqlite = requireNodeSqlite();
+    const corrupted = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      corrupted.exec(`
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE compact_parents (id INTEGER PRIMARY KEY);
+        CREATE TABLE compact_children (
+          id INTEGER PRIMARY KEY,
+          parent_id INTEGER NOT NULL REFERENCES compact_parents(id)
+        );
+        INSERT INTO compact_children (id, parent_id) VALUES (1, 99);
+      `);
+      expect(corrupted.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      expect(corrupted.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(corrupted.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "compact_children",
+        rowid: 1,
+        parent: "compact_parents",
+        fkid: 0,
+      });
+    } finally {
+      corrupted.close();
+    }
+
+    expect(() => runDoctorStateSqliteCompact({ env })).toThrow(
+      /foreign_key_check failed.*compact_children row 1 references compact_parents \(foreign key 0\)/iu,
+    );
+
+    const after = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(readPragma(after, "auto_vacuum")).toBe(0);
+      expect(readPragma(after, "freelist_count")).toBeGreaterThan(0);
+      expect(after.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "compact_children",
+        rowid: 1,
+        parent: "compact_parents",
+        fkid: 0,
+      });
     } finally {
       after.close();
     }
