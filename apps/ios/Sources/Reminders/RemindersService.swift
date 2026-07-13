@@ -92,6 +92,10 @@ final class RemindersService: RemindersServicing {
             reminder.dueDateComponents = Calendar.current.dateComponents(
                 [.year, .month, .day, .hour, .minute, .second],
                 from: dueDate)
+            // Attach an alarm so iOS fires a notification at the due time.
+            // dueDateComponents alone only sets the deadline; EKAlarm is required
+            // for lock-screen/banner alerts.
+            reminder.addAlarm(EKAlarm(absoluteDate: dueDate))
         }
 
         try store.save(reminder, commit: true)
