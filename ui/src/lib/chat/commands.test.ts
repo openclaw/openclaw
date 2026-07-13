@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildSlashCommandsFromEntries,
@@ -13,10 +13,6 @@ import {
 afterEach(() => {
   resetSlashCommandsForTest();
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {

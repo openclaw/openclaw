@@ -1,5 +1,6 @@
 // Control UI chat domain owns pure slash command rules.
 
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
@@ -265,12 +266,6 @@ function normalizeSlashIdentifier(raw: string): string | null {
 function clampText(value: unknown, maxLength: number): string {
   const text = typeof value === "string" ? value : "";
   return text.length > maxLength ? truncateUtf16Safe(text, maxLength) : text;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function getEntryArgs(
