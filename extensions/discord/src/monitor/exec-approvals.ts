@@ -10,7 +10,7 @@ import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { buildExecApprovalCustomId, parseExecApprovalData } from "../approval-custom-id.js";
+import { parseExecApprovalData } from "../approval-custom-id.js";
 import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
   formatDiscordApprovalDisplayValue,
