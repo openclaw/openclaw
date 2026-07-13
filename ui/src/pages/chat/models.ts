@@ -12,13 +12,16 @@ type ModelCatalogCacheEntry = {
 
 const modelCatalogCache = new WeakMap<GatewayBrowserClient, ModelCatalogCacheEntry>();
 
-export async function loadModels(client: GatewayBrowserClient): Promise<ModelCatalogEntry[]> {
+export async function loadModels(
+  client: GatewayBrowserClient,
+  opts?: { refresh?: boolean },
+): Promise<ModelCatalogEntry[]> {
   const cached = modelCatalogCache.get(client);
   const now = Date.now();
-  if (cached?.models && cached.expiresAt > now) {
+  if (!opts?.refresh && cached?.models && cached.expiresAt > now) {
     return cached.models;
   }
-  if (cached?.inFlight) {
+  if (!opts?.refresh && cached?.inFlight) {
     return cached.inFlight;
   }
 
