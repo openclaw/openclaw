@@ -26,7 +26,7 @@ class BrowserNodeControlHostUnavailableError extends Error {
   }
 }
 
-export type BrowserProxyRequest = ((params: {
+type BrowserProxyRequest = ((params: {
   method: string;
   path: string;
   query?: Record<string, string | number | boolean | undefined>;
