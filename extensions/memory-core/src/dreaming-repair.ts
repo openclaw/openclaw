@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   clearMemoryCoreWorkspaceNamespace,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
@@ -227,6 +228,60 @@ function isHeartbeatDerivedAssistantLine(lines: string[], source: CorpusSourceRe
   return false;
 }
 
+async function resolveStorePathForAgent(
+  workspaceRoot: string,
+  agentId: string,
+): Promise<string | undefined> {
+  const candidates = [
+    path.join(workspaceRoot, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+    path.join(workspaceRoot, "agents", agentId, "sessions", "sessions.json"),
+    path.join(workspaceRoot, "agents", agentId, "sessions.json"),
+  ];
+  for (const candidate of candidates) {
+    const exists = await fs
+      .access(candidate)
+      .then(() => true)
+      .catch(() => false);
+    if (exists) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+async function loadTranscriptLinesFromSqlite(
+  agentId: string,
+  sessionPath: string,
+  workspaceRoot: string,
+): Promise<string[] | null> {
+  const sessionId = path
+    .basename(sessionPath)
+    .replace(/\.jsonl$/i, "")
+    .trim();
+  if (!sessionId) {
+    return null;
+  }
+  const storePath = await resolveStorePathForAgent(workspaceRoot, agentId);
+  if (!storePath) {
+    return null;
+  }
+  try {
+    const events = loadTranscriptEventsSync({ agentId, sessionId, storePath });
+    if (events.length === 0) {
+      return null;
+    }
+    // Serialize all events to preserve original event positions.
+    // Corpus `#L<n>` references identify positions in the original
+    // transcript event stream. Non-message events (metadata, compaction,
+    // model-change) are interspersed between messages in real SQLite
+    // sessions. The downstream heartbeat matcher handles non-message
+    // records gracefully via parseMessageRecord returning null.
+    return events.map((event) => JSON.stringify(event));
+  } catch {
+    return null;
+  }
+}
+
 async function findHeartbeatContaminatedCorpusLines(
   workspaceDir: string,
 ): Promise<HeartbeatContaminatedCorpusLine[]> {
@@ -253,18 +308,32 @@ async function findHeartbeatContaminatedCorpusLines(
       // Corpus references use logical session paths. File-backed sessions
       // produce paths ending in .jsonl (e.g. "sessions/main/abc.jsonl").
       // SQLite-backed sessions produce paths without .jsonl
-      // (e.g. "sessions/main/abc-123"). For SQLite logical paths, try
-      // appending .jsonl to find a migrated file; if none exists, the
-      // session is SQLite-only and was created after the heartbeat fix,
-      // so it cannot contain pre-fix contamination.
+      // (e.g. "sessions/main/abc-123"). Try the filesystem first; if the
+      // file doesn't exist or is empty, fall back to the SQLite transcript
+      // store via the canonical loadTranscriptEventsSync reader.
       const hasJsonlExtension = source.sessionPath.toLowerCase().endsWith(".jsonl");
-      const transcriptPath = hasJsonlExtension
-        ? path.join(workspaceRoot, "agents", source.agentId, source.sessionPath)
-        : path.join(workspaceRoot, "agents", source.agentId, `${source.sessionPath}.jsonl`);
+      const transcriptPath = path.join(
+        workspaceRoot,
+        "agents",
+        source.agentId,
+        hasJsonlExtension ? source.sessionPath : `${source.sessionPath}.jsonl`,
+      );
       let transcriptLines = transcriptCache.get(transcriptPath);
       if (!transcriptLines) {
         const transcriptContent = await fs.readFile(transcriptPath, "utf-8").catch(() => "");
         transcriptLines = transcriptContent.length > 0 ? transcriptContent.split(/\r?\n/) : [];
+        // Filesystem read failed or returned empty. For non-.jsonl paths
+        // (SQLite logical paths), try the canonical SQLite reader.
+        if (transcriptLines.length === 0 && !hasJsonlExtension) {
+          const sqliteLines = await loadTranscriptLinesFromSqlite(
+            source.agentId,
+            source.sessionPath,
+            workspaceRoot,
+          );
+          if (sqliteLines) {
+            transcriptLines = sqliteLines;
+          }
+        }
         transcriptCache.set(transcriptPath, transcriptLines);
       }
       if (transcriptLines.length === 0) {

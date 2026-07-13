@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { appendSqliteTranscriptMessage } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { auditDreamingArtifacts, repairDreamingArtifacts } from "./dreaming-repair.js";
 import {
@@ -476,6 +477,79 @@ describe("dreaming artifact repair", () => {
     });
     expect(seenEntries.some((entry) => entry.key === "main:heartbeat-session:0")).toBe(false);
     expect(seenEntries.some((entry) => entry.key === "main:other:0")).toBe(true);
+  });
+
+  it("detects heartbeat-derived corpus lines from SQLite-backed sessions", async () => {
+    const workspaceDir = await createWorkspace();
+    const sessionsDir = path.join(workspaceDir, "..", "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionId = "heartbeat-sqlite";
+
+    // Seed a SQLite-backed session with heartbeat user + assistant ack
+    await appendSqliteTranscriptMessage(
+      {
+        agentId: "main",
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        storePath,
+      },
+      {
+        message: {
+          role: "user",
+          content: "[OpenClaw heartbeat poll]",
+        },
+      },
+    );
+    await appendSqliteTranscriptMessage(
+      {
+        agentId: "main",
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        storePath,
+      },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Heartbeat received. Main is active." }],
+        },
+      },
+    );
+
+    // Create a corpus ref WITHOUT .jsonl extension (SQLite logical path format)
+    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams", "session-corpus"), {
+      recursive: true,
+    });
+    const corpusPath = path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "session-corpus",
+      "2026-04-11.txt",
+    );
+    await fs.writeFile(
+      corpusPath,
+      [
+        `[main/sessions/${sessionId}#L3] Heartbeat received. Main is active.`,
+        `[main/sessions/${sessionId}#L2] [OpenClaw heartbeat poll]`,
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const audit = await auditDreamingArtifacts({ workspaceDir });
+
+    expect(audit.heartbeatContaminatedSessionCorpusFileCount).toBe(1);
+    expect(audit.heartbeatContaminatedSessionCorpusLineCount).toBe(1);
+    expect(
+      audit.issues.some((issue) => issue.code === "dreaming-session-corpus-heartbeat-derived"),
+    ).toBe(true);
+
+    const repair = await repairDreamingArtifacts({ workspaceDir });
+
+    expect(repair.changed).toBe(true);
+    expect(repair.removedHeartbeatDerivedLines).toBe(1);
+    const rewritten = await fs.readFile(corpusPath, "utf-8");
+    expect(rewritten).not.toContain("Heartbeat received. Main is active.");
   });
 
   it("does not remove fallback sentence by text without heartbeat provenance linkage", async () => {
