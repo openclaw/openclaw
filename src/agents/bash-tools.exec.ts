@@ -41,7 +41,6 @@ import {
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
-import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import {
@@ -59,13 +58,15 @@ import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
-import { renderExecOutputText } from "./bash-tools.exec-output.js";
+import {
+  buildExecForegroundResult,
+  buildExecRunningResult,
+} from "./bash-tools.exec-result-format.js";
 import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PATH,
   DEFAULT_PENDING_MAX_OUTPUT,
   type ExecProcessHandle,
-  type ExecProcessOutcome,
   applyPathPrepend,
   applyShellPath,
   normalizePathPrepend,
@@ -91,7 +92,7 @@ import {
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
-import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
+import type { AgentToolWithMeta } from "./tools/common.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
 export type {
@@ -239,44 +240,6 @@ function getResolvedExecWorkdirPreparedState(
   params: ExecToolArgs,
 ): ResolvedExecWorkdirPreparedState | undefined {
   return resolvedExecWorkdirPreparedStates.get(params);
-}
-
-function buildExecForegroundResult(params: {
-  outcome: ExecProcessOutcome;
-  cwd?: string;
-  warningText?: string;
-}): AgentToolResult<ExecToolDetails> {
-  const warningText = params.warningText?.trim()
-    ? `${redactToolPayloadText(params.warningText).trimEnd()}\n\n`
-    : "";
-  const aggregated = redactToolPayloadText(params.outcome.aggregated);
-  if (params.outcome.status === "failed") {
-    return failedTextResult(
-      `${warningText}${redactToolPayloadText(params.outcome.reason)}`,
-      redactSecrets({
-        status: "failed",
-        exitCode: params.outcome.exitCode ?? null,
-        exitSignal: params.outcome.exitSignal,
-        failureKind: params.outcome.failureKind,
-        exitReason: params.outcome.exitReason,
-        durationMs: params.outcome.durationMs,
-        aggregated,
-        timedOut: params.outcome.timedOut,
-        noOutputTimedOut: params.outcome.noOutputTimedOut,
-        cwd: params.cwd,
-      }),
-    );
-  }
-  return textResult(`${warningText}${renderExecOutputText(aggregated)}`, {
-    status: "completed",
-    exitCode: params.outcome.exitCode,
-    exitSignal: params.outcome.exitSignal,
-    exitReason: params.outcome.exitReason,
-    durationMs: params.outcome.durationMs,
-    aggregated,
-    noOutputTimedOut: params.outcome.noOutputTimedOut,
-    cwd: params.cwd,
-  });
 }
 
 const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
@@ -1181,35 +1144,6 @@ function shouldFailClosedInterpreterPreflight(command: string): {
     hasInterpreterSegmentScriptHint,
     hasInterpreterPipelineScriptHint,
     isDirectInterpreterCommand,
-  };
-}
-
-function buildExecRunningResult(params: {
-  warningText?: string;
-  sessionId: string;
-  pid?: number;
-  startedAt: number;
-  cwd?: string;
-  tail: string;
-}): AgentToolResult<ExecToolDetails> {
-  const warningText = params.warningText?.trim()
-    ? `${redactToolPayloadText(params.warningText).trimEnd()}\n\n`
-    : "";
-  return {
-    content: [
-      {
-        type: "text",
-        text: `${warningText}Command still running (session ${params.sessionId}, pid ${params.pid ?? "n/a"}). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
-      },
-    ],
-    details: redactSecrets({
-      status: "running",
-      sessionId: params.sessionId,
-      pid: params.pid,
-      startedAt: params.startedAt,
-      cwd: params.cwd,
-      tail: redactToolPayloadText(params.tail),
-    }),
   };
 }
 

@@ -8,6 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
+import { EXEC_REDACTION_WARNING } from "./bash-tools.exec-output.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
@@ -3467,7 +3468,9 @@ describe("executeNodeHostCommand", () => {
     expect(text).not.toContain(fakeSecretOutput);
     expect(details.aggregated).not.toContain(fakeSecretOutput);
     expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
-    expect(details.aggregated).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(details.aggregated).toContain("OPENAI_API_KEY=***");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect((result.details as { redacted?: boolean }).redacted).toBe(true);
   });
 
   it("redacts secret-shaped node warnings before returning results", async () => {
@@ -3505,6 +3508,8 @@ describe("executeNodeHostCommand", () => {
     const text = (result.content[0] as { text?: string }).text ?? "";
     expect(text).not.toContain(fakeSecretOutput);
     expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect((result.details as { redacted?: boolean }).redacted).toBe(true);
   });
 
   it("returns a non-empty placeholder for silent node exec results", async () => {

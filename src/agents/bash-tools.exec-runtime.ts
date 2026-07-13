@@ -30,7 +30,6 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { AgentToolResult } from "./runtime/index.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
@@ -46,7 +45,7 @@ import {
   markExited,
   tail,
 } from "./bash-process-registry.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { buildExecUpdateResult } from "./bash-tools.exec-output.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -661,8 +660,6 @@ export async function runExecProcess(opts: {
     if (session.backgrounded || session.exited || updatesDisabled) {
       return;
     }
-    const tailText = redactToolPayloadText(session.tail || session.aggregated);
-    const warnings = opts.warnings?.map((warning) => redactToolPayloadText(warning));
     // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
@@ -672,17 +669,18 @@ export async function runExecProcess(opts: {
     // chain on process exit (Layer 1) and by `disableUpdates()` on abort
     // signal (Layer 2) — both of which prevent this call from ever being
     // reached after the agent run has ended.
-    opts.onUpdate({
-      content: [{ type: "text", text: renderExecUpdateText({ tailText, warnings }) }],
-      details: {
+    opts.onUpdate(
+      buildExecUpdateResult({
         status: "running",
         sessionId,
         pid: session.pid ?? undefined,
         startedAt,
         cwd: session.cwd,
-        tail: redactToolPayloadText(session.tail),
-      },
-    });
+        tailText: session.tail || session.aggregated,
+        tail: session.tail,
+        warnings: opts.warnings,
+      }),
+    );
   };
 
   const handleStdout = (data: string) => {

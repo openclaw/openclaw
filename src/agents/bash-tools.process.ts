@@ -3,10 +3,7 @@
  * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
  * and removes background exec sessions.
  */
-import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
-import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
-import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
@@ -21,12 +18,30 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
-import { deriveRedactedProcessSessionName } from "./bash-tools.process-redaction.js";
+import { prependRedactionWarning, withRedactionMarker } from "./bash-tools.exec-output.js";
 import {
-  handleProcessSendKeys,
-  type WritableStdin,
-  writeProcessStdin,
-} from "./bash-tools.process-send-keys.js";
+  DEFAULT_INPUT_WAIT_IDLE_MS,
+  MAX_INPUT_WAIT_IDLE_MS,
+  MIN_INPUT_WAIT_IDLE_MS,
+  type RunningSessionRuntime,
+  defaultTailNote,
+  failText,
+  isWritableStdin,
+  recordPollRetrySuggestion,
+  resetPollRetrySuggestion,
+  resolveLogSliceWindow,
+  resolvePollWaitMs,
+  resolveSessionStdin,
+  runningSessionInputDetails,
+  sleepPollInterval,
+} from "./bash-tools.process-helpers.js";
+import {
+  deriveRedactedProcessSessionName,
+  processSessionTextWasRedacted,
+  redactProcessText,
+  redactProcessToolDetails,
+} from "./bash-tools.process-redaction.js";
+import { handleProcessSendKeys, writeProcessStdin } from "./bash-tools.process-send-keys.js";
 import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
@@ -35,7 +50,6 @@ import {
   sliceLogLines,
   truncateMiddle,
 } from "./bash-tools.shared.js";
-import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodePaste } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
@@ -49,149 +63,8 @@ export type ProcessToolDefaults = {
   scopeKey?: string;
 };
 
-const DEFAULT_LOG_TAIL_LINES = 200;
-const DEFAULT_INPUT_WAIT_IDLE_MS = 15_000;
-const MIN_INPUT_WAIT_IDLE_MS = 1_000;
-const MAX_INPUT_WAIT_IDLE_MS = 10 * 60 * 1000;
-
-function resolveLogSliceWindow(offset?: number, limit?: number) {
-  const usingDefaultTail = offset === undefined && limit === undefined;
-  const effectiveLimit =
-    typeof limit === "number" && Number.isFinite(limit)
-      ? limit
-      : usingDefaultTail
-        ? DEFAULT_LOG_TAIL_LINES
-        : undefined;
-  return { effectiveOffset: offset, effectiveLimit, usingDefaultTail };
-}
-
-function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
-  if (!usingDefaultTail || totalLines <= DEFAULT_LOG_TAIL_LINES) {
-    return "";
-  }
-  return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
-}
-
-const MAX_POLL_WAIT_MS = 30_000;
-const INTEGER_STRING_PATTERN = /^[+-]?\d+$/u;
-
-function redactProcessToolDetails<T>(details: T): T {
-  return redactSecrets(details);
-}
-
 function redactProcessSessionName(command: string): string | undefined {
   return deriveRedactedProcessSessionName(command);
-}
-
-type RunningSessionRuntime = {
-  stdinWritable: boolean;
-  waitingForInput: boolean;
-  idleMs: number;
-  lastOutputAt: number;
-};
-
-function resolveSessionStdin(session: ProcessSession): WritableStdin | undefined {
-  return (session.stdin ?? session.child?.stdin) as WritableStdin | undefined;
-}
-
-function isWritableStdin(stdin: WritableStdin | undefined): stdin is WritableStdin {
-  if (!stdin || stdin.destroyed) {
-    return false;
-  }
-  if (stdin.writable === false || stdin.writableEnded === true || stdin.writableFinished === true) {
-    return false;
-  }
-  return true;
-}
-
-function runningSessionInputDetails(runtime: RunningSessionRuntime) {
-  return {
-    stdinWritable: runtime.stdinWritable,
-    waitingForInput: runtime.waitingForInput,
-    idleMs: runtime.idleMs,
-    lastOutputAt: runtime.lastOutputAt,
-  };
-}
-
-function resolvePollWaitMs(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!INTEGER_STRING_PATTERN.test(trimmed)) {
-      return 0;
-    }
-    const parsed = Number(trimmed);
-    if (Number.isSafeInteger(parsed)) {
-      return Math.max(0, Math.min(MAX_POLL_WAIT_MS, parsed));
-    }
-  }
-  return 0;
-}
-
-function failText(text: string): AgentToolResult<unknown> {
-  return {
-    content: [
-      {
-        type: "text",
-        text,
-      },
-    ],
-    details: { status: "failed" },
-  };
-}
-
-function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
-  try {
-    const sessionState = getDiagnosticSessionState({ sessionId });
-    return recordCommandPoll(sessionState, sessionId, hasNewOutput);
-  } catch {
-    return undefined;
-  }
-}
-
-function resetPollRetrySuggestion(sessionId: string): void {
-  try {
-    const sessionState = getDiagnosticSessionState({ sessionId });
-    resetCommandPollCount(sessionState, sessionId);
-  } catch {
-    // Ignore diagnostics state failures for process tool behavior.
-  }
-}
-
-function createAbortError(reason: unknown): Error {
-  if (reason instanceof Error) {
-    return reason;
-  }
-  return createNamedAbortError(typeof reason === "string" ? reason : "Aborted");
-}
-
-async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    throw createAbortError(signal.reason);
-  }
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (onAbort) {
-        signal?.removeEventListener("abort", onAbort);
-      }
-    };
-    const onResolve = () => {
-      cleanup();
-      resolve();
-    };
-    const onAbort: (() => void) | undefined = () => {
-      cleanup();
-      reject(createAbortError(signal?.reason));
-    };
-    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
-    timer.unref?.();
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 /** Build the process-control tool with optional cleanup, scope, and input-idle defaults. */
@@ -332,11 +205,15 @@ export function createProcessTool(
               formatDurationCompact(s.runtimeMs) ?? "n/a"
             }${marker} :: ${label}`;
           });
+        const redacted = [...running, ...finished].some((session) => session.redacted === true);
         return {
           content: [
             {
               type: "text",
-              text: lines.join("\n") || "No running or recent sessions.",
+              text: prependRedactionWarning(
+                lines.join("\n") || "No running or recent sessions.",
+                redacted,
+              ),
             },
           ],
           details: redactProcessToolDetails({
@@ -395,39 +272,39 @@ export function createProcessTool(
       const runningSessionResult = (
         sessionLocal: ProcessSession,
         text: string,
-      ): AgentToolResult<unknown> => ({
-        content: [{ type: "text", text }],
-        details: redactProcessToolDetails({
-          status: "running",
-          sessionId: params.sessionId,
-          name: redactProcessSessionName(sessionLocal.command),
-        }),
-      });
+      ): AgentToolResult<unknown> => {
+        const details = withRedactionMarker(
+          redactProcessToolDetails({
+            status: "running",
+            sessionId: params.sessionId,
+            name: redactProcessSessionName(sessionLocal.command),
+          }),
+          processSessionTextWasRedacted(sessionLocal.command),
+        );
+        return {
+          content: [
+            { type: "text", text: prependRedactionWarning(text, details.redacted === true) },
+          ],
+          details,
+        };
+      };
 
       switch (params.action) {
         case "poll": {
           if (!scopedSession) {
             if (scopedFinished) {
               resetPollRetrySuggestion(params.sessionId);
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text:
-                      redactToolPayloadText(
-                        scopedFinished.tail ||
-                          `(no output recorded${
-                            scopedFinished.truncated ? " — truncated to cap" : ""
-                          })`,
-                      ) +
-                      `\n\nProcess exited with ${
-                        scopedFinished.exitSignal
-                          ? `signal ${scopedFinished.exitSignal}`
-                          : `code ${scopedFinished.exitCode ?? 0}`
-                      }.`,
-                  },
-                ],
-                details: redactProcessToolDetails({
+              const text = redactProcessText(
+                scopedFinished.tail ||
+                  `(no output recorded${scopedFinished.truncated ? " — truncated to cap" : ""})`,
+                `\n\nProcess exited with ${
+                  scopedFinished.exitSignal
+                    ? `signal ${scopedFinished.exitSignal}`
+                    : `code ${scopedFinished.exitCode ?? 0}`
+                }.`,
+              );
+              const details = withRedactionMarker(
+                redactProcessToolDetails({
                   status: scopedFinished.status === "completed" ? "completed" : "failed",
                   sessionId: params.sessionId,
                   exitCode: scopedFinished.exitCode ?? undefined,
@@ -448,6 +325,19 @@ export function createProcessTool(
                   aggregated: scopedFinished.aggregated,
                   name: redactProcessSessionName(scopedFinished.command),
                 }),
+                text.redacted,
+              );
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: prependRedactionWarning(
+                      text.text,
+                      text.redacted || details.redacted === true,
+                    ),
+                  },
+                ],
+                details,
               };
             }
             resetPollRetrySuggestion(params.sessionId);
@@ -492,20 +382,16 @@ export function createProcessTool(
             resetPollRetrySuggestion(params.sessionId);
           }
           const runtime = exited ? undefined : describeRunningSession(scopedSession);
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  redactToolPayloadText(output || "(no new output)") +
-                  (exited
-                    ? `\n\nProcess exited with ${
-                        exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                      }.`
-                    : buildInputWaitHint(runtime) || "\n\nProcess still running."),
-              },
-            ],
-            details: redactProcessToolDetails({
+          const text = redactProcessText(
+            output || "(no new output)",
+            exited
+              ? `\n\nProcess exited with ${
+                  exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
+                }.`
+              : buildInputWaitHint(runtime) || "\n\nProcess still running.",
+          );
+          const details = withRedactionMarker(
+            redactProcessToolDetails({
               status,
               sessionId: params.sessionId,
               exitCode: exited ? exitCode : undefined,
@@ -528,6 +414,19 @@ export function createProcessTool(
               ...(runtime ? runningSessionInputDetails(runtime) : {}),
               ...(typeof retryInMs === "number" ? { retryInMs } : {}),
             }),
+            text.redacted,
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: prependRedactionWarning(
+                  text.text,
+                  text.redacted || details.redacted === true,
+                ),
+              },
+            ],
+            details,
           };
         }
 
@@ -552,17 +451,12 @@ export function createProcessTool(
             );
             const runtime = describeRunningSession(scopedSession);
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    redactToolPayloadText(slice || "(no output yet)") +
-                    logDefaultTailNote +
-                    buildInputWaitHint(runtime),
-                },
-              ],
-              details: redactProcessToolDetails({
+            const text = redactProcessText(
+              slice || "(no output yet)",
+              logDefaultTailNote + buildInputWaitHint(runtime),
+            );
+            const details = withRedactionMarker(
+              redactProcessToolDetails({
                 status: scopedSession.exited ? "completed" : "running",
                 sessionId: params.sessionId,
                 total: totalLines,
@@ -572,6 +466,19 @@ export function createProcessTool(
                 name: redactProcessSessionName(scopedSession.command),
                 ...runningSessionInputDetails(runtime),
               }),
+              text.redacted,
+            );
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: prependRedactionWarning(
+                    text.text,
+                    text.redacted || details.redacted === true,
+                  ),
+                },
+              ],
+              details,
             };
           }
           if (scopedFinished) {
@@ -583,14 +490,9 @@ export function createProcessTool(
             );
             const status = scopedFinished.status === "completed" ? "completed" : "failed";
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: redactToolPayloadText(slice || "(no output recorded)") + logDefaultTailNote,
-                },
-              ],
-              details: redactProcessToolDetails({
+            const text = redactProcessText(slice || "(no output recorded)", logDefaultTailNote);
+            const details = withRedactionMarker(
+              redactProcessToolDetails({
                 status,
                 sessionId: params.sessionId,
                 total: totalLines,
@@ -601,6 +503,19 @@ export function createProcessTool(
                 exitSignal: scopedFinished.exitSignal ?? undefined,
                 name: redactProcessSessionName(scopedFinished.command),
               }),
+              text.redacted,
+            );
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: prependRedactionWarning(
+                    text.text,
+                    text.redacted || details.redacted === true,
+                  ),
+                },
+              ],
+              details,
             };
           }
           return {

@@ -35,14 +35,15 @@ import {
   extractShellCommandFromArgv,
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { formatNodeRunToolResult } from "./bash-tools.exec-node-result.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
+
+export { formatNodeRunToolResult } from "./bash-tools.exec-node-result.js";
 
 type NodeExecutionTarget = {
   nodeId: string;
@@ -218,47 +219,6 @@ export function shouldSkipNodeApprovalPrepare(params: {
   return (
     params.hostSecurity === "full" && params.hostAsk === "off" && params.strictInlineEval !== true
   );
-}
-
-/** Formats a raw `node.invoke system.run` response as an exec tool result. */
-export function formatNodeRunToolResult(params: {
-  raw: unknown;
-  startedAt: number;
-  cwd: string | undefined;
-  warnings?: string[];
-}): AgentToolResult<ExecToolDetails> {
-  const payload =
-    params.raw && typeof params.raw === "object"
-      ? (params.raw as { payload?: unknown }).payload
-      : undefined;
-  const payloadObj =
-    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
-  const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
-  const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
-  const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
-  const output = redactToolPayloadText(stdout || stderr || errorText);
-  const aggregated = redactToolPayloadText([stdout, stderr, errorText].filter(Boolean).join("\n"));
-  const warnings = (params.warnings ?? []).map((warning) => redactToolPayloadText(warning));
-  const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
-  const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
-  return {
-    content: [
-      {
-        type: "text",
-        text: renderExecUpdateText({
-          tailText: output,
-          warnings,
-        }),
-      },
-    ],
-    details: {
-      status: success ? "completed" : "failed",
-      exitCode,
-      durationMs: Date.now() - params.startedAt,
-      aggregated,
-      cwd: params.cwd,
-    } satisfies ExecToolDetails,
-  };
 }
 
 /** Resolves the node id, platform, argv, env, and timeout for a node-host exec. */

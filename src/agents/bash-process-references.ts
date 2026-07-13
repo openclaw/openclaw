@@ -25,6 +25,7 @@ export type ActiveProcessSessionReference = {
   name: string;
   tail?: string;
   truncated: boolean;
+  redacted?: true;
 };
 
 function truncate(value: string, maxChars: number): string {
@@ -57,20 +58,29 @@ export function listActiveProcessSessionReferences(params: {
     .filter((session) => session.scopeKey === scopeKey)
     .toSorted((left, right) => right.startedAt - left.startedAt)
     .slice(0, limit)
-    .map((session) => ({
-      sessionId: session.id,
-      status: "running" as const,
-      pid: session.pid ?? session.child?.pid,
-      startedAt: session.startedAt,
-      runtimeMs: Math.max(0, now - session.startedAt),
-      cwd: session.cwd,
-      command: redactProcessSessionText(session.command),
-      name: truncate(
-        deriveRedactedProcessSessionName(session.command) ??
-          redactProcessSessionText(session.command),
+    .map((session) => {
+      const command = redactProcessSessionText(session.command);
+      const name = truncate(
+        deriveRedactedProcessSessionName(session.command) ?? command,
         MAX_COMMAND_LABEL_CHARS,
-      ),
-      tail: redactProcessSessionText(session.tail),
-      truncated: session.truncated,
-    }));
+      );
+      const tail = redactProcessSessionText(session.tail);
+      const redacted = command !== session.command || tail !== session.tail;
+      const reference: ActiveProcessSessionReference = {
+        sessionId: session.id,
+        status: "running" as const,
+        pid: session.pid ?? session.child?.pid,
+        startedAt: session.startedAt,
+        runtimeMs: Math.max(0, now - session.startedAt),
+        cwd: session.cwd,
+        command,
+        name,
+        tail,
+        truncated: session.truncated,
+      };
+      if (redacted) {
+        reference.redacted = true;
+      }
+      return reference;
+    });
 }

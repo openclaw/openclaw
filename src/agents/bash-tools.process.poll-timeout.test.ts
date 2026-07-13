@@ -11,6 +11,7 @@ import {
   resetProcessRegistryForTests,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { EXEC_REDACTION_WARNING } from "./bash-tools.exec-output.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
 
@@ -229,6 +230,8 @@ test("process poll redacts secret-shaped output before returning results", async
   expect(details.aggregated).not.toContain(fakeSecretOutput);
   expect(resultText(poll)).toContain("OPENAI_API_KEY=sk-pro…7890");
   expect(details.aggregated).toContain("OPENAI_API_KEY=sk-pro…7890");
+  expect(resultText(poll)).toContain(EXEC_REDACTION_WARNING);
+  expect((poll.details as { redacted?: boolean }).redacted).toBe(true);
 });
 
 test("process log redacts secret-shaped output before returning results", async () => {
@@ -243,6 +246,8 @@ test("process log redacts secret-shaped output before returning results", async 
 
   expect(resultText(log)).not.toContain(fakeSecretOutput);
   expect(resultText(log)).toContain("OPENAI_API_KEY=sk-pro…7890");
+  expect(resultText(log)).toContain(EXEC_REDACTION_WARNING);
+  expect((log.details as { redacted?: boolean }).redacted).toBe(true);
 });
 
 test("process list redacts secret-shaped command and tail details", async () => {
@@ -269,6 +274,8 @@ test("process list redacts secret-shaped command and tail details", async () => 
   expect(resultText(listed)).toContain("OPENAI_API_KEY=");
   expect(listedSession?.command).toContain("OPENAI_API_KEY=***");
   expect(listedSession?.tail).toContain("OPENAI_API_KEY=***");
+  expect(resultText(listed)).toContain(EXEC_REDACTION_WARNING);
+  expect((listed.details as { redacted?: boolean }).redacted).toBe(true);
 });
 
 test("process write redacts secret-shaped command-derived details name", async () => {
@@ -292,6 +299,21 @@ test("process write redacts secret-shaped command-derived details name", async (
   expect(resultText(written)).not.toContain(fakeSecretOutput);
   expect(JSON.stringify(details)).not.toContain(fakeSecretOutput);
   expect(details.name).toContain("OPENAI_API_KEY=");
+  expect(resultText(written)).toContain(EXEC_REDACTION_WARNING);
+  expect((written.details as { redacted?: boolean }).redacted).toBe(true);
+});
+
+test("process poll leaves unredacted output unmarked", async () => {
+  const sessionId = "sess-unredacted-poll";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+
+  appendOutput(session, "stdout", "plain output\n");
+  markExited(session, 0, null, "completed");
+
+  const poll = await pollSession(processTool, "toolcall-unredacted-poll", sessionId);
+
+  expect(resultText(poll)).not.toContain(EXEC_REDACTION_WARNING);
+  expect((poll.details as { redacted?: boolean }).redacted).toBeUndefined();
 });
 
 test("process list, poll, log, and write redact secret-shaped flag values before deriving details name", async () => {

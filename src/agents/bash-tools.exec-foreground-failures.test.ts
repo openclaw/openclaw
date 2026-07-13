@@ -12,6 +12,7 @@ import type { ProcessSupervisor } from "../process/supervisor/index.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { EXEC_REDACTION_WARNING } from "./bash-tools.exec-output.js";
 import { testing, createExecTool } from "./bash-tools.exec.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { resolveShellFromPath } from "./shell-utils.js";
@@ -223,11 +224,13 @@ describe("exec foreground failures", () => {
     });
 
     const text = (result.content[0] as { text?: string }).text ?? "";
-    const details = result.details as { aggregated?: string };
+    const details = result.details as { aggregated?: string; redacted?: boolean };
     expect(text).not.toContain(fakeSecretOutput);
     expect(details.aggregated).not.toContain(fakeSecretOutput);
     expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
-    expect(details.aggregated).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(details.aggregated).toContain("OPENAI_API_KEY=***");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect(details.redacted).toBe(true);
   });
 
   it("redacts secret-shaped warning text before returning foreground results", () => {
@@ -246,6 +249,8 @@ describe("exec foreground failures", () => {
     const text = (result.content[0] as { text?: string }).text ?? "";
     expect(text).not.toContain(fakeSecretOutput);
     expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect((result.details as { redacted?: boolean }).redacted).toBe(true);
   });
 
   it("redacts secret-shaped output from background exec details tail", () => {
@@ -257,10 +262,13 @@ describe("exec foreground failures", () => {
       tail: `${fakeSecretOutput}\n`,
     });
 
-    const details = result.details as { status?: string; tail?: string };
+    const text = (result.content[0] as { text?: string }).text ?? "";
+    const details = result.details as { status?: string; tail?: string; redacted?: boolean };
     expect(details.status).toBe("running");
     expect(details.tail).not.toContain(fakeSecretOutput);
     expect(details.tail).toContain("OPENAI_API_KEY=***");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect(details.redacted).toBe(true);
   });
 
   it("redacts secret-shaped warning text before returning background exec results", () => {
@@ -276,8 +284,27 @@ describe("exec foreground failures", () => {
     const text = (result.content[0] as { text?: string }).text ?? "";
     expect(text).not.toContain(fakeSecretOutput);
     expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect((result.details as { redacted?: boolean }).redacted).toBe(true);
     expect(text).toContain("7890\n\nCommand still running");
     expect(text).toContain("Command still running");
+  });
+
+  it("does not mark unredacted foreground results", () => {
+    const result = testing.buildExecForegroundResult({
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        aggregated: "plain output\n",
+        timedOut: false,
+      },
+    });
+
+    const text = (result.content[0] as { text?: string }).text ?? "";
+    expect(text).not.toContain(EXEC_REDACTION_WARNING);
+    expect((result.details as { redacted?: boolean }).redacted).toBeUndefined();
   });
 
   it("rejects invalid host values before launching a command", async () => {

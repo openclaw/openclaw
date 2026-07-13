@@ -207,6 +207,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(serialized).not.toContain(fakeSecretOutput);
     expect(serialized).toContain("OPENAI_API_KEY=***");
     expect(serialized).toContain('"command":"node worker.js --token ***"');
+    expect(serialized).toContain('"redacted":true');
   });
 
   it("omits active process session references when no safe scope is available", () => {

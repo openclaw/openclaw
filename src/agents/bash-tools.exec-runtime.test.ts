@@ -9,7 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { EXEC_REDACTION_WARNING, renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
@@ -49,8 +49,7 @@ beforeAll(async () => {
     prepareGatewaySuspend,
     resetGatewaySuspendCoordinatorForLifecycleRestart,
     resumeGatewaySuspend,
-  } =
-    await import("../infra/gateway-suspend-coordinator.js"));
+  } = await import("../infra/gateway-suspend-coordinator.js"));
 });
 
 beforeEach(() => {
@@ -464,6 +463,12 @@ describe("renderExecUpdateText", () => {
       "Warning: retrying\n\nhello",
     );
   });
+
+  it("adds a visible warning when output was redacted", () => {
+    expect(renderExecUpdateText({ tailText: "hello", warnings: [], redacted: true })).toBe(
+      `${EXEC_REDACTION_WARNING}\n\nhello`,
+    );
+  });
 });
 
 describe("runExecProcess live updates", () => {
@@ -520,7 +525,9 @@ describe("runExecProcess live updates", () => {
     expect(text).not.toContain(fakeSecretOutput);
     expect(details.tail).not.toContain(fakeSecretOutput);
     expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
-    expect(details.tail).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(details.tail).toContain("OPENAI_API_KEY=***");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect((update.details as { redacted?: boolean }).redacted).toBe(true);
   });
 
   it("redacts secret-shaped warnings in update text", async () => {
@@ -570,9 +577,16 @@ describe("runExecProcess live updates", () => {
     await run.promise;
 
     expect(updates.length).toBeGreaterThan(0);
-    const text = (expectDefined(updates[0], "updates[0] test invariant").content[0] as { text?: string }).text ?? "";
+    const text =
+      (expectDefined(updates[0], "updates[0] test invariant").content[0] as { text?: string })
+        .text ?? "";
     expect(text).not.toContain(fakeSecretOutput);
     expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect(
+      (expectDefined(updates[0], "updates[0] test invariant").details as { redacted?: boolean })
+        .redacted,
+    ).toBe(true);
     expect(text).toContain("ready");
   });
 });
