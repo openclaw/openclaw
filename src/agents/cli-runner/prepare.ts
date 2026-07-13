@@ -499,6 +499,17 @@ export async function prepareCliRunContext(
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
   if (
+    backendResolved.id === "claude-cli" &&
+    params.sessionEntry?.execHost === "node" &&
+    !params.sessionEntry.execNode?.trim()
+  ) {
+    throw new Error("node-placed Claude CLI session is missing execNode");
+  }
+  const nodeClaudePlacement =
+    backendResolved.id === "claude-cli" &&
+    params.sessionEntry?.execHost === "node" &&
+    Boolean(params.sessionEntry.execNode?.trim());
+  if (
     params.cliToolAvailability !== undefined &&
     (backendResolved.nativeToolMode !== "selectable" || !backendResolved.resolveExecutionArgs)
   ) {
@@ -791,6 +802,7 @@ export async function prepareCliRunContext(
     ? buildCrestodianToolsMcpServerConfig(internalParams.crestodianTool)
     : undefined;
   const bundleMcpEnabled =
+    !nodeClaudePlacement &&
     !isSideQuestion &&
     !crestodianMcpConfig &&
     backendResolved.bundleMcp &&
@@ -905,19 +917,21 @@ export async function prepareCliRunContext(
       executionMode,
       env: preparedBackend.env,
     } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
-    preparedExecution = await backendResolved.prepareExecution?.(
-      (backendResolved.id === "google-gemini-cli"
-        ? {
-            ...prepareExecutionContext,
-            // Private bridge for bundled Gemini CLI. This is intentionally not
-            // part of the public Plugin SDK until a credential-forwarding
-            // contract exists.
-            authCredential,
-          }
-        : prepareExecutionContext) as typeof prepareExecutionContext & {
-        authCredential?: AuthProfileCredential;
-      },
-    );
+    preparedExecution = nodeClaudePlacement
+      ? undefined
+      : await backendResolved.prepareExecution?.(
+          (backendResolved.id === "google-gemini-cli"
+            ? {
+                ...prepareExecutionContext,
+                // Private bridge for bundled Gemini CLI. This is intentionally not
+                // part of the public Plugin SDK until a credential-forwarding
+                // contract exists.
+                authCredential,
+              }
+            : prepareExecutionContext) as typeof prepareExecutionContext & {
+            authCredential?: AuthProfileCredential;
+          },
+        );
     const preparedBackendCleanup =
       cleanupPreparedBackend || preparedExecution?.cleanup
         ? async () => {
@@ -962,12 +976,13 @@ export async function prepareCliRunContext(
             await preparedExecution?.beforeExecution?.();
           }
         : undefined;
-    const claudeSkillsPlugin = isSideQuestion
-      ? { args: [], cleanup: async () => {} }
-      : await prepareDeps.prepareClaudeCliSkillsPlugin({
-          backendId: backendResolved.id,
-          skillsSnapshot: params.skillsSnapshot,
-        });
+    const claudeSkillsPlugin =
+      isSideQuestion || nodeClaudePlacement
+        ? { args: [], cleanup: async () => {} }
+        : await prepareDeps.prepareClaudeCliSkillsPlugin({
+            backendId: backendResolved.id,
+            skillsSnapshot: params.skillsSnapshot,
+          });
     const preparedCleanup =
       preparedBackendCleanup || claudeSkillsPlugin.args.length > 0
         ? async () => {
@@ -1094,7 +1109,9 @@ export async function prepareCliRunContext(
     const candidateClaudeCliSessionId =
       resolveReusableCliSessionId(backendReusableCliSession)?.trim() || undefined;
     const hasClaudeCliCandidate =
-      candidateClaudeCliSessionId !== undefined && isClaudeCliProvider(params.provider);
+      !nodeClaudePlacement &&
+      candidateClaudeCliSessionId !== undefined &&
+      isClaudeCliProvider(params.provider);
     const claudeCliTranscriptMissing =
       hasClaudeCliCandidate &&
       !(await prepareDeps.claudeCliSessionTranscriptHasContent({
@@ -1168,7 +1185,7 @@ export async function prepareCliRunContext(
           moduleUrl: import.meta.url,
         });
     const systemPromptSkillsPrompt =
-      isSideQuestion || claudeSkillsPlugin.args.length > 0
+      isSideQuestion || nodeClaudePlacement || claudeSkillsPlugin.args.length > 0
         ? ""
         : await resolveCliSkillsPrompt({
             skillsSnapshot: params.skillsSnapshot,
@@ -1307,7 +1324,9 @@ export async function prepareCliRunContext(
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const rawTranscriptReseedReason = reusableCliSessionId ? "session-expired" : invalidatedReason;
     const shouldPrepareOpenClawHistoryPrompt =
-      !isSideQuestion && (!reusableCliSessionId || allowRawTranscriptReseed);
+      !nodeClaudePlacement &&
+      !isSideQuestion &&
+      (!reusableCliSessionId || allowRawTranscriptReseed);
     const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
           messages: await loadCliSessionReseedMessages({

@@ -11,6 +11,7 @@ import {
   type McpLoopbackToolCallTerminalOutcome,
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import {
@@ -25,13 +26,19 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
+import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../../infra/exec-approvals.js";
 import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
+import type { RunExit } from "../../process/supervisor/types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import {
+  registerExecApprovalRequestForHostOrThrow,
+  resolveRegisteredExecApprovalDecision,
+} from "../bash-tools.exec-approval-request.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   fingerprintCliRuntimeArtifact,
@@ -112,6 +119,9 @@ const executeDeps = {
   enqueueSystemEvent: enqueueSystemEventImpl,
   requestHeartbeat: requestHeartbeatImpl,
   writeCliSystemPromptFile,
+  invokeNodeClaudeCliRun,
+  registerExecApprovalRequestForHostOrThrow,
+  resolveRegisteredExecApprovalDecision,
 };
 
 const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
@@ -121,6 +131,163 @@ const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
 const CLI_MCP_DELIVERY_DRAIN_GRACE_MS = 5_000;
 const CLI_MCP_REQUEST_ADMISSION_GRACE_MS = 250;
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
+const NODE_CLI_MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const NODE_CLI_MAX_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+type NodeClaudePlacement = { nodeId: string; cwd?: string };
+
+function resolveNodeClaudePlacement(context: PreparedCliRunContext): NodeClaudePlacement | null {
+  const entry = context.params.sessionEntry;
+  const nodeId = entry?.execNode?.trim();
+  // For claude-cli, the session placement tuple owns both agent turns and
+  // their exec tools so the CLI, auth, transcript, and commands stay together.
+  if (context.backendResolved.id !== "claude-cli" || entry?.execHost !== "node") {
+    return null;
+  }
+  if (!nodeId) {
+    throw new Error("node-placed Claude CLI session is missing execNode");
+  }
+  return { nodeId, ...(entry.execCwd?.trim() ? { cwd: entry.execCwd.trim() } : {}) };
+}
+
+const NODE_CLI_OMIT_BARE_ARGS = new Set(["--strict-mcp-config"]);
+const NODE_CLI_OMIT_VALUE_ARGS = new Set([
+  "--permission-mode",
+  "--plugin-dir",
+  "--plugin-dir-no-mcp",
+]);
+const NODE_CLI_OMIT_VARIADIC_ARGS = new Set([
+  "--mcp-config",
+  "--allowedTools",
+  "--allowed-tools",
+  "--disallowedTools",
+  "--disallowed-tools",
+  "--tools",
+]);
+
+/** Remove Gateway-local file, plugin, MCP, and tool-selection arguments. */
+function stripGatewayLocalClaudeArgs(args: readonly string[]): string[] {
+  const result: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    const equalsIndex = arg.indexOf("=");
+    const name = equalsIndex > 0 ? arg.slice(0, equalsIndex) : arg;
+    if (NODE_CLI_OMIT_BARE_ARGS.has(name)) {
+      continue;
+    }
+    if (NODE_CLI_OMIT_VALUE_ARGS.has(name)) {
+      if (equalsIndex < 0) {
+        index += 1;
+      }
+      continue;
+    }
+    if (NODE_CLI_OMIT_VARIADIC_ARGS.has(name)) {
+      if (equalsIndex < 0) {
+        while (typeof args[index + 1] === "string" && !args[index + 1]?.startsWith("-")) {
+          index += 1;
+        }
+      }
+      continue;
+    }
+    result.push(arg);
+  }
+  return result;
+}
+
+function parseNodeClaudeResultPayload(result: { payload?: unknown; payloadJSON?: string | null }): {
+  exitCode: number;
+  stderrTail: string;
+  truncated: boolean;
+  timeoutKind?: "hard" | "idle";
+} {
+  const value = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : result.payload;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("paired node returned an invalid Claude CLI result");
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    !Number.isInteger(record.exitCode) ||
+    typeof record.stderrTail !== "string" ||
+    typeof record.truncated !== "boolean" ||
+    (record.timeoutKind !== undefined &&
+      record.timeoutKind !== "hard" &&
+      record.timeoutKind !== "idle")
+  ) {
+    throw new Error("paired node returned an invalid Claude CLI result");
+  }
+  return {
+    exitCode: record.exitCode as number,
+    stderrTail: record.stderrTail,
+    truncated: record.truncated,
+    ...(record.timeoutKind ? { timeoutKind: record.timeoutKind as "hard" | "idle" } : {}),
+  };
+}
+
+type NodeClaudeApprovalRequired = {
+  systemRunPlan: SystemRunApprovalPlan;
+  security: ExecSecurity;
+  ask: ExecAsk;
+};
+
+function parseNodeClaudeApprovalRequired(result: {
+  ok: boolean;
+  payload?: unknown;
+  payloadJSON?: string | null;
+}): NodeClaudeApprovalRequired | null {
+  if (!result.ok) {
+    return null;
+  }
+  const value = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : result.payload;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.approvalRequired !== true ||
+    !record.systemRunPlan ||
+    typeof record.systemRunPlan !== "object" ||
+    Array.isArray(record.systemRunPlan) ||
+    (record.security !== "deny" && record.security !== "allowlist" && record.security !== "full") ||
+    (record.ask !== "off" && record.ask !== "on-miss" && record.ask !== "always")
+  ) {
+    return null;
+  }
+  return {
+    systemRunPlan: record.systemRunPlan as SystemRunApprovalPlan,
+    security: record.security,
+    ask: record.ask,
+  };
+}
+
+async function waitForNodeOperation<T>(params: {
+  operation: Promise<T>;
+  signal?: AbortSignal;
+}): Promise<T> {
+  if (!params.signal) {
+    return await params.operation;
+  }
+  if (params.signal.aborted) {
+    throw createCliAbortError();
+  }
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(createCliAbortError());
+    params.signal?.addEventListener("abort", onAbort, { once: true });
+    void params.operation.then(resolve, reject).finally(() => {
+      params.signal?.removeEventListener("abort", onAbort);
+    });
+  });
+}
+
+async function waitForNodeApprovalDecision(params: {
+  approvalId: string;
+  preResolvedDecision: string | null | undefined;
+  signal?: AbortSignal;
+}): Promise<string | null> {
+  return await waitForNodeOperation({
+    operation: executeDeps.resolveRegisteredExecApprovalDecision(params),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+}
 
 function normalizeCliBackendThinkingLevel(
   level: PreparedCliRunContext["params"]["thinkLevel"],
@@ -466,6 +633,7 @@ export async function executePreparedCliRun(
     throw createCliAbortError();
   }
   const backend = context.preparedBackend.backend;
+  const nodePlacement = resolveNodeClaudePlacement(context);
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
     cliSessionId: cliSessionIdToUse,
@@ -480,6 +648,7 @@ export async function executePreparedCliRun(
     systemPrompt: context.systemPrompt,
   });
   const systemPromptFile =
+    !nodePlacement &&
     systemPromptArg &&
     (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume)
       ? await executeDeps.writeCliSystemPromptFile({
@@ -487,28 +656,41 @@ export async function executePreparedCliRun(
           systemPrompt: systemPromptArg,
         })
       : undefined;
+  const nodeSystemPrompt =
+    nodePlacement &&
+    systemPromptArg &&
+    (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume)
+      ? systemPromptArg
+      : undefined;
 
-  const basePrompt = cliSessionIdToUse
+  const basePrompt = nodePlacement
     ? params.prompt
-    : (context.openClawHistoryPrompt ?? params.prompt);
+    : cliSessionIdToUse
+      ? params.prompt
+      : (context.openClawHistoryPrompt ?? params.prompt);
   let prompt = applyPluginTextReplacements(
     appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
       preserveExactPrompt: context.heartbeatPrompt,
     }),
     context.backendResolved.textTransforms?.input,
   );
+  if (nodePlacement && ((params.images?.length ?? 0) > 0 || Boolean(params.imagePrompt?.trim()))) {
+    throw new Error("paired-node Claude CLI sessions do not support attachments or images");
+  }
   const {
     prompt: promptWithImages,
     imagePaths,
     cleanupImages,
-  } = await prepareCliPromptImagePayload({
-    backend,
-    prompt,
-    imagePrompt: params.imagePrompt,
-    workspaceDir: context.workspaceDir,
-    images: params.images,
-    imageOrder: params.imageOrder,
-  });
+  } = nodePlacement
+    ? { prompt, imagePaths: [] as string[], cleanupImages: async () => {} }
+    : await prepareCliPromptImagePayload({
+        backend,
+        prompt,
+        imagePrompt: params.imagePrompt,
+        workspaceDir: context.workspaceDir,
+        images: params.images,
+        imageOrder: params.imageOrder,
+      });
   prompt = promptWithImages;
 
   const { argsPrompt, stdin } = resolvePromptInput({
@@ -521,15 +703,16 @@ export async function executePreparedCliRun(
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
     : baseArgs;
   const fallbackClaudeSkillsPlugin =
-    context.claudeSkillsPluginArgs === undefined
+    !nodePlacement && context.claudeSkillsPluginArgs === undefined
       ? await prepareClaudeCliSkillsPlugin({
           backendId: context.backendResolved.id,
           skillsSnapshot: params.skillsSnapshot,
         })
       : undefined;
   let fallbackClaudeSkillsPluginCleanupOwned = false;
-  const claudeSkillsPluginArgs =
-    context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? [];
+  const claudeSkillsPluginArgs = nodePlacement
+    ? []
+    : (context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? []);
   const baseArgsWithSkills =
     claudeSkillsPluginArgs.length > 0 ? [...resolvedArgs, ...claudeSkillsPluginArgs] : resolvedArgs;
   const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
@@ -540,22 +723,31 @@ export async function executePreparedCliRun(
     authProfileId: context.effectiveAuthProfileId,
     thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
     executionMode: params.executionMode ?? "agent",
-    toolAvailability: params.cliToolAvailability,
+    toolAvailability: nodePlacement ? undefined : params.cliToolAvailability,
     useResume,
     baseArgs: baseArgsWithSkills,
   });
-  if (params.cliToolAvailability && !resolvedExecutionArgs) {
+  if (!nodePlacement && params.cliToolAvailability && !resolvedExecutionArgs) {
     throw new Error(
       `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
     );
   }
-  const executionBaseArgs = resolvedExecutionArgs ?? baseArgsWithSkills;
+  const executionBaseArgs = nodePlacement
+    ? stripGatewayLocalClaudeArgs(resolvedExecutionArgs ?? baseArgsWithSkills)
+    : (resolvedExecutionArgs ?? baseArgsWithSkills);
+  const argsBackend = nodePlacement
+    ? {
+        ...backend,
+        systemPromptArg: undefined,
+        systemPromptFileArg: undefined,
+      }
+    : backend;
   const args = buildCliArgs({
-    backend,
+    backend: argsBackend,
     baseArgs: Array.from(executionBaseArgs),
     modelId: context.normalizedModel,
     sessionId: resolvedSessionId,
-    systemPrompt: systemPromptArg,
+    systemPrompt: nodePlacement ? undefined : systemPromptArg,
     systemPromptFilePath: systemPromptFile?.filePath,
     imagePaths,
     promptArg: argsPrompt,
@@ -919,15 +1111,16 @@ export async function executePreparedCliRun(
           isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
         const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
         const hasJsonlOutput = outputMode === "jsonl";
-        const initialGatewayCaptureKey = useManagedClaudeLiveSession
-          ? undefined
-          : buildCliMcpCaptureKey(context);
-        const mcpCaptureAttempt = await prepareCliBundleMcpCaptureAttempt({
-          mode: context.backendResolved.bundleMcpMode,
-          backend,
-          env: context.preparedBackend.env,
-          captureKey: initialGatewayCaptureKey,
-        });
+        const initialGatewayCaptureKey =
+          useManagedClaudeLiveSession || nodePlacement ? undefined : buildCliMcpCaptureKey(context);
+        const mcpCaptureAttempt = nodePlacement
+          ? { env: {}, cleanup: undefined }
+          : await prepareCliBundleMcpCaptureAttempt({
+              mode: context.backendResolved.bundleMcpMode,
+              backend,
+              env: context.preparedBackend.env,
+              captureKey: initialGatewayCaptureKey,
+            });
         cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
         const env = (() => {
           const next = sanitizeHostExecEnv({
@@ -969,7 +1162,7 @@ export async function executePreparedCliRun(
         let executionArgs = args;
         context.runtimeOwnerFingerprint = undefined;
         context.runtimeArtifactFingerprint = undefined;
-        if (params.onSuccessfulAuthBinding) {
+        if (params.onSuccessfulAuthBinding && !nodePlacement) {
           const executableIdentity = await resolveCliExecutableIdentity({
             command: backend.command,
             cwd: context.cwd ?? context.workspaceDir,
@@ -1630,12 +1823,6 @@ export async function executePreparedCliRun(
                 },
               })
             : null;
-          const supervisor = executeDeps.getProcessSupervisor();
-          const scopeKey = buildCliSupervisorScopeKey({
-            backend,
-            backendId: context.backendResolved.id,
-            cliSessionId: useResume ? resolvedSessionId : undefined,
-          });
           let stdoutTail: Buffer = Buffer.alloc(0);
           let stdoutParseBuffer: Buffer = Buffer.alloc(0);
           let stdoutBytes = 0;
@@ -1646,6 +1833,27 @@ export async function executePreparedCliRun(
           let stderrBytes = 0;
           const stderrHash = crypto.createHash("sha256");
           let stderrParseExceeded = false;
+          const consumeStdout = (chunk: string) => {
+            stdoutBytes += Buffer.byteLength(chunk);
+            stdoutHash.update(chunk);
+            stdoutTail = appendCliOutputTail(stdoutTail, chunk);
+            if (!stdoutParseExceeded) {
+              const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
+              stdoutParseBuffer = nextStdoutParse.buffer;
+              stdoutParseExceeded = nextStdoutParse.exceeded;
+            }
+            streamingParser?.push(chunk);
+          };
+          const consumeStderr = (chunk: string) => {
+            stderrBytes += Buffer.byteLength(chunk);
+            stderrHash.update(chunk);
+            stderrTail = appendCliOutputTail(stderrTail, chunk);
+            if (!stderrParseExceeded) {
+              const nextStderrParse = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
+              stderrParseBuffer = nextStderrParse.buffer;
+              stderrParseExceeded = nextStderrParse.exceeded;
+            }
+          };
 
           params.onExecutionPhase?.({
             phase: "process_spawned",
@@ -1653,73 +1861,247 @@ export async function executePreparedCliRun(
             model: context.modelId,
             backend: context.backendResolved.id,
           });
-          const managedRun = await supervisor.spawn({
-            sessionId: params.sessionId,
-            backendId: context.backendResolved.id,
-            scopeKey,
-            replaceExistingScope: Boolean(useResume && scopeKey),
-            mode: "child",
-            argv: [executionCommand, ...executionLeadingArgv, ...executionArgs],
-            timeoutMs: params.timeoutMs,
-            noOutputTimeoutMs,
-            cwd: context.cwd ?? context.workspaceDir,
-            env,
-            input: stdinPayload,
-            captureOutput: false,
-            onStdout: (chunk: string) => {
-              stdoutBytes += Buffer.byteLength(chunk);
-              stdoutHash.update(chunk);
-              stdoutTail = appendCliOutputTail(stdoutTail, chunk);
-              if (!stdoutParseExceeded) {
-                const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
-                stdoutParseBuffer = nextStdoutParse.buffer;
-                stdoutParseExceeded = nextStdoutParse.exceeded;
-              }
-              streamingParser?.push(chunk);
-            },
-            onStderr: (chunk: string) => {
-              stderrBytes += Buffer.byteLength(chunk);
-              stderrHash.update(chunk);
-              stderrTail = appendCliOutputTail(stderrTail, chunk);
-              if (!stderrParseExceeded) {
-                const nextStderrParse = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
-                stderrParseBuffer = nextStderrParse.buffer;
-                stderrParseExceeded = nextStderrParse.exceeded;
-              }
-            },
-          });
-          let replyBackendCompleted = false;
-          const replyBackendHandle = params.replyOperation
-            ? {
-                kind: "cli" as const,
-                cancel: () => {
-                  managedRun.cancel("manual-cancel");
-                },
-                isStreaming: () => !replyBackendCompleted,
-              }
-            : undefined;
-          if (replyBackendHandle) {
-            params.replyOperation?.attachBackend(replyBackendHandle);
-          }
-          const abortManagedRun = () => {
-            managedRun.cancel("manual-cancel");
-          };
-          params.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
-          if (params.abortSignal?.aborted) {
-            abortManagedRun();
-          }
-          let result: Awaited<ReturnType<typeof managedRun.wait>>;
-          try {
-            result = await managedRun.wait();
-          } finally {
-            replyBackendCompleted = true;
-            if (replyBackendHandle) {
-              params.replyOperation?.detachBackend(replyBackendHandle);
+          let managedRunPid: number | undefined;
+          let nodeRunAbortSignal: AbortSignal | undefined;
+          let result: RunExit;
+          if (nodePlacement) {
+            const startedAt = Date.now();
+            const hardTimeoutMs = Math.min(params.timeoutMs, NODE_CLI_MAX_TIMEOUT_MS);
+            const hardDeadlineAt = startedAt + hardTimeoutMs;
+            const nodeAbortController = new AbortController();
+            nodeRunAbortSignal = nodeAbortController.signal;
+            let hardDeadlineReached = false;
+            const hardDeadlineTimer = setTimeout(() => {
+              hardDeadlineReached = true;
+              nodeAbortController.abort();
+            }, hardTimeoutMs);
+            const abortNodeRun = () => nodeAbortController.abort();
+            params.abortSignal?.addEventListener("abort", abortNodeRun, { once: true });
+            if (params.abortSignal?.aborted) {
+              abortNodeRun();
             }
-            params.abortSignal?.removeEventListener("abort", abortManagedRun);
+            let replyBackendCompleted = false;
+            const replyBackendHandle = params.replyOperation
+              ? {
+                  kind: "cli" as const,
+                  cancel: abortNodeRun,
+                  isStreaming: () => !replyBackendCompleted,
+                }
+              : undefined;
+            if (replyBackendHandle) {
+              params.replyOperation?.attachBackend(replyBackendHandle);
+            }
+            let nodeResult: Awaited<ReturnType<typeof invokeNodeClaudeCliRun>>;
+            try {
+              const invokeNode = async (approval?: {
+                decision: "allow-once" | "allow-always";
+                plan: SystemRunApprovalPlan;
+              }) => {
+                const remainingTimeoutMs = hardDeadlineAt - Date.now();
+                if (remainingTimeoutMs <= 0) {
+                  hardDeadlineReached = true;
+                  nodeAbortController.abort();
+                  return {
+                    ok: false,
+                    error: {
+                      code: "TIMEOUT",
+                      message: "paired-node Claude CLI invocation exceeded its hard timeout",
+                    },
+                  };
+                }
+                return await executeDeps.invokeNodeClaudeCliRun({
+                  nodeId: nodePlacement.nodeId,
+                  argv: executionArgs,
+                  stdin: stdinPayload,
+                  ...(nodePlacement.cwd ? { cwd: nodePlacement.cwd } : {}),
+                  ...(nodeSystemPrompt !== undefined ? { systemPrompt: nodeSystemPrompt } : {}),
+                  ...(params.agentId ? { agentId: params.agentId } : {}),
+                  ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                  ...(approval
+                    ? {
+                        approvalDecision: approval.decision,
+                        systemRunPlan: approval.plan,
+                      }
+                    : {}),
+                  timeoutMs: remainingTimeoutMs,
+                  idleTimeoutMs: Math.max(
+                    1_000,
+                    Math.min(noOutputTimeoutMs, NODE_CLI_MAX_IDLE_TIMEOUT_MS),
+                  ),
+                  onProgress: consumeStdout,
+                  signal: nodeAbortController.signal,
+                });
+              };
+              nodeResult = await invokeNode();
+              const approval = parseNodeClaudeApprovalRequired(nodeResult);
+              if (approval) {
+                const approvalId = crypto.randomUUID();
+                const registration = await waitForNodeOperation({
+                  operation: executeDeps.registerExecApprovalRequestForHostOrThrow({
+                    approvalId,
+                    command: approval.systemRunPlan.commandText,
+                    commandArgv: approval.systemRunPlan.argv,
+                    systemRunPlan: approval.systemRunPlan,
+                    workdir: approval.systemRunPlan.cwd ?? undefined,
+                    host: "node",
+                    nodeId: nodePlacement.nodeId,
+                    security: approval.security,
+                    ask: approval.ask,
+                    unavailableDecisions: ["allow-always"],
+                    agentId: params.agentId,
+                    sessionKey: params.sessionKey,
+                    ...(params.approvalReviewerDeviceId
+                      ? { approvalReviewerDeviceIds: [params.approvalReviewerDeviceId] }
+                      : {}),
+                  }),
+                  signal: nodeAbortController.signal,
+                });
+                const decision = await waitForNodeApprovalDecision({
+                  approvalId: registration.id,
+                  preResolvedDecision: registration.finalDecision,
+                  signal: nodeAbortController.signal,
+                });
+                if (decision === "allow-once" || decision === "allow-always") {
+                  nodeResult = await invokeNode({ decision, plan: approval.systemRunPlan });
+                } else {
+                  nodeResult = {
+                    ok: false,
+                    error: {
+                      code: "PERMISSION_DENIED",
+                      message: "paired-node Claude CLI agent run was not approved",
+                    },
+                  };
+                }
+              }
+            } catch (error) {
+              if (!hardDeadlineReached) {
+                throw error;
+              }
+              nodeResult = {
+                ok: false,
+                error: {
+                  code: "TIMEOUT",
+                  message: "paired-node Claude CLI invocation exceeded its hard timeout",
+                },
+              };
+            } finally {
+              clearTimeout(hardDeadlineTimer);
+              replyBackendCompleted = true;
+              if (replyBackendHandle) {
+                params.replyOperation?.detachBackend(replyBackendHandle);
+              }
+              params.abortSignal?.removeEventListener("abort", abortNodeRun);
+            }
+            if (hardDeadlineReached) {
+              nodeResult = {
+                ok: false,
+                error: {
+                  code: "TIMEOUT",
+                  message: "paired-node Claude CLI invocation exceeded its hard timeout",
+                },
+              };
+            }
+            if (!nodeResult.ok) {
+              const code = nodeResult.error?.code;
+              const timedOut = code === "TIMEOUT" || code === "IDLE_TIMEOUT";
+              result = {
+                reason:
+                  code === "IDLE_TIMEOUT"
+                    ? "no-output-timeout"
+                    : code === "TIMEOUT"
+                      ? "overall-timeout"
+                      : code === "ABORTED"
+                        ? "manual-cancel"
+                        : "exit",
+                exitCode: timedOut || code === "ABORTED" ? null : 1,
+                exitSignal: null,
+                durationMs: Date.now() - startedAt,
+                stdout: "",
+                stderr: nodeResult.error?.message ?? "paired-node Claude CLI invocation failed",
+                timedOut,
+                noOutputTimedOut: code === "IDLE_TIMEOUT",
+              };
+              consumeStderr(result.stderr);
+            } else {
+              const payload = parseNodeClaudeResultPayload(nodeResult);
+              if (payload.stderrTail) {
+                consumeStderr(payload.stderrTail);
+              }
+              result = {
+                reason:
+                  payload.timeoutKind === "idle"
+                    ? "no-output-timeout"
+                    : payload.timeoutKind === "hard"
+                      ? "overall-timeout"
+                      : "exit",
+                exitCode: payload.timeoutKind ? null : payload.exitCode,
+                exitSignal: null,
+                durationMs: Date.now() - startedAt,
+                stdout: "",
+                stderr: payload.stderrTail,
+                timedOut: payload.timeoutKind !== undefined,
+                noOutputTimedOut: payload.timeoutKind === "idle",
+              };
+            }
+          } else {
+            const supervisor = executeDeps.getProcessSupervisor();
+            const scopeKey = buildCliSupervisorScopeKey({
+              backend,
+              backendId: context.backendResolved.id,
+              cliSessionId: useResume ? resolvedSessionId : undefined,
+            });
+            const managedRun = await supervisor.spawn({
+              sessionId: params.sessionId,
+              backendId: context.backendResolved.id,
+              scopeKey,
+              replaceExistingScope: Boolean(useResume && scopeKey),
+              mode: "child",
+              argv: [executionCommand, ...executionLeadingArgv, ...executionArgs],
+              timeoutMs: params.timeoutMs,
+              noOutputTimeoutMs,
+              cwd: context.cwd ?? context.workspaceDir,
+              env,
+              input: stdinPayload,
+              captureOutput: false,
+              onStdout: consumeStdout,
+              onStderr: consumeStderr,
+            });
+            managedRunPid = managedRun.pid;
+            let replyBackendCompleted = false;
+            const replyBackendHandle = params.replyOperation
+              ? {
+                  kind: "cli" as const,
+                  cancel: () => {
+                    managedRun.cancel("manual-cancel");
+                  },
+                  isStreaming: () => !replyBackendCompleted,
+                }
+              : undefined;
+            if (replyBackendHandle) {
+              params.replyOperation?.attachBackend(replyBackendHandle);
+            }
+            const abortManagedRun = () => {
+              managedRun.cancel("manual-cancel");
+            };
+            params.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
+            if (params.abortSignal?.aborted) {
+              abortManagedRun();
+            }
+            try {
+              result = await managedRun.wait();
+            } finally {
+              replyBackendCompleted = true;
+              if (replyBackendHandle) {
+                params.replyOperation?.detachBackend(replyBackendHandle);
+              }
+              params.abortSignal?.removeEventListener("abort", abortManagedRun);
+            }
           }
           streamingParser?.finish();
-          if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
+          if (
+            (params.abortSignal?.aborted || nodeRunAbortSignal?.aborted) &&
+            result.reason === "manual-cancel"
+          ) {
             throw createCliAbortError();
           }
           const streamingParserErrorText =
@@ -1801,7 +2183,7 @@ export async function executePreparedCliRun(
             if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
               const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
               cliBackendLog.warn(
-                `cli watchdog timeout: provider=${params.provider} model=${context.modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
+                `cli watchdog timeout: provider=${params.provider} model=${context.modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRunPid ?? "node"}`,
               );
               const retryableNoOutputTimeout =
                 !observedCliActivity &&
@@ -1818,7 +2200,11 @@ export async function executePreparedCliRun(
                 const stallNotice = [
                   `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
                   "It may have been waiting for interactive input or an approval prompt.",
-                  "For Claude Code, prefer --permission-mode bypassPermissions --print.",
+                  // Node runs strip --permission-mode, so the local-flag hint
+                  // would be unfollowable advice there.
+                  ...(nodePlacement
+                    ? ["Check the node's Claude permission settings for pending prompts."]
+                    : ["For Claude Code, prefer --permission-mode bypassPermissions --print."]),
                 ].join(" ");
                 const eventRouting = resolveEventSessionRoutingPolicy({
                   cfg: params.config,

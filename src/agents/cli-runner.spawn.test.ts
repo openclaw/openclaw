@@ -14,6 +14,7 @@ import {
   markMcpLoopbackToolCallStarted,
   recordMcpLoopbackToolCallResult,
 } from "../gateway/mcp-http.loopback-runtime.js";
+import { invokeNodeClaudeCliRun } from "../gateway/node-agent-cli-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   onInternalDiagnosticEvent,
@@ -28,6 +29,10 @@ import {
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  registerExecApprovalRequestForHostOrThrow,
+  resolveRegisteredExecApprovalDecision,
+} from "./bash-tools.exec-approval-request.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
@@ -75,7 +80,12 @@ beforeEach(() => {
   resetClaudeLiveSessionsForTest();
   replyRunTesting.resetReplyRunRegistry();
   restoreCliRunnerPrepareTestDeps();
-  setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
+  setCliRunnerExecuteTestDeps({
+    writeCliSystemPromptFile,
+    invokeNodeClaudeCliRun,
+    registerExecApprovalRequestForHostOrThrow,
+    resolveRegisteredExecApprovalDecision,
+  });
   supervisorSpawnMock.mockClear();
 });
 
@@ -394,6 +404,349 @@ describe("runCliAgent spawn path", () => {
 
     expect(logLine).toContain("reuse=reusable-drift:system-prompt");
     expect(logLine).not.toContain("claude-session-secret");
+  });
+
+  it("streams a node-placed Claude resume through the normal JSONL parser", async () => {
+    const writeSystemPrompt = vi.fn(writeCliSystemPromptFile);
+    let toolAvailability: unknown = "unset";
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      const jsonl = [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "forked-node-session" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "forked-node-session",
+          result: "node answer",
+        }),
+        "",
+      ].join("\n");
+      params.onProgress(jsonl.slice(0, 40));
+      params.onProgress(jsonl.slice(40));
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({
+      writeCliSystemPromptFile: writeSystemPrompt,
+      invokeNodeClaudeCliRun: invokeNode,
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-claude",
+      prompt: "current turn",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+        execCwd: "/work/on-node",
+      },
+      backend: {
+        args: [
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--permission-mode",
+          "bypassPermissions",
+          "--strict-mcp-config",
+          "--mcp-config",
+          "/tmp/gateway-mcp.json",
+          "--allowedTools",
+          "mcp__openclaw__*",
+        ],
+        resumeArgs: [
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--permission-mode",
+          "bypassPermissions",
+          "--strict-mcp-config",
+          "--mcp-config",
+          "/tmp/gateway-mcp.json",
+          "--allowedTools",
+          "mcp__openclaw__*",
+          "--resume",
+          "{sessionId}",
+        ],
+        forkArg: "--fork-session",
+        liveSession: "claude-stdio",
+        systemPromptWhen: "always",
+      },
+      resolveExecutionArgs: (execution) => {
+        toolAvailability = execution.toolAvailability;
+        return [...execution.baseArgs];
+      },
+      cliToolAvailability: { native: [], mcp: ["mcp__openclaw__message"] },
+    });
+    context.openClawHistoryPrompt = "gateway transcript reseed";
+    context.claudeSkillsPluginArgs = ["--plugin-dir", "/tmp/gateway-skills"];
+    context.params.forkCliSessionOnResume = true;
+    context.params.claimCliSessionFork = vi.fn(async () => true);
+    context.params.persistCliSessionForkSuccessor = vi.fn(async () => {});
+
+    const output = await executePreparedCliRun(context, "source-node-session");
+
+    expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
+    expect(toolAvailability).toBeUndefined();
+    expect(writeSystemPrompt).not.toHaveBeenCalled();
+    expect(supervisorSpawnMock).not.toHaveBeenCalled();
+    expect(invokeNode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "node-a",
+        cwd: "/work/on-node",
+        stdin: "current turn",
+        argv: expect.arrayContaining(["--resume", "source-node-session", "--fork-session"]),
+        systemPrompt: "You are a helpful assistant.",
+      }),
+    );
+    const argv = invokeNode.mock.calls[0]?.[0].argv ?? [];
+    expect(argv).not.toContain("--mcp-config");
+    expect(argv).not.toContain("--permission-mode");
+    expect(argv).not.toContain("bypassPermissions");
+    expect(argv).not.toContain("--strict-mcp-config");
+    expect(argv).not.toContain("--allowedTools");
+    expect(argv).not.toContain("--plugin-dir");
+    expect(argv).not.toContain("--append-system-prompt");
+    expect(argv).not.toContain("--append-system-prompt-file");
+    expect(invokeNode.mock.calls[0]?.[0].stdin).not.toContain("gateway transcript reseed");
+    expect(context.params.persistCliSessionForkSuccessor).toHaveBeenCalledWith(
+      "forked-node-session",
+    );
+  });
+
+  it("cancels a node-placed Claude process when the run aborts", async () => {
+    const controller = new AbortController();
+    const invokeNode = vi.fn(
+      async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) =>
+        await new Promise<Awaited<ReturnType<typeof invokeNodeClaudeCliRun>>>((resolve) => {
+          params.signal?.addEventListener(
+            "abort",
+            () =>
+              resolve({
+                ok: false,
+                error: { code: "ABORTED", message: "node invoke cancelled" },
+              }),
+            { once: true },
+          );
+        }),
+    );
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-abort",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+    context.params.abortSignal = controller.signal;
+
+    const run = executePreparedCliRun(context);
+    await vi.waitFor(() => expect(invokeNode).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(invokeNode.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+  });
+
+  it("uses the canonical exec approval flow before retrying a node Claude run", async () => {
+    const plan = {
+      argv: ["/trusted/claude", "-p"],
+      cwd: "/work/on-node",
+      commandText: "/trusted/claude -p",
+      agentId: "main",
+      sessionKey: "agent:main:catalog-adopt:claude:node",
+    };
+    const invokeNode = vi.fn(async (input: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      if (invokeNode.mock.calls.length === 1) {
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({
+            approvalRequired: true,
+            systemRunPlan: plan,
+            security: "allowlist",
+            ask: "on-miss",
+          }),
+        };
+      }
+      input.onProgress(
+        `${JSON.stringify({ type: "result", session_id: "approved-node-session", result: "ok" })}\n`,
+      );
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    const registerApproval = vi.fn(async () => ({
+      id: "approval-1",
+      expiresAtMs: Date.now() + 1_000,
+    }));
+    const resolveApproval = vi.fn(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      return "allow-once";
+    });
+    setCliRunnerExecuteTestDeps({
+      invokeNodeClaudeCliRun: invokeNode,
+      registerExecApprovalRequestForHostOrThrow: registerApproval,
+      resolveRegisteredExecApprovalDecision: resolveApproval,
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-approval",
+      sessionKey: plan.sessionKey,
+      agentId: "main",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+        execCwd: plan.cwd,
+      },
+      timeoutMs: 500,
+    });
+
+    await expect(executePreparedCliRun(context)).resolves.toMatchObject({
+      text: "ok",
+      sessionId: "approved-node-session",
+    });
+    expect(registerApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemRunPlan: plan,
+        host: "node",
+        nodeId: "node-a",
+        security: "allowlist",
+        ask: "on-miss",
+      }),
+    );
+    expect(resolveApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "approval-1" }),
+    );
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    expect(invokeNode.mock.calls[1]?.[0]).toMatchObject({
+      approvalDecision: "allow-once",
+      systemRunPlan: plan,
+    });
+    expect(invokeNode.mock.calls[1]?.[0].timeoutMs).toBeLessThan(
+      invokeNode.mock.calls[0]?.[0].timeoutMs ?? 0,
+    );
+  });
+
+  it("keeps the node Claude hard deadline while waiting for approval", async () => {
+    const plan = {
+      argv: ["/trusted/claude", "-p"],
+      commandText: "/trusted/claude -p",
+    };
+    const invokeNode = vi.fn(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({
+        approvalRequired: true,
+        systemRunPlan: plan,
+        security: "allowlist",
+        ask: "on-miss",
+      }),
+    }));
+    setCliRunnerExecuteTestDeps({
+      invokeNodeClaudeCliRun: invokeNode,
+      registerExecApprovalRequestForHostOrThrow: vi.fn(async () => ({
+        id: "approval-timeout",
+        expiresAtMs: Date.now() + 60_000,
+      })),
+      resolveRegisteredExecApprovalDecision: vi.fn(
+        async () => await new Promise<string | null>(() => {}),
+      ),
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-approval-timeout",
+      timeoutMs: 25,
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+
+    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+      code: "cli_overall_timeout",
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the node Claude hard deadline while registering approval", async () => {
+    const invokeNode = vi.fn(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({
+        approvalRequired: true,
+        systemRunPlan: {
+          argv: ["/trusted/claude", "-p"],
+          commandText: "/trusted/claude -p",
+        },
+        security: "allowlist",
+        ask: "on-miss",
+      }),
+    }));
+    const resolveApproval = vi.fn();
+    setCliRunnerExecuteTestDeps({
+      invokeNodeClaudeCliRun: invokeNode,
+      registerExecApprovalRequestForHostOrThrow: vi.fn(
+        async () => await new Promise<never>(() => {}),
+      ),
+      resolveRegisteredExecApprovalDecision: resolveApproval,
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-approval-registration-timeout",
+      timeoutMs: 25,
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+
+    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+      code: "cli_overall_timeout",
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    expect(resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it("rejects images before invoking a node-placed Claude session", async () => {
+    const invokeNode = vi.fn();
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-image",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+    context.params.images = [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }];
+
+    await expect(executePreparedCliRun(context)).rejects.toThrow(
+      "paired-node Claude CLI sessions do not support attachments or images",
+    );
+    context.params.images = undefined;
+    context.params.imagePrompt = "[image: /tmp/gateway-only.png]";
+    await expect(executePreparedCliRun(context)).rejects.toThrow(
+      "paired-node Claude CLI sessions do not support attachments or images",
+    );
+    expect(invokeNode).not.toHaveBeenCalled();
   });
 
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {

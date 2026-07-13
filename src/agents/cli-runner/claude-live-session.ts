@@ -202,6 +202,7 @@ export async function rotateClaudeLiveMcpCaptureKeyForContext(
 /** Returns whether a prepared backend context is eligible for Claude live stdio reuse. */
 export function shouldUseClaudeLiveSession(context: PreparedCliRunContext): boolean {
   return (
+    context.params.sessionEntry?.execHost !== "node" &&
     context.backendResolved.id === "claude-cli" &&
     context.preparedBackend.backend.liveSession === "claude-stdio" &&
     context.preparedBackend.backend.output === "jsonl" &&
