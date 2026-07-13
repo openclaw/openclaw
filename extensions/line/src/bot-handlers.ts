@@ -66,23 +66,32 @@ function isDownloadableLineMessageType(
   return LINE_DOWNLOADABLE_MESSAGE_TYPES.has(messageType);
 }
 
-export type LineUserInFlightGuard = {
-  tryAcquire(key: string): boolean;
-  release(key: string): void;
+// Tracks per-sender in-flight turns without blocking admission: rapid events
+// always reach processMessage so core queue policy (steer/followup/collect/
+// interrupt) decides; the flag only drives the delivery-side steering ack.
+// Ref-counted because steered follow-ups legitimately overlap the same key.
+export type LineUserInFlightTracker = {
+  isInFlight(key: string): boolean;
+  begin(key: string): void;
+  end(key: string): void;
 };
 
-export function createLineUserInFlightGuard(): LineUserInFlightGuard {
-  const inFlight = new Set<string>();
+export function createLineUserInFlightTracker(): LineUserInFlightTracker {
+  const counts = new Map<string, number>();
   return {
-    tryAcquire(key: string): boolean {
-      if (inFlight.has(key)) {
-        return false;
-      }
-      inFlight.add(key);
-      return true;
+    isInFlight(key: string): boolean {
+      return (counts.get(key) ?? 0) > 0;
     },
-    release(key: string): void {
-      inFlight.delete(key);
+    begin(key: string): void {
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    },
+    end(key: string): void {
+      const next = (counts.get(key) ?? 0) - 1;
+      if (next > 0) {
+        counts.set(key, next);
+      } else {
+        counts.delete(key);
+      }
     },
   };
 }
@@ -96,13 +105,11 @@ interface LineHandlerContext {
   replayCache?: LineWebhookReplayCache;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
-  userInFlightGuard?: LineUserInFlightGuard;
+  userInFlightTracker?: LineUserInFlightTracker;
 }
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
-const LINE_IN_FLIGHT_BUSY_TEXT =
-  "⏳ Your previous message is still being processed. Please wait a moment before sending another.";
 type LineWebhookReplayCache = ClaimableDedupe;
 
 function normalizeLineIngressEntry(value: string): string | null {
@@ -446,8 +453,8 @@ function hasAnyLineMention(message: MessageEvent["message"]): boolean {
 }
 
 // LINE marks source userId optional: group/room postbacks and non-mobile group
-// senders can arrive senderless. Guarding those would collapse distinct users
-// onto one key and drop unrelated events, so senderless events bypass the guard.
+// senders can arrive senderless. Tracking those would collapse distinct users
+// onto one key and mis-attribute in-flight state, so they are not tracked.
 function buildLineInFlightKey(
   accountId: string,
   sourceInfo: { userId?: string; groupId?: string; roomId?: string; isGroup: boolean },
@@ -461,50 +468,6 @@ function buildLineInFlightKey(
     return conversationId ? `${accountId}|${conversationId}|${userId}` : null;
   }
   return `${accountId}|${userId}`;
-}
-
-async function sendLineBusyReply(params: {
-  replyToken?: string;
-  sourceInfo: { userId?: string; groupId?: string; roomId?: string; isGroup: boolean };
-  context: LineHandlerContext;
-}): Promise<void> {
-  const { replyToken, sourceInfo, context } = params;
-  const sendOpts = {
-    cfg: context.cfg,
-    accountId: context.account.accountId,
-    channelAccessToken: context.account.channelAccessToken,
-  };
-
-  if (replyToken) {
-    try {
-      await replyMessageLine(
-        replyToken,
-        [{ type: "text", text: LINE_IN_FLIGHT_BUSY_TEXT }],
-        sendOpts,
-      );
-      return;
-    } catch {
-      // Reply token expired or already used; fall through to push.
-    }
-  }
-
-  const target = sourceInfo.isGroup
-    ? sourceInfo.groupId
-      ? `line:group:${sourceInfo.groupId}`
-      : sourceInfo.roomId
-        ? `line:room:${sourceInfo.roomId}`
-        : null
-    : sourceInfo.userId
-      ? `line:${sourceInfo.userId}`
-      : null;
-
-  if (target) {
-    try {
-      await pushMessageLine(target, LINE_IN_FLIGHT_BUSY_TEXT, sendOpts);
-    } catch {
-      logVerbose("line: failed to send busy reply");
-    }
-  }
 }
 
 function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
@@ -552,17 +515,12 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
 
   const sourceInfo = { userId, groupId, roomId, isGroup };
   const inFlightKey = buildLineInFlightKey(account.accountId, sourceInfo);
-
-  // Acquire before media download: a busy-skipped message must not persist
-  // private attachment data it will never dispatch.
-  if (
-    inFlightKey &&
-    context.userInFlightGuard &&
-    !context.userInFlightGuard.tryAcquire(inFlightKey)
-  ) {
-    logVerbose(`line: session busy, sending in-flight notice for ${inFlightKey}`);
-    await sendLineBusyReply({ replyToken: event.replyToken, sourceInfo, context });
-    return;
+  const tracker = context.userInFlightTracker;
+  // Rapid same-user events are always admitted so core queue policy decides
+  // steer/followup/collect/interrupt; the flag only marks steering-ack turns.
+  const inFlightAtAdmission = Boolean(inFlightKey && tracker?.isInFlight(inFlightKey));
+  if (inFlightKey) {
+    tracker?.begin(inFlightKey);
   }
 
   try {
@@ -603,6 +561,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       commandAuthorized: decision.commandAccess.authorized,
       groupHistories: context.groupHistories,
       historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+      inFlightAtAdmission,
     });
 
     if (!messageContext) {
@@ -623,7 +582,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     }
   } finally {
     if (inFlightKey) {
-      context.userInFlightGuard?.release(inFlightKey);
+      tracker?.end(inFlightKey);
     }
   }
 }
@@ -663,34 +622,30 @@ async function handlePostbackEvent(
     return;
   }
 
-  const postbackContext = await buildLinePostbackContext({
-    event,
-    cfg: context.cfg,
-    account: context.account,
-    commandAuthorized: decision.commandAccess.authorized,
-  });
-  if (!postbackContext) {
-    return;
-  }
-
   const sourceInfo = getLineSourceInfo(event.source);
   const inFlightKey = buildLineInFlightKey(context.account.accountId, sourceInfo);
-
-  if (
-    inFlightKey &&
-    context.userInFlightGuard &&
-    !context.userInFlightGuard.tryAcquire(inFlightKey)
-  ) {
-    logVerbose(`line: session busy, sending in-flight notice for ${inFlightKey}`);
-    await sendLineBusyReply({ replyToken: event.replyToken, sourceInfo, context });
-    return;
+  const tracker = context.userInFlightTracker;
+  const inFlightAtAdmission = Boolean(inFlightKey && tracker?.isInFlight(inFlightKey));
+  if (inFlightKey) {
+    tracker?.begin(inFlightKey);
   }
 
   try {
+    const postbackContext = await buildLinePostbackContext({
+      event,
+      cfg: context.cfg,
+      account: context.account,
+      commandAuthorized: decision.commandAccess.authorized,
+      inFlightAtAdmission,
+    });
+    if (!postbackContext) {
+      return;
+    }
+
     await context.processMessage(postbackContext);
   } finally {
     if (inFlightKey) {
-      context.userInFlightGuard?.release(inFlightKey);
+      tracker?.end(inFlightKey);
     }
   }
 }

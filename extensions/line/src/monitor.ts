@@ -46,6 +46,8 @@ import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
+export const LINE_STEERING_ACK_TEXT = "👀 Got it — I'm folding this into the reply I'm working on.";
+
 interface MonitorLineProviderOptions {
   channelAccessToken: string;
   channelSecret: string;
@@ -316,7 +318,22 @@ export async function monitorLineProvider(
         });
         const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
         if (!hasFinalInboundReplyDispatch(dispatchResult)) {
-          logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
+          // Steering ack: core folded this inbound into the sender's active
+          // run (steer/collect), so no standalone reply exists. LINE has no
+          // reactions, so a silent accept reads as message loss — send a
+          // short reply-token ack instead. Best effort only; never push.
+          if (ctx.inFlightAtAdmission && replyToken && !replyTokenUsed) {
+            try {
+              await replyMessageLine(replyToken, [{ type: "text", text: LINE_STEERING_ACK_TEXT }], {
+                cfg: config,
+                accountId: ctx.accountId,
+              });
+            } catch (ackErr) {
+              logVerbose(`line: steering ack reply failed: ${String(ackErr)}`);
+            }
+          } else {
+            logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
+          }
         }
       } catch (err) {
         runtime.error?.(danger(`line: auto-reply failed: ${String(err)}`));

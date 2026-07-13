@@ -44,6 +44,9 @@ interface BuildLineMessageContextParams {
   commandAuthorized: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
+  // True when webhook admission saw the sender's earlier event still
+  // processing; delivery uses it to ack turns core steers into that run.
+  inFlightAtAdmission?: boolean;
 }
 
 type LineSourceInfo = {
@@ -539,6 +542,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     route,
     replyToken: event.replyToken,
     accountId: account.accountId,
+    inFlightAtAdmission: params.inFlightAtAdmission === true,
   };
 }
 
@@ -547,6 +551,7 @@ export async function buildLinePostbackContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
+  inFlightAtAdmission?: boolean;
 }) {
   const { event, cfg, account, commandAuthorized } = params;
 
@@ -601,6 +606,7 @@ export async function buildLinePostbackContext(params: {
     route,
     replyToken: event.replyToken,
     accountId: account.accountId,
+    inFlightAtAdmission: params.inFlightAtAdmission === true,
   };
 }
 
