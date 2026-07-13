@@ -2737,7 +2737,6 @@ export async function syncPluginsForUpdateChannel(params: {
       changed = true;
     }
   }
-
   if (loadHelpers.changed) {
     next = {
       ...next,
@@ -2751,6 +2750,5 @@ export async function syncPluginsForUpdateChannel(params: {
     };
     changed = true;
   }
-
   return { config: next, changed, summary };
 }
