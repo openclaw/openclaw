@@ -2875,6 +2875,60 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("clears a stale CLI session before a fresh-session recovery retry", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "sonnet-4.6"),
+      provider: "claude-cli",
+      model: "sonnet-4.6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(
+      async (runParams: {
+        cliSessionId?: string;
+        onBeforeFreshCliSessionRetry?: (params: {
+          provider: string;
+          reason: "session_expired";
+          sessionId: string;
+        }) => Promise<boolean>;
+      }) => {
+        expect(runParams.cliSessionId).toBe("stale-cli-session");
+        await expect(
+          runParams.onBeforeFreshCliSessionRetry?.({
+            provider: "claude-cli",
+            reason: "session_expired",
+            sessionId: "stale-cli-session",
+          }),
+        ).resolves.toBe(true);
+        return { payloads: [{ text: "recovered" }], meta: {} };
+      },
+    );
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "sonnet-4.6";
+    const sessionEntry = {
+      cliSessionBindings: { "claude-cli": { sessionId: "stale-cli-session" } },
+      cliSessionIds: { "claude-cli": "stale-cli-session" },
+      claudeCliSessionId: "stale-cli-session",
+    } as SessionEntry;
+    const activeSessionStore = { main: sessionEntry };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      activeSessionStore,
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(sessionEntry).toMatchObject({
+      cliSessionBindings: undefined,
+      cliSessionIds: undefined,
+      claudeCliSessionId: undefined,
+    });
+  });
+
   it("keeps the first CLI session created by a room-event turn", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({

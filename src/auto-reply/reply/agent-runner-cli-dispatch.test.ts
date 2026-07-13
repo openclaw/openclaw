@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -14,6 +15,7 @@ import type {
   ReasoningTextPayload,
 } from "./agent-runner-cli-dispatch.js";
 import {
+  clearDroppedCliSessionBinding,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
@@ -21,16 +23,22 @@ import {
 
 const cliDispatchState = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(),
+  updateSessionEntryMock: vi.fn(),
 }));
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => cliDispatchState.runCliAgentMock(...args),
 }));
 
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  updateSessionEntry: (...args: unknown[]) => cliDispatchState.updateSessionEntryMock(...args),
+}));
+
 afterEach(() => {
   vi.useRealTimers();
   resetAgentEventsForTest();
   cliDispatchState.runCliAgentMock.mockReset();
+  cliDispatchState.updateSessionEntryMock.mockReset();
 });
 
 describe("runCliAgentWithLifecycle", () => {
@@ -559,6 +567,100 @@ describe("keepCliSessionBindingOnlyWhenReused", () => {
     expect(onDroppedReplacement).toHaveBeenCalledOnce();
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.cliSessionBinding).toBeUndefined();
+  });
+});
+
+describe("clearDroppedCliSessionBinding", () => {
+  it("clears a matching stale binding from memory and persistence", async () => {
+    const createEntry = (): SessionEntry =>
+      ({
+        cliSessionBindings: { "claude-cli": { sessionId: "stale-session" } },
+        cliSessionIds: { "claude-cli": "stale-session" },
+        claudeCliSessionId: "stale-session",
+        updatedAt: 1,
+      }) as SessionEntry;
+    const activeEntry = createEntry();
+    const storedEntry = createEntry();
+    const persistedEntry = createEntry();
+    cliDispatchState.updateSessionEntryMock.mockImplementationOnce(
+      async (_scope: unknown, update: (entry: SessionEntry) => Partial<SessionEntry> | null) => {
+        const patch = update(persistedEntry);
+        return patch ?? persistedEntry;
+      },
+    );
+
+    await expect(
+      clearDroppedCliSessionBinding({
+        provider: "claude-cli",
+        sessionKey: "main",
+        sessionStore: { main: storedEntry },
+        storePath: "/tmp/sessions.json",
+        activeSessionEntry: activeEntry,
+        expectedSessionId: "stale-session",
+      }),
+    ).resolves.toBe(true);
+
+    for (const entry of [activeEntry, storedEntry, persistedEntry]) {
+      expect(entry).toMatchObject({
+        cliSessionBindings: undefined,
+        cliSessionIds: undefined,
+        claudeCliSessionId: undefined,
+        updatedAt: expect.any(Number),
+      });
+    }
+  });
+
+  it("preserves a newer persisted binding", async () => {
+    const activeEntry = {
+      cliSessionIds: { "claude-cli": "stale-session" },
+      claudeCliSessionId: "stale-session",
+    } as SessionEntry;
+    const persistedEntry = {
+      cliSessionIds: { "claude-cli": "newer-session" },
+      claudeCliSessionId: "newer-session",
+    } as SessionEntry;
+    cliDispatchState.updateSessionEntryMock.mockImplementationOnce(
+      async (_scope: unknown, update: (entry: SessionEntry) => Partial<SessionEntry> | null) => {
+        const patch = update(persistedEntry);
+        return patch ?? persistedEntry;
+      },
+    );
+
+    await expect(
+      clearDroppedCliSessionBinding({
+        provider: "claude-cli",
+        sessionKey: "main",
+        sessionStore: { main: activeEntry },
+        storePath: "/tmp/sessions.json",
+        activeSessionEntry: activeEntry,
+        expectedSessionId: "stale-session",
+      }),
+    ).resolves.toBe(false);
+    expect(activeEntry.cliSessionIds?.["claude-cli"]).toBe("stale-session");
+    expect(persistedEntry.cliSessionIds?.["claude-cli"]).toBe("newer-session");
+  });
+
+  it("clears memory without retrying when the persisted row is missing", async () => {
+    const activeEntry = {
+      cliSessionIds: { "claude-cli": "stale-session" },
+      claudeCliSessionId: "stale-session",
+    } as SessionEntry;
+    cliDispatchState.updateSessionEntryMock.mockImplementationOnce(async () => null);
+
+    await expect(
+      clearDroppedCliSessionBinding({
+        provider: "claude-cli",
+        sessionKey: "main",
+        sessionStore: { main: activeEntry },
+        storePath: "/tmp/sessions.json",
+        activeSessionEntry: activeEntry,
+        expectedSessionId: "stale-session",
+      }),
+    ).resolves.toBe(false);
+    expect(activeEntry).toMatchObject({
+      cliSessionIds: undefined,
+      claudeCliSessionId: undefined,
+    });
   });
 });
 

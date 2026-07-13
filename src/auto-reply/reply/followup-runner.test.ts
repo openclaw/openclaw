@@ -1754,6 +1754,74 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
   });
 
+  it("clears a stale CLI session before retrying a queued followup", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-followup",
+      updatedAt: Date.now(),
+      cliSessionBindings: { "claude-cli": { sessionId: "stale-cli-session" } },
+      cliSessionIds: { "claude-cli": "stale-cli-session" },
+      claudeCliSessionId: "stale-cli-session",
+    };
+    runCliAgentMock.mockImplementationOnce(
+      async (runParams: {
+        cliSessionId?: string;
+        onBeforeFreshCliSessionRetry?: (params: {
+          provider: string;
+          reason: "session_expired";
+          sessionId: string;
+        }) => Promise<boolean>;
+      }) => {
+        expect(runParams.cliSessionId).toBe("stale-cli-session");
+        await expect(
+          runParams.onBeforeFreshCliSessionRetry?.({
+            provider: "claude-cli",
+            reason: "session_expired",
+            sessionId: "stale-cli-session",
+          }),
+        ).resolves.toBe(true);
+        return { payloads: [{ text: "recovered" }], meta: {} };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: runtimeConfig,
+          sessionId: "session-cli-followup",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(sessionEntry).toMatchObject({
+      cliSessionBindings: undefined,
+      cliSessionIds: undefined,
+      claudeCliSessionId: undefined,
+    });
+  });
+
   it("stores queued room-event CLI sessions created from the first ambient run", async () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {

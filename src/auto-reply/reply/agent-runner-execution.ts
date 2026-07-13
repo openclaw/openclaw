@@ -2228,6 +2228,15 @@ async function runAgentTurnWithFallbackInternal(
                     ownerNumbers: params.followupRun.run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,
+                    onBeforeFreshCliSessionRetry: ({ provider: retryProvider, sessionId }) =>
+                      clearDroppedCliSessionBinding({
+                        provider: retryProvider,
+                        sessionKey: params.sessionKey,
+                        sessionStore: params.activeSessionStore,
+                        storePath: params.storePath,
+                        activeSessionEntry: params.getActiveSessionEntry(),
+                        expectedSessionId: sessionId,
+                      }),
                     authProfileId: authProfile.authProfileId,
                     bootstrapContextMode: params.opts?.bootstrapContextMode,
                     bootstrapContextRunKind,
