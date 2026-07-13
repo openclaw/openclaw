@@ -1312,7 +1312,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/commands/onboard-skills.ts: testing",
   "src/commands/onboarding-plugin-install.ts: testing",
   "src/commands/runtime-plugin-install.ts: RuntimePluginInstallResult",
-  "src/commands/session-store-targets.ts: resolveSessionStoreTargets",
   "src/commands/sessions-tail.ts: setSessionsTailFollowIntervalMsForTests",
   "src/commands/sessions.ts: testing",
   "src/commands/status.command.ts: resolvePairingRecoveryContext",
