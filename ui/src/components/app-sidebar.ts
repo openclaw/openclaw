@@ -487,6 +487,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         catalogs: result.catalogs,
         client,
         generation,
+        agentId,
       });
       if (
         generation !== this.sessionCatalogGeneration ||
@@ -530,6 +531,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     catalogs: SessionCatalog[];
     client: GatewayBrowserClient;
     generation: number;
+    agentId: string;
   }): Promise<SessionCatalog[]> {
     const previousCatalogs = new Map(this.sessionCatalogs.map((catalog) => [catalog.id, catalog]));
     return Promise.all(
@@ -556,7 +558,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               try {
                 result = await params.client.request<SessionsCatalogListResult>(
                   "sessions.catalog.list",
-                  { catalogId: catalog.id, cursors: { [host.hostId]: nextCursor } },
+                  {
+                    agentId: params.agentId,
+                    catalogId: catalog.id,
+                    cursors: { [host.hostId]: nextCursor },
+                  },
                 );
               } catch {
                 return previous ?? host;
@@ -614,10 +620,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     const generation = this.sessionCatalogGeneration;
+    const agentId = this.sessionCatalogAgentId ?? this.expandedAgentId();
     const revision = this.sessionCatalogRevisions.get(catalogId) ?? 0;
     this.loadingMoreSessionCatalogIds = new Set([...this.loadingMoreSessionCatalogIds, catalogId]);
     try {
       const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId,
         catalogId,
         cursors,
       });

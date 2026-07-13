@@ -1090,6 +1090,7 @@ describe("AppSidebar session catalog pagination", () => {
       await sidebar.updateComplete;
 
       expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "page-2" },
       });
@@ -1103,6 +1104,7 @@ describe("AppSidebar session catalog pagination", () => {
         limitPerHost: 40,
       });
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "page-2" },
       });
@@ -1115,6 +1117,7 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(5, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "page-3" },
       });
@@ -1172,6 +1175,7 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "replacement-page" },
       });
