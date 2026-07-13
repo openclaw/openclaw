@@ -579,7 +579,12 @@ describe("active-memory plugin", () => {
     vi.restoreAllMocks();
     testing.resetActiveRecallCacheForTests();
     if (stateDir) {
-      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(stateDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      });
       stateDir = "";
     }
   });
@@ -6435,6 +6440,131 @@ describe("active-memory plugin", () => {
     });
     expect(config.circuitBreakerMaxTimeouts).toBe(1);
     expect(config.circuitBreakerCooldownMs).toBe(5000);
+  });
+
+  it("bounds timeout circuit breaker growth by evicting oldest keys", () => {
+    testing.resetActiveRecallCacheForTests();
+    const cap = 1000;
+    const base = 1_000_000;
+    for (let i = 0; i < cap + 5; i += 1) {
+      testing.recordCircuitBreakerTimeout(`agent:model-${i}`, base + i, 60_000);
+    }
+    expect(testing.getTimeoutCircuitBreakerSize()).toBe(cap);
+    expect(testing.getCircuitBreakerEntry("agent:model-0")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry("agent:model-4")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry(`agent:model-${cap + 4}`)?.consecutiveTimeouts).toBe(1);
+  });
+
+  it("purges cooldown-expired circuit breaker entries before inserting", () => {
+    testing.resetActiveRecallCacheForTests();
+    testing.recordCircuitBreakerTimeout("agent:old-a", 1_000_000, 60_000);
+    testing.recordCircuitBreakerTimeout("agent:old-b", 1_000_000, 60_000);
+    testing.recordCircuitBreakerTimeout("agent:fresh", 1_000_000 + 60_000, 60_000);
+    expect(testing.getTimeoutCircuitBreakerSize()).toBe(1);
+    expect(testing.getCircuitBreakerEntry("agent:old-a")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry("agent:old-b")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry("agent:fresh")?.consecutiveTimeouts).toBe(1);
+  });
+
+  it("honors a shorter configured circuitBreakerCooldownMs when purging peers", () => {
+    testing.resetActiveRecallCacheForTests();
+    testing.recordCircuitBreakerTimeout("agent:old", 1_000_000, 5_000);
+    testing.recordCircuitBreakerTimeout("agent:peer", 1_000_000 + 5_000, 5_000);
+    expect(testing.getCircuitBreakerEntry("agent:old")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry("agent:peer")?.consecutiveTimeouts).toBe(1);
+  });
+
+  it("honors a longer configured circuitBreakerCooldownMs when purging peers", () => {
+    testing.resetActiveRecallCacheForTests();
+    testing.recordCircuitBreakerTimeout("agent:old", 1_000_000, 120_000);
+    // At +60s with a 120s cooldown the peer write must keep the still-active entry.
+    testing.recordCircuitBreakerTimeout("agent:peer", 1_000_000 + 60_000, 120_000);
+    expect(testing.getCircuitBreakerEntry("agent:old")?.consecutiveTimeouts).toBe(1);
+    expect(testing.getCircuitBreakerEntry("agent:peer")?.consecutiveTimeouts).toBe(1);
+    // Only after a full 120s from old should a new write purge it.
+    testing.recordCircuitBreakerTimeout("agent:later", 1_000_000 + 120_000, 120_000);
+    expect(testing.getCircuitBreakerEntry("agent:old")).toBeUndefined();
+    expect(testing.getCircuitBreakerEntry("agent:peer")?.consecutiveTimeouts).toBe(1);
+    expect(testing.getCircuitBreakerEntry("agent:later")?.consecutiveTimeouts).toBe(1);
+  });
+
+  it("runtime proof: plugin timeout path trips breaker and tracks distinct keys", async () => {
+    const CONFIGURED_TIMEOUT_MS = 25;
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    const agentIds = Array.from({ length: 8 }, (_, i) => `cbagent${i}`);
+    api.pluginConfig = {
+      agents: agentIds,
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+      circuitBreakerMaxTimeouts: 1,
+      circuitBreakerCooldownMs: 60_000,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const beforePromptBuild = hooks.before_prompt_build;
+    if (typeof beforePromptBuild !== "function") {
+      throw new Error("before_prompt_build not registered");
+    }
+    runEmbeddedAgent.mockImplementation(
+      async (params: { abortSignal?: AbortSignal }) => await waitForAbort(params.abortSignal),
+    );
+
+    for (const agentId of agentIds) {
+      const sessionKey = `agent:${agentId}:proof`;
+      hoisted.sessionStore[sessionKey] = {
+        sessionId: `s-${agentId}`,
+        updatedAt: 0,
+      };
+      await beforePromptBuild(
+        { prompt: `proof timeout ${agentId}`, messages: [] },
+        {
+          agentId,
+          trigger: "user",
+          sessionKey,
+          messageProvider: "webchat",
+        },
+      );
+    }
+
+    const sizeAfterDistinctTimeouts = testing.getTimeoutCircuitBreakerSize();
+    const embeddedRuns = runEmbeddedAgent.mock.calls.length;
+    expect(embeddedRuns).toBeGreaterThanOrEqual(6);
+    expect(sizeAfterDistinctTimeouts).toBe(embeddedRuns);
+
+    // Re-run the first agent that actually timed out → breaker open, no extra embedded run.
+    const probeAgent = agentIds.find((agentId) =>
+      Boolean(
+        testing.getCircuitBreakerEntry(
+          testing.buildCircuitBreakerKey(agentId, "github-copilot", "gpt-5.4-mini"),
+        ),
+      ),
+    );
+    expect(probeAgent).toBeTruthy();
+    const probeSession = `agent:${probeAgent}:proof`;
+    const callsBeforeSkip = runEmbeddedAgent.mock.calls.length;
+    await beforePromptBuild(
+      { prompt: "proof breaker skip", messages: [] },
+      {
+        agentId: probeAgent,
+        trigger: "user",
+        sessionKey: probeSession,
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedAgent.mock.calls.length).toBe(callsBeforeSkip);
+
+    const infoLines: string[] = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    const redacted = infoLines
+      .filter((line) => line.includes("active-memory:") || line.includes("circuit breaker"))
+      .map((line) =>
+        line
+          .replace(/session=[^\s]+/g, "session=<redacted>")
+          .replace(/queryChars=\d+/g, "queryChars=<n>"),
+      );
+
+    expect(redacted.some((line) => line.includes("circuit breaker open"))).toBe(true);
   });
 });
 
