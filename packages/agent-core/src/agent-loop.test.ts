@@ -1194,6 +1194,73 @@ describe("agentLoop tool termination", () => {
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 
+  it("stops after a mixed batch with one critical veto when shouldStopAfterTurn checks for tool-loop", async () => {
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-veto", name: "veto_tool", arguments: {} },
+                { type: "toolCall", id: "call-normal", name: "normal_tool", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "should not reach" }]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const vetoTool: AgentTool = {
+      name: "veto_tool",
+      label: "veto_tool",
+      description: "critical loop veto tool",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => ({
+        content: [{ type: "text", text: "blocked" }],
+        details: { status: "blocked", deniedReason: "tool-loop", reason: "critical loop detected" },
+        terminate: true,
+      }),
+    };
+    const normalTool: AgentTool = {
+      name: "normal_tool",
+      label: "normal_tool",
+      description: "normal tool",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        executed.push("normal_tool");
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "run", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [vetoTool, normalTool] },
+      {
+        ...config,
+        shouldStopAfterTurn: async (context) => {
+          for (const msg of context.toolResults) {
+            const details = msg.details as { deniedReason?: string } | undefined;
+            if (details?.deniedReason === "tool-loop") {
+              return true;
+            }
+          }
+          return false;
+        },
+      },
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+    expect(turn).toBe(1);
+    expect(executed).toEqual(["normal_tool"]);
+    expect(events.filter((e) => e.type === "agent_end")).toHaveLength(1);
+  });
+
   it("does not request another model turn after a tool aborts the run", async () => {
     const controller = new AbortController();
     let streamCalls = 0;

@@ -1298,10 +1298,11 @@ export function buildBlockedToolResult(params: {
   recordPreExecutionBlockedToolCall(params.toolCallId, params.runId);
   const deniedReason = params.deniedReason ?? "plugin-before-tool-call";
   // tool-loop vetoes must terminate the agent run so the model cannot keep
-  // retrying the blocked tool indefinitely (issue #106231). agent-core's
-  // shouldTerminateToolBatch stops the loop when every finalized result in
-  // the batch carries terminate: true; without it the run continues burning
-  // resources for hours after the critical-level safety breaker fires.
+  // retrying the blocked tool indefinitely (issue #106231). The per-result
+  // terminate: true flag handles single-tool batches via agent-core's
+  // shouldTerminateToolBatch; a post-turn shouldStopAfterTurn hook in
+  // AgentSession covers mixed batches where the veto appears alongside
+  // normal tool results.
   const terminateRun = deniedReason === "tool-loop";
   return {
     content: [{ type: "text" as const, text: params.reason }],
