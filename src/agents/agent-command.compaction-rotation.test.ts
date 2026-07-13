@@ -831,6 +831,34 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(storedEntry?.pendingFinalDeliveryText).toBeUndefined();
   });
 
+  it("skips post-turn compaction when a recoverable final cannot persist a pending marker", async () => {
+    const sessionId = "subagent-no-pending-marker";
+    const sessionKey = `agent:main:subagent:${sessionId}`;
+    const text = "subagent final must deliver before compaction";
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
+
+    const result = await agentCommand({
+      message: "subagent room message",
+      sessionId,
+      sessionKey,
+      cwd: state.workspaceDir,
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
+      deliver: true,
+    });
+
+    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payloads: [{ text }] }),
+    );
+    expect(result).toMatchObject({ deliverySucceeded: true });
+    const storedEntry = findStoredSessionEntry(sessionKey);
+    expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(storedEntry?.pendingFinalDeliveryText).toBeUndefined();
+  });
+
   it("keeps post-turn compaction for no-delivery runs with unrecoverable sendable finals", async () => {
     const sessionId = "unrecoverable-media-no-delivery";
     const sessionKey = `agent:main:explicit:${sessionId}`;

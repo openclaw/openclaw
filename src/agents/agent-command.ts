@@ -3,11 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import {
-  buildRecoverablePendingFinalDeliveryText,
-  normalizePendingFinalDeliveryPayloads,
-  normalizePendingFinalRecoveryPayloads,
-} from "../auto-reply/reply/pending-final-delivery.js";
-import {
   formatThinkingLevels,
   isThinkingLevelSupported,
   normalizeThinkLevel,
@@ -164,6 +159,7 @@ import {
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
+import { persistPendingFinalDeliveryMarker } from "./pending-final-delivery-marker.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import {
@@ -172,6 +168,7 @@ import {
   isAgentRunRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
+  throwAgentRunRestartAbortReason,
 } from "./run-termination.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
@@ -1034,8 +1031,8 @@ async function agentCommandInternal(
   } = prepared;
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
-  let sessionEntry = prepared.sessionEntry;
-  let runOwnedSessionId = sessionId;
+  let sessionEntry = prepared.sessionEntry,
+    runOwnedSessionId = sessionId;
   const sessionStateActor = classifySessionStateActor({
     inputProvenance: opts.inputProvenance,
     internalEvents: opts.internalEvents,
@@ -2654,8 +2651,6 @@ async function agentCommandInternal(
           });
           sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
         }
-        // Provider and post-turn compaction rotations transfer this run's delivery cleanup
-        // ownership to a known successor; unrelated later rotations must still fail the CAS guards.
         runOwnedSessionId = effectiveSessionId;
 
         const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
@@ -2702,56 +2697,24 @@ async function agentCommandInternal(
         }
 
         const payloads = result.payloads ?? [];
-        const recoveryFinalPayloads = normalizePendingFinalRecoveryPayloads(payloads);
-        const sendableFinalPayloads = normalizePendingFinalDeliveryPayloads(payloads);
-        const hasSendableFinalPayload = sendableFinalPayloads.length > 0;
-        const recoverableFinalDeliveryText =
-          buildRecoverablePendingFinalDeliveryText(recoveryFinalPayloads);
-        let pendingFinalDeliveryTextForThisRun: string | undefined;
-
-        // Persist the completed final before optional post-turn compaction. A compaction
-        // timeout or restart must leave recovery enough state to deliver the visible reply.
-        if (
-          opts.deliver === true &&
-          sessionStore &&
-          sessionKey &&
-          !suppressVisibleSessionEffects &&
-          !sessionReboundDuringRun &&
-          payloads.length > 0 &&
-          !isSubagentSessionKey(sessionKey)
-        ) {
-          const now = Date.now();
-
-          if (recoverableFinalDeliveryText && hasSendableFinalPayload) {
-            pendingFinalDeliveryTextForThisRun = recoverableFinalDeliveryText;
-            const entry = sessionStore[sessionKey] ?? sessionEntry;
-            if (entry) {
-              const next: SessionEntry = {
-                ...entry,
-                pendingFinalDelivery: true,
-                pendingFinalDeliveryText: recoverableFinalDeliveryText,
-                pendingFinalDeliveryContext: currentRunDeliveryContext,
-                pendingFinalDeliveryCreatedAt: now,
-                updatedAt: now,
-              };
-              const persisted = await persistSessionEntry({
-                sessionStore,
-                sessionKey,
-                storePath,
-                initialEntry: entry,
-                entry: next,
-                shouldPersist: (current) =>
-                  shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId),
-              });
-              sessionEntry = persisted;
-            }
-          }
-        }
+        const pendingFinalDeliveryMarker = await persistPendingFinalDeliveryMarker({
+          deliver: opts.deliver === true,
+          sessionStore,
+          sessionKey,
+          sessionEntry,
+          storePath,
+          suppressVisibleSessionEffects,
+          sessionReboundDuringRun,
+          payloads,
+          deliveryContext: currentRunDeliveryContext,
+          runOwnedSessionId,
+        });
+        sessionEntry = pendingFinalDeliveryMarker.sessionEntry;
 
         const canSafelyRunPostTurnCompaction =
           opts.deliver !== true ||
-          !hasSendableFinalPayload ||
-          Boolean(recoverableFinalDeliveryText);
+          !pendingFinalDeliveryMarker.hasSendableFinalPayload ||
+          pendingFinalDeliveryMarker.pendingFinalDeliveryMarkerPersisted;
 
         if (
           persistedCliTurnTranscript &&
@@ -2781,26 +2744,18 @@ async function agentCommandInternal(
               thinkLevel: effectiveTurnThinkLevel,
               extraSystemPrompt: opts.extraSystemPrompt,
             });
-            const restartAbortReason = opts.abortSignal?.reason;
-            if (isAgentRunRestartAbortReason(restartAbortReason)) {
-              throw restartAbortReason;
-            }
+            throwAgentRunRestartAbortReason(opts.abortSignal?.reason);
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             sessionEntry = compactedSessionEntry;
             runOwnedSessionId = compactedSessionEntry?.sessionId ?? runOwnedSessionId;
           } catch (error) {
-            const restartAbortReason = opts.abortSignal?.reason;
-            if (isAgentRunRestartAbortReason(restartAbortReason)) {
-              throw restartAbortReason;
-            }
-            if (isAgentRunRestartAbortReason(error)) {
-              throw error;
-            }
+            throwAgentRunRestartAbortReason(opts.abortSignal?.reason);
+            throwAgentRunRestartAbortReason(error);
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             if (
               opts.deliver !== true ||
-              !recoverableFinalDeliveryText ||
-              !hasSendableFinalPayload
+              !pendingFinalDeliveryMarker.pendingFinalDeliveryMarkerPersisted ||
+              !pendingFinalDeliveryMarker.hasSendableFinalPayload
             ) {
               throw error;
             }
@@ -2850,7 +2805,6 @@ async function agentCommandInternal(
             : deliveryParams,
         );
 
-        // Clear this run's pending delivery payload after successful delivery.
         if (
           sessionStore &&
           sessionKey &&
@@ -2864,7 +2818,7 @@ async function agentCommandInternal(
           }
           const noPendingTextForThisRun =
             opts.deliver === true &&
-            pendingFinalDeliveryTextForThisRun === undefined &&
+            pendingFinalDeliveryMarker.pendingFinalDeliveryTextForThisRun === undefined &&
             entry?.pendingFinalDelivery === true &&
             !entry.pendingFinalDeliveryText;
           if (entry && (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun)) {
