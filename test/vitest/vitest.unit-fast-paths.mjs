@@ -7,7 +7,10 @@ import {
   commandsLightTestFiles,
 } from "./vitest.commands-light-paths.mjs";
 import { pluginSdkLightSourceFiles, pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
-import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
+import {
+  boundaryTestFiles,
+  bundledPluginDependentUnitTestFiles,
+} from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
@@ -227,6 +230,9 @@ const broadUnitFastCandidateSkipGlobs = [
   "**/*.live.test.ts",
   "test/fixtures/**/*.test.ts",
   "test/setup-home-isolation.test.ts",
+  // Explicit bundled ownership outranks content-based discovery. Otherwise extracting
+  // a test body can silently move its entry to a config with the wrong mocked setup.
+  ...bundledPluginDependentUnitTestFiles,
   "src/agents/sandbox.resolveSandboxContext.test.ts",
   "src/acp/runtime/session-meta.test.ts",
   "src/channels/plugins/contracts/**/*.test.ts",
