@@ -75,7 +75,11 @@ function isStyleHidden(style: string): boolean {
   const transform = style.match(/(?:^|;)\s*transform\s*:\s*([^;]+)/i);
   const transformValue = transform?.at(1);
   if (transformValue) {
-    if (/scale(?:3d)?\s*\(\s*0(?:\.0+)?(?:\s*,\s*0(?:\.0+)?)+\s*\)|\bscale\s*\(\s*0(?:\.0+)?\s*\)/i.test(transformValue)) {
+    if (
+      /scale(?:3d)?\s*\(\s*0(?:\.0+)?(?:\s*,\s*0(?:\.0+)?)+\s*\)|\bscale\s*\(\s*0(?:\.0+)?\s*\)/i.test(
+        transformValue,
+      )
+    ) {
       return true;
     }
     if (/translateX\s*\(\s*-\d{4,}px\s*\)/i.test(transformValue)) {
