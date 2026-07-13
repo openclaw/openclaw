@@ -66,6 +66,25 @@ export function normalizeChatWorkspaceDock(value: unknown): ChatWorkspaceDock {
     : "right";
 }
 
+/** Normalize a persisted pinned-agent list; unknown shapes fall back to []
+    and stale/duplicate ids are dropped without a migration. */
+export function normalizePinnedAgentIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const pinned: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const agentId = entry.trim();
+    if (agentId && !pinned.includes(agentId)) {
+      pinned.push(agentId);
+    }
+  }
+  return pinned;
+}
+
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -100,6 +119,7 @@ export type UiSettings = {
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" menu row
+  pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
   locale?: string;
@@ -522,6 +542,7 @@ export function loadSettings(): UiSettings {
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
+    pinnedAgentIds: [],
     textScale: 100,
   };
 
@@ -586,6 +607,7 @@ export function loadSettings(): UiSettings {
           : defaults.navWidth,
       sidebarPinnedRoutes:
         normalizeSidebarPinnedRoutes(parsed.sidebarPinnedRoutes) ?? defaults.sidebarPinnedRoutes,
+      pinnedAgentIds: normalizePinnedAgentIds(parsed.pinnedAgentIds),
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
@@ -680,6 +702,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,
+    pinnedAgentIds: next.pinnedAgentIds ?? [],
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,

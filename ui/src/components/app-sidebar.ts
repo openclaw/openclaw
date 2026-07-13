@@ -160,6 +160,8 @@ const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
 const SIDEBAR_SESSION_PAGE_SIZE = 10;
+/** Above this roster size the chip menu switches to pinned agents + filter. */
+const QUICK_SWITCH_AGENT_LIMIT = 10;
 const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
@@ -273,6 +275,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarPinnedRoutes: readonly SidebarNavRoute[] =
     DEFAULT_SIDEBAR_PINNED_ROUTES;
+  /** Agents surfaced first in the chip quick switcher when many exist. */
+  @property({ attribute: false }) pinnedAgentIds: readonly string[] = [];
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) lobsterPetVisits = true;
   @property({ attribute: false }) lobsterPetSounds = false;
@@ -314,6 +318,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   @state() private agentMenuPosition: { x: number; bottom: number } | null = null;
+  @state() private agentMenuFilter = "";
   @state() private visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
@@ -1474,6 +1479,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.agentMenuTrigger = trigger;
+    this.agentMenuFilter = "";
     // Right-aligned to the toggle so the menu stays over the sidebar column.
     this.agentMenuPosition = {
       x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
@@ -1482,7 +1488,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
     void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>(".sidebar-agent-menu .sidebar-customize-menu__item")?.focus();
+      // Large rosters open on the filter so typing narrows immediately.
+      this.querySelector<HTMLElement>(
+        ".sidebar-agent-menu__filter input, .sidebar-agent-menu .sidebar-customize-menu__item",
+      )?.focus();
     });
   }
 
@@ -1490,6 +1499,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const trigger = this.agentMenuTrigger;
     this.agentMenuTrigger = null;
     this.agentMenuPosition = null;
+    this.agentMenuFilter = "";
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
@@ -1927,6 +1937,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (items.length === 0) {
       return;
     }
+    // Typing in a menu filter keeps caret keys; arrows still enter the list.
+    if (
+      (event.target as HTMLElement | null)?.tagName === "INPUT" &&
+      (event.key === "Home" || event.key === "End")
+    ) {
+      return;
+    }
     const activeIndex = items.indexOf(document.activeElement as HTMLElement);
     let nextIndex: number;
     if (event.key === "ArrowDown") {
@@ -1998,6 +2015,43 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
+  /** Rows for the chip switcher. Small rosters list everything; past
+      QUICK_SWITCH_AGENT_LIMIT the menu shows pinned agents (plus the active
+      one) and the filter searches the full roster. */
+  private agentMenuRows(
+    agents: readonly { id: string; name?: string; identity?: { name?: string; emoji?: string } }[],
+    activeId: string,
+  ) {
+    const pinnedIds = new Set(this.pinnedAgentIds.map((agentId) => normalizeAgentId(agentId)));
+    const sorted = agents.toSorted((a, b) => {
+      const aPinned = pinnedIds.has(normalizeAgentId(a.id)) ? 0 : 1;
+      const bPinned = pinnedIds.has(normalizeAgentId(b.id)) ? 0 : 1;
+      return aPinned - bPinned;
+    });
+    if (agents.length <= QUICK_SWITCH_AGENT_LIMIT) {
+      return { rows: sorted, showFilter: false };
+    }
+    const query = this.agentMenuFilter.trim().toLowerCase();
+    if (query) {
+      const rows = sorted.filter((entry) => {
+        const agentId = normalizeAgentId(entry.id);
+        return (
+          agentId.toLowerCase().includes(query) ||
+          normalizeAgentLabel(entry).toLowerCase().includes(query)
+        );
+      });
+      return { rows, showFilter: true };
+    }
+    const rows =
+      pinnedIds.size > 0
+        ? sorted.filter((entry) => {
+            const agentId = normalizeAgentId(entry.id);
+            return pinnedIds.has(agentId) || agentId === activeId;
+          })
+        : sorted.slice(0, QUICK_SWITCH_AGENT_LIMIT);
+    return { rows, showFilter: true };
+  }
+
   private renderAgentMenu() {
     const position = this.agentMenuPosition;
     if (!position) {
@@ -2005,6 +2059,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     const { activeId, agent, agents } = this.activeChipAgent();
     const activeName = agent ? normalizeAgentLabel(agent) : activeId;
+    const { rows, showFilter } = this.agentMenuRows(agents, activeId);
     return html`
       <openclaw-menu-surface>
         <div
@@ -2016,7 +2071,29 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           ${agents.length > 1
             ? html`
                 <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
-                ${agents.map((entry) => this.renderAgentMenuAgentRow(entry, activeId))}
+                ${showFilter
+                  ? html`
+                      <div class="sidebar-agent-menu__filter">
+                        <input
+                          type="text"
+                          .value=${this.agentMenuFilter}
+                          placeholder=${t("agentChip.filterAgents")}
+                          aria-label=${t("agentChip.filterAgents")}
+                          @input=${(event: Event) => {
+                            this.agentMenuFilter = (event.target as HTMLInputElement).value;
+                          }}
+                        />
+                      </div>
+                    `
+                  : nothing}
+                <div class="sidebar-agent-menu__list">
+                  ${rows.map((entry) => this.renderAgentMenuAgentRow(entry, activeId))}
+                  ${rows.length === 0
+                    ? html`<div class="sidebar-agent-menu__empty">
+                        ${t("agentChip.noAgentMatches")}
+                      </div>`
+                    : nothing}
+                </div>
                 <div class="sidebar-customize-menu__separator" role="separator"></div>
               `
             : nothing}
@@ -2032,6 +2109,21 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             <span class="sidebar-customize-menu__text">
               ${t("agentChip.whatCanAgentDo", { name: activeName })}
             </span>
+          </button>
+          <button
+            type="button"
+            class="sidebar-customize-menu__item"
+            role="menuitem"
+            tabindex="-1"
+            @click=${() => {
+              this.closeAgentMenu();
+              this.onNavigate?.("agents", {
+                search: `?agent=${encodeURIComponent(activeId)}`,
+              });
+            }}
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons.users}</span>
+            <span class="sidebar-customize-menu__text">${t("agentChip.agentSettings")}</span>
           </button>
           <div class="sidebar-customize-menu__separator" role="separator"></div>
           <button

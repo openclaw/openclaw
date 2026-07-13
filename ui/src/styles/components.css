@@ -3537,6 +3537,55 @@ td.data-table-key-col {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
+.agent-identity-editor {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.agent-identity-editor__avatar {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 24px;
+}
+
+.agent-identity-editor__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.agent-identity-editor__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-identity-editor__fields .field {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.agent-identity-editor__fields .agent-identity-editor__emoji {
+  flex: 0 1 96px;
+}
+
+.agent-identity-editor__hint {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
 .agent-kv {
   display: grid;
   gap: 6px;

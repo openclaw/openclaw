@@ -407,6 +407,9 @@ export const en: TranslationMap = {
     getHelp: "Get help",
     discord: "Discord community",
     viewChangelog: "View changelog",
+    agentSettings: "Agent settings",
+    filterAgents: "Find agent…",
+    noAgentMatches: "No matching agents",
   },
   newSession: {
     title: "New session",
@@ -615,6 +618,8 @@ export const en: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Pin to switcher",
+    unpinFromSwitcher: "Unpin from switcher",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -639,6 +644,17 @@ export const en: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identity",
+      subtitle: "Name, emoji, and avatar shown in chats and the sidebar.",
+      name: "Display name",
+      namePlaceholder: "Agent name",
+      emoji: "Emoji",
+      chooseImage: "Choose image…",
+      replaceImage: "Replace image…",
+      imageUnusable: "That image can't be used. Pick an image file up to 2 MB.",
+      fileHint: "Agents can set this themselves by editing IDENTITY.md in their workspace.",
     },
     overview: {
       title: "Overview",

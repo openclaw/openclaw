@@ -50,6 +50,7 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   canPairDevice: boolean;
+  pinnedAgentIds: readonly string[];
   sessionKey: string;
   onNavigate: (routeId: string, options?: { search?: string }) => void;
   sessionCatalogs: SessionCatalog[];
@@ -440,6 +441,106 @@ describe("AppSidebar agent chip", () => {
       search: "?session=agent%3Aresearch%3Amain",
     });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+  });
+
+  it("navigates to the agents settings page with the active agent preselected", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const onNavigate = vi.fn();
+    sidebar.connected = true;
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const settingsRow = [
+      ...sidebar.querySelectorAll<HTMLButtonElement>('.sidebar-agent-menu [role="menuitem"]'),
+    ].find((row) => row.textContent?.includes("Agent settings"));
+    expect(settingsRow).toBeDefined();
+    settingsRow?.click();
+    expect(onNavigate).toHaveBeenCalledWith("agents", { search: "?agent=main" });
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+  });
+
+  const manyAgents = (count: number) =>
+    ({
+      defaultId: "agent-1",
+      mainKey: "main",
+      scope: "agent",
+      agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
+    }) as AgentsListResult;
+
+  it("keeps the plain roster without a filter at ten agents or fewer", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("agent-1", ["agent:agent-1:main"]),
+      "panel",
+      manyAgents(10),
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')).toHaveLength(10);
+  });
+
+  it("shows pinned agents plus filter for large rosters and filters on input", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("agent-1", ["agent:agent-1:main"]),
+      "panel",
+      manyAgents(12),
+    );
+    sidebar.connected = true;
+    sidebar.pinnedAgentIds = ["agent-7", "agent-12"];
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const input = sidebar.querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input");
+    expect(input).not.toBeNull();
+    // Pinned agents plus the active one; pinned sort first.
+    const labels = () =>
+      [
+        ...sidebar.querySelectorAll(
+          '.sidebar-agent-menu [role="menuitemradio"] .sidebar-customize-menu__text',
+        ),
+      ].map((el) => el.textContent?.trim());
+    expect(labels()).toEqual(["agent-7", "agent-12", "agent-1"]);
+
+    if (!input) {
+      throw new Error("Expected agent menu filter input");
+    }
+    input.value = "agent-11";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await sidebar.updateComplete;
+    expect(labels()).toEqual(["agent-11"]);
+  });
+
+  it("falls back to the first ten agents when nothing is pinned", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("agent-1", ["agent:agent-1:main"]),
+      "panel",
+      manyAgents(12),
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')).toHaveLength(10);
   });
 });
 

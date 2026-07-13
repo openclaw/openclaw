@@ -1285,6 +1285,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
+                .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
                 .themeMode=${context.theme.mode}
                 .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
                 .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}

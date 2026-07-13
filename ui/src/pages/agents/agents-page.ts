@@ -19,6 +19,7 @@ import {
 } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import {
   resolveAgentConfig,
   resolveEffectiveModelFallbacks,
@@ -31,6 +32,7 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession,
   resetToolsEffectiveState,
   setDefaultAgent,
+  updateAgentIdentity,
   type AgentsPanel,
   type AgentsState,
 } from "../../lib/agents/index.ts";
@@ -45,7 +47,9 @@ import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { fileToAvatarDataUrl } from "./avatar-image.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
+import type { AgentIdentityDraft } from "./panels-overview.ts";
 import { loadAgentSkills } from "./skills.ts";
 import { renderAgents } from "./view.ts";
 
@@ -94,6 +98,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   @state() agentFileSaving = false;
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
+  @state() identityDraft: AgentIdentityDraft = { name: null, emoji: null, avatar: null };
+  @state() identitySaving = false;
+  @state() identityError: string | null = null;
   @state() agentSkillsLoading = false;
   @state() agentSkillsError: string | null = null;
   @state() agentSkillsReport: SkillStatusReport | null = null;
@@ -171,6 +178,10 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     .watch(
       () => this.context?.channels,
       (channels, notify) => channels.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.navigation,
+      (navigation, notify) => navigation.subscribe(notify),
     )
     .watch(
       () => this.context?.runtimeConfig,
@@ -369,7 +380,13 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     this.agentsError = data.error;
     if (data.agentsList) {
       this.agentsList = data.agentsList;
-      this.agentsSelectedId = data.selectedAgentId ?? this.resolveSelectedAgentId();
+      const nextSelectedId = data.selectedAgentId ?? this.resolveSelectedAgentId();
+      if (nextSelectedId !== this.agentsSelectedId) {
+        this.agentsSelectedId = nextSelectedId;
+        // Route-driven agent switches (chip menu "Agent settings") must not
+        // carry per-agent panel caches or identity drafts across agents.
+        this.resetSelectionState();
+      }
     }
   }
 
@@ -561,6 +578,68 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     }
   }
 
+  private resetIdentityDraft() {
+    this.identityDraft = { name: null, emoji: null, avatar: null };
+    this.identitySaving = false;
+    this.identityError = null;
+  }
+
+  private setIdentityDraftField(field: "name" | "emoji", value: string) {
+    this.identityDraft = { ...this.identityDraft, [field]: value };
+  }
+
+  private selectIdentityAvatar(file: File) {
+    void fileToAvatarDataUrl(file).then((dataUrl) => {
+      if (dataUrl) {
+        this.identityDraft = { ...this.identityDraft, avatar: dataUrl };
+        this.identityError = null;
+      } else {
+        this.identityError = t("agents.identity.imageUnusable");
+      }
+    });
+  }
+
+  private saveIdentityDraft() {
+    const client = this.client;
+    const agentId = this.resolveSelectedAgentId();
+    const draft = this.identityDraft;
+    if (!client || !agentId || this.identitySaving) {
+      return;
+    }
+    const name = draft.name?.trim();
+    const emoji = draft.emoji?.trim();
+    const avatar = draft.avatar ?? undefined;
+    if (!name && !emoji && !avatar) {
+      this.resetIdentityDraft();
+      return;
+    }
+    const generation = this.requestGeneration;
+    const agents = this.context.agents;
+    const agentIdentity = this.context.agentIdentity;
+    this.identitySaving = true;
+    this.identityError = null;
+    void (async () => {
+      try {
+        await updateAgentIdentity(client, { agentId, name, emoji, avatar });
+        agentIdentity.invalidate([agentId]);
+        await agents.refreshList();
+        await agentIdentity.ensure([agentId]);
+        if (this.isCurrentRequest(client, generation, agentId, { agents, agentIdentity })) {
+          this.resetIdentityDraft();
+          this.syncAgentState(agents);
+        }
+      } catch (err) {
+        if (this.isCurrentRequest(client, generation, agentId, { agents, agentIdentity })) {
+          this.identityError = String(err);
+        }
+      } finally {
+        if (this.isCurrentRequest(client, generation, agentId, { agents, agentIdentity })) {
+          this.identitySaving = false;
+        }
+      }
+    })();
+  }
+
   private resetSelectionState() {
     this.requestGeneration += 1;
     this.agentFilesList = null;
@@ -576,6 +655,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     this.agentSkillsAgentId = null;
     this.agentIdentityLoading = false;
     this.agentIdentityError = null;
+    this.resetIdentityDraft();
     this.toolsCatalogResult = null;
     this.toolsCatalogError = null;
     this.toolsCatalogLoading = false;
@@ -699,6 +779,14 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     void this.context.runtimeConfig.refresh({ discardPendingChanges: true });
   }
 
+  private togglePinnedAgent(agentId: string) {
+    const pinned = this.context.navigation.snapshot.pinnedAgentIds;
+    const next = pinned.includes(agentId)
+      ? pinned.filter((id) => id !== agentId)
+      : [...pinned, agentId];
+    this.context.navigation.update({ pinnedAgentIds: next });
+  }
+
   private runCronJobNow(jobId: string) {
     if (!this.cron.cronJobs.some((entry) => entry.id === jobId)) {
       return;
@@ -758,6 +846,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           agentIdentityLoading: this.agentIdentityLoading,
           agentIdentityError: this.agentIdentityError,
           agentIdentityById: this.agentIdentityById(),
+          identityDraft: this.identityDraft,
+          identitySaving: this.identitySaving,
+          identityError: this.identityError,
           agentSkills: {
             report: this.agentSkillsReport,
             loading: this.agentSkillsLoading,
@@ -778,6 +869,8 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           runtimeSessionKey: this.sessionKey,
           runtimeSessionMatchesSelectedAgent: selectedAgentId === this.chatAgentId(),
           modelCatalog: this.chatModelCatalog,
+          pinnedAgentIds: this.context.navigation.snapshot.pinnedAgentIds,
+          onTogglePinnedAgent: (agentId) => this.togglePinnedAgent(agentId),
           onRefresh: () => this.refreshAgents(),
           onSelectAgent: (agentId) => this.selectAgent(agentId),
           onSelectPanel: (panel) => this.selectPanel(panel),
@@ -838,6 +931,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           },
           onConfigReload: () => this.reloadConfig(),
           onConfigSave: () => this.saveAgentConfig(),
+          onIdentityFieldChange: (field, value) => this.setIdentityDraftField(field, value),
+          onIdentityAvatarSelect: (file) => this.selectIdentityAvatar(file),
+          onIdentitySave: () => this.saveIdentityDraft(),
           onChannelsRefresh: () => void this.context.channels.refresh(false),
           onCronRefresh: () => void this.refreshCron(),
           onCronRunNow: (jobId) => this.runCronJobNow(jobId),

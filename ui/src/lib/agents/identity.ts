@@ -15,6 +15,7 @@ export type AgentIdentityCapability = {
   get: (agentId: string | null | undefined) => AgentIdentityResult | null;
   entries: () => AgentIdentityResult[];
   ensure: (agentIds: readonly (string | null | undefined)[]) => Promise<void>;
+  invalidate: (agentIds: readonly (string | null | undefined)[]) => void;
   subscribe: (listener: () => void) => () => void;
 };
 
@@ -115,6 +116,18 @@ export function createAgentIdentityCapability(
           identities.set(agentId, identity);
           changed = true;
         }
+      }
+      if (changed) {
+        publish();
+      }
+    },
+    invalidate(agentIds) {
+      let changed = false;
+      for (const agentId of normalizeIds(agentIds)) {
+        if (identities.delete(agentId)) {
+          changed = true;
+        }
+        inFlight.delete(agentId);
       }
       if (changed) {
         publish();
