@@ -1,6 +1,7 @@
 /**
  * Sanitizes, extracts, and classifies embedded-agent tool execution results.
  */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -285,7 +286,12 @@ export function sanitizeToolResult(result: unknown): unknown {
       const entry = item as Record<string, unknown>;
       if (readStringValue(entry.type) === "image") {
         const data = readStringValue(entry.data);
-        const bytes = data?.length ?? (typeof entry.bytes === "number" ? entry.bytes : undefined);
+        const bytes =
+          data !== undefined
+            ? estimateBase64DecodedBytes(data)
+            : typeof entry.bytes === "number"
+              ? entry.bytes
+              : undefined;
         const cleaned = { ...entry };
         delete cleaned.data;
         return Object.assign({}, cleaned, { bytes, omitted: true });

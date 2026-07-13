@@ -3,6 +3,7 @@
  *
  * Reads bounded, redacted session transcript history after session visibility filtering.
  */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -121,7 +122,12 @@ function sanitizeHistoryContentBlock(block: unknown): {
   }
   if (type === "image") {
     const data = readStringValue(entry.data);
-    const bytes = data ? data.length : undefined;
+    const bytes =
+      data !== undefined
+        ? estimateBase64DecodedBytes(data)
+        : typeof entry.bytes === "number"
+          ? entry.bytes
+          : undefined;
     if ("data" in entry) {
       delete entry.data;
       truncated = true;

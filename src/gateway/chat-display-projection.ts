@@ -1,6 +1,7 @@
 // Gateway chat display projection.
 // Converts raw transcript messages into bounded Control UI/history display records.
 import { createHash } from "node:crypto";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   asFiniteNumber,
@@ -415,7 +416,7 @@ function sanitizeChatHistoryContentBlock(
   }
   const type = typeof entry.type === "string" ? entry.type : "";
   if (type === "image" && typeof entry.data === "string") {
-    const bytes = Buffer.byteLength(entry.data, "utf8");
+    const bytes = estimateBase64DecodedBytes(entry.data);
     delete entry.data;
     entry.omitted = true;
     entry.bytes = bytes;
