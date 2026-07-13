@@ -252,6 +252,12 @@ type BuildSkillStatusContext = {
   agentSkillFilter?: string[];
   workspaceDir: string;
   clawhubLockRead: ClawHubSkillsLockfileStatusRead;
+  // Directory holding globally-installed (managed) skills, and the lockfile
+  // status for its parent. Globally installed skills are tracked in the
+  // managed lockfile (`<dirname(managedSkillsDir)>/.clawhub/lock.json`), not
+  // the workspace one, so both are needed to resolve their link status.
+  managedSkillsDir: string;
+  managedLockRead: ClawHubSkillsLockfileStatusRead;
 };
 
 function buildSkillStatus(
@@ -294,13 +300,21 @@ function buildSkillStatus(
   const availableToAgent = eligible && !blockedByAgentFilter;
   const userInvocable = indexed.userInvocable;
 
+  // Globally managed skills are tracked in the managed lockfile, not the
+  // workspace lockfile. Use the loader-assigned source rather than a lexical
+  // path check: managed skill roots may contain symlinks whose resolved
+  // baseDir sits outside the managedSkillsDir tree. Resolve the link against
+  // the managed parent dir so the expected install dir matches the skill dir.
+  const isGlobalManagedSkill = !bundled && skillSource === "openclaw-managed";
   const clawhub =
     workspaceDir && !bundled
       ? resolveClawHubSkillStatusLinkSync({
-          workspaceDir,
+          workspaceDir: isGlobalManagedSkill
+            ? path.dirname(path.resolve(context.managedSkillsDir))
+            : workspaceDir,
           skillDir: entry.skill.baseDir,
           skillKey,
-          lockRead: context.clawhubLockRead,
+          lockRead: isGlobalManagedSkill ? context.managedLockRead : context.clawhubLockRead,
         })
       : undefined;
   const skillCard = resolveLocalSkillCardStatusSync(entry.skill.baseDir);
@@ -367,6 +381,15 @@ export function buildWorkspaceSkillStatus(
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const allowBundled = resolveBundledAllowlist(opts?.config);
   const clawhubLockRead = readClawHubSkillsLockfileStatusSync(workspaceDir);
+  // Globally installed skills live under managedSkillsDir and are tracked in
+  // the managed lockfile at `<dirname(managedSkillsDir)>/.clawhub/lock.json`.
+  // Reuse the workspace read when the two directories coincide to avoid
+  // reading the same file twice.
+  const managedParentDir = path.dirname(path.resolve(managedSkillsDir));
+  const managedLockRead =
+    managedParentDir === path.resolve(workspaceDir)
+      ? clawhubLockRead
+      : readClawHubSkillsLockfileStatusSync(managedParentDir);
   const skillIndexEntries = buildSkillIndexEntries(skillEntries, {
     bundledNames: bundledContext.names,
     agentSkillFilter,
@@ -385,6 +408,8 @@ export function buildWorkspaceSkillStatus(
         agentSkillFilter,
         workspaceDir,
         clawhubLockRead,
+        managedSkillsDir,
+        managedLockRead,
       }),
     ),
   };

@@ -238,6 +238,68 @@ describe("buildWorkspaceSkillStatus", () => {
     }
   });
 
+  it("links globally installed ClawHub skills via the managed lockfile, not the workspace lockfile", async () => {
+    const managedParentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-status-"));
+    try {
+      const managedSkillsDir = path.join(managedParentDir, "skills");
+      const skillDir = path.join(managedSkillsDir, "agentreceipt");
+      // Origin + lockfile live under the managed parent (global install), not the workspace.
+      await writeClawHubStatusFixture({
+        workspaceDir: managedParentDir,
+        skillDir,
+        slug: "agentreceipt",
+      });
+
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        managedSkillsDir,
+        entries: [createEntry("agentreceipt", { baseDir: skillDir, source: "openclaw-managed" })],
+      });
+
+      // Global skill must be linked via the managed lockfile, not flagged as
+      // "not tracked by the workspace ClawHub lockfile".
+      expect(report.skills[0]?.clawhub).toMatchObject({
+        status: "linked",
+        valid: true,
+        slug: "agentreceipt",
+      });
+    } finally {
+      await fs.rm(managedParentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a globally installed skill as invalid when it is absent from the managed lockfile", async () => {
+    const managedParentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-status-"));
+    try {
+      const managedSkillsDir = path.join(managedParentDir, "skills");
+      const skillDir = path.join(managedSkillsDir, "agentreceipt");
+      // Origin metadata present, but no lockfile at the managed parent.
+      await writeClawHubStatusFixture({
+        workspaceDir: managedParentDir,
+        skillDir,
+        slug: "agentreceipt",
+        writeLock: false,
+      });
+
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        managedSkillsDir,
+        entries: [createEntry("agentreceipt", { baseDir: skillDir, source: "openclaw-managed" })],
+      });
+
+      // No managed lockfile -> the global skill is genuinely untracked, not linked.
+      expect(report.skills[0]?.clawhub).toMatchObject({
+        status: "invalid",
+        valid: false,
+        reason: expect.stringContaining("not tracked"),
+      });
+    } finally {
+      await fs.rm(managedParentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not surface install options for OS-scoped skills on unsupported platforms", () => {
     if (process.platform === "win32") {
       // Keep this simple; win32 platform naming is already explicitly handled elsewhere.
