@@ -294,6 +294,36 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.getAccumulatedFinalText()).toBe("");
   });
 
+  it("silences cleaned metadata-only ACP block operational notices when configured", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: {
+          tts: { enabled: true },
+          operationalReplies: { policy: "silent" },
+        },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    const delivered = await coordinator.deliver(
+      "block",
+      createAcpErrorNotice("backend [[tts:text]]hidden[[/tts:text]] visible"),
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(coordinator.getAccumulatedBlockText()).toBe("");
+  });
+
   it("redirects ACP operational notices to the configured session", async () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({

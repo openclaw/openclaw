@@ -16,7 +16,7 @@ import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { isReplyPayloadStatusNotice } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -398,7 +398,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (rawBlockText) {
       if (state.cleanBlockTtsDirectiveText && !isStatusNotice) {
         const text = state.cleanBlockTtsDirectiveText.push(rawBlockText);
-        visiblePayload = { ...payload, text: text.trim() ? text : undefined };
+        visiblePayload = copyReplyPayloadMetadata(payload, {
+          ...payload,
+          text: text.trim() ? text : undefined,
+        });
       }
     }
 
