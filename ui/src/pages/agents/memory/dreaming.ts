@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
+import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
@@ -1151,27 +1152,18 @@ export async function copyDreamingArchivePath(state: DreamingState): Promise<boo
   if (!path) {
     return false;
   }
-  if (!globalThis.navigator?.clipboard?.writeText) {
-    state.dreamDiaryActionMessage = {
-      kind: "error",
-      text: "Could not copy archive path.",
-    };
-    return false;
-  }
-  try {
-    await globalThis.navigator.clipboard.writeText(path);
+  if (await copyToClipboard(path)) {
     state.dreamDiaryActionMessage = {
       kind: "success",
       text: "Archive path copied.",
     };
     return true;
-  } catch {
-    state.dreamDiaryActionMessage = {
-      kind: "error",
-      text: "Could not copy archive path.",
-    };
-    return false;
   }
+  state.dreamDiaryActionMessage = {
+    kind: "error",
+    text: "Could not copy archive path.",
+  };
+  return false;
 }
 
 export async function dedupeDreamDiary(state: DreamingState): Promise<boolean> {
