@@ -23,6 +23,7 @@ import {
   createWikiApplyTool,
   createWikiGetTool,
   createWikiLintTool,
+  createWikiOpenItemsTool,
   createWikiSearchTool,
   createWikiStatusTool,
 } from "./src/tool.js";
@@ -83,6 +84,13 @@ export default definePluginEntry({
         return resolved ? createWikiLintTool(resolved.config, resolved.appConfig) : null;
       },
       { name: "wiki_lint" },
+    );
+    api.registerTool(
+      (ctx) => {
+        const resolved = resolveToolContext(ctx.agentId);
+        return resolved ? createWikiOpenItemsTool(resolved.config, resolved.appConfig) : null;
+      },
+      { name: "wiki_open_items" },
     );
     api.registerTool(
       (ctx) => {
