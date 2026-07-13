@@ -39,13 +39,19 @@ function makeConnectParams(params: {
   nonce: string;
   bootstrapToken?: string;
   deviceToken?: string;
+  client?: Partial<ConnectParams["client"]>;
+  caps?: string[];
+  commands?: string[];
+  permissions?: ConnectParams["permissions"];
+  minProtocol?: number;
+  maxProtocol?: number;
 }): ConnectParams {
   const publicKey = publicKeyRawBase64UrlFromPem(params.identity.publicKeyPem);
   const auth = params.deviceToken
     ? { deviceToken: params.deviceToken }
     : { bootstrapToken: params.bootstrapToken };
   const signedAt = Date.now();
-  const client = {
+  const client: ConnectParams["client"] = {
     id: GATEWAY_CLIENT_IDS.WATCHOS_APP,
     displayName: "Test Watch",
     version: "1.0.0",
@@ -53,7 +59,8 @@ function makeConnectParams(params: {
     deviceFamily: "Apple Watch",
     mode: GATEWAY_CLIENT_MODES.NODE,
     instanceId: "watch-test",
-  } as const;
+    ...params.client,
+  };
   const scopes: string[] = [];
   const signaturePayload = buildDeviceAuthPayloadV3({
     deviceId: params.identity.deviceId,
@@ -68,12 +75,12 @@ function makeConnectParams(params: {
     deviceFamily: client.deviceFamily,
   });
   return {
-    minProtocol: PROTOCOL_VERSION,
-    maxProtocol: PROTOCOL_VERSION,
+    minProtocol: params.minProtocol ?? PROTOCOL_VERSION,
+    maxProtocol: params.maxProtocol ?? PROTOCOL_VERSION,
     client,
-    caps: [],
-    commands: ["device.info", "device.status", "system.notify"],
-    permissions: { notifications: true },
+    caps: params.caps ?? [],
+    commands: params.commands ?? ["device.info", "device.status", "system.notify"],
+    permissions: params.permissions ?? { notifications: true },
     role: "node",
     scopes,
     auth,
@@ -173,18 +180,38 @@ describe("watch node HTTP transport", () => {
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
     const { baseUrl, runtime } = await startRuntime(baseDir);
-    const variants: Array<(connect: ConnectParams) => ConnectParams> = [
-      (connect) => ({ ...connect, commands: [...(connect.commands ?? []), "system.run"] }),
-      (connect) => ({ ...connect, caps: ["canvas"] }),
-      (connect) => ({
-        ...connect,
-        client: { ...connect.client, deviceFamily: "iPhone" },
-      }),
-      (connect) => ({
-        ...connect,
-        minProtocol: PROTOCOL_VERSION + 1,
-        maxProtocol: PROTOCOL_VERSION + 1,
-      }),
+    const variants: Array<(nonce: string) => ConnectParams> = [
+      (nonce) =>
+        makeConnectParams({
+          identity,
+          nonce,
+          bootstrapToken: issued.token,
+          commands: ["device.info", "device.status", "system.notify", "system.run"],
+        }),
+      (nonce) =>
+        makeConnectParams({ identity, nonce, bootstrapToken: issued.token, caps: ["canvas"] }),
+      (nonce) =>
+        makeConnectParams({
+          identity,
+          nonce,
+          bootstrapToken: issued.token,
+          client: { deviceFamily: "iPhone" },
+        }),
+      (nonce) =>
+        makeConnectParams({
+          identity,
+          nonce,
+          bootstrapToken: issued.token,
+          permissions: { notifications: true, canvas: true },
+        }),
+      (nonce) =>
+        makeConnectParams({
+          identity,
+          nonce,
+          bootstrapToken: issued.token,
+          minProtocol: PROTOCOL_VERSION + 1,
+          maxProtocol: PROTOCOL_VERSION + 1,
+        }),
     ];
 
     for (const variant of variants) {
@@ -192,18 +219,40 @@ describe("watch node HTTP transport", () => {
       const response = await fetch(`${baseUrl}/connect`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(
-          variant(
-            makeConnectParams({
-              identity,
-              nonce: String(challenge.nonce),
-              bootstrapToken: issued.token,
-            }),
-          ),
-        ),
+        body: JSON.stringify(variant(String(challenge.nonce))),
       });
       expect(response.status).toBe(400);
+      expect(await readJson(response)).toMatchObject({
+        error: { message: "unsupported watch node identity or capability surface" },
+      });
     }
+    runtime.close();
+  });
+
+  it("accepts a supported notification permission set to false", async () => {
+    const baseDir = await tempDirs.make("openclaw-watch-node-permissions-");
+    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "watch-identity.json"));
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const { baseUrl, runtime } = await startRuntime(baseDir);
+    const challenge = await readJson(await fetch(`${baseUrl}/challenge`));
+    const response = await fetch(`${baseUrl}/connect`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(
+        makeConnectParams({
+          identity,
+          nonce: String(challenge.nonce),
+          bootstrapToken: issued.token,
+          permissions: { notifications: false },
+        }),
+      ),
+    });
+
+    expect(response.status).toBe(200);
+    await readJson(response);
     runtime.close();
   });
 
@@ -226,6 +275,7 @@ describe("watch node HTTP transport", () => {
         headers: { "x-forwarded-for": "198.51.100.20" },
       });
       expect(response.status).toBe(200);
+      await readJson(response);
     }
 
     const connectResponse = await fetch(`${baseUrl}/connect`, {

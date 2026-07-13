@@ -174,7 +174,7 @@ describe("buildGatewayReloadPlan", () => {
       resolveAccount: () => ({}),
     },
     reload: {
-      configPrefixes: ["channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
+      configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
       noopPrefixes: ["channels.whatsapp"],
     },
   };
@@ -253,10 +253,120 @@ describe("buildGatewayReloadPlan", () => {
     }
   });
 
+  it.each([
+    "gateway.port",
+    "gateway.terminal.enabled",
+    "browser.enabled",
+    "plugins.installs.telegram.installPath",
+    "plugins.load.paths.0",
+    "gateway.auth.mode",
+  ])("keeps restart-owned path restart-backed: %s", (path) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual([path]);
+    expect(plan.hotReasons).toStrictEqual([]);
+  });
+
+  it.each([
+    {
+      path: "hooks.gmail.account",
+      expected: { restartGmailWatcher: true, reloadHooks: true },
+    },
+    {
+      path: "gateway.channelHealthCheckMinutes",
+      expected: { restartHealthMonitor: true },
+    },
+    {
+      path: "mcp.servers.context7.command",
+      expected: { disposeMcpRuntimes: true },
+    },
+    {
+      path: "models.providers.openai.models",
+      expected: { restartHeartbeat: true },
+    },
+    {
+      path: "agents.defaults.models",
+      expected: { restartHeartbeat: true },
+    },
+    {
+      path: "agents.list",
+      expected: { restartHeartbeat: true },
+    },
+    {
+      path: "plugins.entries.lossless-claw.config.mode",
+      expected: { reloadPlugins: true, disposeMcpRuntimes: true },
+    },
+    {
+      path: "diagnostics.memoryPressureSnapshot",
+      expected: {},
+    },
+  ])("keeps hot-reload actions for $path", ({ path, expected }) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      restartReasons: [],
+      hotReasons: [path],
+      noopPaths: [],
+      ...expected,
+    });
+  });
+
+  it.each([
+    "gateway.remote.url",
+    "secrets.providers.default.path",
+    "tui.footer.showRemoteHost",
+    "diagnostics.stuckSessionWarnMs",
+    "diagnostics.stuckSessionAbortMs",
+  ])("keeps runtime-irrelevant path as a no-op: %s", (path) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toStrictEqual([]);
+    expect(plan.noopPaths).toEqual([path]);
+  });
+
+  it("treats plugin install timestamp-only changes as no-ops", () => {
+    const paths = [
+      "plugins.installs.lossless-claw.resolvedAt",
+      "plugins.installs.lossless-claw.installedAt",
+    ];
+    const plan = buildGatewayReloadPlan(paths);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toEqual(paths);
+    for (const path of paths) {
+      expect(resolveConfigReloadMetadata(path).kind).toBe("none");
+    }
+  });
+
+  it("restarts for forced whole-record plugin install changes", () => {
+    const path = "plugins.installs.lossless.resolvedAt";
+    const plan = buildGatewayReloadPlan([path, path], {
+      noopPaths: [path],
+      forceChangedPaths: [path],
+    });
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(false);
+    expect(plan.restartReasons).toEqual([path, path]);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
   it("restarts the matching channel for channel config changes", () => {
     const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it("restarts every channel whose config prefix matches", () => {
+    const plan = buildGatewayReloadPlan(["web.enabled", "channels.telegram.botToken"]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp", "telegram"]));
   });
 
   it("prefers a specific hot rule under a broad restart prefix", () => {
