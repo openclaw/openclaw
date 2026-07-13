@@ -72,7 +72,7 @@ export function resolveNodeTargets(
   return list;
 }
 
-export type DeviceIconSource = {
+type DeviceIconSource = {
   clientId?: string;
   clientMode?: string;
   platform?: string;
