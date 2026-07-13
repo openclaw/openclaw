@@ -805,6 +805,9 @@ async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
+    ? { remaining: 1 }
+    : undefined;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
@@ -826,6 +829,7 @@ async function runEmbeddedAgentInternal(
     sessionId: runSessionTarget.sessionId,
     sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
     sessionFile: runSessionTarget.sessionFile,
+    skillWorkshopProposalMutationBudget,
   };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
@@ -2847,6 +2851,9 @@ async function runEmbeddedAgentInternal(
             streamParams: params.streamParams,
             modelRun: params.modelRun,
             disableTrajectory: params.disableTrajectory,
+            skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
+            skillWorkshopOrigin: params.skillWorkshopOrigin,
+            skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,

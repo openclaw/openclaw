@@ -71,7 +71,7 @@ describe("skill_workshop tool", () => {
     expect(tools.some((tool) => tool.name === "skill_workshop")).toBe(true);
   });
 
-  it("asks the model to capture reusable experience only when autonomy is enabled", () => {
+  it("does not nudge the foreground model when autonomy is enabled", () => {
     const disabled = createSkillWorkshopTool({
       workspaceDir: "/tmp/openclaw",
       config: { skills: { workshop: { autonomous: { enabled: false } } } },
@@ -81,15 +81,79 @@ describe("skill_workshop tool", () => {
       config: { skills: { workshop: { autonomous: { enabled: true } } } },
     });
 
-    expect(disabled.description).not.toContain("Experience capture is enabled");
-    expect(enabled.description).toContain("after successful nontrivial work");
-    expect(enabled.description).toContain("review the full trajectory");
-    expect(enabled.description).toContain("`skill-creator` is listed in available skills");
-    expect(enabled.description).toContain("updating a relevant writable workspace skill");
-    expect(enabled.description).toContain("otherwise create a broad new skill");
-    expect(enabled.description).toContain("Skip routine completion");
-    expect(enabled.description).toContain("secrets");
-    expect(enabled.description).toContain("never apply it without an explicit user request");
+    expect(enabled.description).toBe(disabled.description);
+    expect(enabled.description).not.toContain("Experience capture");
+  });
+
+  it("restricts internal review runs to one pending proposal mutation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-");
+    const proposalMutationBudget = { remaining: 1 };
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+      proposalOnly: true,
+      proposalMutationBudget,
+    });
+
+    expect(
+      (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
+    ).toEqual(["create", "revise", "list", "inspect"]);
+    await expect(
+      tool.execute("call-apply", { action: "apply", proposal_id: "proposal-1" }),
+    ).rejects.toThrow("only inspect or draft proposals");
+    await expect(
+      tool.execute("call-update", {
+        action: "update",
+        skill_name: "existing-skill",
+        proposal_content: "# Replacement\n",
+      }),
+    ).rejects.toThrow("only inspect or draft proposals");
+
+    await tool.execute("call-create", {
+      action: "create",
+      name: "Review Learning",
+      description: "Reuse a recovered workflow",
+      proposal_content: "# Review Learning\n\nFollow the recovered workflow.\n",
+    });
+    const retryTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      proposalMutationBudget,
+    });
+    await expect(
+      retryTool.execute("call-create-2", {
+        action: "create",
+        name: "Second Learning",
+        description: "Should stay blocked",
+        proposal_content: "# Second Learning\n",
+      }),
+    ).rejects.toThrow("limited to one proposal mutation");
+  });
+
+  it("does not refund the review mutation budget after a failed mutation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-failure-");
+    const proposalMutationBudget = { remaining: 1 };
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      proposalMutationBudget,
+    });
+
+    await expect(
+      tool.execute("call-revise-missing", {
+        action: "revise",
+        proposal_id: "missing-proposal",
+        proposal_content: "# Missing Skill\n",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      tool.execute("call-create-after-failure", {
+        action: "create",
+        name: "Second Mutation",
+        description: "Must remain blocked after a failed mutation",
+        proposal_content: "# Second Mutation\n",
+      }),
+    ).rejects.toThrow("limited to one proposal mutation");
   });
 
   it("is not exposed from sandboxed OpenClaw tool sets", async () => {

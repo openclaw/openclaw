@@ -20,6 +20,11 @@ export type SkillProposalOrigin = {
   messageId?: string;
 };
 
+/** Run-scoped budget shared by every workshop tool instance created across runner retries. */
+export type SkillWorkshopProposalMutationBudget = {
+  remaining: number;
+};
+
 export type SkillProposalScan = {
   state: SkillProposalScannerState;
   scannedAt: string;

@@ -26,6 +26,10 @@ import { getPluginToolMeta } from "../plugins/tools.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
+import type {
+  SkillProposalOrigin,
+  SkillWorkshopProposalMutationBudget,
+} from "../skills/workshop/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
@@ -377,6 +381,12 @@ type OpenClawCodingToolsOptions = {
   modelProvider?: string;
   /** Model id for the current provider (used for model-specific tool gating). */
   modelId?: string;
+  /** Restrict Skill Workshop to one pending proposal mutation for internal review runs. */
+  skillWorkshopProposalOnly?: boolean;
+  /** Override proposal provenance for internal review runs. */
+  skillWorkshopOrigin?: SkillProposalOrigin;
+  /** Run-scoped proposal mutation budget shared across runner attempts. */
+  skillWorkshopProposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   /** Model API for the current provider (used for provider-native tool arbitration). */
   modelApi?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
@@ -1017,6 +1027,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
             modelProvider: options?.modelProvider,
             modelId: options?.modelId,
+            skillWorkshopProposalOnly: options?.skillWorkshopProposalOnly,
+            skillWorkshopOrigin: options?.skillWorkshopOrigin,
+            skillWorkshopProposalMutationBudget: options?.skillWorkshopProposalMutationBudget,
             replyToMode: options?.replyToMode,
             hasRepliedRef: options?.hasRepliedRef,
             modelHasVision: options?.modelHasVision,

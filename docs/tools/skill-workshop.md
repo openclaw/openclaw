@@ -236,15 +236,18 @@ the most recent detected workflow through `skill_workshop`; the user decides whe
 proposal. This built-in suggestion does not create or change a skill by itself. Enable
 `skills.workshop.autonomous.enabled` to create pending proposals directly instead.
 
-With autonomous capture enabled, the agent also reviews successful nontrivial work before its final
-reply. It can distill a reusable technique even when the user did not phrase it as a correction.
-The review uses the completed turn's full trajectory, prefers revising or updating an existing
-writable workspace skill, and otherwise creates a broad new skill. It skips routine completion,
-one-off requests, user-specific facts, secrets, transient failures, and unsupported negative
-claims. The result is still only a pending proposal; autonomous capture never applies a skill. If
-`skill-creator` is available, the agent loads its authoring guidance before it drafts proposal
-content. Workshop rejects recognized literal credentials in proposal content, support files, goals,
-and evidence before writing proposal state.
+With autonomous capture enabled, OpenClaw can also review successful substantial work after the
+foreground run has ended. A turn qualifies only after at least ten model iterations. OpenClaw then
+waits for 30 seconds and keeps waiting while any agent run is active. The isolated review receives
+the completed turn trajectory and only the `skill_workshop` tool.
+
+The reviewer creates or changes at most one pending proposal. It does so only when the trajectory
+shows a reusable recovery from model difficulty or a stable procedure that would remove at least
+two future model/tool round trips. It skips routine completion, one-off requests, user-specific
+facts, secrets, transient failures, unsupported negative claims, and generic advice. The isolated
+tool cannot apply, reject, or quarantine proposals, even when `approvalPolicy` is `"auto"`.
+Workshop also rejects recognized literal credentials in proposal content, support files, goals, and
+evidence before writing proposal state.
 
 ## Approval and autonomy
 
@@ -264,24 +267,26 @@ and evidence before writing proposal state.
 }
 ```
 
-| Setting                    | Default     | Effect                                                                                                                                                                     |
-| -------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`     | Creates pending proposals from explicit corrections and reusable techniques found after successful nontrivial work instead of only offering a suggestion on the next turn. |
-| `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                        |
-| `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action).     |
-| `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                              |
-| `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                            |
+| Setting                    | Default     | Effect                                                                                                                                                                 |
+| -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.enabled`       | `false`     | Creates pending proposals from explicit corrections and, after an idle delay, substantial completed work with reusable recovery or meaningful round-trip savings.      |
+| `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
+| `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
+| `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
+| `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
 
 Autonomous capture recognizes prospective rules (for example, “from now on”) and reactive
 corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
 to three proposals per turn, routes vocabulary matches to existing writable workspace skills, and
 revises its own pending proposal when another correction targets the same skill.
 
-For successful nontrivial work without an explicit correction, the active model decides whether
-the trajectory contains a durable procedure worth proposing. This reuses the model's current
-context rather than starting a second review run. Selectivity guidance lives in the
-`skill_workshop` tool description, so restrictive tool policy or sandboxing also disables this
-capture path.
+For successful substantial work without an explicit correction, an isolated run of the selected
+model decides whether the completed trajectory clears the conservative proposal bar. The
+foreground model is not prompted to learn before it replies. The background reviewer preserves the
+foreground run as proposal provenance, cannot access general agent tools, and cannot make lifecycle
+decisions. The review starts only when the foreground runtime reports both its exact resolved model
+and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
+fails closed and creates no proposal.
 
 Proposal descriptions are always capped at 160 bytes, independent of
 `maxSkillBytes`.

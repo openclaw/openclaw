@@ -1298,6 +1298,7 @@ export async function runEmbeddedAttempt(
       !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
+      params.skillWorkshopProposalOnly !== true &&
       params.toolsAllow?.length !== 0 &&
       codeModeConfig.enabled;
     const toolSearchControlsEnabledForRun =
@@ -1305,6 +1306,7 @@ export async function runEmbeddedAttempt(
       !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
+      params.skillWorkshopProposalOnly !== true &&
       params.toolsAllow?.length !== 0 &&
       !codeModeControlsEnabledForRun &&
       toolSearchConfig.enabled;
@@ -1467,6 +1469,9 @@ export async function runEmbeddedAttempt(
             abortSignal: runAbortController.signal,
             modelProvider: params.provider,
             modelId: params.modelId,
+            skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
+            skillWorkshopOrigin: params.skillWorkshopOrigin,
+            skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
             modelCompat: extractModelCompat(params.model),
             modelApi: params.model.api,
             modelContextWindowTokens: params.model.contextWindow,
@@ -5392,6 +5397,24 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               sessionId: params.sessionId,
               workspaceDir: params.workspaceDir,
+              modelProviderId: params.provider,
+              modelId: params.modelId,
+              authProfileId: params.authProfileId,
+              skillWorkshopAvailable: uncompactedEffectiveTools.some(
+                (tool) => tool.name === "skill_workshop",
+              ),
+              messageChannel: params.messageChannel,
+              chatType: params.chatType,
+              agentAccountId: params.agentAccountId,
+              groupId: params.groupId,
+              groupChannel: params.groupChannel,
+              groupSpace: params.groupSpace,
+              memberRoleIds: params.memberRoleIds,
+              spawnedBy: params.spawnedBy,
+              senderName: params.senderName,
+              senderUsername: params.senderUsername,
+              senderE164: params.senderE164,
+              senderIsOwner: params.senderIsOwner,
               trigger: params.trigger,
               ...(params.config ? { config: params.config } : {}),
               ...buildAgentHookContextChannelFields(params),

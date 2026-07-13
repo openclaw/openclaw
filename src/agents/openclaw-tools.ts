@@ -18,6 +18,10 @@ import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import type {
+  SkillProposalOrigin,
+  SkillWorkshopProposalMutationBudget,
+} from "../skills/workshop/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -170,6 +174,12 @@ export function createOpenClawTools(
     modelProvider?: string;
     /** Active model id for provider/model-specific tool gating. */
     modelId?: string;
+    /** Restrict Skill Workshop to pending proposal work for internal review runs. */
+    skillWorkshopProposalOnly?: boolean;
+    /** Override proposal provenance for internal review runs. */
+    skillWorkshopOrigin?: SkillProposalOrigin;
+    /** Run-scoped proposal mutation budget shared across runner attempts. */
+    skillWorkshopProposalMutationBudget?: SkillWorkshopProposalMutationBudget;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -553,12 +563,18 @@ export function createOpenClawTools(
             workspaceDir,
             config: resolvedConfig,
             agentId: sessionAgentId,
-            origin: {
-              agentId: sessionAgentId,
-              ...(skillWorkshopSessionKey ? { sessionKey: skillWorkshopSessionKey } : {}),
-              ...(skillWorkshopRunId ? { runId: skillWorkshopRunId } : {}),
-              ...(skillWorkshopMessageId ? { messageId: skillWorkshopMessageId } : {}),
-            },
+            origin:
+              options?.skillWorkshopOrigin ??
+              ({
+                agentId: sessionAgentId,
+                ...(skillWorkshopSessionKey ? { sessionKey: skillWorkshopSessionKey } : {}),
+                ...(skillWorkshopRunId ? { runId: skillWorkshopRunId } : {}),
+                ...(skillWorkshopMessageId ? { messageId: skillWorkshopMessageId } : {}),
+              } satisfies SkillProposalOrigin),
+            proposalOnly: options?.skillWorkshopProposalOnly,
+            proposalMutationBudget:
+              options?.skillWorkshopProposalMutationBudget ??
+              (options?.skillWorkshopProposalOnly ? { remaining: 1 } : undefined),
           }),
         ]),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
