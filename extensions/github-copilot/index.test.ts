@@ -278,6 +278,44 @@ describe("github-copilot plugin", () => {
     expect(profile?.levels.map((level) => level.id)).not.toContain("max");
   });
 
+  it("preserves thinking levels for Claude models when catalog reasoning is false", () => {
+    // Copilot's /models endpoint does not expose reasoning_effort for
+    // Anthropic-backed models, so discovery marks Claude models reasoning:false
+    // and the shared resolver would otherwise collapse this profile to off-only.
+    // The provider opts in to preserving its declared levels for Claude models.
+    // See #99240.
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "claude-sonnet-4.6",
+      compat: { supportedReasoningEfforts: [] },
+    });
+
+    expect(profile?.preserveWhenCatalogReasoningFalse).toBe(true);
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("does not preserve thinking levels for non-Claude Copilot models", () => {
+    // Non-Claude Copilot models without reasoning_effort stay off-only so we do
+    // not advertise reasoning to models that may not support it. See #99240.
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "gpt-5.4-mini",
+      compat: { supportedReasoningEfforts: [] },
+    });
+
+    expect(profile?.preserveWhenCatalogReasoningFalse).toBeUndefined();
+  });
+
   it("exposes xhigh thinking for non-Claude Copilot models with catalog xhigh effort", () => {
     // Regression for #59416: mini-family models (e.g. gpt-5.4-mini) are
     // entitled to xhigh per live /models, but the static xhigh allowlist only
