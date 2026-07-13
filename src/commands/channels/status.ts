@@ -78,24 +78,6 @@ function formatEventLoopBits(value: unknown): string | null {
     .join(" ");
 }
 
-function formatSignalProbeReadiness(provider: ChatChannel, probe: unknown): string | null {
-  if (provider !== "signal" || !probe || typeof probe !== "object") {
-    return null;
-  }
-  switch ((probe as { readiness?: unknown }).readiness) {
-    case "ready":
-      return "readiness:ready";
-    case "account_missing":
-      return "readiness:account-missing";
-    case "unreachable":
-      return "readiness:daemon-unreachable";
-    case "receive_unavailable":
-      return "readiness:receive-unavailable";
-    default:
-      return null;
-  }
-}
-
 /** Render gateway channel status payloads into terminal-friendly lines. */
 export function formatGatewayChannelsStatusLines(payload: Record<string, unknown>): string[] {
   const lines: string[] = [];
@@ -183,13 +165,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       }
       appendBaseUrlBit(bits, account);
       const probe = account.probe as { ok?: boolean } | undefined;
-      const signalReadiness = formatSignalProbeReadiness(provider, probe);
-      if (signalReadiness) {
-        bits.push(signalReadiness);
-      }
-      const suppressSignalWorks =
-        Boolean(signalReadiness) && signalReadiness !== "readiness:ready" && probe?.ok === true;
-      if (probe && typeof probe.ok === "boolean" && !suppressSignalWorks) {
+      if (probe && typeof probe.ok === "boolean") {
         bits.push(probe.ok ? "works" : "probe failed");
       }
       const audit = account.audit as { ok?: boolean } | undefined;

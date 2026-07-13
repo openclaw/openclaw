@@ -703,6 +703,109 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(configure).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps external plugin install metadata when channel setup is cancelled", async () => {
+    const configure = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      cfg,
+      cancelled: true as const,
+    }));
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
+      setupWizard: {
+        channel: "external-chat",
+        getStatus: vi.fn(async () => ({
+          channel: "external-chat",
+          configured: false,
+          statusLines: [],
+        })),
+        configure,
+      } as ChannelSetupPlugin["setupWizard"],
+    });
+    const installableCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
+      pluginId: "@vendor/external-chat-plugin",
+    });
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "external-chat",
+            meta: makeMeta("external-chat", "External Chat"),
+          },
+        ],
+        installableCatalogEntries: [installableCatalogEntry],
+        installableCatalogById: new Map([["external-chat", installableCatalogEntry]]),
+      }),
+    );
+    ensureChannelSetupPluginInstalled.mockImplementationOnce(async ({ cfg }) => ({
+      cfg: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          entries: {
+            ...cfg.plugins?.entries,
+            "@vendor/external-chat-plugin": { enabled: true },
+          },
+          installs: {
+            ...cfg.plugins?.installs,
+            "@vendor/external-chat-plugin": {
+              source: "npm",
+              spec: "@vendor/external-chat-plugin",
+              installPath: "/tmp/plugins/external-chat",
+            },
+          },
+        },
+      },
+      installed: true,
+      pluginId: "@vendor/external-chat-plugin",
+      status: "installed",
+    }));
+    loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue(
+      makePluginRegistry({
+        channelSetups: [
+          {
+            pluginId: "@vendor/external-chat-plugin",
+            source: "global",
+            enabled: true,
+            plugin: externalChatPlugin,
+          },
+        ],
+      }),
+    );
+    const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
+    const selection = vi.fn();
+
+    const result = await setupChannels(
+      {
+        channels: {
+          telegram: { botToken: "keep" },
+        },
+      } as OpenClawConfig,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        skipConfirm: true,
+        skipDmPolicyPrompt: true,
+        onSelection: selection,
+      },
+    );
+
+    expect(configure).toHaveBeenCalledTimes(1);
+    expect(selection).toHaveBeenCalledWith([]);
+    expect(result.channels?.telegram).toEqual({ botToken: "keep" });
+    expect(result.channels?.["external-chat"]).toBeUndefined();
+    expect(result.plugins?.entries?.["@vendor/external-chat-plugin"]).toEqual({ enabled: true });
+    expect(result.plugins?.installs?.["@vendor/external-chat-plugin"]).toMatchObject({
+      source: "npm",
+      spec: "@vendor/external-chat-plugin",
+      installPath: "/tmp/plugins/external-chat",
+    });
+  });
+
   it("does not load or re-enable an explicitly disabled channel when selected lazily", async () => {
     const setupWizard = {
       channel: "external-chat",

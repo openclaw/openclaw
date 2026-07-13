@@ -570,7 +570,7 @@
           "clawhubSpec": "clawhub:@openclaw/signal",
           "npmSpec": "@openclaw/signal",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.6.11",
+          "minHostVersion": ">=2026.6.9",
           "allowInvalidConfigRecovery": true
         }
       }

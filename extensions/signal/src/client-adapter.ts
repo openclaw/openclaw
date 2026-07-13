@@ -74,7 +74,11 @@ function waitForNativePreferenceGrace(
   });
 }
 
-type SignalCheckResult = { ok: boolean; status?: number | null; error?: string | null };
+export type SignalCheckResult = { ok: boolean; status?: number | null; error?: string | null };
+export type SignalApiCheck = {
+  mode: "native" | "container" | null;
+  check: SignalCheckResult;
+};
 type SignalApiDetection = { mode: "native" | "container"; check: SignalCheckResult };
 type SignalApiDetectionOptions = {
   account?: string;
@@ -94,6 +98,20 @@ function resolveReceiveAccountCacheValue(params: {
     return undefined;
   }
   return params.receiveAccount;
+}
+
+function canReuseDetectedMode(params: {
+  cached: { mode: "native" | "container"; receiveAccount?: string };
+  receiveAccount?: string;
+  options: SignalApiDetectionOptions;
+}): boolean {
+  if (!params.options.requireReceive) {
+    return true;
+  }
+  if (params.cached.mode === "native" && params.options.checkNativeReceive === false) {
+    return true;
+  }
+  return Boolean(params.receiveAccount && params.cached.receiveAccount === params.receiveAccount);
 }
 
 function createSignalApiNotReachableError(
@@ -142,10 +160,7 @@ async function resolveAutoApiMode(
   const cached = detectedModeCache.get(baseUrl);
   if (cached) {
     if (now !== undefined && cached.expiresAt > now) {
-      if (
-        !options.requireReceive ||
-        (Boolean(receiveAccount) && cached.receiveAccount === receiveAccount)
-      ) {
+      if (canReuseDetectedMode({ cached, receiveAccount, options })) {
         return cached.mode;
       }
     } else {
@@ -194,10 +209,7 @@ async function resolveAutoApiDetection(
   const cached = detectedModeCache.get(baseUrl);
   if (cached) {
     if (now !== undefined && cached.expiresAt > now) {
-      if (
-        !options.requireReceive ||
-        (Boolean(receiveAccount) && cached.receiveAccount === receiveAccount)
-      ) {
+      if (canReuseDetectedMode({ cached, receiveAccount, options })) {
         return {
           mode: cached.mode,
           check: await checkDetectedSignalApiMode(baseUrl, timeoutMs, cached.mode, options),
@@ -339,49 +351,42 @@ export async function signalCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   options: { apiMode?: SignalApiMode; account?: string; requireReceive?: boolean } = {},
-): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
+): Promise<SignalCheckResult> {
+  return (await signalCheckWithMode(baseUrl, timeoutMs, options)).check;
+}
+
+export async function signalCheckWithMode(
+  baseUrl: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  options: { apiMode?: SignalApiMode; account?: string; requireReceive?: boolean } = {},
+): Promise<SignalApiCheck> {
   const configured = resolveConfiguredApiMode(options.apiMode);
-  if (configured === "auto" && options.requireReceive) {
+  if (configured === "auto") {
     return await resolveAutoApiDetection(baseUrl, timeoutMs, {
       account: options.account,
       requireReceive: options.requireReceive,
-    })
-      .then((detection) => detection.check)
-      .catch((error: unknown) => {
-        const result =
-          typeof error === "object" && error !== null
-            ? (error as { signalCheckResult?: SignalCheckResult }).signalCheckResult
-            : undefined;
-        return {
+    }).catch((error: unknown) => {
+      const result =
+        typeof error === "object" && error !== null
+          ? (error as { signalCheckResult?: SignalCheckResult }).signalCheckResult
+          : undefined;
+      return {
+        mode: null,
+        check: {
           ok: false,
           status: result?.status ?? null,
           error: result?.error ?? formatErrorMessage(error),
-        } as const;
-      });
+        },
+      } satisfies SignalApiCheck;
+    });
   }
-  const mode =
-    configured === "auto"
-      ? await resolveAutoApiMode(baseUrl, timeoutMs).catch((error: unknown) => {
-          return { ok: false, status: null, error: formatErrorMessage(error) } as const;
-        })
-      : configured;
-  if (typeof mode !== "string") {
-    return mode;
-  }
-  if (mode === "container") {
-    if (options.requireReceive) {
-      return containerCheck(baseUrl, timeoutMs, options.account?.trim());
-    }
-    return containerCheck(baseUrl, timeoutMs);
-  }
-  if (options.requireReceive) {
-    const check = await nativeCheck(baseUrl, timeoutMs);
-    if (!check.ok) {
-      return check;
-    }
-    return nativeReceiveCheck(baseUrl, timeoutMs, options.account?.trim());
-  }
-  return nativeCheck(baseUrl, timeoutMs);
+  return {
+    mode: configured,
+    check: await checkDetectedSignalApiMode(baseUrl, timeoutMs, configured, {
+      account: options.account,
+      requireReceive: options.requireReceive,
+    }),
+  };
 }
 
 /**

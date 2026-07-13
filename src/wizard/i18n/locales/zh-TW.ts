@@ -815,7 +815,7 @@ export const zh_TW = {
       examples: "範例：",
       installPrompt: "未找到 signal-cli。現在安裝？",
       multipleEntries: "多個項目請用逗號分隔。",
-      nextLinkDevice: '綁定裝置：signal-cli link -n "OpenClaw"',
+      nextLinkDevice: "綁定裝置：{command}",
       nextScanQr: "在 Signal -> Linked Devices 中掃描 QR code",
       nextStepsTitle: "Signal 後續步驟",
       reinstallPrompt: "已偵測到 signal-cli。現在重新安裝/更新？",

@@ -4,12 +4,10 @@ import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
-  ChannelOnboardingPostWriteHook,
   ChannelSetupConfiguredResult,
   ChannelSetupPlugin,
   ChannelSetupResult,
   ChannelSetupStatus,
-  ChannelSetupWizardAdapter,
   SetupChannelsOptions,
 } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -29,13 +27,13 @@ import {
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
 import { enableExplicitlySelectedPluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { createChannelOnboardingPostWriteHook } from "./channel-setup-post-write-hooks.js";
 import {
   maybeConfigureDmPolicies,
   promptConfiguredAction,
@@ -52,60 +50,11 @@ import {
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
 
-export function createChannelOnboardingPostWriteHookCollector() {
-  const hooks = new Map<string, ChannelOnboardingPostWriteHook>();
-  return {
-    collect(hook: ChannelOnboardingPostWriteHook) {
-      hooks.set(`${hook.channel}:${hook.accountId}`, hook);
-    },
-    drain(): ChannelOnboardingPostWriteHook[] {
-      const next = [...hooks.values()];
-      hooks.clear();
-      return next;
-    },
-  };
-}
-
-export async function runCollectedChannelOnboardingPostWriteHooks(params: {
-  hooks: ChannelOnboardingPostWriteHook[];
-  cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  beforePersistentEffect?: () => Promise<void>;
-}): Promise<void> {
-  for (const hook of params.hooks) {
-    await params.beforePersistentEffect?.();
-    try {
-      await hook.run({ cfg: params.cfg, runtime: params.runtime });
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      params.runtime.error(
-        `Channel ${hook.channel} post-setup warning for "${hook.accountId}": ${message}`,
-      );
-    }
-  }
-}
-
-export function createChannelOnboardingPostWriteHook(params: {
-  accountId?: string;
-  adapter?: Pick<ChannelSetupWizardAdapter, "afterConfigWritten">;
-  channel: ChannelChoice;
-  previousCfg: OpenClawConfig;
-}): ChannelOnboardingPostWriteHook | undefined {
-  if (!params.accountId || !params.adapter?.afterConfigWritten) {
-    return undefined;
-  }
-  return {
-    channel: params.channel,
-    accountId: params.accountId,
-    run: async ({ cfg, runtime }) =>
-      await params.adapter?.afterConfigWritten?.({
-        previousCfg: params.previousCfg,
-        cfg,
-        accountId: params.accountId!,
-        runtime,
-      }),
-  };
-}
+export {
+  createChannelOnboardingPostWriteHook,
+  createChannelOnboardingPostWriteHookCollector,
+  runCollectedChannelOnboardingPostWriteHooks,
+} from "./channel-setup-post-write-hooks.js";
 
 // Channel-specific prompts moved into setup flow adapters.
 
@@ -444,15 +393,23 @@ export async function setupChannels(
   const applyCustomSetupResult = async (
     channel: ChannelChoice,
     result: ChannelSetupConfiguredResult,
+    cfgOnCancellation: OpenClawConfig,
   ) => {
     if (result === "skip") {
+      return false;
+    }
+    if (result.cancelled) {
+      // Preserve an installation accepted before the wizard ran so its on-disk package keeps a
+      // matching install record. Wizard-local edits are still discarded by the adapter contract.
+      next = cfgOnCancellation;
+      await refreshStatus(channel);
       return false;
     }
     await applySetupResult(channel, result);
     return true;
   };
 
-  const configureChannel = async (channel: ChannelChoice) => {
+  const configureChannel = async (channel: ChannelChoice, cfgBeforeChoice: OpenClawConfig) => {
     if (scopedPluginsById.has(channel)) {
       await loadScopedChannelPlugin(channel, undefined, {
         forceReload: true,
@@ -479,10 +436,14 @@ export async function setupChannels(
       shouldPromptAccountIds,
       forceAllowFrom: forceAllowFromChannels.has(channel),
     });
-    await applySetupResult(channel, result);
+    await applyCustomSetupResult(channel, result, cfgBeforeChoice);
   };
 
-  const handleConfiguredChannel = async (channel: ChannelChoice, label: string) => {
+  const handleConfiguredChannel = async (
+    channel: ChannelChoice,
+    label: string,
+    cfgBeforeChoice: OpenClawConfig,
+  ) => {
     const plugin = getVisibleChannelPlugin(channel);
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (adapter?.configureWhenConfigured) {
@@ -497,7 +458,7 @@ export async function setupChannels(
         configured: true,
         label,
       });
-      if (!(await applyCustomSetupResult(channel, custom))) {
+      if (!(await applyCustomSetupResult(channel, custom, cfgBeforeChoice))) {
         return;
       }
       return;
@@ -517,7 +478,7 @@ export async function setupChannels(
       return;
     }
     if (action === "update") {
-      await configureChannel(channel);
+      await configureChannel(channel, cfgBeforeChoice);
       return;
     }
     if (!options?.allowDisable) {
@@ -580,6 +541,8 @@ export async function setupChannels(
   const handleChannelChoice = async (
     channel: ChannelChoice,
   ): Promise<"done" | "retry_selection"> => {
+    const cfgBeforeChoice = next;
+    let cfgOnCancellation = cfgBeforeChoice;
     const { catalogById, installedCatalogById } = getChannelEntries();
     const catalogEntry = catalogById.get(channel);
     const installedCatalogEntry = installedCatalogById.get(channel);
@@ -613,6 +576,7 @@ export async function setupChannels(
       if (!result.installed) {
         return "retry_selection";
       }
+      cfgOnCancellation = next;
       await loadScopedChannelPlugin(channel, result.pluginId ?? catalogEntry.pluginId);
       await refreshStatus(channel);
     } else if (installedCatalogEntry) {
@@ -653,6 +617,7 @@ export async function setupChannels(
         if (!result.installed) {
           return "retry_selection";
         }
+        cfgOnCancellation = next;
         plugin = await loadScopedChannelPlugin(
           channel,
           result.pluginId ?? installedCatalogEntry.pluginId,
@@ -711,6 +676,7 @@ export async function setupChannels(
         if (!result.installed) {
           return "retry_selection";
         }
+        cfgOnCancellation = next;
         await loadScopedChannelPlugin(channel, result.pluginId ?? fallbackCatalogEntry.pluginId);
         await refreshStatus(channel);
       } else {
@@ -738,16 +704,16 @@ export async function setupChannels(
         configured,
         label,
       });
-      if (!(await applyCustomSetupResult(channel, custom))) {
+      if (!(await applyCustomSetupResult(channel, custom, cfgOnCancellation))) {
         return "done";
       }
       return "done";
     }
     if (configured) {
-      await handleConfiguredChannel(channel, label);
+      await handleConfiguredChannel(channel, label, cfgOnCancellation);
       return "done";
     }
-    await configureChannel(channel);
+    await configureChannel(channel, cfgOnCancellation);
     return "done";
   };
 

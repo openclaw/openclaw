@@ -482,6 +482,35 @@ async function runQuickstartTelegramSetupWithInteractive(params: {
   }
 }
 
+async function runQuickstartTelegramSetupWithConfigure(
+  configure: NonNullable<Parameters<typeof patchTelegramAdapter>[0]["configure"]>,
+) {
+  const select = createQuickstartTelegramSelect();
+  const selection = vi.fn();
+  const onAccountId = vi.fn();
+  const onPostWriteHook = vi.fn();
+  const restore = patchTelegramAdapter({
+    configureInteractive: undefined,
+    configureWhenConfigured: undefined,
+    configure,
+  });
+  const { prompter } = createUnexpectedQuickstartPrompter(
+    select as unknown as WizardPrompter["select"],
+  );
+
+  try {
+    const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
+      quickstartDefaults: true,
+      onSelection: selection,
+      onAccountId,
+      onPostWriteHook,
+    });
+    return { cfg, selection, onAccountId, onPostWriteHook };
+  } finally {
+    restore();
+  }
+}
+
 vi.mock("node:fs/promises", () => ({
   default: {
     access: vi.fn(async () => {
@@ -1167,6 +1196,22 @@ describe("setupChannels", () => {
     expect(selection).toHaveBeenCalledWith([]);
     expect(onAccountId).not.toHaveBeenCalled();
     expect(cfg.channels?.telegram?.botToken).toBeUndefined();
+  });
+
+  it("uses ordinary configure cancellation without mutating selection or account state", async () => {
+    const configure = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      cfg,
+      cancelled: true as const,
+    }));
+    const { cfg, selection, onAccountId, onPostWriteHook } =
+      await runQuickstartTelegramSetupWithConfigure(configure);
+
+    expect(configure).toHaveBeenCalledTimes(1);
+    expect(selection).toHaveBeenCalledWith([]);
+    expect(onAccountId).not.toHaveBeenCalled();
+    expect(onPostWriteHook).not.toHaveBeenCalled();
+    expect(cfg.channels?.telegram).toBeUndefined();
+    expect(cfg.plugins?.entries?.telegram).toBeUndefined();
   });
 
   it("applies configureInteractive result cfg/account updates", async () => {

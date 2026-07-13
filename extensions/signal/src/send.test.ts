@@ -140,6 +140,30 @@ describe("sendMessageSignal receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it("keeps the root media cap for explicit connection override sends", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567891 });
+
+    await sendMessageSignal("+15551234567", "", {
+      cfg: { channels: { signal: { mediaMaxMb: 2 } } },
+      baseUrl: "http://signal.test",
+      account: "+15550001111",
+      mediaUrl: "/tmp/image.png",
+      mediaLocalRoots: ["/tmp"],
+    });
+
+    const expectedMaxBytes = 2 * 1024 * 1024;
+    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
+      "/tmp/image.png",
+      expectedMaxBytes,
+      expect.objectContaining({ localRoots: ["/tmp"] }),
+    );
+    expect(signalRpcRequestMock).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ attachments: ["/tmp/image.png"] }),
+      expect.objectContaining({ maxAttachmentBytes: expectedMaxBytes }),
+    );
+  });
+
   it("does not invent platform ids when signal-cli omits a timestamp", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({});
 

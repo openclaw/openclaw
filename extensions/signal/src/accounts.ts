@@ -19,7 +19,21 @@ export type ResolvedSignalAccount = {
   config: SignalAccountConfig;
 };
 
+function isSignalAccountConfigConfigured(config: SignalAccountConfig | undefined): boolean {
+  return Boolean(
+    normalizeOptionalString(config?.account) ||
+    normalizeOptionalString(config?.configPath) ||
+    normalizeOptionalString(config?.httpUrl) ||
+    normalizeOptionalString(config?.cliPath) ||
+    normalizeOptionalString(config?.httpHost) ||
+    typeof config?.httpPort === "number" ||
+    typeof config?.autoStart === "boolean",
+  );
+}
+
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal", {
+  // Top-level transport fields are shared defaults for named accounts. Only an account
+  // identity implicitly creates the default; accountless defaults must use accounts.default.
   implicitDefaultAccount: {
     channelKeys: ["account"],
   },
@@ -52,15 +66,7 @@ export function resolveSignalAccount(params: {
   const host = normalizeOptionalString(merged.httpHost) ?? "127.0.0.1";
   const port = merged.httpPort ?? 8080;
   const baseUrl = normalizeOptionalString(merged.httpUrl) ?? `http://${host}:${port}`;
-  const configured = Boolean(
-    normalizeOptionalString(merged.account) ||
-    normalizeOptionalString(merged.configPath) ||
-    normalizeOptionalString(merged.httpUrl) ||
-    normalizeOptionalString(merged.cliPath) ||
-    normalizeOptionalString(merged.httpHost) ||
-    typeof merged.httpPort === "number" ||
-    typeof merged.autoStart === "boolean",
-  );
+  const configured = isSignalAccountConfigConfigured(merged);
   return {
     accountId,
     enabled,

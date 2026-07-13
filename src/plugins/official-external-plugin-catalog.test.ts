@@ -894,6 +894,7 @@ describe("official external plugin catalog", () => {
       ["mattermost", "@openclaw/mattermost"],
       ["moonshot", "@openclaw/moonshot-provider"],
       ["searxng", "@openclaw/searxng-plugin"],
+      ["signal", "@openclaw/signal"],
       ["sms", "@openclaw/sms"],
       ["tavily", "@openclaw/tavily-plugin"],
       ["tencent", "@openclaw/tencent-provider"],
@@ -901,10 +902,7 @@ describe("official external plugin catalog", () => {
       ["vercel-ai-gateway", "@openclaw/vercel-ai-gateway-provider"],
       ["zai", "@openclaw/zai-provider"],
     ] as const;
-    const currentExternalized = [
-      ["featherless", "@openclaw/featherless-provider", {}],
-      ["signal", "@openclaw/signal", { allowInvalidConfigRecovery: true }],
-    ] as const;
+    const currentExternalized = [["featherless", "@openclaw/featherless-provider"]] as const;
 
     for (const [id, npmSpec] of [...providers, ...plugins]) {
       expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
@@ -922,13 +920,12 @@ describe("official external plugin catalog", () => {
         minHostVersion: ">=2026.6.9",
       });
     }
-    for (const [id, npmSpec, extraInstall] of currentExternalized) {
+    for (const [id, npmSpec] of currentExternalized) {
       expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
         clawhubSpec: `clawhub:${npmSpec}`,
         npmSpec,
         defaultChoice: "npm",
         minHostVersion: ">=2026.6.11",
-        ...extraInstall,
       });
     }
   });

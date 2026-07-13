@@ -18,9 +18,15 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import WebSocket from "ws";
+import {
+  normalizeSignalContainerBaseUrl,
+  releaseSignalContainerResponseBody,
+  type SignalContainerLinkedAccountResult,
+  validateSignalContainerLinkedAccountWithRuntime,
+} from "./client-container-accounts.js";
+
+export type { SignalContainerLinkedAccountResult } from "./client-container-accounts.js";
 
 type ContainerRpcOptions = {
   baseUrl: string;
@@ -58,9 +64,6 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
 const SIGNAL_REST_ERROR_RESPONSE_MAX_BYTES = 16 * 1024;
 const SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-const MIN_E164_DIGITS = 5;
-const MAX_E164_DIGITS = 15;
-const DIGITS_ONLY = /^\d+$/;
 // Receive envelopes contain JSON metadata; attachment bytes are fetched separately.
 // Keep the ws pre-buffer limit narrow so a container cannot force 100 MiB frames.
 const SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
@@ -76,23 +79,6 @@ const CONTAINER_TEXT_STYLE_MARKERS: Record<string, string> = {
   SPOILER: "||",
 };
 
-function normalizeBaseUrl(url: string): string {
-  const trimmed = url.trim();
-  if (!trimmed) {
-    throw new Error("Signal base URL is required");
-  }
-  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-  const parsed = new URL(withProtocol);
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Signal base URL unsupported protocol: ${parsed.protocol}`);
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error("Signal base URL must not include credentials");
-  }
-  const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
-  return `${parsed.protocol}//${parsed.host}${pathname}`;
-}
-
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
   const fetchImpl = resolveFetch();
   if (!fetchImpl) {
@@ -106,22 +92,6 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   } finally {
     clearTimeout(timer);
   }
-}
-
-function normalizeContainerAccountInput(value: string | null | undefined): string | null {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return null;
-  }
-  const normalized = normalizeE164(trimmed);
-  const digits = normalized.slice(1);
-  if (!DIGITS_ONLY.test(digits)) {
-    return null;
-  }
-  if (digits.length < MIN_E164_DIGITS || digits.length > MAX_E164_DIGITS) {
-    return null;
-  }
-  return `+${digits}`;
 }
 
 function normalizeMaxResponseBytes(value: number | undefined): number {
@@ -177,12 +147,6 @@ async function readCappedResponseBuffer(
   });
 }
 
-async function releaseUnreadResponseBody(res: Response | undefined): Promise<void> {
-  if (res?.bodyUsed !== true) {
-    await res?.body?.cancel().catch(() => undefined);
-  }
-}
-
 /**
  * Check if bbernhard container REST API is available.
  */
@@ -191,7 +155,7 @@ export async function containerCheck(
   timeoutMs = DEFAULT_TIMEOUT_MS,
   account?: string,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
-  const normalized = normalizeBaseUrl(baseUrl);
+  const normalized = normalizeSignalContainerBaseUrl(baseUrl);
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
@@ -210,37 +174,7 @@ export async function containerCheck(
       error: err instanceof Error ? err.message : String(err),
     };
   } finally {
-    await releaseUnreadResponseBody(res);
-  }
-}
-
-async function readContainerAccounts(
-  baseUrl: string,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-): Promise<{ ok: true; accounts: string[] } | { ok: false; error: string }> {
-  const normalized = normalizeBaseUrl(baseUrl);
-  let res: Response | undefined;
-  try {
-    res = await fetchWithTimeout(`${normalized}/v1/accounts`, { method: "GET" }, timeoutMs);
-    if (!res.ok) {
-      return { ok: false, error: `HTTP ${res.status}` };
-    }
-    const text = await readProviderTextResponse(res, "Signal accounts");
-    const parsed = JSON.parse(text) as unknown;
-    if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
-      return { ok: false, error: "Signal accounts response was not a string array" };
-    }
-    return {
-      ok: true,
-      accounts: parsed.map((entry) => normalizeContainerAccountInput(entry) ?? entry),
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  } finally {
-    await releaseUnreadResponseBody(res);
+    await releaseSignalContainerResponseBody(res);
   }
 }
 
@@ -248,25 +182,10 @@ export async function validateSignalContainerLinkedAccount(params: {
   httpUrl: string;
   account: string;
   timeoutMs?: number;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const account = normalizeContainerAccountInput(params.account);
-  if (!account) {
-    return { ok: false, error: "Signal account is not a valid phone number" };
-  }
-  const accounts = await readContainerAccounts(params.httpUrl, params.timeoutMs);
-  if (!accounts.ok) {
-    return { ok: false, error: `Signal accounts check failed: ${accounts.error}` };
-  }
-  if (accounts.accounts.includes(account)) {
-    return { ok: true };
-  }
-  if (accounts.accounts.length === 0) {
-    return { ok: false, error: `Signal container has no linked accounts; expected ${account}.` };
-  }
-  return {
-    ok: false,
-    error: `Signal container does not list ${account}; linked accounts: ${accounts.accounts.join(", ")}.`,
-  };
+}): Promise<SignalContainerLinkedAccountResult> {
+  return await validateSignalContainerLinkedAccountWithRuntime(params, {
+    fetchWithTimeout,
+  });
 }
 
 function containerReceiveCheck(
@@ -343,7 +262,7 @@ export async function containerRestRequest<T = unknown>(
   method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
   body?: unknown,
 ): Promise<T> {
-  const baseUrl = normalizeBaseUrl(opts.baseUrl);
+  const baseUrl = normalizeSignalContainerBaseUrl(opts.baseUrl);
   const url = `${baseUrl}${endpoint}`;
 
   const init: RequestInit = {
@@ -392,7 +311,7 @@ export async function containerFetchAttachment(
   attachmentId: string,
   opts: ContainerRpcOptions,
 ): Promise<Buffer | null> {
-  const baseUrl = normalizeBaseUrl(opts.baseUrl);
+  const baseUrl = normalizeSignalContainerBaseUrl(opts.baseUrl);
   const url = `${baseUrl}/v1/attachments/${encodeURIComponent(attachmentId)}`;
   let res: Response | undefined;
 
@@ -411,7 +330,7 @@ export async function containerFetchAttachment(
       bodyIdleTimeoutMs,
     );
   } finally {
-    await releaseUnreadResponseBody(res);
+    await releaseSignalContainerResponseBody(res);
   }
 }
 
@@ -428,7 +347,7 @@ export async function streamContainerEvents(params: {
   onEvent: (event: ContainerWebSocketMessage) => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
-  const normalized = normalizeBaseUrl(params.baseUrl);
+  const normalized = normalizeSignalContainerBaseUrl(params.baseUrl);
   const wsUrl = `${normalized.replace(/^http/, "ws")}/v1/receive/${encodeURIComponent(params.account ?? "")}`;
   const redactedWsUrl = `${normalized.replace(/^http/, "ws")}/v1/receive/<redacted>`;
   const log = params.logger?.log ?? (() => {});

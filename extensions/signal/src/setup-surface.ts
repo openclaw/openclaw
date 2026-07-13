@@ -17,7 +17,6 @@ import {
   finalizeSignalSetupWizard,
   prepareSignalSetupWizard,
   resolveSignalSetupTransportFromCredentialValues,
-  signalCompletionNote,
   signalDmPolicy,
   signalNumberTextInput,
 } from "./setup-core.js";
@@ -25,17 +24,18 @@ import {
 const t = createSetupTranslator();
 
 const channel = "signal" as const;
-function hasConfiguredSignalAccount(params: {
+function isSignalSetupConfigured(params: {
   cfg: Parameters<typeof listSignalAccountIds>[0];
   accountId?: string;
 }) {
-  return Boolean(normalizeOptionalString(resolveSignalAccount(params).config.account));
+  const account = resolveSignalAccount(params);
+  return account.config.apiMode === "container"
+    ? Boolean(normalizeOptionalString(account.config.account))
+    : account.configured;
 }
 
-function hasAnyConfiguredSignalAccount(cfg: Parameters<typeof listSignalAccountIds>[0]) {
-  return listSignalAccountIds(cfg).some((accountId) =>
-    hasConfiguredSignalAccount({ cfg, accountId }),
-  );
+function hasAnyConfiguredSignalSetup(cfg: Parameters<typeof listSignalAccountIds>[0]) {
+  return listSignalAccountIds(cfg).some((accountId) => isSignalSetupConfigured({ cfg, accountId }));
 }
 
 const nativeSignalStatus = createDetectedBinaryStatus({
@@ -48,7 +48,7 @@ const nativeSignalStatus = createDetectedBinaryStatus({
   configuredScore: 1,
   unconfiguredScore: 0,
   resolveConfigured: ({ cfg, accountId }) =>
-    accountId ? hasConfiguredSignalAccount({ cfg, accountId }) : hasAnyConfiguredSignalAccount(cfg),
+    accountId ? isSignalSetupConfigured({ cfg, accountId }) : hasAnyConfiguredSignalSetup(cfg),
   resolveBinaryPath: ({ cfg, accountId }) =>
     resolveSignalAccount({ cfg, accountId }).config.cliPath ?? "signal-cli",
   detectBinary,
@@ -75,9 +75,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 0,
     resolveConfigured: ({ cfg, accountId }) =>
-      accountId
-        ? hasConfiguredSignalAccount({ cfg, accountId })
-        : hasAnyConfiguredSignalAccount(cfg),
+      accountId ? isSignalSetupConfigured({ cfg, accountId }) : hasAnyConfiguredSignalSetup(cfg),
     async resolveStatusLines(params) {
       const transport = resolveSetupStatusTransport(params);
       if (transport === "native") {
@@ -122,7 +120,6 @@ export const signalSetupWizard: ChannelSetupWizard = {
     signalNumberTextInput,
   ],
   finalize: finalizeSignalSetupWizard,
-  completionNote: signalCompletionNote,
   dmPolicy: signalDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

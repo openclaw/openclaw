@@ -5,6 +5,13 @@ import { describe, expect, it } from "vitest";
 import { resolveSignalAccount } from "./accounts.js";
 import { finalizeSignalSetupWizard, signalSetupAdapter } from "./setup-core.js";
 
+function requireSavedSignalSetup(result: Awaited<ReturnType<typeof finalizeSignalSetupWizard>>) {
+  if (result.cancelled) {
+    throw new Error("expected Signal setup to be saved");
+  }
+  return result;
+}
+
 describe("signalSetupAdapter", () => {
   it("allows non-interactive external server setup without a Signal account", () => {
     expect(
@@ -89,6 +96,129 @@ describe("signalSetupAdapter", () => {
     );
   });
 
+  it("allocates a distinct port for non-interactive named native setup", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            enabled: false,
+            account: "+15555550123",
+            autoStart: true,
+            httpHost: "127.0.0.1",
+            httpPort: 8080,
+            accounts: {
+              work: {
+                account: "+15555550124",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      input: {
+        cliPath: "/usr/local/bin/signal-cli",
+      },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work).toMatchObject({
+      autoStart: true,
+      httpHost: "127.0.0.1",
+      httpPort: 8081,
+    });
+    expect(next?.channels?.signal?.enabled).toBe(true);
+    expect(resolveSignalAccount({ cfg: next as OpenClawConfig, accountId: "work" }).baseUrl).toBe(
+      "http://127.0.0.1:8081",
+    );
+  });
+
+  it("preserves an existing named native port when it does not collide", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            autoStart: true,
+            httpPort: 8080,
+            accounts: {
+              work: {
+                account: "+15555550124",
+                autoStart: true,
+                apiMode: "native",
+                httpHost: "127.0.0.1",
+                httpPort: 19089,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      input: {
+        cliPath: "/opt/homebrew/bin/signal-cli",
+      },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work?.httpPort).toBe(19089);
+  });
+
+  it("does not reserve an inherited root port for a nonexistent default account", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            autoStart: true,
+            httpHost: "127.0.0.1",
+            httpPort: 8080,
+            accounts: {
+              work: {
+                account: "+15555550124",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      input: {
+        cliPath: "/opt/homebrew/bin/signal-cli",
+      },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work).toMatchObject({
+      autoStart: true,
+      apiMode: "native",
+      httpPort: 8080,
+    });
+  });
+
+  it("preserves a named native port when managed-daemon settings use defaults", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            httpPort: 8080,
+            accounts: {
+              work: {
+                account: "+15555550124",
+                httpHost: "127.0.0.1",
+                httpPort: 19089,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      input: {
+        cliPath: "/opt/homebrew/bin/signal-cli",
+      },
+    });
+
+    expect(next?.channels?.signal?.accounts?.work).toMatchObject({
+      autoStart: true,
+      apiMode: "native",
+      httpPort: 19089,
+    });
+  });
+
   it("preserves custom native endpoints during partial non-interactive setup", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {
@@ -120,6 +250,36 @@ describe("signalSetupAdapter", () => {
     expect(resolveSignalAccount({ cfg: next as OpenClawConfig }).baseUrl).toBe(
       "http://0.0.0.0:19089",
     );
+  });
+
+  it("resets external host and port during partial non-interactive native setup", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            cliPath: "/usr/local/bin/signal-cli",
+            httpHost: "192.0.2.10",
+            httpPort: 18080,
+            autoStart: false,
+            apiMode: "auto",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+      input: {
+        cliPath: "/opt/homebrew/bin/signal-cli",
+      },
+    });
+
+    expect(next?.channels?.signal).toMatchObject({
+      account: "+15555550123",
+      cliPath: "/opt/homebrew/bin/signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+      autoStart: true,
+      apiMode: "native",
+    });
   });
 
   it("scopes non-interactive default native setup when named accounts exist", () => {
@@ -164,6 +324,42 @@ describe("signalSetupAdapter", () => {
     );
   });
 
+  it("preserves the root native port when scoping non-interactive default setup", () => {
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            cliPath: "/usr/local/bin/signal-cli",
+            httpHost: "127.0.0.1",
+            httpPort: 19089,
+            autoStart: true,
+            apiMode: "native",
+            accounts: {
+              work: {
+                account: "+15555550124",
+                httpUrl: "http://signal-container:8080",
+                autoStart: false,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+      input: {
+        cliPath: "/opt/homebrew/bin/signal-cli",
+      },
+    });
+
+    expect(next?.channels?.signal?.httpPort).toBeUndefined();
+    expect(next?.channels?.signal?.accounts?.default).toMatchObject({
+      httpHost: "127.0.0.1",
+      httpPort: 19089,
+      autoStart: true,
+      apiMode: "native",
+    });
+  });
+
   it("preserves implicit default account fields when scoping around named accounts", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {
@@ -205,32 +401,40 @@ describe("signalSetupAdapter", () => {
 
   it("persists a prepared native cliPath during finalize", async () => {
     const prompts = createQueuedWizardPrompter({
-      textValues: ["~/.local/share/signal-cli"],
+      textValues: ["~/Signal Data"],
     });
 
-    const result = await finalizeSignalSetupWizard({
-      cfg: {
-        channels: {
-          signal: {
-            cliPath: "/tmp/openclaw-stale-signal-cli",
+    const result = requireSavedSignalSetup(
+      await finalizeSignalSetupWizard({
+        cfg: {
+          channels: {
+            signal: {
+              cliPath: "/tmp/openclaw-stale-signal-cli",
+            },
           },
+        } as OpenClawConfig,
+        accountId: "default",
+        credentialValues: {
+          signalTransport: "native",
+          signalNumber: "+1 (555) 555-0123",
+          cliPath: "/tmp/openclaw-installed-signal-cli",
         },
-      } as OpenClawConfig,
-      accountId: "default",
-      credentialValues: {
-        signalTransport: "native",
-        signalNumber: "+1 (555) 555-0123",
-        cliPath: "/tmp/openclaw-installed-signal-cli",
-      },
-      prompter: prompts.prompter,
-    });
+        prompter: prompts.prompter,
+      }),
+    );
 
     expect(result.cfg.channels?.signal).toMatchObject({
       account: "+15555550123",
       cliPath: "/tmp/openclaw-installed-signal-cli",
-      configPath: "~/.local/share/signal-cli",
+      configPath: "~/Signal Data",
       autoStart: true,
     });
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Link device with: /tmp/openclaw-installed-signal-cli --config ~/'Signal Data' link -n OpenClaw",
+      ),
+      "Signal next steps",
+    );
   });
 
   it("forces native apiMode when finalizing over an external auto server", async () => {
@@ -238,25 +442,27 @@ describe("signalSetupAdapter", () => {
       textValues: [""],
     });
 
-    const result = await finalizeSignalSetupWizard({
-      cfg: {
-        channels: {
-          signal: {
-            account: "+15555550123",
-            cliPath: "/usr/local/bin/signal-cli",
-            httpUrl: "http://127.0.0.1:8080",
-            autoStart: false,
-            apiMode: "auto",
+    const result = requireSavedSignalSetup(
+      await finalizeSignalSetupWizard({
+        cfg: {
+          channels: {
+            signal: {
+              account: "+15555550123",
+              cliPath: "/usr/local/bin/signal-cli",
+              httpUrl: "http://127.0.0.1:8080",
+              autoStart: false,
+              apiMode: "auto",
+            },
           },
+        } as OpenClawConfig,
+        accountId: "default",
+        credentialValues: {
+          signalTransport: "native",
+          cliPath: "/usr/local/bin/signal-cli",
         },
-      } as OpenClawConfig,
-      accountId: "default",
-      credentialValues: {
-        signalTransport: "native",
-        cliPath: "/usr/local/bin/signal-cli",
-      },
-      prompter: prompts.prompter,
-    });
+        prompter: prompts.prompter,
+      }),
+    );
 
     expect(result.cfg.channels?.signal).toMatchObject({
       account: "+15555550123",
@@ -265,5 +471,45 @@ describe("signalSetupAdapter", () => {
       apiMode: "native",
     });
     expect(result.cfg.channels?.signal?.httpUrl).toBeUndefined();
+  });
+
+  it("allocates a distinct port for interactive named native setup", async () => {
+    const prompts = createQueuedWizardPrompter({ textValues: [""] });
+
+    const result = requireSavedSignalSetup(
+      await finalizeSignalSetupWizard({
+        cfg: {
+          channels: {
+            signal: {
+              enabled: false,
+              account: "+15555550123",
+              autoStart: true,
+              httpHost: "127.0.0.1",
+              httpPort: 8080,
+              accounts: {
+                work: {
+                  account: "+15555550124",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        accountId: "work",
+        credentialValues: {
+          signalTransport: "native",
+          signalNumber: "+15555550124",
+          cliPath: "/usr/local/bin/signal-cli",
+        },
+        prompter: prompts.prompter,
+      }),
+    );
+
+    expect(result.cfg.channels?.signal?.httpPort).toBe(8080);
+    expect(result.cfg.channels?.signal?.accounts?.work).toMatchObject({
+      autoStart: true,
+      httpHost: "127.0.0.1",
+      httpPort: 8081,
+    });
+    expect(result.cfg.channels?.signal?.enabled).toBe(true);
   });
 });

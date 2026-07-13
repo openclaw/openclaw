@@ -1,4 +1,3 @@
-// Signal plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
@@ -42,6 +41,7 @@ import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
+import { formatSignalCapabilitiesProbe } from "./probe-readiness.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { resolveSignalReplyContextWithPersistence } from "./reply-authors.js";
 import { signalSetupAdapter } from "./setup-core.js";
@@ -561,32 +561,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             apiMode: account.config?.apiMode ?? "auto",
           });
         },
-        formatCapabilitiesProbe: ({ probe }) => {
-          if (!probe) {
-            return [];
-          }
-          const readiness = (() => {
-            switch (probe.readiness) {
-              case "ready":
-                return { text: "Signal readiness: ready", tone: "success" as const };
-              case "account_missing":
-                return { text: "Signal readiness: account missing", tone: "warn" as const };
-              case "receive_unavailable":
-                return { text: "Signal readiness: receive unavailable", tone: "warn" as const };
-              case "unreachable":
-                return { text: "Signal readiness: daemon unreachable", tone: "error" as const };
-              default:
-                return null;
-            }
-          })();
-          if (!readiness) {
-            return [];
-          }
-          return [
-            readiness,
-            ...(probe.version ? [{ text: `Signal daemon: ${probe.version}` }] : []),
-          ];
-        },
+        formatCapabilitiesProbe: formatSignalCapabilitiesProbe,
         resolveAccountSnapshot: ({ account }) => ({
           accountId: account.accountId,
           name: account.name,

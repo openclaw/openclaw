@@ -25,6 +25,16 @@ type SignalRpcResponse<T> = {
   id?: string | number | null;
 };
 
+export class SignalRpcRequestError extends Error {
+  constructor(
+    readonly code: number | undefined,
+    message: string,
+  ) {
+    super(`Signal RPC ${code ?? "unknown"}: ${message}`);
+    this.name = "SignalRpcRequestError";
+  }
+}
+
 export type SignalSseEvent = {
   event?: string;
   data?: string;
@@ -223,9 +233,8 @@ export async function signalRpcRequest<T = unknown>(
   }
   const parsed = parseSignalRpcResponse<T>(res.text, res.status);
   if (parsed.error) {
-    const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";
-    throw new Error(`Signal RPC ${code}: ${msg}`);
+    throw new SignalRpcRequestError(parsed.error.code, msg);
   }
   return parsed.result as T;
 }

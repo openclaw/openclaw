@@ -626,7 +626,7 @@ describe("signalCheck", () => {
       status: 200,
     });
 
-    expect(mockNativeCheck).toHaveBeenCalledTimes(4);
+    expect(mockNativeCheck).toHaveBeenCalledTimes(2);
     expect(mockContainerCheck).toHaveBeenCalledTimes(2);
   });
 
@@ -645,7 +645,7 @@ describe("signalCheck", () => {
       status: 200,
     });
 
-    expect(mockNativeCheck).toHaveBeenCalledTimes(4);
+    expect(mockNativeCheck).toHaveBeenCalledTimes(2);
     expect(mockContainerCheck).toHaveBeenCalledTimes(2);
   });
 });
@@ -806,6 +806,26 @@ describe("streamSignalEvents", () => {
     );
   });
 
+  it("reuses the detected native mode across stream reconnects", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 101 });
+    mockNativeStreamEvents.mockResolvedValue(undefined);
+
+    const params = {
+      baseUrl: "http://native-stream-cache.local:8080",
+      account: "+14259798283",
+      onEvent: vi.fn(),
+    };
+    await streamSignalEvents(params);
+    await streamSignalEvents(params);
+
+    expect(mockNativeCheck).toHaveBeenCalledTimes(1);
+    expect(mockContainerCheck).toHaveBeenCalledTimes(1);
+    expect(mockNativeReceiveCheck).not.toHaveBeenCalled();
+    expect(mockNativeStreamEvents).toHaveBeenCalledTimes(2);
+  });
+
   it("forwards timeout to container event stream", async () => {
     setApiMode("container");
     mockStreamContainerEvents.mockResolvedValue(undefined);
@@ -824,14 +844,11 @@ describe("streamSignalEvents", () => {
   it("revalidates an unvalidated cached container mode before streaming", async () => {
     setApiMode("auto");
     mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
-    mockContainerCheck
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 200,
-        error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
-      });
+    mockContainerCheck.mockResolvedValueOnce({ ok: true, status: 200 }).mockResolvedValueOnce({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
 
     await expect(signalCheck("http://auto-cache.local:8080")).resolves.toEqual({
       ok: true,
@@ -870,7 +887,7 @@ describe("streamSignalEvents", () => {
       }),
     ).rejects.toThrow("Signal API not reachable at http://auto-cache-no-account.local:8080");
     expect(mockStreamContainerEvents).not.toHaveBeenCalled();
-    expect(mockContainerCheck).toHaveBeenCalledTimes(2);
+    expect(mockContainerCheck).toHaveBeenCalledTimes(1);
   });
 });
 

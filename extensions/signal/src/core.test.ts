@@ -22,6 +22,7 @@ import {
 } from "./approval-reactions.js";
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
+import { SignalRpcRequestError } from "./client.js";
 import { classifySignalCliLogLine } from "./daemon.js";
 import {
   looksLikeUuid,
@@ -149,54 +150,66 @@ describe("probeSignal", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to the direct probe helper when runtime is not initialized", async () => {
+  function mockSingleAccountNativeRpc(version = "0.13.22") {
+    return vi
+      .spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version })
+      .mockRejectedValueOnce(new SignalRpcRequestError(-32601, "Method not implemented"));
+  }
+
+  it("forwards named-account transport config through the status probe", async () => {
     clearSignalRuntime();
-    vi.spyOn(clientModule, "signalCheck")
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        error: null,
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        error: null,
-      });
-    vi.spyOn(clientModule, "signalRpcRequest")
-      .mockResolvedValueOnce({ version: "0.13.22" })
-      .mockResolvedValueOnce({ version: "0.13.22" });
+    const signalCheck = vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    const signalRpcRequest = mockSingleAccountNativeRpc();
 
     const params = {
       cfg: {} as never,
       account: {
-        accountId: "default",
+        accountId: "work",
         enabled: true,
         configured: true,
         baseUrl: "http://127.0.0.1:8080",
-        config: { account: "+15555550123" },
+        config: { account: "+15555550123", apiMode: "native" },
       } as never,
       timeoutMs: 1000,
     };
 
-    const expected = await probeSignal("http://127.0.0.1:8080", 1000, {
-      account: "+15555550123",
-    });
     const result = await signalPlugin.status!.probeAccount!(params);
 
-    expect(result.ok).toBe(expected.ok);
-    expect(result.status).toBe(expected.status);
-    expect(result.error).toBe(expected.error);
-    expect(result.version).toBe(expected.version);
-    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
-  });
-
-  it("extracts version from {version} result", async () => {
-    vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
+    expect(result).toMatchObject({
       ok: true,
       status: 200,
       error: null,
+      version: "0.13.22",
+      readiness: "ready",
     });
-    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(signalCheck).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "native",
+      requireReceive: false,
+    });
+    expect(signalRpcRequest).toHaveBeenCalledWith("version", undefined, {
+      baseUrl: "http://127.0.0.1:8080",
+      timeoutMs: 1000,
+      apiMode: "native",
+    });
+    expect(signalRpcRequest).toHaveBeenCalledWith("listAccounts", undefined, {
+      baseUrl: "http://127.0.0.1:8080",
+      timeoutMs: 1000,
+      apiMode: "native",
+    });
+  });
+
+  it("extracts version from {version} result", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    mockSingleAccountNativeRpc();
 
     const res = await probeSignal("http://127.0.0.1:8080", 1000, {
       account: "+15555550123",
@@ -209,24 +222,11 @@ describe("probeSignal", () => {
   });
 
   it("does not hard-fail native probes on finite receive readiness", async () => {
-    const signalCheck = vi
-      .spyOn(clientModule, "signalCheck")
-      .mockImplementation(async (_baseUrl, _timeoutMs, options) =>
-        options?.requireReceive
-          ? {
-              ok: false,
-              status: null,
-              error:
-                "Signal native receive endpoint unavailable: Signal SSE connection timed out after 25ms",
-            }
-          : {
-              ok: true,
-              status: 200,
-              error: null,
-            },
-      );
-    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
-    vi.spyOn(clientModule, "detectSignalApiMode").mockResolvedValueOnce("native");
+    const signalCheck = vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    const signalRpcRequest = mockSingleAccountNativeRpc();
 
     const res = await probeSignal("http://127.0.0.1:8080", 1000, {
       account: "+15555550123",
@@ -241,23 +241,24 @@ describe("probeSignal", () => {
       apiMode: "auto",
       requireReceive: false,
     });
+    expect(signalRpcRequest).toHaveBeenCalledWith("version", undefined, {
+      baseUrl: "http://127.0.0.1:8080",
+      timeoutMs: 1000,
+      apiMode: "native",
+    });
   });
 
   it("still requires receive readiness for auto-detected container probes", async () => {
-    const signalCheck = vi
-      .spyOn(clientModule, "signalCheck")
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        error: null,
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 200,
-        error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
-      });
+    const initialCheck = vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: { ok: true, status: 200, error: null },
+    });
+    const receiveCheck = vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
     vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
-    vi.spyOn(clientModule, "detectSignalApiMode").mockResolvedValueOnce("container");
 
     const res = await probeSignal("http://127.0.0.1:8080", 1000, {
       account: "+15555550123",
@@ -267,12 +268,12 @@ describe("probeSignal", () => {
     expect(res.ok).toBe(false);
     expect(res.version).toBe("0.13.22");
     expect(res.readiness).toBe("receive_unavailable");
-    expect(signalCheck).toHaveBeenNthCalledWith(1, "http://127.0.0.1:8080", 1000, {
+    expect(initialCheck).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
       account: "+15555550123",
       apiMode: "auto",
       requireReceive: false,
     });
-    expect(signalCheck).toHaveBeenNthCalledWith(2, "http://127.0.0.1:8080", 1000, {
+    expect(receiveCheck).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
       account: "+15555550123",
       apiMode: "container",
       requireReceive: true,
@@ -280,10 +281,9 @@ describe("probeSignal", () => {
   });
 
   it("returns ok=false when /check fails", async () => {
-    vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
-      ok: false,
-      status: 503,
-      error: "HTTP 503",
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: false, status: 503, error: "HTTP 503" },
     });
 
     const res = await probeSignal("http://127.0.0.1:8080", 1000, {
@@ -296,11 +296,49 @@ describe("probeSignal", () => {
     expect(res.readiness).toBe("unreachable");
   });
 
-  it("reports missing account after probing transport reachability", async () => {
-    const signalCheck = vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
-      ok: true,
+  it("reports accountless native RPC failures as unreachable", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockRejectedValueOnce(new Error("RPC unavailable"));
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      apiMode: "native",
+    });
+
+    expect(res).toMatchObject({
+      ok: false,
       status: 200,
-      error: null,
+      error: "RPC unavailable",
+      readiness: "unreachable",
+    });
+  });
+
+  it("reports accountful native RPC failures as unreachable", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockRejectedValueOnce(new Error("RPC unavailable"));
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "native",
+    });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: 200,
+      error: "RPC unavailable",
+      readiness: "unreachable",
+    });
+  });
+
+  it("reports missing account after probing transport reachability", async () => {
+    const signalCheck = vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: { ok: true, status: 200, error: null },
     });
     const signalRpcRequest = vi
       .spyOn(clientModule, "signalRpcRequest")
@@ -327,13 +365,11 @@ describe("probeSignal", () => {
   });
 
   it("reports native transport-only probes as ready without an account", async () => {
-    const signalCheck = vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      error: null,
+    const signalCheck = vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
     });
-    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
-    const detect = vi.spyOn(clientModule, "detectSignalApiMode").mockResolvedValueOnce("native");
+    mockSingleAccountNativeRpc();
 
     const res = await probeSignal("http://127.0.0.1:8080", 1000, {
       apiMode: "auto",
@@ -348,14 +384,81 @@ describe("probeSignal", () => {
       apiMode: "auto",
       requireReceive: false,
     });
-    expect(detect).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000);
+  });
+
+  it("requires an account for a multi-account native daemon", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550123" }, { number: "+15555550999" }]);
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, { apiMode: "native" });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: 200,
+      readiness: "account_missing",
+      error: "Signal native daemon serves multiple accounts; configure a Signal phone number",
+      version: "0.13.22",
+    });
+  });
+
+  it("rejects an account that a multi-account native daemon does not serve", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550999" }]);
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "native",
+    });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: 200,
+      readiness: "account_missing",
+      error: "Signal native daemon does not list +15555550123",
+      version: "0.13.22",
+    });
+  });
+
+  it("accepts an account that a multi-account native daemon serves", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550123" }]);
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "native",
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      status: 200,
+      readiness: "ready",
+      version: "0.13.22",
+    });
   });
 
   it("reports container receive failures separately from unreachable transport", async () => {
-    vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
-      ok: false,
-      status: 200,
-      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: {
+        ok: false,
+        status: 200,
+        error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+      },
     });
 
     const res = await probeSignal("http://127.0.0.1:8080", 1000, {
@@ -369,10 +472,9 @@ describe("probeSignal", () => {
   });
 
   it("does not report a container probe ready when the account is not linked", async () => {
-    vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
-      ok: true,
-      status: 101,
-      error: null,
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: { ok: true, status: 101, error: null },
     });
     vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
     const fetchImpl = vi.fn(
@@ -400,11 +502,30 @@ describe("probeSignal", () => {
     expect(res.error).toContain("Signal container does not list +15555550123");
   });
 
+  it("reports linked-account lookup failures as unreachable", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: { ok: true, status: 101, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
+    vi.spyOn(fetchRuntime, "resolveFetch").mockReturnValue(
+      vi.fn(async () => new Response("not-json", { status: 200 })) as unknown as typeof fetch,
+    );
+
+    const res = await probeSignal("http://signal-cli:8080", 1000, {
+      account: "+15555550123",
+      apiMode: "container",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.readiness).toBe("unreachable");
+    expect(res.error).toContain("Signal accounts check failed");
+  });
+
   it("reports a container probe ready when the account is linked", async () => {
-    vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
-      ok: true,
-      status: 101,
-      error: null,
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValueOnce({
+      mode: "container",
+      check: { ok: true, status: 101, error: null },
     });
     vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
     const fetchImpl = vi.fn(
@@ -479,6 +600,26 @@ describe("probeSignal", () => {
     expect(status.quickstartScore).toBe(1);
     expect(status.statusLines).toContain("Signal transport: existing Signal server");
     expect(status.statusLines.some((line) => line.includes("signal-cli: missing"))).toBe(false);
+  });
+
+  it("keeps an accountless external native daemon configured", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            enabled: true,
+            httpUrl: "http://127.0.0.1:8080",
+            autoStart: false,
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+    expect(status.quickstartScore).toBe(1);
+    expect(status.statusLines).toContain("Signal: configured");
+    expect(status.statusLines).toContain("Signal transport: existing Signal server");
   });
 
   it("keeps endpoint-only Signal setup incomplete until an account is configured", async () => {
@@ -1759,11 +1900,10 @@ describe("signal setup parsing", () => {
             account: "+15555550123",
             cliPath: "/tmp/missing-signal-cli-native-switch",
             configPath: "/tmp/stale-signal-config",
-            httpUrl: "http://signal-cli:8080",
-            httpHost: "signal-cli",
-            httpPort: 8080,
+            httpHost: "192.0.2.10",
+            httpPort: 18080,
             autoStart: false,
-            apiMode: "container",
+            apiMode: "auto",
           },
         },
       } as OpenClawConfig,
@@ -1814,6 +1954,45 @@ describe("signal setup parsing", () => {
       apiMode: "native",
       httpHost: "127.0.0.1",
       httpPort: 19089,
+    });
+  });
+
+  it("preserves the root native port when interactive setup scopes the default account", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+      textValues: ["/tmp/missing-signal-cli-native-default", "+15555550123", ""],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            cliPath: "/tmp/missing-signal-cli-native-default",
+            httpHost: "127.0.0.1",
+            httpPort: 19089,
+            autoStart: true,
+            apiMode: "native",
+            accounts: {
+              work: {
+                account: "+15555550124",
+                httpUrl: "http://signal-container:8080",
+                autoStart: false,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal?.httpPort).toBeUndefined();
+    expect(result.cfg.channels?.signal?.accounts?.default).toMatchObject({
+      httpHost: "127.0.0.1",
+      httpPort: 19089,
+      autoStart: true,
+      apiMode: "native",
     });
   });
 
@@ -1880,6 +2059,7 @@ describe("signal setup parsing", () => {
         channels: {
           signal: {
             enabled: true,
+            name: "Legacy default",
             account: "+15550000000",
             accountUuid: "123e4567-e89b-12d3-a456-426614174000",
             cliPath: "/tmp/stale-root-signal-cli",
@@ -1897,6 +2077,7 @@ describe("signal setup parsing", () => {
                 name: "Work",
                 autoStart: false,
               },
+              personal: {},
             },
           },
         },
@@ -1905,6 +2086,7 @@ describe("signal setup parsing", () => {
     });
 
     expect(result.cfg.channels?.signal?.account).toBeUndefined();
+    expect(result.cfg.channels?.signal?.name).toBeUndefined();
     expect(result.cfg.channels?.signal?.accountUuid).toBeUndefined();
     expect(result.cfg.channels?.signal?.cliPath).toBeUndefined();
     expect(result.cfg.channels?.signal?.configPath).toBeUndefined();
@@ -1915,6 +2097,7 @@ describe("signal setup parsing", () => {
     expect(result.cfg.channels?.signal?.apiMode).toBe("container");
     expect(result.cfg.channels?.signal?.accounts?.default).toMatchObject({
       enabled: true,
+      name: "Legacy default",
       account: "+15555550123",
       cliPath: "/tmp/missing-signal-cli-native-default",
       autoStart: true,
@@ -1927,6 +2110,7 @@ describe("signal setup parsing", () => {
 
     const reloadedCfg = structuredClone(result.cfg);
     const work = resolveSignalAccount({ cfg: reloadedCfg, accountId: "work" });
+    expect(work.name).toBe("Work");
     expect(work.config.account).toBe("+15550000000");
     expect(work.config.accountUuid).toBe("123e4567-e89b-12d3-a456-426614174000");
     expect(work.config.cliPath).toBe("/tmp/stale-root-signal-cli");
@@ -1936,6 +2120,7 @@ describe("signal setup parsing", () => {
     expect(work.config.httpPort).toBe(19090);
     expect(work.config.apiMode).toBe("container");
     expect(work.config.autoStart).toBe(false);
+    expect(resolveSignalAccount({ cfg: reloadedCfg, accountId: "personal" }).name).toBeUndefined();
   });
 
   it("preselects native setup for an existing native Signal account", async () => {
@@ -1990,6 +2175,35 @@ describe("signal setup parsing", () => {
       }),
     );
     expect(result?.credentialValues?.signalTransport).toBe("external-native");
+  });
+
+  it("preselects native setup when explicit auto-start uses a custom URL", async () => {
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["native"],
+    });
+
+    const result = await runSetupWizardPrepare({
+      prepare: prepareSignalSetupWizard,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            httpUrl: "http://127.0.0.1:18080",
+            autoStart: true,
+            apiMode: "native",
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "How do you want to set up Signal for OpenClaw?",
+        initialValue: "native",
+      }),
+    );
+    expect(result?.credentialValues?.signalTransport).toBe("native");
   });
 
   it("preselects existing-server setup when container mode has host and port", async () => {
@@ -2056,18 +2270,147 @@ describe("signal setup parsing", () => {
     expect(progress?.update).toHaveBeenCalledWith("Testing http://127.0.0.1:8080");
     expect(progress?.stop).toHaveBeenCalledWith("Signal server reachable");
     expect(result.cfg.channels?.signal?.cliPath).toBeUndefined();
+    const nextStepsNotes = prompts.note.mock.calls.filter(
+      ([, title]) => title === "Signal next steps",
+    );
+    expect(nextStepsNotes).toEqual([
+      [
+        expect.stringContaining("Link and manage this account through the selected Signal server."),
+        "Signal next steps",
+      ],
+    ]);
+    expect(nextStepsNotes[0]?.[0]).not.toContain("signal-cli link");
   });
 
-  it("detects existing native server protocol without receive probing", async () => {
-    vi.spyOn(clientModule, "signalCheck").mockResolvedValue({
-      ok: true,
-      status: 200,
-      error: null,
+  it("connects to an accountless native Signal server through the wizard", async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: "0.13.22" }));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["", "http://127.0.0.1:8080"],
     });
-    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValue({
-      version: "0.13.22",
-    } as never);
-    const detect = vi.spyOn(clientModule, "detectSignalApiMode").mockResolvedValue("native");
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal).toMatchObject({
+      enabled: true,
+      httpUrl: "http://127.0.0.1:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+    expect(result.cfg.channels?.signal?.account).toBeUndefined();
+    expect(probe).toHaveBeenCalledWith({
+      httpUrl: "http://127.0.0.1:8080",
+      account: "",
+      apiMode: "auto",
+    });
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining("Signal server connected.\n"),
+      "Signal next steps",
+    );
+    expect(prompts.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("undefined"),
+      expect.anything(),
+    );
+  });
+
+  it("clears an existing Signal account for accountless native server setup", async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: "0.13.22" }));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["", "http://127.0.0.1:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            httpUrl: "http://127.0.0.1:8080",
+            autoStart: false,
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal?.account).toBe("");
+    expect(resolveSignalAccount({ cfg: structuredClone(result.cfg) }).config.account).toBe("");
+  });
+
+  it("clears a stale invalid Signal account for accountless native server setup", async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: "0.13.22" }));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["", "http://127.0.0.1:8080"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            account: "stale-invalid-account",
+            httpUrl: "http://127.0.0.1:8080",
+            autoStart: false,
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+    });
+
+    expect(result.cfg.channels?.signal?.account).toBe("");
+    expect(resolveSignalAccount({ cfg: structuredClone(result.cfg) }).config.account).toBe("");
+  });
+
+  it("clears an inherited Signal account for named accountless server setup", async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: "0.13.22" }));
+    setSignalSetupServerProbeForTest(probe);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: ["", "http://127.0.0.1:8081"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accounts: {
+              work: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompter: prompts.prompter,
+      accountOverrides: { signal: "work" },
+    });
+
+    expect(result.cfg.channels?.signal?.account).toBe("+15555550123");
+    expect(result.cfg.channels?.signal?.accounts?.work?.account).toBe("");
+    expect(
+      normalizeSignalAccountInput(
+        resolveSignalAccount({ cfg: structuredClone(result.cfg), accountId: "work" }).config
+          .account,
+      ),
+    ).toBeNull();
+  });
+
+  it("validates an existing native server account without receive probing", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValue({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550123" }]);
     const prompts = createQueuedWizardPrompter({
       selectValues: ["external-native"],
       textValues: ["+15555550123", "http://signal-cli:8080"],
@@ -2078,10 +2421,11 @@ describe("signal setup parsing", () => {
       prompter: prompts.prompter,
     });
 
-    expect(detect.mock.calls).toEqual([
-      ["http://signal-cli:8080", 5_000],
-      ["http://signal-cli:8080", 5_000],
-    ]);
+    expect(clientModule.signalCheckWithMode).toHaveBeenCalledWith(
+      "http://signal-cli:8080",
+      5_000,
+      expect.objectContaining({ requireReceive: false }),
+    );
     expect(result.cfg.channels?.signal).toMatchObject({
       account: "+15555550123",
       httpUrl: "http://signal-cli:8080",
@@ -2090,14 +2434,54 @@ describe("signal setup parsing", () => {
     });
   });
 
+  it("re-prompts an account that an existing native server does not list", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValue({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550999" }])
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce([{ number: "+15555550999" }]);
+    const prompts = createQueuedWizardPrompter({
+      selectValues: ["external-native"],
+      textValues: [
+        "+15555550123",
+        "http://signal-cli:8080",
+        "+15555550999",
+        "http://signal-cli:8080",
+      ],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: configureSignalSetup,
+      prompter: prompts.prompter,
+    });
+
+    expect(prompts.confirm).not.toHaveBeenCalled();
+    expect(
+      prompts.text.mock.calls.map(([prompt]) => (prompt as { message?: string }).message),
+    ).toEqual([
+      "Signal phone number",
+      "Signal server URL",
+      "Signal phone number",
+      "Signal server URL",
+    ]);
+    expect(result.cfg.channels?.signal).toMatchObject({
+      account: "+15555550999",
+      httpUrl: "http://signal-cli:8080",
+      autoStart: false,
+      apiMode: "auto",
+    });
+  });
+
   it("does not save an existing native server when the RPC probe fails", async () => {
-    vi.spyOn(clientModule, "signalCheck").mockResolvedValue({
-      ok: true,
-      status: 200,
-      error: null,
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValue({
+      mode: "native",
+      check: { ok: true, status: 200, error: null },
     });
     vi.spyOn(clientModule, "signalRpcRequest").mockRejectedValue(new Error("RPC unavailable"));
-    vi.spyOn(clientModule, "detectSignalApiMode").mockResolvedValue("native");
     const prompts = createQueuedWizardPrompter({
       selectValues: ["external-native"],
       confirmValues: [false],
@@ -2117,7 +2501,8 @@ describe("signal setup parsing", () => {
       message: "Try the Signal server URL again?",
       initialValue: true,
     });
-    expect(result.cfg.channels?.signal).toBeUndefined();
+    expect(result.cancelled).toBe(true);
+    expect(result.cfg).toEqual({});
   });
 
   it("saves a new default account number when connecting to an existing server with named accounts", async () => {
@@ -2174,16 +2559,19 @@ describe("signal setup parsing", () => {
     });
   });
 
-  it("does not save an existing container server when the account is not linked", async () => {
+  it("re-prompts the Signal account when the container does not list it", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValue({
+      mode: "container",
+      check: { ok: true, status: 101, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValue({
+      version: "0.13.22",
+    } as never);
     vi.spyOn(clientModule, "signalCheck").mockResolvedValue({
       ok: true,
       status: 101,
       error: null,
     });
-    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValue({
-      version: "0.13.22",
-    } as never);
-    vi.spyOn(clientModule, "detectSignalApiMode").mockResolvedValue("container");
     const fetchImpl = vi.fn(
       async () =>
         new Response(JSON.stringify(["+15555550999"]), {
@@ -2194,8 +2582,12 @@ describe("signal setup parsing", () => {
     vi.spyOn(fetchRuntime, "resolveFetch").mockReturnValue(fetchImpl as unknown as typeof fetch);
     const prompts = createQueuedWizardPrompter({
       selectValues: ["external-native"],
-      confirmValues: [false],
-      textValues: ["+15555550123", "http://signal-cli:8080"],
+      textValues: [
+        "+15555550123",
+        "http://signal-cli:8080",
+        "+15555550999",
+        "http://signal-cli:8080",
+      ],
     });
 
     const result = await runSetupWizardConfigure({
@@ -2207,27 +2599,36 @@ describe("signal setup parsing", () => {
       method: "GET",
       signal: expect.any(AbortSignal),
     });
-    expect(prompts.note).toHaveBeenCalledWith(
-      expect.stringContaining("Signal container does not list +15555550123"),
+    expect(prompts.confirm).not.toHaveBeenCalled();
+    expect(
+      prompts.text.mock.calls.map(([prompt]) => (prompt as { message?: string }).message),
+    ).toEqual([
+      "Signal phone number",
       "Signal server URL",
-    );
-    expect(prompts.confirm).toHaveBeenCalledWith({
-      message: "Try the Signal server URL again?",
-      initialValue: true,
+      "Signal phone number",
+      "Signal server URL",
+    ]);
+    expect(result.cfg.channels?.signal).toMatchObject({
+      account: "+15555550999",
+      httpUrl: "http://signal-cli:8080",
+      autoStart: false,
+      apiMode: "auto",
     });
-    expect(result.cfg.channels?.signal).toBeUndefined();
   });
 
   it("accepts a bare existing container server URL when the account is linked", async () => {
+    vi.spyOn(clientModule, "signalCheckWithMode").mockResolvedValue({
+      mode: "container",
+      check: { ok: true, status: 101, error: null },
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValue({
+      version: "0.13.22",
+    } as never);
     vi.spyOn(clientModule, "signalCheck").mockResolvedValue({
       ok: true,
       status: 101,
       error: null,
     });
-    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValue({
-      version: "0.13.22",
-    } as never);
-    vi.spyOn(clientModule, "detectSignalApiMode").mockResolvedValue("container");
     const fetchImpl = vi.fn(
       async () =>
         new Response(JSON.stringify(["+15555550123"]), {
@@ -2331,7 +2732,8 @@ describe("signal setup parsing", () => {
       ),
     ).toBe(false);
     expect(probe).toHaveBeenCalledTimes(1);
-    expect(result.cfg.channels?.signal).toBeUndefined();
+    expect(result.cancelled).toBe(true);
+    expect(result.cfg).toEqual({});
   });
 
   it("does not save Signal server URL setup when the server probe throws", async () => {
@@ -2366,7 +2768,8 @@ describe("signal setup parsing", () => {
     expect(progress?.update).toHaveBeenCalledWith("Testing http://127.0.0.1:8080");
     expect(progress?.stop).toHaveBeenCalledWith();
     expect(probe).toHaveBeenCalledTimes(1);
-    expect(result.cfg.channels?.signal).toBeUndefined();
+    expect(result.cancelled).toBe(true);
+    expect(result.cfg).toEqual({});
   });
 
   it("uses auto mode for existing Signal server setup", async () => {

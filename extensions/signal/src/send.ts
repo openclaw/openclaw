@@ -257,6 +257,9 @@ export async function sendMessageSignal(
     if (typeof accountInfo?.config.mediaMaxMb === "number") {
       return accountInfo.config.mediaMaxMb * 1024 * 1024;
     }
+    if (typeof cfg.channels?.signal?.mediaMaxMb === "number") {
+      return cfg.channels.signal.mediaMaxMb * 1024 * 1024;
+    }
     if (typeof cfg.agents?.defaults?.mediaMaxMb === "number") {
       return cfg.agents.defaults.mediaMaxMb * 1024 * 1024;
     }
