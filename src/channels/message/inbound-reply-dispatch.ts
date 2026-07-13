@@ -324,16 +324,16 @@ export async function recordInboundSessionAndDispatchReply(
 export const buildChannelMessageReplyDispatchBase = buildInboundReplyDispatchBase;
 /** @deprecated Compatibility helper for legacy reply dispatch results. */
 export const hasFinalChannelMessageReplyDispatch: (
-  result: import("../turn/dispatch-result.ts").ChannelTurnDispatchResultLike,
+  result: import("../turn/dispatch-result.js").ChannelTurnDispatchResultLike,
   signals?: Pick<
-    import("../turn/dispatch-result.ts").ChannelTurnVisibleDeliverySignals,
+    import("../turn/dispatch-result.js").ChannelTurnVisibleDeliverySignals,
     "fallbackDelivered" | "deliverySummaryDelivered"
   >,
 ) => boolean = hasFinalChannelTurnDispatch;
 /** @deprecated Compatibility helper for legacy reply dispatch results. */
 export const hasVisibleChannelMessageReplyDispatch: (
-  result: import("../turn/dispatch-result.ts").ChannelTurnDispatchResultLike,
-  signals?: import("../turn/dispatch-result.ts").ChannelTurnVisibleDeliverySignals,
+  result: import("../turn/dispatch-result.js").ChannelTurnDispatchResultLike,
+  signals?: import("../turn/dispatch-result.js").ChannelTurnVisibleDeliverySignals,
 ) => boolean = hasVisibleChannelTurnDispatch;
 /** @deprecated Compatibility helper for legacy reply dispatch results. */
 export const resolveChannelMessageReplyDispatchCounts = resolveChannelTurnDispatchCounts;
