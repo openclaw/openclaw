@@ -48,7 +48,7 @@ export function buildHistoryContext(params: {
 }
 
 /** Appends one history entry, enforces per-session limit, and refreshes LRU key order. */
-export function appendHistoryEntry<T extends HistoryEntry>(params: {
+function appendHistoryEntry<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
   entry: T;
