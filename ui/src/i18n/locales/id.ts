@@ -218,10 +218,11 @@ export const id: TranslationMap = {
   lazyView: {
     loadingTitle: "Memuat panel",
     errorTitle: "Panel gagal dimuat",
-    errorSubtitle:
-      "Muat ulang halaman untuk memuat bundel Control UI terbaru, atau coba lagi jika permintaan jaringan gagal.",
+    genericSubtitle: "Terjadi kesalahan saat memuat panel ini.",
+    staleTitle: "Versi baru tersedia",
+    staleSubtitle:
+      "OpenClaw telah diperbarui di latar belakang. Muat ulang untuk mendapatkan panel terbaru.",
     retry: "Coba lagi",
-    unknownError: "Kesalahan pemuatan modul yang tidak diketahui.",
   },
   nodes: {
     pairing: {

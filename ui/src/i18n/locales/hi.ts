@@ -218,10 +218,10 @@ export const hi: TranslationMap = {
   lazyView: {
     loadingTitle: "पैनल लोड हो रहा है",
     errorTitle: "पैनल लोड नहीं हो सका",
-    errorSubtitle:
-      "नवीनतम Control UI bundle लोड करने के लिए पेज पुनः लोड करें, या यदि नेटवर्क अनुरोध विफल हुआ हो तो फिर से प्रयास करें।",
+    genericSubtitle: "इस पैनल को लोड करते समय कुछ गड़बड़ हो गई।",
+    staleTitle: "एक नया संस्करण उपलब्ध है",
+    staleSubtitle: "OpenClaw को बैकग्राउंड में अपडेट किया गया था। नवीनतम पैनल पाने के लिए फिर से लोड करें।",
     retry: "फिर से प्रयास करें",
-    unknownError: "अज्ञात मॉड्यूल लोड त्रुटि।",
   },
   nodes: {
     pairing: {

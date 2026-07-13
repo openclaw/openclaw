@@ -216,9 +216,10 @@ export const zh_CN: TranslationMap = {
   lazyView: {
     loadingTitle: "正在加载面板",
     errorTitle: "面板加载失败",
-    errorSubtitle: "重新加载页面以加载最新的 Control UI 捆绑包，或在网络请求失败时重试。",
+    genericSubtitle: "加载此面板时出现问题。",
+    staleTitle: "有新版本可用",
+    staleSubtitle: "OpenClaw 已在后台更新。请重新加载以获取最新面板。",
     retry: "重试",
-    unknownError: "未知的模块加载错误。",
   },
   nodes: {
     pairing: {

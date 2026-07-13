@@ -218,10 +218,11 @@ export const es: TranslationMap = {
   lazyView: {
     loadingTitle: "Cargando panel",
     errorTitle: "No se pudo cargar el panel",
-    errorSubtitle:
-      "Vuelve a cargar la página para cargar el paquete más reciente de Control UI, o inténtalo de nuevo si falló la solicitud de red.",
+    genericSubtitle: "Se produjo un error al cargar este panel.",
+    staleTitle: "Hay una nueva versión disponible",
+    staleSubtitle:
+      "OpenClaw se actualizó en segundo plano. Recarga para obtener el panel más reciente.",
     retry: "Reintentar",
-    unknownError: "Error desconocido al cargar el módulo.",
   },
   nodes: {
     pairing: {

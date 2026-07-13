@@ -219,10 +219,11 @@ export const ja_JP: TranslationMap = {
   lazyView: {
     loadingTitle: "パネルを読み込み中",
     errorTitle: "パネルの読み込みに失敗しました",
-    errorSubtitle:
-      "最新の Control UI バンドルを読み込むにはページを再読み込みしてください。ネットワークリクエストに失敗した場合は再試行してください。",
+    genericSubtitle: "このパネルの読み込み中に問題が発生しました。",
+    staleTitle: "新しいバージョンが利用可能です",
+    staleSubtitle:
+      "OpenClaw がバックグラウンドで更新されました。最新のパネルを表示するには再読み込みしてください。",
     retry: "再試行",
-    unknownError: "不明なモジュール読み込みエラーです。",
   },
   nodes: {
     pairing: {
