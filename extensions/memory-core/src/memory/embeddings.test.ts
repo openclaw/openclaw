@@ -313,4 +313,23 @@ describe("createEmbeddingProvider", () => {
     expect(model).toBe("generic-default");
     expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config]);
   });
+
+  it("backfills empty provider.model with resolved model name (#90042)", async () => {
+    registerMemoryEmbeddingProvider({
+      id: "openai",
+      transport: "remote",
+      defaultModel: "text-embedding-3-small",
+      create: async () => ({
+        provider: {
+          id: "openai",
+          model: "",
+          embedQuery: async () => [1],
+          embedBatch: async (texts) => texts.map(() => [1]),
+        },
+      }),
+    });
+
+    const result = await createEmbeddingProvider(createOptions("openai"));
+    expect(result.provider?.model).toBe("text-embedding-3-small");
+  });
 });
