@@ -174,11 +174,6 @@ import {
   isShortWindowRateLimitMessage,
 } from "./run/assistant-failover.js";
 import {
-  buildTraceToolSummary,
-  hasCompletedModelProgressForIdleBreaker,
-  normalizeEmbeddedRunAttemptResult,
-} from "./run/run-attempt-result.js";
-import {
   createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
   formatEmbeddedRunStageSummary,
@@ -250,6 +245,11 @@ import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
+import {
+  buildTraceToolSummary,
+  hasCompletedModelProgressForIdleBreaker,
+  normalizeEmbeddedRunAttemptResult,
+} from "./run/run-attempt-result.js";
 import {
   CODEX_HARNESS_ID,
   resolveAttemptTrajectoryAttribution,

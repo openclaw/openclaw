@@ -181,12 +181,12 @@ import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
-import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import {
   prepareEmbeddedAttemptSkills,
   startEmbeddedAttemptDiagnostics,
   type EmitDiagnosticRunCompleted,
 } from "./attempt-startup.js";
+import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-transport.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
