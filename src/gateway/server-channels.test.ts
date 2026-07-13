@@ -17,7 +17,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
-  const computeBackoff = vi.fn(() => 10);
   const sleepWithAbort = vi.fn((ms: number, abortSignal?: AbortSignal) => {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => resolve(), ms);
@@ -32,11 +31,11 @@ const hoisted = vi.hoisted(() => {
     });
   });
   const startChannelApprovalHandlerBootstrap = vi.fn(async () => async () => {});
-  return { computeBackoff, sleepWithAbort, startChannelApprovalHandlerBootstrap };
+  return { sleepWithAbort, startChannelApprovalHandlerBootstrap };
 });
 
-vi.mock("../infra/backoff.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/backoff.js")>();
+vi.mock("../../packages/retry/src/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../packages/retry/src/index.js")>();
   class TestRetrySupervisor extends actual.RetrySupervisor {
     constructor(
       _policy: ConstructorParameters<typeof actual.RetrySupervisor>[0],
@@ -47,8 +46,14 @@ vi.mock("../infra/backoff.js", async (importOriginal) => {
   }
   return {
     ...actual,
-    computeBackoff: hoisted.computeBackoff,
     RetrySupervisor: TestRetrySupervisor,
+  };
+});
+
+vi.mock("../infra/backoff.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/backoff.js")>();
+  return {
+    ...actual,
     sleepWithAbort: hoisted.sleepWithAbort,
   };
 });
@@ -243,7 +248,6 @@ describe("server-channels auto restart", () => {
     previousRegistry = getActivePluginRegistry();
     vi.useRealTimers();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    hoisted.computeBackoff.mockClear();
     hoisted.sleepWithAbort.mockClear();
     hoisted.startChannelApprovalHandlerBootstrap.mockReset();
     hoisted.startChannelApprovalHandlerBootstrap.mockResolvedValue(async () => {});

@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { RetrySupervisor, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
+import { RetrySupervisor } from "../../../packages/retry/src/index.js";
+import { sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {

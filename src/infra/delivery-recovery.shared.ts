@@ -1,5 +1,5 @@
+import { computeBackoffSchedule } from "../../packages/retry/src/index.js";
 import { sleep } from "../utils/sleep.js";
-import { computeBackoffSchedule } from "./backoff.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
 import { isPlatformMessageNotDispatchedError } from "./outbound/deliver-types.js";
 import { getRetryAttemptErrors } from "./retry-attempt-errors.js";

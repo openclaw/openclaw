@@ -1,7 +1,8 @@
 // Realtime transcription websocket session streams audio to transcription providers.
 import { randomUUID } from "node:crypto";
 import WebSocket, { type RawData } from "ws";
-import { RetrySupervisor, sleepWithAbort } from "../infra/backoff.js";
+import { RetrySupervisor } from "../../packages/retry/src/index.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEvent } from "../proxy-capture/runtime.js";
 import type {
