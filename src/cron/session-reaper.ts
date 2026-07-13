@@ -78,16 +78,22 @@ export async function sweepCronRunSessions(params: {
   let transcriptCleanupError: unknown;
   try {
     const cutoff = now - retentionMs;
-    const pendingMediaSessionKeys = buildPendingGeneratedMediaSessionKeySet();
+    // Lazily built on the first continuation row so idle sweeps (deployments
+    // with no cron jobs) skip the task-registry snapshot entirely. Once built,
+    // every subsequent continuation row uses O(1) Set.has() instead of
+    // repeating the full listTaskRecords() clone+sort for each row.
+    let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
     for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
       if (!isCronRunSessionKey(sessionKey)) {
         continue;
       }
       const continuation = entry.cronRunContinuation;
-      const hasPendingMedia = Boolean(continuation && pendingMediaSessionKeys.has(sessionKey));
-      if (continuation && hasPendingMedia) {
-        continue;
+      if (continuation) {
+        pendingMediaSessionKeys ??= buildPendingGeneratedMediaSessionKeySet();
+        if (pendingMediaSessionKeys.has(sessionKey)) {
+          continue;
+        }
       }
       const updatedAt = entry.updatedAt ?? 0;
       if (updatedAt < cutoff) {

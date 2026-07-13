@@ -453,4 +453,35 @@ describe("sweepCronRunSessions", () => {
       listSpy.mockRestore();
     }
   });
+
+  it("does not build the pending-media snapshot when no cron continuations exist", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:cron:job1:run:recent-1": {
+        sessionId: "recent-1",
+        updatedAt: now - 1 * 3_600_000, // 1h ago — not expired
+      },
+      "agent:main:cron:job1:run:recent-2": {
+        sessionId: "recent-2",
+        updatedAt: now - 2 * 3_600_000, // 2h ago — not expired
+      },
+      "agent:main:telegram:dm:123": {
+        sessionId: "regular-dm",
+        updatedAt: now - 50 * 3_600_000, // old, but not cron run
+      },
+    };
+    await seedSessionEntries(storePath, store);
+    taskStatusMocks.buildPendingSet.mockClear();
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(0);
+    // Lazy snapshot: no continuation rows → buildPendingSet never called.
+    expect(taskStatusMocks.buildPendingSet).not.toHaveBeenCalled();
+  });
 });
