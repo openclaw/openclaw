@@ -117,14 +117,7 @@ export class ChannelWizardController {
       return;
     }
     const generation = this.generation;
-    if (
-      this.channel === null &&
-      current.step.type === "select" &&
-      typeof value === "string" &&
-      this.isKnownChannel(value)
-    ) {
-      this.channel = value;
-    }
+    this.maybeAdoptChannel(current.step, value);
     this.setState({ ...current, busy: true, validationError: null });
     try {
       const result = await client.request<WizardNextResult>(
@@ -160,6 +153,27 @@ export class ChannelWizardController {
       } catch {
         // Session may already be finished/purged; closing the modal wins.
       }
+    }
+  }
+
+  // Browse-all sessions start with channel null; adopt the channel the user
+  // picks in the wizard's own select/multiselect step so channel-specific
+  // completion (WhatsApp QR linking) still runs.
+  private maybeAdoptChannel(step: ChannelWizardStep, value: unknown): void {
+    if (this.channel !== null) {
+      return;
+    }
+    const candidates =
+      step.type === "select"
+        ? [value]
+        : step.type === "multiselect" && Array.isArray(value)
+          ? value
+          : [];
+    const match = candidates.find(
+      (entry): entry is string => typeof entry === "string" && this.isKnownChannel(entry),
+    );
+    if (match) {
+      this.channel = match;
     }
   }
 

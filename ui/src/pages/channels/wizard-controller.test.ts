@@ -143,6 +143,28 @@ describe("ChannelWizardController", () => {
     expect(controller.state).toEqual({ phase: "done", channel: "whatsapp" });
   });
 
+  it("adopts a known channel from a multiselect answer", async () => {
+    const multiStep = {
+      id: "step-multi",
+      type: "multiselect" as const,
+      message: "Pick channels",
+      options: [{ value: "whatsapp", label: "WhatsApp" }],
+    };
+    const { controller } = createController(
+      async (method) => {
+        if (method === "wizard.start") {
+          return { sessionId: "s1", done: false, status: "running", step: multiStep };
+        }
+        return { done: true, status: "done" };
+      },
+      (value) => value === "whatsapp",
+    );
+
+    await controller.start(null);
+    await controller.answer(["whatsapp"]);
+    expect(controller.state).toEqual({ phase: "done", channel: "whatsapp" });
+  });
+
   it("cancel clears the session and notifies the gateway", async () => {
     const calls: string[] = [];
     const { controller } = createController(async (method) => {
