@@ -31,6 +31,9 @@ struct AgentProTab: View {
     @State var clawHubInstallSlug: String?
     @State var cronActionBusyIDs: Set<String> = []
     @State var cronActionStatusText: String?
+    @State var automationQuery = ""
+    @State var automationListFilter: AutomationListFilter = .all
+    @State var automationEditorSelection: AutomationEditorSelection?
 
     enum AgentRoute: Hashable {
         case agents
@@ -90,6 +93,24 @@ struct AgentProTab: View {
         }
     }
 
+    enum AutomationListFilter: String, CaseIterable, Identifiable {
+        case all
+        case active
+        case paused
+
+        var id: Self {
+            self
+        }
+
+        var title: String {
+            switch self {
+            case .all: String(localized: "All")
+            case .active: String(localized: "Active")
+            case .paused: String(localized: "Paused")
+            }
+        }
+    }
+
     enum AgentLayout {
         static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
         static let filterHeight: CGFloat = 34
@@ -110,6 +131,11 @@ struct AgentProTab: View {
 
     struct SkillEditorSelection: Identifiable {
         let id: String
+    }
+
+    struct AutomationEditorSelection: Identifiable {
+        let id: String
+        let pendingRunID: String?
     }
 
     struct SkillEditorMessage {
@@ -150,6 +176,19 @@ struct AgentProTab: View {
                 self.skillEditorSheet(skill)
             } else {
                 self.missingSkillEditorSheet
+            }
+        }
+        .sheet(item: self.$automationEditorSelection) { selection in
+            if let overview = self.overview,
+               let job = overview.cronJobs.first(where: { $0.id == selection.id })
+            {
+                AgentAutomationDetailScreen(
+                    initialJob: job,
+                    sourceGatewayID: overview.gatewayID,
+                    initialPendingRunID: selection.pendingRunID)
+                {
+                    Task { await self.refreshOverview(force: true) }
+                }
             }
         }
     }

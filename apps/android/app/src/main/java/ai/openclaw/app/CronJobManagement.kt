@@ -277,10 +277,10 @@ internal enum class GatewayCronRunSkipReason {
   val messageText: NativeText
     get() =
       when (this) {
-        NotDue -> nativeText("Cron job is not due yet.")
-        AlreadyRunning -> nativeText("Cron job is already running.")
+        NotDue -> nativeText("Automation is not due yet.")
+        AlreadyRunning -> nativeText("Automation is already running.")
         RestartRecoveryPending -> nativeText("Gateway restart recovery is still in progress.")
-        InvalidSpec -> nativeText("Cron job has an invalid configuration.")
+        InvalidSpec -> nativeText("Automation has an invalid configuration.")
         Stopped -> nativeText("Cron scheduler is stopped.")
       }
 }
@@ -310,10 +310,10 @@ internal fun cronRunCompletionNotice(
 ): GatewayCronActionState.Notice {
   val (message, kind) =
     when (status) {
-      "ok" -> nativeText("Cron run finished.") to GatewayCronNoticeKind.Success
-      "skipped" -> nativeText("Cron run skipped.") to GatewayCronNoticeKind.Warning
-      "error" -> nativeText("Cron run failed.") to GatewayCronNoticeKind.Error
-      else -> nativeText("Cron run finished with an unknown status.") to GatewayCronNoticeKind.Warning
+      "ok" -> nativeText("Automation run finished.") to GatewayCronNoticeKind.Success
+      "skipped" -> nativeText("Automation run skipped.") to GatewayCronNoticeKind.Warning
+      "error" -> nativeText("Automation run failed.") to GatewayCronNoticeKind.Error
+      else -> nativeText("Automation run finished with an unknown status.") to GatewayCronNoticeKind.Warning
     }
   return GatewayCronActionState.Notice(id = jobId, message = message, kind = kind)
 }
@@ -373,7 +373,7 @@ internal fun buildCronUpdateParams(
   edit: GatewayCronJobEdit,
 ): String {
   val name = edit.name.trim()
-  require(name.isNotEmpty()) { "Cron job name is required." }
+  require(name.isNotEmpty()) { "Automation name is required." }
   val description = edit.description.trim()
   val sessionTarget = edit.sessionTarget.trim()
   require(
@@ -466,7 +466,7 @@ private fun buildCronSchedulePatch(
     is GatewayCronScheduleEdit.At -> {
       require(original.scheduleKind == "at") { "Changing schedule type is not supported here." }
       val at = edit.at.trim()
-      require(at.isNotEmpty()) { "One-time cron jobs need an ISO time." }
+      require(at.isNotEmpty()) { "One-time automations need an ISO time." }
       if (at == original.scheduleAt) {
         null
       } else {
@@ -517,7 +517,7 @@ private fun buildCronSchedulePatch(
     is GatewayCronScheduleEdit.OnExit -> {
       require(original.scheduleKind == "on-exit") { "Changing schedule type is not supported here." }
       val command = edit.command.trim()
-      require(command.isNotEmpty()) { "On-exit cron jobs need a command." }
+      require(command.isNotEmpty()) { "On-exit automations need a command." }
       val cwd = edit.cwd.trim().ifEmpty { null }
       if (command == original.scheduleCommand && cwd == original.scheduleCwd) {
         null

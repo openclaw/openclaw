@@ -95,6 +95,12 @@ extension AgentProTab {
 
     @MainActor
     func refreshOverview(force: Bool) async {
+        if self.appModel.isScreenshotFixtureModeEnabled {
+            self.overview = .screenshotFixture
+            self.overviewErrorText = nil
+            self.overviewLoading = false
+            return
+        }
         guard self.scenePhase == .active, self.liveGatewayConnected else {
             _ = self.overviewRefreshGate.begin()
             self.overview = nil
@@ -107,6 +113,7 @@ extension AgentProTab {
         }
         let generation = self.overviewRefreshGate.begin()
         let requestContext = self.overviewTaskID
+        guard let gatewayID = self.appModel.connectedGatewayID else { return }
 
         self.overviewLoading = true
         self.overviewErrorText = nil
@@ -125,11 +132,7 @@ extension AgentProTab {
         async let config = self.requestOptional(ConfigSnapshotLite.self, method: "config.get")
         async let presence = self.requestOptional([PresenceEntry].self, method: "system-presence")
         async let cronStatus = self.requestOptional(CronStatusLite.self, method: "cron.status")
-        async let cronJobs = self.requestOptional(
-            CronJobsListLite.self,
-            method: "cron.list",
-            paramsJSON: "{\"includeDisabled\":true,\"limit\":8,\"sortBy\":\"nextRunAtMs\",\"sortDir\":\"asc\"}",
-            timeoutSeconds: 12)
+        async let cronJobs = self.requestAllCronJobs()
         async let dreaming = self.requestOptional(DreamingStatusEnvelope.self, method: "doctor.memory.status")
         async let dreamDiary = self.requestOptional(DreamDiaryLite.self, method: "doctor.memory.dreamDiary")
         async let usage = self.requestOptional(
@@ -147,6 +150,7 @@ extension AgentProTab {
         let loadedDreamDiary = await dreamDiary
         let loadedUsage = await usage
         let snapshot = AgentOverviewSnapshot(
+            gatewayID: gatewayID,
             skills: loadedSkills,
             presence: loadedPresence ?? [],
             cronStatus: loadedCronStatus,
@@ -185,6 +189,60 @@ extension AgentProTab {
         } catch {
             return nil
         }
+    }
+
+    func requestAllCronJobs() async -> CronJobsListLite? {
+        let pageLimit = 100
+        let jobLimit = 20000
+        var jobs: [CronJob] = []
+        var seenJobIDs: Set<String> = []
+        var offset = 0
+        for _ in 0..<pageLimit {
+            guard let paramsJSON = try? Self.automationParams([
+                "includeDisabled": true,
+                "limit": 200,
+                "offset": offset,
+                "sortBy": "name",
+                "sortDir": "asc",
+            ]) else { return nil }
+            guard let page = await self.requestOptional(
+                CronJobsListLite.self,
+                method: "cron.list",
+                paramsJSON: paramsJSON,
+                timeoutSeconds: 12)
+            else { return nil }
+            let pageJobIDs = Set(page.jobs.map(\.id))
+            guard pageJobIDs.count == page.jobs.count,
+                  seenJobIDs.isDisjoint(with: pageJobIDs)
+            else { return nil }
+            seenJobIDs.formUnion(pageJobIDs)
+            jobs.append(contentsOf: page.jobs)
+            guard jobs.count <= jobLimit else { return nil }
+            if let total = page.total {
+                guard total >= jobs.count, total <= jobLimit else { return nil }
+                if jobs.count == total {
+                    return CronJobsListLite(
+                        jobs: jobs,
+                        total: total,
+                        hasMore: false,
+                        nextOffset: nil)
+                }
+            }
+            guard page.hasMore else {
+                return CronJobsListLite(
+                    jobs: jobs,
+                    total: page.total,
+                    hasMore: false,
+                    nextOffset: nil)
+            }
+            guard let nextOffset = nextCronJobsListOffset(page: page, currentOffset: offset),
+                  nextOffset <= jobLimit
+            else {
+                return nil
+            }
+            offset = nextOffset
+        }
+        return nil
     }
 
     func normalized(_ value: String?) -> String? {

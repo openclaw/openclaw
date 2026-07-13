@@ -104,7 +104,7 @@ class CronRuntimeGuardTest {
     val notice =
       GatewayCronActionState.Notice(
         id = "job-a",
-        message = "Cron job updated.",
+        message = "Automation updated.",
         kind = GatewayCronNoticeKind.Success,
       )
     actionState.value = notice

@@ -36,6 +36,7 @@ enum AgentProValueReader {
 }
 
 struct AgentOverviewSnapshot {
+    let gatewayID: String
     let skills: SkillStatusReportLite?
     let presence: [PresenceEntry]
     let cronStatus: CronStatusLite?
@@ -53,6 +54,74 @@ struct AgentOverviewSnapshot {
             || self.dreaming != nil
             || self.dreamDiary != nil
             || self.usage != nil
+    }
+}
+
+extension AgentOverviewSnapshot {
+    static var screenshotFixture: AgentOverviewSnapshot {
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        let daily = CronJob(
+            id: "release-briefing",
+            name: "Release briefing",
+            description: "Summarize mobile release readiness and open risks.",
+            enabled: true,
+            deleteafterrun: false,
+            createdatms: now - 86_400_000 * 12,
+            updatedatms: now - 3_600_000,
+            configrevision: "sha256:screenshot-release-briefing",
+            schedule: AnyCodable([
+                "kind": AnyCodable("cron"),
+                "expr": AnyCodable("0 9 * * 1-5"),
+                "tz": AnyCodable("America/Los_Angeles"),
+            ]),
+            sessiontarget: AnyCodable("isolated"),
+            wakemode: AnyCodable("now"),
+            payload: AnyCodable([
+                "kind": AnyCodable("agentTurn"),
+                "message": AnyCodable("Summarize mobile release readiness and open risks."),
+                "model": AnyCodable("openai/gpt-5.6-sol"),
+            ]),
+            state: [
+                "nextRunAtMs": AnyCodable(now + 3_600_000),
+                "lastRunAtMs": AnyCodable(now - 82_800_000),
+                "lastStatus": AnyCodable("ok"),
+            ],
+            nextrunatms: now + 3_600_000,
+            lastrunatms: now - 82_800_000,
+            lastrunstatus: AnyCodable("ok"))
+        let weekly = CronJob(
+            id: "weekly-project-review",
+            name: "Weekly project review",
+            description: "Prepare a concise progress report every Friday.",
+            enabled: false,
+            deleteafterrun: false,
+            createdatms: now - 86_400_000 * 30,
+            updatedatms: now - 86_400_000,
+            configrevision: "sha256:screenshot-weekly-review",
+            schedule: AnyCodable([
+                "kind": AnyCodable("cron"),
+                "expr": AnyCodable("30 16 * * 5"),
+                "tz": AnyCodable("America/Los_Angeles"),
+            ]),
+            sessiontarget: AnyCodable("isolated"),
+            wakemode: AnyCodable("now"),
+            payload: AnyCodable([
+                "kind": AnyCodable("agentTurn"),
+                "message": AnyCodable("Prepare the weekly project review."),
+            ]),
+            state: ["lastStatus": AnyCodable("ok")],
+            lastrunatms: now - 86_400_000 * 7,
+            lastrunstatus: AnyCodable("ok"))
+        return AgentOverviewSnapshot(
+            gatewayID: ScreenshotFixtureMode.gatewayID,
+            skills: nil,
+            presence: [],
+            cronStatus: CronStatusLite(enabled: true, jobs: 2, nextwakeatms: now + 3_600_000),
+            cronJobs: [daily, weekly],
+            dreaming: nil,
+            dreamDiary: nil,
+            usage: nil,
+            agentSkillFilter: nil)
     }
 }
 
@@ -109,7 +178,7 @@ struct SkillStatusEntryLite: Decodable {
     }
 
     var effectiveSkillKey: String {
-        let trimmed = (self.skillKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = (skillKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? self.name : trimmed
     }
 
@@ -143,7 +212,7 @@ struct SkillStatusEntryLite: Decodable {
     }
 
     var installSummary: String? {
-        guard let option = self.install?.first else { return nil }
+        guard let option = install?.first else { return nil }
         return option.label
     }
 
@@ -201,20 +270,6 @@ struct ClawHubInstallParams: Encodable {
     let slug: String
 }
 
-struct CronRunParams: Encodable {
-    let id: String
-    let mode: String
-}
-
-struct CronUpdatePatch: Encodable {
-    let enabled: Bool
-}
-
-struct CronUpdateParams: Encodable {
-    let id: String
-    let patch: CronUpdatePatch
-}
-
 struct SkillStatusMissingLite: Decodable {
     let bins: [String]
     let env: [String]
@@ -237,6 +292,35 @@ struct CronStatusLite: Decodable {
 struct CronJobsListLite: Decodable {
     let jobs: [CronJob]
     let total: Int?
+    let hasMore: Bool
+    let nextOffset: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case jobs
+        case total
+        case hasMore
+        case nextOffset
+    }
+
+    init(jobs: [CronJob], total: Int?, hasMore: Bool, nextOffset: Int?) {
+        self.jobs = jobs
+        self.total = total
+        self.hasMore = hasMore
+        self.nextOffset = nextOffset
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.jobs = try container.decode([CronJob].self, forKey: .jobs)
+        self.total = try container.decodeIfPresent(Int.self, forKey: .total)
+        self.hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
+        self.nextOffset = try container.decodeIfPresent(Int.self, forKey: .nextOffset)
+    }
+}
+
+func nextCronJobsListOffset(page: CronJobsListLite, currentOffset: Int) -> Int? {
+    guard page.hasMore, let nextOffset = page.nextOffset, nextOffset > currentOffset else { return nil }
+    return nextOffset
 }
 
 struct DreamingStatusEnvelope: Decodable {
@@ -312,7 +396,7 @@ struct ConfigSnapshotLite: Decodable {
     }
 
     func effectiveSkillFilter(agentId: String) -> [String]? {
-        if let agentSkills = self.agentConfig(id: agentId)?.skills {
+        if let agentSkills = agentConfig(id: agentId)?.skills {
             return agentSkills
         }
         return self.config?.agents?.defaults?.skills

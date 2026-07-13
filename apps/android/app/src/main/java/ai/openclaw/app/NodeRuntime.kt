@@ -1673,7 +1673,7 @@ class NodeRuntime private constructor(
       _cronActionState.value =
         GatewayCronActionState.Notice(
           id = jobId,
-          message = nativeText("This cron job already has a queued run."),
+          message = nativeText("This automation already has a queued run."),
           kind = GatewayCronNoticeKind.Warning,
         )
       return
@@ -1703,7 +1703,7 @@ class NodeRuntime private constructor(
             }
           }
           CronActionResult(
-            message = if (outcome.runId == null) nativeText("Cron job started.") else nativeText("Cron run queued."),
+            message = if (outcome.runId == null) nativeText("Automation started.") else nativeText("Automation run queued."),
             kind = GatewayCronNoticeKind.Success,
             refresh = cronRunShouldRefresh(outcome),
           )
@@ -1716,7 +1716,7 @@ class NodeRuntime private constructor(
           )
         GatewayCronRunOutcome.Rejected ->
           CronActionResult(
-            message = nativeText("Gateway rejected the cron run."),
+            message = nativeText("Gateway rejected the automation run."),
             kind = GatewayCronNoticeKind.Error,
             refresh = false,
           )
@@ -1747,7 +1747,7 @@ class NodeRuntime private constructor(
         }.toString(),
       )
       CronActionResult(
-        message = if (enabled) nativeText("Cron job enabled.") else nativeText("Cron job disabled."),
+        message = if (enabled) nativeText("Automation enabled.") else nativeText("Automation paused."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
       )
@@ -1769,13 +1769,13 @@ class NodeRuntime private constructor(
         if (!isCronJobRevisionConflict(err.gatewayError)) throw err
         reloadCronJobIfSelected(original.id)
         return@launchCronAction CronActionResult(
-          message = nativeText("This cron job changed on the gateway. Review the latest version before saving again."),
+          message = nativeText("This automation changed on the gateway. Review the latest version before saving again."),
           kind = GatewayCronNoticeKind.Warning,
           refresh = false,
         )
       }
       CronActionResult(
-        message = nativeText("Cron job updated."),
+        message = nativeText("Automation updated."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
       )
@@ -1790,7 +1790,7 @@ class NodeRuntime private constructor(
         buildJsonObject { put("id", JsonPrimitive(jobId)) }.toString(),
       )
       CronActionResult(
-        message = nativeText("Cron job deleted."),
+        message = nativeText("Automation deleted."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
         deleted = true,
@@ -2213,7 +2213,7 @@ class NodeRuntime private constructor(
     cronJobDetailRequestGuard.publishIfCurrent(detailRequest) {
       _cronJobDetailState.value =
         detail?.let(GatewayCronJobDetailState::Loaded)
-          ?: GatewayCronJobDetailState.Error(detailRequest.id, nativeText("Gateway returned an invalid cron job."))
+          ?: GatewayCronJobDetailState.Error(detailRequest.id, nativeText("Gateway returned an invalid automation."))
     }
     publishScreenshotCronHistory(historyRequest)
   }
@@ -4305,7 +4305,7 @@ class NodeRuntime private constructor(
       }
     } catch (_: Throwable) {
       publishCronRefresh(gatewayScope, refreshGeneration) {
-        _cronErrorText.value = nativeText("Could not load cron jobs.")
+        _cronErrorText.value = nativeText("Could not load automations.")
       }
     } finally {
       publishCronRefresh(gatewayScope, refreshGeneration) {
@@ -4318,7 +4318,7 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Connect the gateway to inspect cron jobs."))
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Connect the gateway to inspect automations."))
       }
       return
     }
@@ -4328,11 +4328,11 @@ class NodeRuntime private constructor(
       cronJobDetailRequestGuard.publishIfCurrent(request) {
         _cronJobDetailState.value =
           parseGatewayCronJobDetail(root)?.let(GatewayCronJobDetailState::Loaded)
-            ?: GatewayCronJobDetailState.Error(request.id, nativeText("Gateway returned an invalid cron job."))
+            ?: GatewayCronJobDetailState.Error(request.id, nativeText("Gateway returned an invalid automation."))
       }
     } catch (_: Throwable) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Could not load cron job."))
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Could not load automation."))
       }
     }
   }
@@ -4344,7 +4344,7 @@ class NodeRuntime private constructor(
         _cronRunHistoryState.value =
           GatewayCronRunHistoryState.Error(
             id = request.id,
-            message = nativeString("Connect the gateway to inspect cron run history."),
+            message = nativeString("Connect the gateway to inspect automation run history."),
           )
       }
       return
@@ -4375,7 +4375,7 @@ class NodeRuntime private constructor(
           _cronRunHistoryState.value =
             GatewayCronRunHistoryState.Error(
               id = request.id,
-              message = nativeString("Could not load cron run history."),
+              message = nativeString("Could not load automation run history."),
             )
         }
       }
@@ -4401,7 +4401,7 @@ class NodeRuntime private constructor(
       _cronActionState.value =
         GatewayCronActionState.Notice(
           id = jobId,
-          message = nativeText("Connect the gateway to manage cron jobs."),
+          message = nativeText("Connect the gateway to manage automations."),
           kind = GatewayCronNoticeKind.Error,
         )
       return
