@@ -25,8 +25,7 @@ import {
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { resolveFollowupAuthorizationKey } from "./queue/drain.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
-import { clearFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 

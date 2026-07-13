@@ -7,8 +7,7 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import { createDeferred, createQueueTestRun as createRun } from "./queue.test-helpers.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
-import { clearFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./queue/types.js";
 
 describe("followup queue in-flight ownership", () => {
