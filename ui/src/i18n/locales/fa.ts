@@ -165,6 +165,8 @@ export const fa: TranslationMap = {
       doneTitle: "کانال پیکربندی شد",
       doneBody:
         "پیکربندی ذخیره شد. Gateway کانال را به‌طور خودکار بارگیری مجدد می‌کند؛ برای مشاهده وضعیت زنده، کارت آن را بررسی کنید.",
+      doneNoChangesTitle: "هیچ تغییری انجام نشد",
+      doneNoChangesBody: "راه‌اندازی بدون پیکربندی کانال به پایان رسید. چیزی ذخیره نشد.",
       whatsappScanTitle: "اتصال WhatsApp با اسکن کد QR",
       whatsappScanHelp:
         "در تلفن خود، WhatsApp را باز کنید و به تنظیمات ← دستگاه‌های متصل ← اتصال دستگاه بروید، سپس این کد را اسکن کنید.",

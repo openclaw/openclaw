@@ -163,6 +163,8 @@ export const ar: TranslationMap = {
       doneTitle: "تم إعداد القناة",
       doneBody:
         "تم حفظ الإعدادات. يعيد Gateway تحميل القناة تلقائيًا؛ تحقّق من بطاقتها للاطلاع على الحالة المباشرة.",
+      doneNoChangesTitle: "لم يتم إجراء أي تغييرات",
+      doneNoChangesBody: "اكتمل الإعداد دون تهيئة أي قناة. لم يتم حفظ أي شيء.",
       whatsappScanTitle: "اربط WhatsApp عن طريق مسح رمز QR",
       whatsappScanHelp:
         "على هاتفك، افتح WhatsApp ← الإعدادات ← الأجهزة المرتبطة ← ربط جهاز، ثم امسح هذا الرمز.",

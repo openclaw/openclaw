@@ -165,6 +165,9 @@ export const tr: TranslationMap = {
       doneTitle: "Kanal yapılandırıldı",
       doneBody:
         "Yapılandırma kaydedildi. Gateway kanalı otomatik olarak yeniden yükler; canlı durum için kartını kontrol edin.",
+      doneNoChangesTitle: "Değişiklik yapılmadı",
+      doneNoChangesBody:
+        "Kurulum, bir kanal yapılandırılmadan tamamlandı. Hiçbir şey kaydedilmedi.",
       whatsappScanTitle: "QR kodunu tarayarak WhatsApp'ı bağlayın",
       whatsappScanHelp:
         "Telefonunuzda WhatsApp → Ayarlar → Bağlı cihazlar → Cihaz bağla bölümünü açın, ardından bu kodu tarayın.",

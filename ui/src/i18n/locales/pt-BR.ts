@@ -165,6 +165,8 @@ export const pt_BR: TranslationMap = {
       doneTitle: "Canal configurado",
       doneBody:
         "Configuração salva. O Gateway recarrega o canal automaticamente; verifique o cartão para acompanhar o status em tempo real.",
+      doneNoChangesTitle: "Nenhuma alteração feita",
+      doneNoChangesBody: "A configuração foi concluída sem configurar um canal. Nada foi salvo.",
       whatsappScanTitle: "Vincule o WhatsApp escaneando o código QR",
       whatsappScanHelp:
         "No seu celular, abra o WhatsApp → Configurações → Dispositivos conectados → Conectar um dispositivo e escaneie este código.",

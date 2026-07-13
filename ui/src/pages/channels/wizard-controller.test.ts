@@ -49,11 +49,10 @@ describe("ChannelWizardController", () => {
       step: { id: "step-select" },
       busy: false,
     });
-    expect(request).toHaveBeenCalledWith(
-      "wizard.start",
-      { flow: "channels", channel: "telegram" },
-      expect.anything(),
-    );
+    expect(request).toHaveBeenCalledWith("wizard.start", {
+      flow: "channels",
+      channel: "telegram",
+    });
 
     await controller.answer("telegram");
     expect(controller.state).toEqual({
@@ -62,11 +61,10 @@ describe("ChannelWizardController", () => {
       channels: ["telegram"],
       accounts: [{ channel: "telegram", accountId: "default" }],
     });
-    expect(request).toHaveBeenCalledWith(
-      "wizard.next",
-      { sessionId: "s1", answer: { stepId: "step-select", value: "telegram" } },
-      expect.anything(),
-    );
+    expect(request).toHaveBeenCalledWith("wizard.next", {
+      sessionId: "s1",
+      answer: { stepId: "step-select", value: "telegram" },
+    });
   });
 
   it("surfaces validation errors on the re-emitted step", async () => {

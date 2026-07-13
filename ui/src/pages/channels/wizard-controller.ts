@@ -2,8 +2,31 @@
 // as a step/answer state machine for the Control UI wizard modal.
 
 type WizardGatewayClient = {
-  request<T = unknown>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T>;
+  request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
+
+// The browser gateway client does not expose per-request timeouts, so race a
+// local ceiling; stale late responses are cleaned up by the generation guard.
+async function requestWithTimeout<T>(
+  client: WizardGatewayClient,
+  method: string,
+  params: unknown,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      client.request<T>(method, params),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`wizard request timed out: ${method}`)),
+          WIZARD_STEP_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export type ChannelWizardStepOption = {
   value: unknown;
@@ -95,11 +118,10 @@ export class ChannelWizardController {
     this.stepIndex = 0;
     this.setState({ phase: "starting", channel });
     try {
-      const result = await client.request<WizardNextResult>(
-        "wizard.start",
-        { flow: "channels", ...(channel ? { channel } : {}) },
-        { timeoutMs: WIZARD_STEP_TIMEOUT_MS },
-      );
+      const result = await requestWithTimeout<WizardNextResult>(client, "wizard.start", {
+        flow: "channels",
+        ...(channel ? { channel } : {}),
+      });
       if (this.generation !== generation) {
         // The modal was closed/superseded mid-start, but the gateway already
         // created a running session; cancel it or later starts get rejected.
@@ -130,14 +152,10 @@ export class ChannelWizardController {
     }
     this.setState({ ...current, busy: true, validationError: null });
     try {
-      const result = await client.request<WizardNextResult>(
-        "wizard.next",
-        {
-          sessionId: this.sessionId,
-          answer: { stepId: current.step.id, value },
-        },
-        { timeoutMs: WIZARD_STEP_TIMEOUT_MS },
-      );
+      const result = await requestWithTimeout<WizardNextResult>(client, "wizard.next", {
+        sessionId: this.sessionId,
+        answer: { stepId: current.step.id, value },
+      });
       if (this.generation !== generation) {
         return;
       }

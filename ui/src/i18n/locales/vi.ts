@@ -164,6 +164,9 @@ export const vi: TranslationMap = {
       doneTitle: "Đã cấu hình kênh",
       doneBody:
         "Đã lưu cấu hình. Gateway sẽ tự động tải lại kênh; hãy kiểm tra thẻ của kênh để xem trạng thái trực tiếp.",
+      doneNoChangesTitle: "Không có thay đổi nào",
+      doneNoChangesBody:
+        "Đã hoàn tất thiết lập mà không cấu hình kênh nào. Không có nội dung nào được lưu.",
       whatsappScanTitle: "Liên kết WhatsApp bằng cách quét mã QR",
       whatsappScanHelp:
         "Trên điện thoại, hãy mở WhatsApp → Cài đặt → Thiết bị liên kết → Liên kết thiết bị, sau đó quét mã này.",

@@ -165,6 +165,8 @@ export const hi: TranslationMap = {
       doneTitle: "चैनल कॉन्फ़िगर किया गया",
       doneBody:
         "कॉन्फ़िगरेशन सहेजा गया। Gateway चैनल को अपने-आप फिर से लोड करता है; लाइव स्थिति के लिए उसका कार्ड देखें।",
+      doneNoChangesTitle: "कोई बदलाव नहीं किया गया",
+      doneNoChangesBody: "किसी चैनल को कॉन्फ़िगर किए बिना सेटअप पूरा हो गया। कुछ भी सहेजा नहीं गया।",
       whatsappScanTitle: "QR कोड स्कैन करके WhatsApp लिंक करें",
       whatsappScanHelp:
         "अपने फ़ोन पर WhatsApp → सेटिंग्स → लिंक किए गए डिवाइस → डिवाइस लिंक करें खोलें, फिर इस कोड को स्कैन करें।",

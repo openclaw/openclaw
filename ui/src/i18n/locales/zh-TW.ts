@@ -161,6 +161,8 @@ export const zh_TW: TranslationMap = {
       docs: "文件",
       doneTitle: "頻道已設定",
       doneBody: "設定已儲存。Gateway 會自動重新載入頻道；請查看其卡片以瞭解即時狀態。",
+      doneNoChangesTitle: "未進行任何變更",
+      doneNoChangesBody: "設定已完成，但未設定任何頻道。未儲存任何內容。",
       whatsappScanTitle: "掃描 QR code 以連結 WhatsApp",
       whatsappScanHelp: "在手機上開啟 WhatsApp → 設定 → 已連結的裝置 → 連結裝置，然後掃描此代碼。",
       whatsappQrLoading: "正在產生 QR code…",

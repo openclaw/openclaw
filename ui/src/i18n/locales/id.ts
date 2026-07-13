@@ -165,6 +165,8 @@ export const id: TranslationMap = {
       doneTitle: "Saluran dikonfigurasi",
       doneBody:
         "Konfigurasi disimpan. Gateway memuat ulang saluran secara otomatis; periksa kartunya untuk melihat status terkini.",
+      doneNoChangesTitle: "Tidak ada perubahan yang dibuat",
+      doneNoChangesBody: "Penyiapan selesai tanpa mengonfigurasi saluran. Tidak ada yang disimpan.",
       whatsappScanTitle: "Tautkan WhatsApp dengan memindai kode QR",
       whatsappScanHelp:
         "Di ponsel Anda, buka WhatsApp → Pengaturan → Perangkat tertaut → Tautkan perangkat, lalu pindai kode ini.",

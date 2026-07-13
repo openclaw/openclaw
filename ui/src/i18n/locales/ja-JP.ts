@@ -165,6 +165,9 @@ export const ja_JP: TranslationMap = {
       doneTitle: "チャンネルを設定しました",
       doneBody:
         "設定を保存しました。Gateway がチャンネルを自動的に再読み込みします。カードで現在のステータスを確認してください。",
+      doneNoChangesTitle: "変更はありません",
+      doneNoChangesBody:
+        "チャンネルを設定せずにセットアップが完了しました。何も保存されませんでした。",
       whatsappScanTitle: "QR コードをスキャンして WhatsApp をリンク",
       whatsappScanHelp:
         "スマートフォンで WhatsApp → 設定 → リンク済みのデバイス → デバイスをリンク の順に開き、このコードをスキャンしてください。",

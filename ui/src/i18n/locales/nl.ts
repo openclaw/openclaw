@@ -165,6 +165,9 @@ export const nl: TranslationMap = {
       doneTitle: "Kanaal geconfigureerd",
       doneBody:
         "Configuratie opgeslagen. De Gateway laadt het kanaal automatisch opnieuw; bekijk de kaart voor de actuele status.",
+      doneNoChangesTitle: "Geen wijzigingen aangebracht",
+      doneNoChangesBody:
+        "De configuratie is voltooid zonder een kanaal te configureren. Er is niets opgeslagen.",
       whatsappScanTitle: "Koppel WhatsApp door de QR-code te scannen",
       whatsappScanHelp:
         "Open WhatsApp op je telefoon → Instellingen → Gekoppelde apparaten → Apparaat koppelen en scan vervolgens deze code.",

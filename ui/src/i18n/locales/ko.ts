@@ -164,6 +164,8 @@ export const ko: TranslationMap = {
       doneTitle: "채널이 구성되었습니다",
       doneBody:
         "구성이 저장되었습니다. Gateway가 채널을 자동으로 다시 로드합니다. 실시간 상태는 해당 카드에서 확인하세요.",
+      doneNoChangesTitle: "변경 사항 없음",
+      doneNoChangesBody: "채널을 구성하지 않고 설정을 완료했습니다. 저장된 내용이 없습니다.",
       whatsappScanTitle: "QR 코드를 스캔하여 WhatsApp 연결",
       whatsappScanHelp:
         "휴대전화에서 WhatsApp → 설정 → 연결된 기기 → 기기 연결을 연 다음, 이 코드를 스캔하세요.",

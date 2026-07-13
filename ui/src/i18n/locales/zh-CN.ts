@@ -161,6 +161,8 @@ export const zh_CN: TranslationMap = {
       docs: "文档",
       doneTitle: "渠道已配置",
       doneBody: "配置已保存。Gateway 会自动重新加载该渠道；请查看其卡片以了解实时状态。",
+      doneNoChangesTitle: "未进行任何更改",
+      doneNoChangesBody: "设置已完成，但未配置任何频道。未保存任何内容。",
       whatsappScanTitle: "扫描二维码关联 WhatsApp",
       whatsappScanHelp:
         "在手机上打开 WhatsApp → 设置 → 已关联的设备 → 关联设备，然后扫描此二维码。",
