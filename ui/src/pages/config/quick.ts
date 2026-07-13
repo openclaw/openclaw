@@ -31,6 +31,7 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 
 // ── Types ──
 
@@ -109,8 +110,10 @@ export type QuickSettingsProps = {
 
   // Pending config changes
   configDirty?: boolean;
+  configLoading?: boolean;
   configSaving?: boolean;
   configApplying?: boolean;
+  configUpdating?: boolean;
   configReady?: boolean;
   onResetConfig?: () => void;
   onSaveConfig?: () => void;
@@ -370,10 +373,20 @@ function renderGeneralCard(props: QuickSettingsProps) {
   `;
 }
 
+function isConfigBusy(props: QuickSettingsProps): boolean {
+  return (
+    props.configLoading === true ||
+    props.configSaving === true ||
+    props.configApplying === true ||
+    props.configUpdating === true
+  );
+}
+
 function renderModelCard(props: QuickSettingsProps) {
   const fastMode = formatFastModeValue(props.fastMode);
+  const configBusy = isConfigBusy(props);
   return html`
-    <div class="qs-card qs-card--model">
+    <div id=${GENERAL_SETTINGS_TARGET_IDS.model} class="qs-card qs-card--model">
       ${renderCardHeader(icons.brain, t("quickSettings.model.title"))}
       <div class="qs-card__body">
         <div class="qs-row">
@@ -392,6 +405,7 @@ function renderModelCard(props: QuickSettingsProps) {
                   class="qs-segmented__btn ${level === props.thinkingLevel
                     ? "qs-segmented__btn--active"
                     : ""}"
+                  ?disabled=${configBusy}
                   @click=${() => props.onThinkingChange?.(level)}
                 >
                   ${t(`quickSettings.model.thinkingLevels.${level}`)}
@@ -413,6 +427,7 @@ function renderModelCard(props: QuickSettingsProps) {
               ([value, labelKey]) => html`
                 <button
                   class="qs-segmented__btn ${fastMode === value ? "qs-segmented__btn--active" : ""}"
+                  ?disabled=${configBusy}
                   @click=${() =>
                     fastMode === value
                       ? undefined
@@ -439,7 +454,7 @@ function renderChannelsCard(props: QuickSettingsProps) {
       : undefined;
 
   return html`
-    <div class="qs-card qs-card--channels">
+    <div id=${GENERAL_SETTINGS_TARGET_IDS.channels} class="qs-card qs-card--channels">
       ${renderCardHeader(icons.send, t("quickSettings.channels.title"), badge)}
       <div class="qs-card__body">
         ${props.channels.length === 0
@@ -473,7 +488,7 @@ function renderAutomationsCard(props: QuickSettingsProps) {
   const { cronJobCount, skillCount, mcpServerCount } = props.automation;
 
   return html`
-    <div class="qs-card qs-card--automations">
+    <div id=${GENERAL_SETTINGS_TARGET_IDS.automations} class="qs-card qs-card--automations">
       ${renderCardHeader(icons.zap, t("quickSettings.automation.title"))}
       <div class="qs-card__body">
         <div class="qs-row">
@@ -526,9 +541,10 @@ function renderSecurityCard(props: QuickSettingsProps) {
   const toolProfiles = TOOL_PROFILES.includes(normalizedToolProfile)
     ? TOOL_PROFILES
     : [...TOOL_PROFILES, normalizedToolProfile];
+  const configBusy = isConfigBusy(props);
 
   return html`
-    <div class="qs-card qs-card--security">
+    <div id=${GENERAL_SETTINGS_TARGET_IDS.security} class="qs-card qs-card--security">
       ${renderCardHeader(
         icons.eye,
         t("quickSettings.security.title"),
@@ -555,6 +571,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
             <input
               type="checkbox"
               .checked=${browserEnabled}
+              ?disabled=${configBusy}
               @change=${(event: Event) =>
                 props.onBrowserEnabledToggle?.((event.currentTarget as HTMLInputElement).checked)}
             />
@@ -574,6 +591,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
                   normalizedToolProfile
                     ? "qs-segmented__btn--active"
                     : ""}"
+                  ?disabled=${configBusy}
                   @click=${() => props.onToolProfileChange?.(profile)}
                 >
                   ${profile}
@@ -751,7 +769,7 @@ function renderSystemCard(props: QuickSettingsProps) {
   const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder();
 
   return html`
-    <div class="qs-card qs-card--system">
+    <div id=${GENERAL_SETTINGS_TARGET_IDS.system} class="qs-card qs-card--system">
       ${renderCardHeader(
         icons.monitor,
         t("quickSettings.system.gatewayHost"),
@@ -796,7 +814,7 @@ function renderAppearanceCard(props: QuickSettingsProps) {
     { id: "custom", label: importedThemeName },
   ];
   return html`
-    <div class="qs-card qs-card--appearance">
+    <div id=${GENERAL_SETTINGS_TARGET_IDS.appearance} class="qs-card qs-card--appearance">
       ${renderCardHeader(icons.spark, t("quickSettings.appearance.title"))}
       <div class="qs-card__body qs-appearance">
         <div class="qs-row qs-row--stacked">
@@ -977,7 +995,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
         ? t("quickSettings.personal.configuredAvatar")
         : t("quickSettings.personal.fallbackLogo");
   return html`
-    <div class="qs-card qs-card--personal">
+    <div id=${GENERAL_SETTINGS_TARGET_IDS.personal} class="qs-card qs-card--personal">
       ${renderCardHeader(icons.image, t("quickSettings.personal.title"))}
       <div class="qs-card__body">
         <div class="qs-identity-grid">
@@ -1103,11 +1121,8 @@ function renderPendingChangesBar(props: QuickSettingsProps) {
   if (props.configDirty !== true) {
     return nothing;
   }
-  const canCommit =
-    props.connected &&
-    props.configReady === true &&
-    props.configSaving !== true &&
-    props.configApplying !== true;
+  const configBusy = isConfigBusy(props);
+  const canCommit = props.connected && props.configReady === true && !configBusy;
 
   return html`
     <div class="qs-card qs-card--span-all qs-pending" aria-live="polite">
@@ -1116,11 +1131,7 @@ function renderPendingChangesBar(props: QuickSettingsProps) {
         <span class="qs-pending__hint muted">${t("quickSettings.pending.hint")}</span>
       </div>
       <div class="qs-pending__actions">
-        <button
-          class="btn btn--sm"
-          ?disabled=${props.configSaving === true || props.configApplying === true}
-          @click=${props.onResetConfig}
-        >
+        <button class="btn btn--sm" ?disabled=${configBusy} @click=${props.onResetConfig}>
           ${t("quickSettings.pending.discard")}
         </button>
         <button class="btn btn--sm primary" ?disabled=${!canCommit} @click=${props.onSaveConfig}>

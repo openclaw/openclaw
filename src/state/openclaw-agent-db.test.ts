@@ -1064,7 +1064,7 @@ describe("openclaw agent database", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "defers nested permission repair until the outer transaction commits",
+    "defers nested permission repair to the outer transaction boundary",
     () => {
       const stateDir = createTempStateDir();
       const options = {

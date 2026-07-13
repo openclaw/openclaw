@@ -153,9 +153,11 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-ingress": 8,
   "channel-message": 232,
   "channel-message-runtime": 229,
+  "channel-pairing": 1,
   "channel-pairing-paths": 1,
   "channel-policy": 8,
   "channel-route": 5,
+  "conversation-runtime": 4,
   "session-store-runtime": 4,
   "session-transcript-runtime": 2,
   "group-access": 13,
@@ -199,17 +201,17 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10639,
+      10642,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5357,
+      5358,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3279,
+      3284,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

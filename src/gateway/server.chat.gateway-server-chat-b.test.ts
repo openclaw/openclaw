@@ -13,6 +13,7 @@ import { appendTranscriptEvent, loadSessionEntry } from "../config/sessions/sess
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -3407,6 +3408,17 @@ describe("gateway server chat", () => {
               content: [{ type: "text", text: "hello from Claude" }],
             },
           }),
+          ...Array.from({ length: 105 }, (_, index) =>
+            JSON.stringify({
+              type: index % 2 === 0 ? "user" : "assistant",
+              uuid: `older-${index}`,
+              timestamp: new Date(Date.parse("2026-03-26T16:30:00.000Z") + index).toISOString(),
+              message: {
+                role: index % 2 === 0 ? "user" : "assistant",
+                content: [{ type: "text", text: `imported message ${index + 1}` }],
+              },
+            }),
+          ),
         ].join("\n"),
         "utf-8",
       );
@@ -3428,15 +3440,361 @@ describe("gateway server chat", () => {
             },
           },
         });
-
-        const messages = await fetchHistoryMessages(ws);
-        expect(messages).toHaveLength(2);
-        const userMessage = messages[0] as { role?: string; content?: string };
+        const history = await rpcReq<{
+          messages?: Array<{ __openclaw?: { id?: string } }>;
+          hasMore?: boolean;
+          nextOffset?: number;
+          totalMessages?: number;
+          completeSnapshot?: boolean;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 100 });
+        expect(history.ok).toBe(true);
+        const messages = history.payload?.messages ?? [];
+        expect(messages).toHaveLength(107);
+        const userMessage = expectDefined(messages[0], "oldest imported user message") as {
+          role?: string;
+          content?: string;
+        };
         expect(userMessage.role).toBe("user");
         expect(userMessage.content).toBe("hi");
-        const assistantMessage = messages[1] as { role?: string; provider?: string };
+        const assistantMessage = expectDefined(
+          messages[1],
+          "oldest imported assistant message",
+        ) as { role?: string; provider?: string };
         expect(assistantMessage.role).toBe("assistant");
         expect(assistantMessage.provider).toBe("claude-cli");
+        expect(JSON.stringify(messages)).toContain("imported message 105");
+        expect(history.payload?.hasMore).toBe(false);
+        expect(history.payload?.nextOffset).toBeUndefined();
+        expect(history.payload?.totalMessages).toBe(107);
+        expect(history.payload?.completeSnapshot).toBe(true);
+        expect(new Set(messages.map((message) => message["__openclaw"]?.id)).size).toBe(107);
+      } finally {
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
+  test("chat.history marks byte-truncated claude-cli snapshots as incomplete", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-byte-pages";
+      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07531";
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      const homeDir = path.join(sessionDir, "home");
+      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+      await fs.mkdir(claudeProjectsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
+        Array.from({ length: 14 }, (_, index) =>
+          JSON.stringify({
+            type: index % 2 === 0 ? "user" : "assistant",
+            uuid: `byte-page-${index + 1}`,
+            timestamp: new Date(Date.parse("2026-03-26T16:30:00.000Z") + index).toISOString(),
+            message: {
+              role: index % 2 === 0 ? "user" : "assistant",
+              content: [{ type: "text", text: `message ${index + 1} ${"x".repeat(600)}` }],
+            },
+          }),
+        ).join("\n"),
+        "utf-8",
+      );
+      setTestEnvValue("HOME", homeDir);
+      setMaxChatHistoryMessagesBytesForTest(1_200);
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
+              modelProvider: "claude-cli",
+              model: "claude-sonnet-4-6",
+              cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+            },
+          },
+        });
+
+        const history = await rpcReq<{
+          messages?: unknown[];
+          hasMore?: boolean;
+          nextOffset?: number;
+          totalMessages?: number;
+          completeSnapshot?: boolean;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 20 });
+        expect(history.ok).toBe(true);
+        expect(history.payload?.messages?.length).toBeLessThan(14);
+        expect(history.payload?.totalMessages).toBe(14);
+        expect(history.payload?.hasMore).toBe(false);
+        expect(history.payload?.nextOffset).toBeUndefined();
+        expect(history.payload?.completeSnapshot).toBeUndefined();
+
+        setMaxChatHistoryMessagesBytesForTest();
+        const complete = await rpcReq<{
+          messages?: unknown[];
+          hasMore?: boolean;
+          completeSnapshot?: boolean;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 20 });
+        expect(complete.payload?.messages).toHaveLength(14);
+        expect(complete.payload?.hasMore).toBe(false);
+        expect(complete.payload?.completeSnapshot).toBe(true);
+      } finally {
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
+  test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-local-prefix";
+      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07532";
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      const homeDir = path.join(sessionDir, "home");
+      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+      await fs.mkdir(claudeProjectsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
+        [
+          JSON.stringify({
+            type: "user",
+            uuid: "import-prefix-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: { role: "user", content: "import prefix user" },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "import-prefix-assistant",
+            timestamp: "2026-03-26T16:29:55.500Z",
+            message: { role: "assistant", content: "import prefix assistant" },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+      setTestEnvValue("HOME", homeDir);
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
+              modelProvider: "claude-cli",
+              model: "claude-sonnet-4-6",
+              cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+            },
+          },
+        });
+        await writeMainSessionTranscript(
+          sessionDir,
+          Array.from({ length: 70 }, (_, index) =>
+            JSON.stringify({
+              message: {
+                role: index % 2 === 0 ? "user" : "assistant",
+                content: [{ type: "text", text: `local-only message ${index + 1}` }],
+                timestamp: Date.parse("2026-03-27T00:00:00.000Z") + index,
+              },
+            }),
+          ),
+          sessionId,
+        );
+
+        const history = await rpcReq<{
+          messages?: Array<{ __openclaw?: { id?: string; seq?: number } }>;
+          hasMore?: boolean;
+          nextOffset?: number;
+          totalMessages?: number;
+          completeSnapshot?: boolean;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 2 });
+        expect(history.ok).toBe(true);
+        expect(history.payload?.totalMessages).toBe(72);
+        expect(history.payload?.hasMore).toBe(false);
+        expect(history.payload?.nextOffset).toBeUndefined();
+        expect(history.payload?.completeSnapshot).toBe(true);
+        const deliveredIdentities = new Set(
+          (history.payload?.messages ?? []).map((message) => {
+            const metadata = expectDefined(message["__openclaw"], "history metadata");
+            return metadata.seq !== undefined
+              ? `seq:${metadata.seq}`
+              : `id:${expectDefined(metadata.id, "history id")}`;
+          }),
+        );
+        expect(deliveredIdentities.size).toBe(72);
+        expect(deliveredIdentities).toContain("id:import-prefix-user");
+        expect(deliveredIdentities).toContain("id:import-prefix-assistant");
+        for (let index = 1; index <= 70; index += 1) {
+          expect(deliveredIdentities).toContain(`seq:${index}`);
+        }
+      } finally {
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
+  test("chat.history keeps offset paging when a claude-cli binding has no import", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-missing-import";
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      setTestEnvValue("HOME", path.join(sessionDir, "empty-home"));
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
+              modelProvider: "claude-cli",
+              model: "claude-sonnet-4-6",
+              cliSessionBindings: {
+                "claude-cli": { sessionId: "missing-cli-session" },
+              },
+            },
+          },
+        });
+        await writeMainSessionTranscript(
+          sessionDir,
+          Array.from({ length: 5 }, (_, index) =>
+            JSON.stringify({
+              message: {
+                role: index % 2 === 0 ? "user" : "assistant",
+                content: [{ type: "text", text: `local message ${index + 1}` }],
+                timestamp: Date.now() + index,
+              },
+            }),
+          ),
+          sessionId,
+        );
+
+        const firstPage = await rpcReq<{
+          messages?: Array<{ __openclaw?: { seq?: number } }>;
+          hasMore?: boolean;
+          nextOffset?: number;
+          totalMessages?: number;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 2 });
+        expect(firstPage.ok).toBe(true);
+        expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([4, 5]);
+        expect(firstPage.payload?.hasMore).toBe(true);
+        expect(firstPage.payload?.nextOffset).toBe(2);
+        expect(firstPage.payload?.totalMessages).toBe(5);
+
+        const secondPage = await rpcReq<{
+          messages?: Array<{ __openclaw?: { seq?: number } }>;
+          hasMore?: boolean;
+          nextOffset?: number;
+        }>(ws, "chat.history", {
+          sessionKey: "main",
+          limit: 2,
+          offset: firstPage.payload?.nextOffset,
+        });
+        expect(secondPage.ok).toBe(true);
+        expect(secondPage.payload?.messages?.map(readOpenClawSeq)).toEqual([2, 3]);
+        expect(secondPage.payload?.hasMore).toBe(true);
+        expect(secondPage.payload?.nextOffset).toBe(4);
+      } finally {
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
+  test("chat.history terminates when the full local read dedupes every claude-cli import", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-dedupe-loop";
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      const homeDir = path.join(sessionDir, "home");
+      const cliSessionId = "0f5b202c-f6bb-4046-9475-d2f15fd07531";
+      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+      const dupBaseMs = Date.parse("2026-03-26T16:29:54.800Z");
+      await fs.mkdir(claudeProjectsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
+        [
+          JSON.stringify({
+            type: "user",
+            uuid: "dup-user-1",
+            timestamp: new Date(dupBaseMs).toISOString(),
+            message: { role: "user", content: "dup user question" },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "dup-assistant-1",
+            timestamp: new Date(dupBaseMs + 1000).toISOString(),
+            message: {
+              role: "assistant",
+              model: "claude-sonnet-4-6",
+              content: [{ type: "text", text: "dup assistant reply" }],
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+      setTestEnvValue("HOME", homeDir);
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
+              modelProvider: "claude-cli",
+              model: "claude-sonnet-4-6",
+              cliSessionBindings: {
+                "claude-cli": { sessionId: cliSessionId },
+              },
+            },
+          },
+        });
+        // The two import copies are the oldest local records; 45 newer
+        // local-only records push them past the limit-1 tail window (40 raw
+        // messages), so the tail merge incorporates the import while the full
+        // read dedupes everything. This layout used to recurse forever.
+        await writeMainSessionTranscript(
+          sessionDir,
+          [
+            JSON.stringify({
+              message: {
+                role: "user",
+                content: [{ type: "text", text: "dup user question" }],
+                timestamp: dupBaseMs,
+              },
+            }),
+            JSON.stringify({
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "dup assistant reply" }],
+                timestamp: dupBaseMs + 1000,
+              },
+            }),
+            ...Array.from({ length: 45 }, (_, index) =>
+              JSON.stringify({
+                message: {
+                  role: index % 2 === 0 ? "user" : "assistant",
+                  content: [{ type: "text", text: `local-only message ${index + 1}` }],
+                  timestamp: dupBaseMs + 60_000 + index,
+                },
+              }),
+            ),
+          ],
+          sessionId,
+        );
+
+        const history = await rpcReq<{
+          messages?: unknown[];
+          hasMore?: boolean;
+          nextOffset?: number;
+          totalMessages?: number;
+        }>(ws, "chat.history", { sessionKey: "main", limit: 1 });
+        expect(history.ok).toBe(true);
+        expect(history.payload?.totalMessages).toBe(47);
+        expect(history.payload?.hasMore).toBe(true);
+        expect(history.payload?.nextOffset).toBeGreaterThan(0);
+        expect(JSON.stringify(history.payload?.messages?.at(-1))).toContain(
+          "local-only message 45",
+        );
       } finally {
         homeEnvSnapshot.restore();
       }
@@ -4664,6 +5022,124 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history first-page fallback cursor advances only by byte-bounded records read", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes: 1_000,
+      });
+      const silentTail = Array.from({ length: 7 }, (_, index) =>
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            padding: "x".repeat(180_000),
+            timestamp: Date.now() + index + 2,
+          },
+        }),
+      );
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "oldest visible question" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "oldest visible answer" }],
+            timestamp: Date.now() + 1,
+          },
+        }),
+        ...silentTail,
+      ]);
+
+      type HistoryPage = {
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextOffset?: number;
+        hasMore?: boolean;
+        totalMessages?: number;
+      };
+      const firstPage = await rpcReq<HistoryPage>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 3,
+      });
+      expect(firstPage.ok).toBe(true);
+      expect(firstPage.payload?.messages).toEqual([]);
+      expect(firstPage.payload?.totalMessages).toBe(9);
+      expect(firstPage.payload?.hasMore).toBe(true);
+      expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
+      expect(firstPage.payload?.nextOffset).toBeLessThan(9);
+
+      const visibleSeqs: number[] = [];
+      let offset = firstPage.payload?.nextOffset;
+      for (let pageIndex = 0; pageIndex < 10 && offset !== undefined; pageIndex += 1) {
+        const page = await rpcReq<HistoryPage>(ws, "chat.history", {
+          sessionKey: "main",
+          limit: 3,
+          offset,
+        });
+        expect(page.ok).toBe(true);
+        visibleSeqs.push(
+          ...(page.payload?.messages?.map(readOpenClawSeq).filter((seq) => seq !== undefined) ??
+            []),
+        );
+        offset = page.payload?.nextOffset;
+      }
+      expect(visibleSeqs.toSorted((a, b) => a - b)).toEqual([1, 2]);
+      expect(offset).toBeUndefined();
+    });
+  });
+
+  test("chat.history advances past an oversized newest record when the tail parses empty", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes: 1_000,
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "reachable older message" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            padding: "x".repeat(2_000_000),
+            timestamp: Date.now() + 1,
+          },
+        }),
+      ]);
+
+      const firstPage = await rpcReq<{
+        messages?: unknown[];
+        nextOffset?: number;
+        hasMore?: boolean;
+      }>(ws, "chat.history", { sessionKey: "main", limit: 1 });
+      expect(firstPage.ok).toBe(true);
+      expect(firstPage.payload?.messages).toEqual([]);
+      expect(firstPage.payload?.hasMore).toBe(true);
+      expect(firstPage.payload?.nextOffset).toBe(1);
+
+      const olderPage = await rpcReq<{ messages?: unknown[]; hasMore?: boolean }>(
+        ws,
+        "chat.history",
+        { sessionKey: "main", limit: 1, offset: firstPage.payload?.nextOffset },
+      );
+      expect(olderPage.ok).toBe(true);
+      expect(JSON.stringify(olderPage.payload?.messages)).toContain("reachable older message");
+      expect(olderPage.payload?.hasMore).toBe(false);
+    });
+  });
+
   test("chat.history offset pagination advances from the projected first-page boundary", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
@@ -4740,6 +5216,59 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history first-page metadata pages backward without overlaps or gaps", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(
+        sessionDir,
+        Array.from({ length: 7 }, (_, index) =>
+          JSON.stringify({
+            message: {
+              role: index % 2 === 0 ? "user" : "assistant",
+              content: [{ type: "text", text: `message ${index + 1}` }],
+              timestamp: Date.now() + index,
+            },
+          }),
+        ),
+      );
+
+      type HistoryPage = {
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextOffset?: number;
+        hasMore?: boolean;
+        totalMessages?: number;
+      };
+      const pages: HistoryPage[] = [];
+      let offset: number | undefined;
+      do {
+        const page = await rpcReq<HistoryPage>(ws, "chat.history", {
+          sessionKey: "main",
+          limit: 2,
+          ...(offset !== undefined ? { offset } : {}),
+        });
+        expect(page.ok).toBe(true);
+        pages.push(page.payload ?? {});
+        offset = page.payload?.nextOffset;
+      } while (pages.at(-1)?.hasMore);
+
+      expect(pages.map((page) => page.messages?.map(readOpenClawSeq))).toEqual([
+        [6, 7],
+        [4, 5],
+        [2, 3],
+        [1],
+      ]);
+      expect(pages.map((page) => page.nextOffset)).toEqual([2, 4, 6, undefined]);
+      expect(pages.map((page) => page.hasMore)).toEqual([true, true, true, false]);
+      expect(pages.map((page) => page.totalMessages)).toEqual([7, 7, 7, 7]);
+      expect(
+        pages
+          .flatMap((page) => page.messages ?? [])
+          .map(readOpenClawSeq)
+          .toSorted((a, b) => (a ?? 0) - (b ?? 0)),
+      ).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    });
+  });
+
   test("chat.history offset pagination advances from the final budgeted page", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({
@@ -4787,6 +5316,96 @@ describe("gateway server chat", () => {
       expect(firstPage.payload?.nextOffset).toBe(2);
       expect(firstPage.payload?.hasMore).toBe(true);
       expect(firstPage.payload?.totalMessages).toBe(3);
+    });
+  });
+
+  test("chat.history advances past a replay boundary that cannot fit all projected siblings", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes: 1_200,
+      });
+      const captured: DiagnosticPayloadLargeEvent[] = [];
+      const unsubscribe = onDiagnosticEvent((event) => {
+        if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
+          captured.push(event);
+        }
+      });
+      try {
+        await writeMainSessionTranscript(sessionDir, [
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "reachable older message" }],
+              timestamp: Date.now(),
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: Array.from({ length: 4 }, (_, index) => ({
+                type: "toolcall",
+                name: "message",
+                arguments: {
+                  action: "send",
+                  message: `projected sibling ${index + 1} ${"x".repeat(700)}`,
+                },
+              })),
+              timestamp: Date.now() + 1,
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              toolName: "message",
+              result: { ok: true },
+              content: [{ type: "text", text: "NO_REPLY" }],
+              timestamp: Date.now() + 2,
+            },
+          }),
+        ]);
+
+        type HistoryPage = {
+          messages?: Array<{ __openclaw?: { seq?: number } }>;
+          nextOffset?: number;
+          hasMore?: boolean;
+        };
+        const firstPage = await rpcReq<HistoryPage>(ws, "chat.history", {
+          sessionKey: "main",
+          limit: 2,
+          offset: 0,
+        });
+        expect(firstPage.ok).toBe(true);
+        expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([3]);
+        expect(firstPage.payload?.hasMore).toBe(true);
+        expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
+        expect(
+          captured.some((event) => event.action === "truncated" && (event.count ?? 0) > 0),
+        ).toBe(true);
+
+        let offset = expectDefined(firstPage.payload?.nextOffset, "second page offset");
+        const olderMessages: unknown[] = [];
+        for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
+          const page = await rpcReq<HistoryPage>(ws, "chat.history", {
+            sessionKey: "main",
+            limit: 2,
+            offset,
+          });
+          expect(page.ok).toBe(true);
+          olderMessages.push(...(page.payload?.messages ?? []));
+          const nextOffset = page.payload?.nextOffset;
+          if (nextOffset === undefined) {
+            expect(page.payload?.hasMore).toBe(false);
+            break;
+          }
+          expect(nextOffset).toBeGreaterThan(offset);
+          offset = nextOffset;
+        }
+        expect(JSON.stringify(olderMessages)).toContain("reachable older message");
+      } finally {
+        unsubscribe();
+      }
     });
   });
 
