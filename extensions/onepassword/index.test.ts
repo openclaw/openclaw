@@ -44,4 +44,91 @@ describe("onepassword plugin", () => {
     expect(registerCli).toHaveBeenCalledTimes(1);
     expect(registerTool).not.toHaveBeenCalled();
   });
+
+  it("evaluates enablement and before-tool policy from live plugin config", async () => {
+    const pluginConfig = (policy: "auto" | "deny") => ({
+      vault: "Automation",
+      items: {
+        deploy: {
+          item: "Deploy token",
+          field: "credential",
+          policy,
+        },
+      },
+    });
+    let livePolicy: "auto" | "deny" = "auto";
+    let liveEnabled = true;
+    const current = () => ({
+      plugins: {
+        entries: {
+          onepassword: {
+            enabled: liveEnabled,
+            config: pluginConfig(livePolicy),
+          },
+        },
+      },
+    });
+    const store = {
+      register: vi.fn(async () => undefined),
+      lookup: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+      entries: vi.fn(async () => []),
+    };
+    const on = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "onepassword",
+        name: "1Password",
+        source: "test",
+        config: current(),
+        pluginConfig: pluginConfig("auto"),
+        runtime: {
+          config: { current },
+          state: {
+            openKeyedStore: () => store,
+            resolveStateDir: () => "/tmp/openclaw-onepassword-test",
+          },
+        } as never,
+        registerCli: vi.fn(),
+        registerTool: vi.fn(),
+        on,
+      }),
+    );
+
+    const beforeToolCall = on.mock.calls.find(([name]) => name === "before_tool_call")?.[1] as
+      | ((
+          event: { toolName: string; toolCallId: string; params: Record<string, unknown> },
+          context: { toolName: string; toolCallId: string; agentId: string },
+        ) => Promise<{ block?: boolean } | void>)
+      | undefined;
+    if (!beforeToolCall) {
+      throw new Error("missing before_tool_call hook");
+    }
+
+    liveEnabled = false;
+    await expect(
+      beforeToolCall(
+        {
+          toolName: "onepassword",
+          toolCallId: "live-enabled-1",
+          params: { action: "get", slug: "deploy", reason: "test live enablement" },
+        },
+        { toolName: "onepassword", toolCallId: "live-enabled-1", agentId: "agent-a" },
+      ),
+    ).resolves.toMatchObject({ block: true });
+
+    liveEnabled = true;
+    livePolicy = "deny";
+    await expect(
+      beforeToolCall(
+        {
+          toolName: "onepassword",
+          toolCallId: "live-policy-1",
+          params: { action: "get", slug: "deploy", reason: "test live policy" },
+        },
+        { toolName: "onepassword", toolCallId: "live-policy-1", agentId: "agent-a" },
+      ),
+    ).resolves.toMatchObject({ block: true });
+  });
 });

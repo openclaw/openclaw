@@ -57,6 +57,12 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],
+  "extensions/onepassword/index.ts": [
+    "resolveLivePluginConfigObject(",
+    "resolveEffectiveEnableState(",
+    '"onepassword"',
+    "api.runtime.config?.current",
+  ],
   "extensions/thread-ownership/index.ts": [
     "resolveLivePluginConfigObject(",
     '"thread-ownership"',

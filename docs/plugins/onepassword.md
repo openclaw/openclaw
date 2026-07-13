@@ -156,7 +156,10 @@ bound, the oldest grant is evicted and its agent must approve the next access.
 
 The in-memory cache defaults to 300 seconds and is bounded by the configured
 slug registry. Set `cacheTtlSeconds` to `0` to disable it. Policy is evaluated
-before every cache lookup, and cache hits are audited.
+before every cache lookup, and cache hits are audited. Runtime config reloads
+take effect at each policy and execution boundary; disabling the plugin or
+removing, denying, or retargeting a slug invalidates pending authorization and
+cached values.
 
 ## Inspect status and audit history
 

@@ -12,8 +12,8 @@ type CommandLike = {
 
 export type OnePasswordCliContext = {
   program: CommandLike;
-  config?: OnePasswordConfig;
-  opClient: Pick<OpClient, "opBin" | "tokenFilePresent">;
+  resolveConfig: () => OnePasswordConfig | undefined;
+  resolveOpClient: () => Pick<OpClient, "opBin" | "tokenFilePresent">;
   auditStore: PluginStateKeyedStore<AuditRow>;
   write?: (message: string) => void;
 };
@@ -75,7 +75,13 @@ export function registerOnePasswordCommands(context: OnePasswordCliContext): voi
     .command("status")
     .description("Show broker readiness without secret values")
     .action(async () => {
-      write(JSON.stringify(await buildStatus(context.config, context.opClient), null, 2));
+      write(
+        JSON.stringify(
+          await buildStatus(context.resolveConfig(), context.resolveOpClient()),
+          null,
+          2,
+        ),
+      );
     });
   command
     .command("audit")

@@ -51,6 +51,7 @@ function configuredItem(configured: OnePasswordConfig, slug: string): OnePasswor
 
 function setup(nowValue = 1_000, configured = config()) {
   let now = nowValue;
+  let currentConfig: OnePasswordConfig | undefined = configured;
   const audit = new MemoryKeyedStore<AuditRow>(() => now);
   const grants = new MemoryKeyedStore<StandingGrant>(() => now);
   const getItem = vi.fn(async () => ({
@@ -59,7 +60,7 @@ function setup(nowValue = 1_000, configured = config()) {
     fieldLabel: "credential",
   }));
   const broker = new OnePasswordBroker({
-    config: configured,
+    resolveConfig: () => currentConfig,
     opClient: { getItem },
     stores: { audit, grants },
     now: () => now,
@@ -69,6 +70,9 @@ function setup(nowValue = 1_000, configured = config()) {
     audit,
     grants,
     getItem,
+    setConfig: (next: OnePasswordConfig | undefined) => {
+      currentConfig = next;
+    },
     advance: (ms: number) => {
       now += ms;
     },
@@ -380,6 +384,94 @@ describe("OnePasswordBroker validation and policy", () => {
     expect(remapped?.requireApproval).toBeDefined();
   });
 
+  it("fails closed when live policy changes after authorization", async () => {
+    const configured = config();
+    const { broker, audit, getItem, setConfig } = setup(1_000, configured);
+    await before(broker, "live-deny-1", {
+      action: "get",
+      slug: "automatic",
+      reason: "authorized before reload",
+    });
+    const reloaded = structuredClone(configured);
+    configuredItem(reloaded, "automatic").policy = "deny";
+    setConfig(reloaded);
+
+    await expect(
+      broker.get(
+        "live-deny-1",
+        { action: "get", slug: "automatic", reason: "authorized before reload" },
+        invocation,
+      ),
+    ).rejects.toMatchObject({ code: "POLICY_CHANGED" });
+    expect(getItem).not.toHaveBeenCalled();
+    expect((await audit.entries()).at(-1)?.value).toMatchObject({
+      outcome: "policy-denied",
+    });
+  });
+
+  it("rejects a retargeted authorization and never reuses its cached value", async () => {
+    const configured = config();
+    const { broker, getItem, setConfig } = setup(1_000, configured);
+    await before(broker, "live-target-1", {
+      action: "get",
+      slug: "automatic",
+      reason: "prime original target",
+    });
+    await broker.get(
+      "live-target-1",
+      { action: "get", slug: "automatic", reason: "prime original target" },
+      invocation,
+    );
+
+    await before(broker, "live-target-2", {
+      action: "get",
+      slug: "automatic",
+      reason: "authorized before retarget",
+    });
+    const reloaded = structuredClone(configured);
+    configuredItem(reloaded, "automatic").item = "Replacement target";
+    setConfig(reloaded);
+    await expect(
+      broker.get(
+        "live-target-2",
+        { action: "get", slug: "automatic", reason: "authorized before retarget" },
+        invocation,
+      ),
+    ).rejects.toMatchObject({ code: "POLICY_CHANGED" });
+
+    await before(broker, "live-target-3", {
+      action: "get",
+      slug: "automatic",
+      reason: "authorize replacement target",
+    });
+    await broker.get(
+      "live-target-3",
+      { action: "get", slug: "automatic", reason: "authorize replacement target" },
+      invocation,
+    );
+    expect(getItem).toHaveBeenCalledTimes(2);
+    expect(getItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ item: "Replacement target" }),
+    );
+  });
+
+  it("blocks access after live plugin config removal", async () => {
+    const { broker, audit, getItem, setConfig } = setup();
+    setConfig(undefined);
+    await expect(
+      before(broker, "live-remove-1", {
+        action: "get",
+        slug: "automatic",
+        reason: "after removal",
+      }),
+    ).resolves.toMatchObject({ block: true });
+    expect(getItem).not.toHaveBeenCalled();
+    expect((await audit.entries()).at(-1)?.value).toMatchObject({
+      outcome: "error",
+      errorCode: "POLICY_CHANGED",
+    });
+  });
+
   it("prunes grants for removed slugs before persisting a replacement", async () => {
     const { broker, grants } = setup();
     for (const slug of ["removed-a", "removed-b"]) {
@@ -483,7 +575,7 @@ describe("OnePasswordBroker cache and audit", () => {
       fieldLabel: "credential",
     }));
     const broker = new OnePasswordBroker({
-      config: cfg,
+      resolveConfig: () => cfg,
       opClient: { getItem },
       stores: { audit, grants },
     });

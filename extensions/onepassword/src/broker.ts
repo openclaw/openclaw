@@ -63,7 +63,7 @@ export type BrokerStores = {
 };
 
 export type BrokerOptions = {
-  config: OnePasswordConfig;
+  resolveConfig: () => OnePasswordConfig | undefined;
   opClient: Pick<OpClient, "getItem">;
   stores: BrokerStores;
   now?: () => number;
@@ -81,10 +81,13 @@ type AccessContext = {
 type PendingAuthorization = AccessContext & {
   outcome: "auto" | "approved" | "grant";
   persistGrant: boolean;
+  configFingerprint: string;
+  targetFingerprint: string;
   expiresAtMs: number;
 };
 
 type CacheEntry = ResolvedSecret & {
+  targetFingerprint: string;
   expiresAtMs: number;
 };
 
@@ -176,18 +179,40 @@ function errorCode(error: unknown): AuditErrorCode | undefined {
 }
 
 export class OnePasswordBroker {
-  private readonly config: OnePasswordConfig;
+  private readonly resolveConfig: () => OnePasswordConfig | undefined;
   private readonly opClient: Pick<OpClient, "getItem">;
   private readonly stores: BrokerStores;
   private readonly now: () => number;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly pending = new Map<string, PendingAuthorization>();
+  private lastConfigFingerprint: string | null | undefined;
 
   constructor(options: BrokerOptions) {
-    this.config = options.config;
+    this.resolveConfig = options.resolveConfig;
     this.opClient = options.opClient;
     this.stores = options.stores;
     this.now = options.now ?? Date.now;
+  }
+
+  private observeConfigFingerprint(fingerprint: string | null): void {
+    if (this.lastConfigFingerprint !== undefined && this.lastConfigFingerprint !== fingerprint) {
+      // A reload can revoke policy or retarget a slug. Cached secrets and
+      // in-flight authorizations must not survive that ownership boundary.
+      this.cache.clear();
+      this.pending.clear();
+    }
+    this.lastConfigFingerprint = fingerprint;
+  }
+
+  private currentConfig(): { config: OnePasswordConfig; fingerprint: string } {
+    const config = this.resolveConfig();
+    if (!config) {
+      this.observeConfigFingerprint(null);
+      throw internalError("POLICY_CHANGED", "1Password broker is no longer configured");
+    }
+    const fingerprint = createHash("sha256").update(JSON.stringify(config)).digest("hex");
+    this.observeConfigFingerprint(fingerprint);
+    return { config, fingerprint };
   }
 
   private context(
@@ -244,11 +269,11 @@ export class OnePasswordBroker {
     }
   }
 
-  private async pruneStaleGrants(): Promise<void> {
+  private async pruneStaleGrants(config: OnePasswordConfig): Promise<void> {
     const now = this.now();
     for (const entry of await this.stores.grants.entries()) {
-      const item = Object.hasOwn(this.config.items, entry.value.slug)
-        ? this.config.items[entry.value.slug]
+      const item = Object.hasOwn(config.items, entry.value.slug)
+        ? config.items[entry.value.slug]
         : undefined;
       if (
         !item ||
@@ -286,11 +311,22 @@ export class OnePasswordBroker {
       return;
     }
     const context = this.context(event, ctx, input);
-    if (!Object.hasOwn(this.config.items, input.slug)) {
+    let config: OnePasswordConfig;
+    let configFingerprint: string;
+    try {
+      ({ config, fingerprint: configFingerprint } = this.currentConfig());
+    } catch (error) {
+      await this.audit(context, "error", { errorCode: errorCode(error) });
+      return {
+        block: true,
+        blockReason: error instanceof Error ? error.message : "1Password broker is unavailable",
+      };
+    }
+    if (!Object.hasOwn(config.items, input.slug)) {
       await this.audit(context, "error", { errorCode: "UNKNOWN_SLUG" });
       return { block: true, blockReason: `Unknown 1Password slug: ${input.slug}` };
     }
-    const item = this.config.items[input.slug];
+    const item = config.items[input.slug];
     if (!item) {
       throw new Error(`Missing 1Password config for registered slug: ${input.slug}`);
     }
@@ -309,6 +345,8 @@ export class OnePasswordBroker {
         ...context,
         outcome: "auto",
         persistGrant: false,
+        configFingerprint,
+        targetFingerprint: fingerprintOnePasswordTarget(item),
         expiresAtMs: this.now() + PENDING_AUTHORIZATION_TTL_MS,
       });
       return;
@@ -328,6 +366,8 @@ export class OnePasswordBroker {
         ...context,
         outcome: "grant",
         persistGrant: false,
+        configFingerprint,
+        targetFingerprint: fingerprintOnePasswordTarget(item),
         expiresAtMs: this.now() + PENDING_AUTHORIZATION_TTL_MS,
       });
       return;
@@ -357,6 +397,8 @@ export class OnePasswordBroker {
               ...context,
               outcome: "approved",
               persistGrant: decision === "allow-always" && context.agentId !== "unknown",
+              configFingerprint,
+              targetFingerprint: fingerprintOnePasswordTarget(item),
               expiresAtMs: this.now() + PENDING_AUTHORIZATION_TTL_MS,
             });
             return;
@@ -376,12 +418,13 @@ export class OnePasswordBroker {
   }
 
   async list(invocation: ToolInvocationContext): Promise<ListedItem[]> {
+    const { config } = this.currentConfig();
     const grants = new Map(
       (await this.stores.grants.entries()).map((entry) => [entry.key, entry.value]),
     );
     const now = this.now();
     const agentId = invocation.agentId;
-    return Object.entries(this.config.items)
+    return Object.entries(config.items)
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([slug, item]) => {
         const grant = agentId ? grants.get(standingGrantKey(agentId, slug)) : undefined;
@@ -429,11 +472,19 @@ export class OnePasswordBroker {
       );
     }
 
-    if (!Object.hasOwn(this.config.items, input.slug)) {
+    let config: OnePasswordConfig;
+    let configFingerprint: string;
+    try {
+      ({ config, fingerprint: configFingerprint } = this.currentConfig());
+    } catch (error) {
+      await this.audit(authorization, "error", { errorCode: errorCode(error) });
+      throw error;
+    }
+    if (!Object.hasOwn(config.items, input.slug)) {
       await this.audit(authorization, "error", { errorCode: "UNKNOWN_SLUG" });
       throw internalError("UNKNOWN_SLUG", `Unknown 1Password slug: ${input.slug}`);
     }
-    const item = this.config.items[input.slug];
+    const item = config.items[input.slug];
     if (!item) {
       throw new Error(`Missing 1Password config for registered slug: ${input.slug}`);
     }
@@ -443,7 +494,9 @@ export class OnePasswordBroker {
     }
     if (
       (authorization.outcome === "auto" && item.policy !== "auto") ||
-      (authorization.outcome !== "auto" && item.policy !== "approve")
+      (authorization.outcome !== "auto" && item.policy !== "approve") ||
+      authorization.configFingerprint !== configFingerprint ||
+      authorization.targetFingerprint !== fingerprintOnePasswordTarget(item)
     ) {
       await this.audit(authorization, "error", { errorCode: "POLICY_CHANGED" });
       throw internalError("POLICY_CHANGED", "1Password policy changed before tool execution");
@@ -469,9 +522,9 @@ export class OnePasswordBroker {
 
     if (authorization.persistGrant) {
       const grantedAtMs = this.now();
-      const ttlMs = Math.round(this.config.grantTtlHours * 60 * 60 * 1000);
+      const ttlMs = Math.round(config.grantTtlHours * 60 * 60 * 1000);
       try {
-        await this.pruneStaleGrants();
+        await this.pruneStaleGrants(config);
         await this.stores.grants.register(
           standingGrantKey(authorization.agentId, input.slug),
           {
@@ -490,7 +543,12 @@ export class OnePasswordBroker {
     }
 
     const cached = this.cache.get(input.slug);
-    if (cached && cached.expiresAtMs > this.now()) {
+    const targetFingerprint = fingerprintOnePasswordTarget(item);
+    if (
+      cached &&
+      cached.expiresAtMs > this.now() &&
+      cached.targetFingerprint === targetFingerprint
+    ) {
       await this.audit(authorization, "cache-hit");
       return {
         slug: input.slug,
@@ -504,10 +562,11 @@ export class OnePasswordBroker {
     try {
       const secret = await this.opClient.getItem(item);
       await this.audit(authorization, authorization.outcome);
-      if (this.config.cacheTtlSeconds > 0) {
+      if (config.cacheTtlSeconds > 0) {
         this.cache.set(input.slug, {
           ...secret,
-          expiresAtMs: this.now() + this.config.cacheTtlSeconds * 1000,
+          targetFingerprint,
+          expiresAtMs: this.now() + config.cacheTtlSeconds * 1000,
         });
       }
       return { slug: input.slug, ...secret };
