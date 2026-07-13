@@ -416,7 +416,10 @@ export class GatewayProtocolClient<TPlan> {
       // the exponential sequence for the next transport failure.
       this.reconnectSupervisor.nextDelayOverrideMs = overrideMs;
     }
-    const retry = this.reconnectSupervisor.next()!;
+    const retry = this.reconnectSupervisor.next();
+    if (!retry) {
+      return;
+    }
     // Ignore cancelled sleeps only; reconnect start failures stay observable.
     void sleepWithAbort(retry.delayMs, retry.signal).then(
       () => this.connect(),
