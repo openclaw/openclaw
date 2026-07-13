@@ -33,10 +33,7 @@ import {
 } from "../infra/agent-events.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
-import {
-  parseInteractiveParam,
-  parseJsonMessageParam,
-} from "../infra/outbound/message-action-params.js";
+import { parseStructuredMessageContentParams } from "../infra/outbound/message-action-structured-content.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -727,9 +724,7 @@ function hasMessagingRichContent(record: Record<string, unknown>): boolean {
     channelData: record.channelData,
   };
   try {
-    parseJsonMessageParam(payload, "presentation");
-    parseJsonMessageParam(payload, "channelData");
-    parseInteractiveParam(payload);
+    parseStructuredMessageContentParams(payload);
   } catch {
     return false;
   }

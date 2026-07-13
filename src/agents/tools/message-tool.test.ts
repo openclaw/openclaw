@@ -3789,6 +3789,30 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(JSON.stringify(call?.params)).not.toContain("BOOT.md");
   });
 
+  it("drops stringified channelData containing mixed internal-runtime-context strings before dispatch", async () => {
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+
+    for (const channelData of [
+      { slack: { blocks: [{ type: "section", text: `prefix\n${internalContext}\nsuffix` }] } },
+      { slack: { [`prefix\n${internalContext}\nsuffix`]: { type: "section" } } },
+    ]) {
+      mockSendResult({ channel: "slack", to: "slack:C123" });
+
+      const call = await executeSend({
+        action: {
+          target: "slack:C123",
+          message: "Visible",
+          channelData: JSON.stringify(channelData),
+        },
+      });
+
+      expect(call?.params?.message).toBe("Visible");
+      expect(call?.params?.channelData).toBeUndefined();
+      expect(JSON.stringify(call?.params)).not.toContain("BOOT.md");
+    }
+  });
+
   it("suppresses sends when visible text and stringified channelData both contain internal context", async () => {
     const internalContext =
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";

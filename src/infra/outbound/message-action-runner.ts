@@ -79,13 +79,16 @@ import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
-  parseInteractiveParam,
-  parseJsonMessageParam,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
+import {
+  hasChannelDataPayloadContent,
+  parseStructuredMessageContentParams,
+  readChannelDataObjectParam,
+} from "./message-action-structured-content.js";
 import {
   prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
@@ -1188,7 +1191,7 @@ async function buildSendPayloadParts(params: {
     Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
-  const hasChannelData = hasReplyPayloadContent({ channelData: actionParams.channelData });
+  const hasChannelData = hasChannelDataPayloadContent(actionParams);
   const location = normalizeOutboundLocation(actionParams.location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
@@ -1270,11 +1273,7 @@ async function buildSendPayloadParts(params: {
   }
 
   const mediaUrl = readStringParam(actionParams, "media", { trim: false });
-  const rawChannelData = actionParams.channelData;
-  const channelData =
-    rawChannelData && typeof rawChannelData === "object" && !Array.isArray(rawChannelData)
-      ? (rawChannelData as Record<string, unknown>)
-      : undefined;
+  const channelData = readChannelDataObjectParam(actionParams);
   if (
     !hasReplyPayloadContent({
       text: message,
@@ -1838,10 +1837,7 @@ export async function runMessageAction(
     (input.sessionKey
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
       : undefined);
-  parseJsonMessageParam(params, "presentation");
-  parseJsonMessageParam(params, "delivery");
-  parseJsonMessageParam(params, "channelData");
-  parseInteractiveParam(params);
+  parseStructuredMessageContentParams(params, { delivery: true });
 
   const action = input.action;
   enforceMessageActionAllowlist({
