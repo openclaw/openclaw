@@ -259,7 +259,6 @@ async function fetchDiscordMedia(params: {
       : (params.abortSignal ?? timeoutAbortController?.signal);
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-
   const savePromise = saveRemoteMedia({
     url: params.url,
     filePathHint: params.filePathHint,
@@ -276,7 +275,6 @@ async function fetchDiscordMedia(params: {
     }
     throw error;
   });
-
   try {
     if (!params.totalTimeoutMs) {
       return await savePromise;
