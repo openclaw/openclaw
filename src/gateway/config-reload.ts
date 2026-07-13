@@ -1,6 +1,7 @@
 // Gateway config hot-reload watcher.
 // Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
+import type { ConfigRuntimeEnvPublication } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
@@ -132,13 +133,18 @@ type InProcessConfigCandidate = {
 export type GatewayConfigReloadTransactionOwnership = {
   isCurrent: () => boolean;
   markRuntimeCommitted: (runtimeConfig: OpenClawConfig, plan: GatewayReloadPlan) => void;
+  commitRuntimeEnv: () => void;
+  publishRuntimeEnv: () => void;
+  rollbackRuntimeEnv: () => void;
   reapplyRuntimeOverlays: (config: OpenClawConfig) => OpenClawConfig;
+  runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
   runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
 };
 
 type PreparedGatewayConfigCandidate = {
   runtimeConfig: OpenClawConfig;
   compareConfig: OpenClawConfig;
+  runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
   reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
   reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
 };
@@ -164,9 +170,10 @@ export function startGatewayConfigReloader(opts: {
   prepareConfigCandidate?: (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
+    previousSourceConfig: OpenClawConfig;
   }) => PreparedGatewayConfigCandidate;
   initialInternalWriteHash?: string | null;
-  readSnapshot: () => Promise<ConfigFileSnapshot>;
+  readSnapshot: (activeSourceConfig: OpenClawConfig) => Promise<ConfigFileSnapshot>;
   /** Pauses restart emission synchronously when a matching disk candidate is observed. */
   onConfigCandidateObserved?: () => void;
   onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
@@ -223,10 +230,12 @@ export function startGatewayConfigReloader(opts: {
   const initialCandidate = opts.prepareConfigCandidate?.({
     runtimeConfig: opts.initialConfig,
     sourceConfig: initialSourceConfig,
+    previousSourceConfig: initialSourceConfig,
   });
   let currentConfig = initialCandidate?.runtimeConfig ?? opts.initialConfig;
   let currentCompareConfig = initialCandidate?.compareConfig ?? initialSourceConfig;
   let currentSourceConfig = initialSourceConfig;
+  let currentRuntimeEnvSourceConfig = initialSourceConfig;
   let currentReapplyRuntimeOverlays =
     initialCandidate?.reapplyRuntimeOverlays ?? ((config: OpenClawConfig) => config);
   let currentRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
@@ -344,40 +353,69 @@ export function startGatewayConfigReloader(opts: {
     preflightCandidate?: ConfigWriteNotification["preparedCandidate"],
     runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions,
   ) => {
+    // Reprepare against the current accepted env owner. A managed write can
+    // finish preflight while another watcher transaction accepts first.
     const preparedCandidate =
-      preflightCandidate ??
       opts.prepareConfigCandidate?.({
         runtimeConfig: candidateRuntimeConfig,
         sourceConfig: nextSourceConfig,
-      });
+        previousSourceConfig: currentRuntimeEnvSourceConfig,
+      }) ?? preflightCandidate;
     const nextConfig = preparedCandidate?.runtimeConfig ?? candidateRuntimeConfig;
     const nextCompareConfig = preparedCandidate?.compareConfig ?? nextSourceConfig;
     let nextPluginInstallRecords = currentPluginInstallRecords;
     let committedRuntimeConfig: OpenClawConfig | null = null;
+    let publishedRuntimeEnv: ConfigRuntimeEnvPublication | undefined;
+    let runtimeEnvCommitted = false;
     const nextSettings = resolveGatewayReloadSettings(nextConfig);
+    const isCurrent = () => configWriteEpoch === transactionEpoch;
+    const assertCurrent = () => {
+      if (!isCurrent()) {
+        throw new GatewayConfigReloadSupersededError();
+      }
+    };
+    const commitPublishedRuntimeEnv = () => {
+      runtimeEnvCommitted = true;
+      publishedRuntimeEnv?.commit();
+      publishedRuntimeEnv = undefined;
+    };
     const ownership: GatewayConfigReloadTransactionOwnership = {
-      isCurrent: () => configWriteEpoch === transactionEpoch,
+      isCurrent,
       reapplyRuntimeOverlays: preparedCandidate?.reapplyRuntimeOverlays ?? ((config) => config),
+      ...(preparedCandidate?.runtimeEnv ? { runtimeEnv: preparedCandidate.runtimeEnv } : {}),
       ...(runtimeRefresh ? { runtimeRefresh } : {}),
+      publishRuntimeEnv: () => {
+        assertCurrent();
+        if (runtimeEnvCommitted) {
+          return;
+        }
+        publishedRuntimeEnv ??= preparedCandidate?.runtimeEnv?.publish();
+        assertCurrent();
+      },
+      rollbackRuntimeEnv: () => {
+        if (runtimeEnvCommitted) {
+          return;
+        }
+        publishedRuntimeEnv?.();
+        publishedRuntimeEnv = undefined;
+      },
+      commitRuntimeEnv: commitPublishedRuntimeEnv,
       markRuntimeCommitted: (runtimeConfig, plan) => {
         // Publication can win immediately before a watcher supersedes this
         // transaction. Advance the runtime diff baseline at that exact edge so
         // the newer disk config plans the reverse work instead of diffing stale state.
+        commitPublishedRuntimeEnv();
         committedRuntimeConfig = runtimeConfig;
         currentConfig = runtimeConfig;
         currentCompareConfig = nextCompareConfig;
         currentSourceConfig = nextSourceConfig;
+        currentRuntimeEnvSourceConfig = nextSourceConfig;
         currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
         currentRuntimeRefresh = ownership.runtimeRefresh;
         currentPluginInstallRecords = nextPluginInstallRecords;
         settings = resolveGatewayReloadSettings(runtimeConfig);
         pendingRuntimeApplicationPlan = plan;
       },
-    };
-    const assertCurrent = () => {
-      if (!ownership.isCurrent()) {
-        throw new GatewayConfigReloadSupersededError();
-      }
     };
     const configChangedPaths = diffGatewayReloadPaths(currentCompareConfig, nextCompareConfig);
     const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
@@ -436,7 +474,7 @@ export function startGatewayConfigReloader(opts: {
       assertCurrent();
       let rollbackAcceptedSource: (() => Promise<void>) | undefined;
       try {
-        rollbackAcceptedSource = await opts.onConfigAccepted?.(
+        const acceptedSourceRollback = await opts.onConfigAccepted?.(
           committedRuntimeConfig ?? nextConfig,
           ownership,
           nextSourceConfig,
@@ -445,6 +483,9 @@ export function startGatewayConfigReloader(opts: {
             ...(options.publishSource ? { publishSource: options.publishSource } : {}),
           },
         );
+        if (typeof acceptedSourceRollback === "function") {
+          rollbackAcceptedSource = acceptedSourceRollback;
+        }
         assertCurrent();
         rollbackAcceptedSource ??= await options.publishSource?.();
         assertCurrent();
@@ -459,6 +500,11 @@ export function startGatewayConfigReloader(opts: {
           lastSourceOnlySourceConfig = nextSourceConfig;
           return;
         }
+        // Runtime owners publish env at their commit edge. Keep this idempotent
+        // fallback for effective-config-unchanged transactions without a
+        // dedicated runtime publication callback.
+        ownership.publishRuntimeEnv();
+        currentRuntimeEnvSourceConfig = nextSourceConfig;
         if (persistedHash === lastSourceOnlyWriteHash) {
           lastSourceOnlyWriteHash = null;
           lastSourceOnlyReapplyRuntimeOverlays = null;
@@ -474,7 +520,9 @@ export function startGatewayConfigReloader(opts: {
         settings = committedRuntimeConfig
           ? resolveGatewayReloadSettings(committedRuntimeConfig)
           : nextSettings;
+        commitPublishedRuntimeEnv();
       } catch (error) {
+        ownership.rollbackRuntimeEnv();
         await rollbackAcceptedSource?.();
         throw error;
       }
@@ -564,7 +612,12 @@ export function startGatewayConfigReloader(opts: {
     }
 
     await opts.onConfigChange?.(plan, nextConfig);
-    await opts.onHotReload(plan, nextConfig, ownership, nextSourceConfig);
+    try {
+      await opts.onHotReload(plan, nextConfig, ownership, nextSourceConfig);
+    } catch (error) {
+      ownership.rollbackRuntimeEnv();
+      throw error;
+    }
     assertCurrent();
     await applyCurrentRuntimePlan(plan, nextConfig);
     await commitReloadBaseline();
@@ -593,6 +646,9 @@ export function startGatewayConfigReloader(opts: {
     const ownership: GatewayConfigReloadTransactionOwnership = {
       isCurrent: () => configWriteEpoch === transactionEpoch,
       reapplyRuntimeOverlays: currentReapplyRuntimeOverlays,
+      publishRuntimeEnv: () => {},
+      rollbackRuntimeEnv: () => {},
+      commitRuntimeEnv: () => {},
       ...(currentRuntimeRefresh ? { runtimeRefresh: currentRuntimeRefresh } : {}),
       markRuntimeCommitted: () => {},
     };
@@ -615,7 +671,7 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     try {
-      const snapshot = await opts.readSnapshot();
+      const snapshot = await opts.readSnapshot(currentRuntimeEnvSourceConfig);
       if (snapshot.hash !== persistedHash || !snapshot.valid) {
         return;
       }
@@ -681,7 +737,7 @@ export function startGatewayConfigReloader(opts: {
       }
       const transactionEpoch = configWriteEpoch;
       const intentCandidate = watcherIntentCandidate;
-      const snapshot = await opts.readSnapshot();
+      const snapshot = await opts.readSnapshot(currentRuntimeEnvSourceConfig);
       if (configWriteEpoch !== transactionEpoch) {
         throw new GatewayConfigReloadSupersededError();
       }
@@ -753,6 +809,9 @@ export function startGatewayConfigReloader(opts: {
               isCurrent: () => configWriteEpoch === transactionEpoch,
               reapplyRuntimeOverlays:
                 lastSourceOnlyReapplyRuntimeOverlays ?? currentReapplyRuntimeOverlays,
+              publishRuntimeEnv: () => {},
+              rollbackRuntimeEnv: () => {},
+              commitRuntimeEnv: () => {},
               ...(lastSourceOnlyRuntimeRefresh
                 ? { runtimeRefresh: lastSourceOnlyRuntimeRefresh }
                 : {}),

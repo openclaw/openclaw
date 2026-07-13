@@ -1,5 +1,9 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import {
+  resetPublishedConfigRuntimeEnv,
+  type PreparedConfigRuntimeEnv,
+} from "./config-env-vars.js";
 import type { OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -87,6 +91,7 @@ export type RuntimeConfigWriteNotification = {
 export type RuntimeConfigWritePreparedCandidate = {
   runtimeConfig: OpenClawConfig;
   compareConfig: OpenClawConfig;
+  runtimeEnv?: PreparedConfigRuntimeEnv;
   reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
   reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
 };
@@ -185,6 +190,7 @@ export function resetConfigRuntimeState(): void {
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
   runtimeConfigSnapshotRevision = 0;
+  resetPublishedConfigRuntimeEnv();
 }
 
 export function clearRuntimeConfigSnapshot(): void {

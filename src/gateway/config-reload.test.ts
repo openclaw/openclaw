@@ -4,6 +4,7 @@ import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type {
   ConfigFileSnapshot,
   ConfigWriteNotification,
@@ -768,7 +769,12 @@ function createReloaderHarness(
     prepareConfigCandidate?: (params: {
       runtimeConfig: OpenClawConfig;
       sourceConfig: OpenClawConfig;
-    }) => { runtimeConfig: OpenClawConfig; compareConfig: OpenClawConfig };
+      previousSourceConfig: OpenClawConfig;
+    }) => {
+      runtimeConfig: OpenClawConfig;
+      compareConfig: OpenClawConfig;
+      runtimeEnv?: ReturnType<typeof prepareConfigRuntimeEnv>;
+    };
     initialInternalWriteHash?: string | null;
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
@@ -909,7 +915,7 @@ function getOnlyRestartCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenC
   if (!call) {
     throw new Error("expected one restart call");
   }
-  return call;
+  return [call[0], call[1]];
 }
 
 function getOnlyHotReloadCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenClawConfig] {
@@ -918,7 +924,7 @@ function getOnlyHotReloadCall(harness: ReloaderHarness): [GatewayReloadPlan, Ope
   if (!call) {
     throw new Error("expected one hot reload call");
   }
-  return call;
+  return [call[0], call[1]];
 }
 
 function getOnlyPromoteSnapshotCall(promoteSnapshot: {
@@ -1033,9 +1039,16 @@ describe("startGatewayConfigReloader", () => {
         hash: "unchanged-root-hash",
       }),
     );
-    const onRestart = vi.fn(async () => {
-      throw new Error("required SecretRef INCLUDED_GATEWAY_TOKEN is unavailable");
-    });
+    const onRestart = vi.fn(
+      async (
+        _plan: GatewayReloadPlan,
+        _nextConfig: OpenClawConfig,
+        _ownership: GatewayConfigReloadTransactionOwnership,
+        _sourceConfig: OpenClawConfig,
+      ) => {
+        throw new Error("required SecretRef INCLUDED_GATEWAY_TOKEN is unavailable");
+      },
+    );
     const harness = createReloaderHarness(readSnapshot, {
       initialConfig,
       initialCompareConfig: initialConfig,
@@ -1400,7 +1413,7 @@ describe("startGatewayConfigReloader", () => {
         }
       },
     );
-    const promoteSnapshot = vi.fn(async () => true);
+    const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
     const harness = createReloaderHarness(readSnapshot, {
       initialConfig,
       onHotReload,
@@ -1427,6 +1440,69 @@ describe("startGatewayConfigReloader", () => {
     ]);
     expect(promoteSnapshot.mock.calls.map(([snapshot]) => snapshot.hash)).toEqual(["reverse-b"]);
 
+    await harness.reloader.stop();
+  });
+
+  it("prepares a superseding config against the env owner committed at the runtime edge", async () => {
+    const envKey = "OPENCLAW_TEST_COMMITTED_ENV_SOURCE";
+    const targetEnv: NodeJS.ProcessEnv = { [envKey]: "old" };
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true, token: "test-token", path: "/old" },
+      env: { vars: { [envKey]: "old" } },
+    } satisfies OpenClawConfig;
+    const configA = {
+      ...initialConfig,
+      hooks: { ...initialConfig.hooks, path: "/a" },
+      env: { vars: { [envKey]: "a" } },
+    } satisfies OpenClawConfig;
+    const configB = {
+      ...initialConfig,
+      hooks: { ...initialConfig.hooks, path: "/b" },
+      env: { vars: { [envKey]: "b" } },
+    } satisfies OpenClawConfig;
+    const preparedEnvValues: Array<string | undefined> = [];
+    const harness = createReloaderHarness(vi.fn(), {
+      initialConfig,
+      prepareConfigCandidate: ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
+        runtimeConfig,
+        compareConfig: { ...sourceConfig, env: initialConfig.env },
+        runtimeEnv: prepareConfigRuntimeEnv({
+          previousConfig: previousSourceConfig,
+          nextConfig: sourceConfig,
+          env: targetEnv,
+          previousOwnedEnv: {
+            [envKey]: previousSourceConfig.env?.vars?.[envKey] ?? "",
+          },
+        }),
+      }),
+      onHotReload: async (plan, nextConfig, ownership) => {
+        preparedEnvValues.push(ownership.runtimeEnv?.env[envKey]);
+        ownership.publishRuntimeEnv();
+        ownership.markRuntimeCommitted(nextConfig, plan);
+        if (nextConfig === configA) {
+          emitWrite(configB, "env-b", 2);
+        }
+      },
+    });
+    const emitWrite = (config: OpenClawConfig, hash: string, revision: number) => {
+      harness.emitWrite({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: config,
+        runtimeConfig: config,
+        persistedHash: hash,
+        revision,
+        fingerprint: `runtime-${hash}`,
+        sourceFingerprint: `source-${hash}`,
+        writtenAtMs: Date.now(),
+      });
+    };
+
+    emitWrite(configA, "env-a", 1);
+    await vi.runAllTimersAsync();
+
+    expect(preparedEnvValues).toEqual(["a", "b"]);
+    expect(targetEnv[envKey]).toBe("b");
     await harness.reloader.stop();
   });
 
@@ -1798,7 +1874,7 @@ describe("startGatewayConfigReloader", () => {
   it("plans one immutable runtime override snapshot per candidate", async () => {
     const initialConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
-      identity: { name: "initial" },
+      meta: { lastTouchedVersion: "initial" },
       messages: { visibleReplies: "automatic" },
     };
     let visibleRepliesOverride: "message_tool" | undefined;
@@ -1835,7 +1911,7 @@ describe("startGatewayConfigReloader", () => {
     visibleRepliesOverride = "message_tool";
     const overrideSource: OpenClawConfig = {
       ...initialConfig,
-      identity: { name: "override-active" },
+      meta: { lastTouchedVersion: "override-active" },
     };
     harness.emitWrite(makeOverrideWrite(overrideSource, "override-active"));
     await vi.runAllTimersAsync();
@@ -1850,7 +1926,7 @@ describe("startGatewayConfigReloader", () => {
     visibleRepliesOverride = undefined;
     const resetSource: OpenClawConfig = {
       ...initialConfig,
-      identity: { name: "override-reset" },
+      meta: { lastTouchedVersion: "override-reset" },
     };
     harness.emitWrite(makeOverrideWrite(resetSource, "override-reset"));
     await vi.runAllTimersAsync();
@@ -2449,6 +2525,230 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it.each([
+    { label: "accepted", afterWrite: undefined, reloadMode: "hybrid", expected: "candidate" },
+    {
+      label: "afterWrite none",
+      afterWrite: { mode: "none" as const, reason: "source-only" },
+      reloadMode: "hybrid",
+      expected: "old",
+    },
+    { label: "reload off", afterWrite: undefined, reloadMode: "off", expected: "old" },
+    { label: "hot restart ignore", afterWrite: undefined, reloadMode: "hot", expected: "old" },
+  ] as const)(
+    "publishes config env only for a runtime-applied $label transaction",
+    async (testCase) => {
+      const envKey = "OPENCLAW_TEST_RELOAD_TRANSACTION_ENV";
+      const targetEnv: NodeJS.ProcessEnv = { [envKey]: "old" };
+      const initialConfig = {
+        gateway: { reload: { debounceMs: 0, mode: testCase.reloadMode } },
+        env: { vars: { [envKey]: "old" } },
+      } satisfies OpenClawConfig;
+      const nextConfig = {
+        ...initialConfig,
+        gateway: { ...initialConfig.gateway, port: 19001 },
+        env: { vars: { [envKey]: "candidate" } },
+      } satisfies OpenClawConfig;
+      const runtimeEnv = prepareConfigRuntimeEnv({
+        previousConfig: initialConfig,
+        nextConfig,
+        env: targetEnv,
+        previousOwnedEnv: { [envKey]: "old" },
+      });
+      const harness = createReloaderHarness(vi.fn(), { initialConfig });
+
+      harness.emitWrite({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        preparedCandidate: { runtimeConfig: nextConfig, compareConfig: nextConfig, runtimeEnv },
+        persistedHash: `env-${testCase.label}`,
+        revision: 1,
+        fingerprint: `runtime-env-${testCase.label}`,
+        sourceFingerprint: `source-env-${testCase.label}`,
+        writtenAtMs: Date.now(),
+        ...(testCase.afterWrite ? { afterWrite: testCase.afterWrite } : {}),
+      });
+      await vi.runAllTimersAsync();
+
+      expect(runtimeEnv.env[envKey]).toBe("candidate");
+      expect(targetEnv[envKey]).toBe(testCase.expected);
+      await harness.reloader.stop();
+    },
+  );
+
+  it.each([
+    { label: "rejected before runtime commit", markCommitted: false, expected: "old" },
+    { label: "failed after runtime commit", markCommitted: true, expected: "candidate" },
+  ] as const)("$label handles published config env ownership", async (testCase) => {
+    const envKey = "OPENCLAW_TEST_RELOAD_ENV_COMMIT_EDGE";
+    const targetEnv: NodeJS.ProcessEnv = { [envKey]: "old" };
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true, token: "test", path: "/old" },
+      env: { vars: { [envKey]: "old" } },
+    } satisfies OpenClawConfig;
+    const nextConfig = {
+      ...initialConfig,
+      hooks: { ...initialConfig.hooks, path: "/next" },
+      env: { vars: { [envKey]: "candidate" } },
+    } satisfies OpenClawConfig;
+    const compareConfig = {
+      ...nextConfig,
+      env: initialConfig.env,
+    } satisfies OpenClawConfig;
+    const runtimeEnv = prepareConfigRuntimeEnv({
+      previousConfig: initialConfig,
+      nextConfig,
+      env: targetEnv,
+      previousOwnedEnv: { [envKey]: "old" },
+    });
+    const harness = createReloaderHarness(vi.fn(), {
+      initialConfig,
+      onHotReload: async (plan, runtimeConfig, ownership) => {
+        ownership.publishRuntimeEnv();
+        expect(targetEnv[envKey]).toBe("candidate");
+        if (testCase.markCommitted) {
+          ownership.markRuntimeCommitted(runtimeConfig, plan);
+        }
+        throw new Error("hot reload failed");
+      },
+    });
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: nextConfig,
+      runtimeConfig: nextConfig,
+      preparedCandidate: { runtimeConfig: nextConfig, compareConfig, runtimeEnv },
+      persistedHash: `env-${testCase.label}`,
+      revision: 1,
+      fingerprint: `runtime-env-${testCase.label}`,
+      sourceFingerprint: `source-env-${testCase.label}`,
+      writtenAtMs: Date.now(),
+    });
+    await vi.runAllTimersAsync();
+
+    expect(targetEnv[envKey]).toBe(testCase.expected);
+    await harness.reloader.stop();
+  });
+
+  it("keeps a deferred config env candidate isolated when a watcher supersedes it", async () => {
+    const envKey = "OPENCLAW_TEST_SUPERSEDED_RELOAD_ENV";
+    const targetEnv: NodeJS.ProcessEnv = { [envKey]: "old" };
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      env: { vars: { [envKey]: "old" } },
+    } satisfies OpenClawConfig;
+    const nextConfig = {
+      ...initialConfig,
+      gateway: { ...initialConfig.gateway, port: 19001 },
+      env: { vars: { [envKey]: "candidate" } },
+    } satisfies OpenClawConfig;
+    const runtimeEnv = prepareConfigRuntimeEnv({
+      previousConfig: initialConfig,
+      nextConfig,
+      env: targetEnv,
+      previousOwnedEnv: { [envKey]: "old" },
+    });
+    let releaseRestart = () => {};
+    const restartGate = new Promise<void>((resolve) => {
+      releaseRestart = resolve;
+    });
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot({ config: initialConfig, hash: "superseding-env" })),
+      {
+        initialConfig,
+        onRestart: async () => await restartGate,
+      },
+    );
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: nextConfig,
+      runtimeConfig: nextConfig,
+      preparedCandidate: { runtimeConfig: nextConfig, compareConfig: nextConfig, runtimeEnv },
+      persistedHash: "deferred-env",
+      revision: 1,
+      fingerprint: "runtime-deferred-env",
+      sourceFingerprint: "source-deferred-env",
+      writtenAtMs: Date.now(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(targetEnv[envKey]).toBe("old");
+
+    harness.watcher.emit("change");
+    releaseRestart();
+    await vi.runAllTimersAsync();
+
+    expect(targetEnv[envKey]).toBe("old");
+    await harness.reloader.stop();
+  });
+
+  it("reprepares a stale managed-write env candidate after another transaction accepts", async () => {
+    const envKey = "OPENCLAW_TEST_INTERLEAVED_RELOAD_ENV";
+    const targetEnv: NodeJS.ProcessEnv = { [envKey]: "a" };
+    const makeConfig = (value: string, port: number): OpenClawConfig => ({
+      gateway: { reload: { debounceMs: 0 }, port },
+      env: { vars: { [envKey]: value } },
+    });
+    const configA = makeConfig("a", 18_789);
+    const configB = makeConfig("b", 19_001);
+    const configC = makeConfig("c", 19_002);
+    const staleRuntimeEnv = prepareConfigRuntimeEnv({
+      previousConfig: configA,
+      nextConfig: configB,
+      env: targetEnv,
+      previousOwnedEnv: { [envKey]: "a" },
+    });
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        sourceConfig: configC,
+        runtimeConfig: configC,
+        config: configC,
+        hash: "env-c",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: configA,
+      prepareConfigCandidate: ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
+        runtimeConfig,
+        compareConfig: sourceConfig,
+        runtimeEnv: prepareConfigRuntimeEnv({
+          previousConfig: previousSourceConfig,
+          nextConfig: sourceConfig,
+          env: targetEnv,
+          previousOwnedEnv: {
+            [envKey]: previousSourceConfig.env?.vars?.[envKey] ?? "",
+          },
+        }),
+      }),
+    });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+    expect(targetEnv[envKey]).toBe("c");
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: configB,
+      runtimeConfig: configB,
+      preparedCandidate: {
+        runtimeConfig: configB,
+        compareConfig: configB,
+        runtimeEnv: staleRuntimeEnv,
+      },
+      persistedHash: "env-b",
+      revision: 2,
+      fingerprint: "runtime-env-b",
+      sourceFingerprint: "source-env-b",
+      writtenAtMs: Date.now(),
+    });
+    await vi.runAllTimersAsync();
+
+    expect(targetEnv[envKey]).toBe("b");
+    await harness.reloader.stop();
+  });
+
   it("honors in-process write intent to force restart", async () => {
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
@@ -2498,7 +2798,7 @@ describe("startGatewayConfigReloader", () => {
       return {};
     });
     const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot(hash));
-    const promoteSnapshot = vi.fn(async () => true);
+    const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
     const harness = createReloaderHarness(readSnapshot, {
       promoteSnapshot,
       readPluginInstallRecords,

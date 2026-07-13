@@ -18,9 +18,17 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import {
+  collectConfigRuntimeEnvOwnership,
+  initializePublishedConfigRuntimeEnv,
+  prepareConfigRuntimeEnv,
+} from "../config/config-env-vars.js";
+import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-selection.js";
+import {
   getRuntimeConfig,
+  getRuntimeConfigSourceSnapshot,
   promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshot,
+  readConfigFileSnapshotForRuntimeTransaction,
   registerConfigWriteListener,
   setRuntimeConfigSnapshot,
   type ReadConfigFileSnapshotWithPluginMetadataResult,
@@ -119,7 +127,7 @@ import type { ChannelAutostartSuppression } from "./server-channels.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
-import { applyGatewayLaneConcurrency } from "./server-lanes.js";
+import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { clearNodeWakeState } from "./server-methods/nodes-wake-state.js";
@@ -245,9 +253,6 @@ const logCron = log.child("cron");
 const logReload = log.child("reload");
 const logHooks = log.child("hooks");
 
-// Direct/embedded gateways have no run-loop signal handler. Keep hot reload
-// active, but fail closed when a change requires a process restart.
-const rejectUnavailableGatewayRestart: GatewayRestartEmitter = () => ({ status: "failed" });
 const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const logSecrets = log.child("secrets");
@@ -622,6 +627,7 @@ export async function startGatewayServer(
   });
   const { loadGatewayStartupConfigSnapshot } = await startupConfigModulePromise;
 
+  const envBeforeStartupConfigLoad = { ...process.env };
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
       minimalTestGateway,
@@ -810,13 +816,23 @@ export async function startGatewayServer(
   const prepareReloadCandidate = (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
+    previousSourceConfig?: OpenClawConfig;
   }) => {
+    const previousSourceConfig =
+      params.previousSourceConfig ??
+      getRuntimeConfigSourceSnapshot() ??
+      startupLastGoodSnapshot.sourceConfig;
+    assertGatewayConfigEnvSelectionUnchanged(previousSourceConfig, params.sourceConfig);
+    const runtimeEnv = prepareConfigRuntimeEnv({
+      previousConfig: previousSourceConfig,
+      nextConfig: params.sourceConfig,
+    });
     const metadata = startupConfigLoad.pluginMetadataSnapshot;
     const pluginCandidate = minimalTestGateway
       ? { runtimeConfig: params.runtimeConfig, compareConfig: params.sourceConfig }
       : resolveGatewayReloadPluginActivationCandidate({
           ...params,
-          env: process.env,
+          env: runtimeEnv.env,
           ...(metadata?.manifestRegistry ? { manifestRegistry: metadata.manifestRegistry } : {}),
           discovery: metadata?.discovery,
         });
@@ -833,6 +849,7 @@ export async function startGatewayServer(
     return {
       runtimeConfig: reapplyRuntimeOverlays(params.runtimeConfig),
       compareConfig: reapplyCompareOverlays(params.sourceConfig),
+      runtimeEnv,
       reapplyRuntimeOverlays,
       reapplyCompareOverlays,
     };
@@ -847,6 +864,14 @@ export async function startGatewayServer(
     startupLastGoodSnapshot = startupSnapshot;
   }
   setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  initializePublishedConfigRuntimeEnv(startupLastGoodSnapshot.sourceConfig, {
+    ownedEnv: collectConfigRuntimeEnvOwnership(
+      startupLastGoodSnapshot.sourceConfig,
+      envBeforeStartupConfigLoad,
+      process.env,
+    ),
+    preserveExistingOwnership: true,
+  });
   const workerEnvironmentStore = minimalTestGateway ? undefined : createWorkerEnvironmentStore();
   const hasWorkerEnvironmentRecords = (workerEnvironmentStore?.list().length ?? 0) > 0;
   // Durable rows can outlive profiles. Startup planning still enforces plugin trust/disable gates.
@@ -1274,7 +1299,7 @@ export async function startGatewayServer(
       (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
         DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
   });
-  applyGatewayLaneConcurrency(cfgAtStart);
+  applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(cfgAtStart));
 
   runtimeState = createGatewayServerLiveState({
     hooksConfig: initialHooksConfig,
@@ -1716,6 +1741,7 @@ export async function startGatewayServer(
       changedPaths: readonly string[];
       beforeReplace: (channels: ReadonlySet<ChannelId>) => Promise<void>;
       commitRuntime: () => Promise<void>;
+      env: NodeJS.ProcessEnv;
       isAborted?: () => boolean;
     }): Promise<GatewayPluginReloadResult> => {
       const beforeChannelTargets = listAttachedChannelConfigTargets();
@@ -1729,12 +1755,12 @@ export async function startGatewayServer(
       const nextPluginActivationConfig = resolveGatewayStartupPluginActivationConfig({
         runtimeConfig: params.nextConfig,
         activationSourceConfig: params.nextConfig,
-        env: process.env,
+        env: params.env,
       });
       const nextPluginLookUpTable = loadPluginLookUpTable({
         config: nextPluginActivationConfig,
         workspaceDir: defaultWorkspaceDir,
-        env: process.env,
+        env: params.env,
         activationSourceConfig: params.nextConfig,
         workerProviderIds: listDurableWorkerProviderIds(),
       });
@@ -1785,7 +1811,7 @@ export async function startGatewayServer(
       });
       setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
         config: params.nextConfig,
-        env: process.env,
+        env: params.env,
         workspaceDir: defaultWorkspaceDir,
       });
       replaceAttachedPluginRuntime(loaded);
@@ -2144,14 +2170,13 @@ export async function startGatewayServer(
     activateScheduledServicesWhenReady();
 
     const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
-    const requestRecoveryRestart = opts.hotReloadRecovery ?? rejectUnavailableGatewayRestart;
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,
       initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
       initialInternalWriteHash: startupInternalWriteHash,
       watchPath: configSnapshot.path,
-      readSnapshot: readConfigFileSnapshot,
+      readSnapshot: readConfigFileSnapshotForRuntimeTransaction,
       promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
       subscribeToWrites: (listener) =>
         registerConfigWriteListener(listener, {
@@ -2164,6 +2189,7 @@ export async function startGatewayServer(
             await activateRuntimeSecrets(candidate.runtimeConfig, {
               reason: "reload",
               activate: false,
+              env: candidate.runtimeEnv.env,
               includeAuthStoreRefs: runtimeRefresh?.includeAuthStoreRefs,
             });
             return candidate;
@@ -2220,7 +2246,7 @@ export async function startGatewayServer(
       resolveSharedGatewaySessionGenerationForConfig,
       sharedGatewaySessionGenerationState,
       clients,
-      requestRecoveryRestart,
+      ...(opts.hotReloadRecovery ? { requestRecoveryRestart: opts.hotReloadRecovery } : {}),
       restartRecoveryAvailable: opts.hotReloadRecovery !== undefined,
     });
     await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {

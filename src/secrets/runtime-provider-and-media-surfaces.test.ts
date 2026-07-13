@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -21,6 +22,7 @@ function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
 }
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function envTokenRef(id: string) {
   return { source: "env" as const, provider: "default" as const, id };
@@ -157,7 +159,7 @@ describe("secrets runtime provider and media surfaces", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-refresh-"));
+    const root = autoCleanupTempDirs.make("openclaw-provider-auth-refresh-");
     const secretsPath = path.join(root, "secrets.json");
     const writeSecrets = async (gatewayToken: string | undefined, modelKey: string) => {
       await fs.writeFile(
@@ -263,6 +265,10 @@ describe("secrets runtime provider and media surfaces", () => {
     } = await import("./runtime.js");
     const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
     activateSecretsRuntimeSnapshot(initial);
+    const openaiProvider = initial.config.models?.providers?.openai;
+    if (!openaiProvider) {
+      throw new Error("expected resolved OpenAI provider");
+    }
     setRuntimeConfigSnapshot(
       {
         ...initial.config,
@@ -271,7 +277,7 @@ describe("secrets runtime provider and media surfaces", () => {
           providers: {
             ...initial.config.models?.providers,
             openai: {
-              ...initial.config.models?.providers?.openai,
+              ...openaiProvider,
               apiKey: "sk-stale-pinned",
             },
           },

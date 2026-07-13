@@ -6,9 +6,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveOAuthDir } from "../../config/paths.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
@@ -20,20 +23,26 @@ import {
   upsertAuthProfileWithLock,
 } from "./profiles.js";
 import {
+  getRuntimeAuthProfileStoreSnapshot as getInternalRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreCredentialMutationRevision,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreStateMutationRevision,
 } from "./runtime-snapshots.js";
+import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
 import {
+  captureAuthProfileStorePersistenceSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStoreWithoutExternalProfiles,
   getRuntimeAuthProfileStoreSnapshot,
   loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
+  restoreAuthProfileStorePersistenceSnapshot,
+  saveAuthProfileStoreIfPersistenceSnapshotMatches,
   saveAuthProfileStore,
   testing as storeTesting,
 } from "./store.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 type ExpectedOAuthCredentialFields = {
   provider: string;
@@ -51,6 +60,11 @@ type AuthProfileTestState = {
   agentDir: string;
   agentDirFor: (agentId: string) => string;
 };
+
+afterEach(() => {
+  storeTesting.resetRuntimeSnapshotPublisherForTest();
+  clearRuntimeAuthProfileStoreSnapshots();
+});
 
 async function withAuthProfileTestState<T>(
   prefix: string,
@@ -351,6 +365,420 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
+  it("publishes a caller-owned database transaction from the supplied store", async () => {
+    await withAuthProfileTestState("openclaw-auth-caller-transaction-", async ({ agentDir }) => {
+      const store = (key: string): AuthProfileStore => ({
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key },
+          "openai:backup": { type: "api_key", provider: "openai", key: "sk-backup" },
+        },
+        order: {
+          openai:
+            key === "sk-old"
+              ? ["openai:default", "openai:backup"]
+              : ["openai:backup", "openai:default"],
+        },
+      });
+      saveAuthProfileStore(store("sk-old"), agentDir);
+      replaceRuntimeAuthProfileStoreSnapshots([
+        { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
+      ]);
+      const credentialRevision = getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir);
+      const stateRevision = getRuntimeAuthProfileStoreStateMutationRevision(agentDir);
+
+      runAuthProfileWriteTransaction(agentDir, (database) => {
+        saveAuthProfileStore(store("sk-new"), agentDir, undefined, database);
+      });
+
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:default"]).toMatchObject({
+        key: "sk-new",
+      });
+      expect(
+        getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"],
+      ).toMatchObject({ key: "sk-new" });
+      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.order?.openai).toEqual([
+        "openai:backup",
+        "openai:default",
+      ]);
+      expect(getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir)).toBeGreaterThan(
+        credentialRevision,
+      );
+      expect(getRuntimeAuthProfileStoreStateMutationRevision(agentDir)).toBeGreaterThan(
+        stateRevision,
+      );
+    });
+  });
+
+  it("preserves derived runtime snapshots on a caller-owned main-store no-op", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-caller-noop-",
+      async ({ agentDir, agentDirFor }) => {
+        const derivedAgentDir = agentDirFor("worker");
+        const mainStore: AuthProfileStore = {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:default": { type: "api_key", provider: "openai", key: "sk-main" },
+          },
+        };
+        saveAuthProfileStore(mainStore, agentDir);
+        const derivedStore = loadAuthProfileStoreForRuntime(derivedAgentDir);
+        replaceRuntimeAuthProfileStoreSnapshots([
+          { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
+          { agentDir: derivedAgentDir, store: derivedStore },
+        ]);
+
+        runAuthProfileWriteTransaction(agentDir, (database) => {
+          saveAuthProfileStore(mainStore, agentDir, undefined, database);
+        });
+
+        expect(getRuntimeAuthProfileStoreSnapshot(derivedAgentDir)).toEqual(derivedStore);
+      },
+    );
+  });
+
+  it("drops caller-owned publication when a nested savepoint rolls back", async () => {
+    await withAuthProfileTestState("openclaw-auth-caller-savepoint-", async ({ agentDir }) => {
+      const initial: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key: "sk-initial" },
+        },
+      };
+      const candidate: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key: "sk-candidate" },
+        },
+      };
+      saveAuthProfileStore(initial, agentDir);
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: initial }]);
+
+      runAuthProfileWriteTransaction(agentDir, () => {
+        expect(() =>
+          runAuthProfileWriteTransaction(agentDir, (database) => {
+            saveAuthProfileStore(candidate, agentDir, undefined, database);
+            throw new Error("rollback savepoint");
+          }),
+        ).toThrow("rollback savepoint");
+      });
+
+      expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(initial);
+      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toEqual(initial);
+    });
+  });
+
+  it("rolls back credentials when the state write fails", async () => {
+    await withAuthProfileTestState("openclaw-auth-atomic-save-", async ({ agentDir }) => {
+      const oldStore: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:old": { type: "api_key", provider: "openai", key: "sk-old" },
+        },
+        order: { openai: ["openai:old"] },
+      };
+      saveAuthProfileStore(oldStore, agentDir);
+      const credentialRevision = getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir);
+      const stateRevision = getRuntimeAuthProfileStoreStateMutationRevision(agentDir);
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: resolveAuthProfileDatabasePath(agentDir),
+      });
+      database.db.exec(`
+        CREATE TRIGGER reject_auth_profile_state_update
+        BEFORE UPDATE ON auth_profile_state
+        BEGIN
+          SELECT RAISE(ABORT, 'injected auth state write failure');
+        END;
+      `);
+
+      expect(() =>
+        saveAuthProfileStore(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:new": { type: "api_key", provider: "openai", key: "sk-new" },
+            },
+            order: { openai: ["openai:new"] },
+          },
+          agentDir,
+        ),
+      ).toThrow("injected auth state write failure");
+      database.db.exec("DROP TRIGGER reject_auth_profile_state_update;");
+
+      expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir)).toMatchObject(oldStore);
+      expect(getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir)).toBe(
+        credentialRevision,
+      );
+      expect(getRuntimeAuthProfileStoreStateMutationRevision(agentDir)).toBe(stateRevision);
+    });
+  });
+
+  it("restores materialized and runtime-external snapshot credentials after a temporary write", async () => {
+    await withAuthProfileTestState("openclaw-auth-runtime-restore-", async ({ agentDir }) => {
+      const keyRef = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-materialized",
+              keyRef,
+            },
+          },
+        },
+        agentDir,
+      );
+      const runtimeStore: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-materialized",
+            keyRef,
+          },
+          "anthropic:external": {
+            type: "oauth",
+            provider: "anthropic",
+            access: "external-access",
+            refresh: "external-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+        runtimeExternalProfileIds: ["anthropic:external"],
+      };
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: runtimeStore }]);
+      const snapshot = captureAuthProfileStorePersistenceSnapshot(agentDir);
+
+      const committed = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+        snapshot,
+        agentDir,
+        store: {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:temporary": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-temporary",
+            },
+          },
+        },
+      });
+      expect(committed.publishRuntimeSnapshots()).toBe(true);
+      const { owned } = committed;
+      restoreAuthProfileStorePersistenceSnapshot(snapshot, owned, agentDir);
+
+      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toMatchObject(runtimeStore);
+      expect(
+        getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:temporary"],
+      ).toBeUndefined();
+    });
+  });
+
+  it.each(["before save", "before publication"] as const)(
+    "preserves a runtime-only OAuth mutation %s",
+    async (mutationTiming) => {
+      await withAuthProfileTestState(
+        "openclaw-auth-runtime-edge-ownership-",
+        async ({ agentDir }) => {
+          const baselineStore: AuthProfileStore = {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:baseline": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-baseline",
+              },
+              "anthropic:external": {
+                type: "oauth",
+                provider: "anthropic",
+                access: "external-before-capture",
+                refresh: "external-refresh",
+                expires: Date.now() + 60_000,
+              },
+            },
+            runtimeExternalProfileIds: ["anthropic:external"],
+          };
+          saveAuthProfileStore(baselineStore, agentDir);
+          replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: baselineStore }]);
+          const snapshot = captureAuthProfileStorePersistenceSnapshot(agentDir);
+
+          const mutateRuntimeStore = () => {
+            replaceRuntimeAuthProfileStoreSnapshots([
+              {
+                agentDir,
+                store: {
+                  ...baselineStore,
+                  profiles: {
+                    ...baselineStore.profiles,
+                    "anthropic:external": {
+                      type: "oauth",
+                      provider: "anthropic",
+                      access: "external-after-capture",
+                      refresh: "external-refresh-new",
+                      expires: Date.now() + 120_000,
+                    },
+                  },
+                },
+              },
+            ]);
+          };
+          if (mutationTiming === "before save") {
+            mutateRuntimeStore();
+          }
+          const committed = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+            snapshot,
+            agentDir,
+            store: {
+              version: AUTH_STORE_VERSION,
+              profiles: {
+                "openai:temporary": {
+                  type: "api_key",
+                  provider: "openai",
+                  key: "sk-temporary",
+                },
+              },
+            },
+          });
+          if (mutationTiming === "before publication") {
+            storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
+              storeTesting.resetRuntimeSnapshotPublisherForTest();
+              mutateRuntimeStore();
+              publish();
+            });
+          }
+          expect(committed.publishRuntimeSnapshots()).toBe(true);
+          const { owned } = committed;
+
+          restoreAuthProfileStorePersistenceSnapshot(snapshot, owned, agentDir);
+
+          expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles).toMatchObject({
+            "openai:baseline": { key: "sk-baseline" },
+            "anthropic:external": {
+              access: "external-after-capture",
+              refresh: "external-refresh-new",
+            },
+          });
+          expect(
+            getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:temporary"],
+          ).toBeUndefined();
+        },
+        { clearOAuthDir: true },
+      );
+    },
+  );
+
+  it("restores captured and rebuilds newer derived snapshots after main rollback", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-main-derived-rollback-",
+      async ({ agentDirFor }) => {
+        const capturedAgentDir = agentDirFor("captured");
+        const newerAgentDir = agentDirFor("newer");
+        const keyRef = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
+        saveAuthProfileStore({
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:baseline": {
+              type: "api_key",
+              provider: "openai",
+              keyRef,
+            },
+          },
+        });
+        const capturedRuntime = loadAuthProfileStoreForRuntime(capturedAgentDir);
+        const capturedProfile = capturedRuntime.profiles["openai:baseline"];
+        if (capturedProfile?.type !== "api_key") {
+          throw new Error("expected captured derived API-key profile");
+        }
+        capturedProfile.key = "sk-captured-resolved";
+        capturedRuntime.profiles["anthropic:captured-external"] = {
+          type: "oauth",
+          provider: "anthropic",
+          access: "captured-external-access",
+          refresh: "captured-external-refresh",
+          expires: Date.now() + 60_000,
+        };
+        capturedRuntime.runtimeExternalProfileIds = ["anthropic:captured-external"];
+        replaceRuntimeAuthProfileStoreSnapshots([
+          { agentDir: capturedAgentDir, store: capturedRuntime },
+        ]);
+        const snapshot = captureAuthProfileStorePersistenceSnapshot();
+
+        const committed = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+          snapshot,
+          store: {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:temporary": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-temporary",
+              },
+            },
+          },
+        });
+        capturedRuntime.profiles["anthropic:captured-external"] = {
+          type: "oauth",
+          provider: "anthropic",
+          access: "captured-publication-edge-access",
+          refresh: "captured-publication-edge-refresh",
+          expires: Date.now() + 120_000,
+        };
+        replaceRuntimeAuthProfileStoreSnapshots([
+          { agentDir: capturedAgentDir, store: capturedRuntime },
+        ]);
+        expect(committed.publishRuntimeSnapshots()).toBe(true);
+        const { owned } = committed;
+        const ownedCapturedRuntime = getRuntimeAuthProfileStoreSnapshot(capturedAgentDir);
+        if (!ownedCapturedRuntime) {
+          throw new Error("expected apply-owned derived runtime snapshot");
+        }
+        expect(ownedCapturedRuntime.profiles["openai:baseline"]).toBeUndefined();
+        expect(ownedCapturedRuntime.profiles["anthropic:captured-external"]).toMatchObject({
+          access: "captured-publication-edge-access",
+          refresh: "captured-publication-edge-refresh",
+        });
+        const newerRuntime = loadAuthProfileStoreForRuntime(newerAgentDir);
+        newerRuntime.profiles["anthropic:newer-external"] = {
+          type: "oauth",
+          provider: "anthropic",
+          access: "newer-external-access",
+          refresh: "newer-external-refresh",
+          expires: Date.now() + 60_000,
+        };
+        newerRuntime.runtimeExternalProfileIds = ["anthropic:newer-external"];
+        replaceRuntimeAuthProfileStoreSnapshots([
+          { agentDir: capturedAgentDir, store: ownedCapturedRuntime },
+          { agentDir: newerAgentDir, store: newerRuntime },
+        ]);
+
+        restoreAuthProfileStorePersistenceSnapshot(snapshot, owned);
+
+        expect(getRuntimeAuthProfileStoreSnapshot(capturedAgentDir)?.profiles).toMatchObject({
+          "openai:baseline": { key: "sk-captured-resolved", keyRef },
+          "anthropic:captured-external": {
+            access: "captured-publication-edge-access",
+            refresh: "captured-publication-edge-refresh",
+          },
+        });
+        expect(
+          getRuntimeAuthProfileStoreSnapshot(capturedAgentDir)?.profiles["openai:temporary"],
+        ).toBeUndefined();
+        expect(getRuntimeAuthProfileStoreSnapshot(newerAgentDir)?.profiles).toMatchObject({
+          "openai:baseline": { keyRef },
+          "anthropic:newer-external": { access: "newer-external-access" },
+        });
+        expect(
+          getRuntimeAuthProfileStoreSnapshot(newerAgentDir)?.profiles["openai:temporary"],
+        ).toBeUndefined();
+      },
+      { clearOAuthDir: true },
+    );
+  });
+
   it("tracks state-only saves without advancing credential ownership", async () => {
     await withAuthProfileTestState("openclaw-auth-state-lineage-", async ({ agentDir }) => {
       const store: AuthProfileStore = {
@@ -410,9 +838,9 @@ describe("promoteAuthProfileInOrder", () => {
           expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.runtimePersistedProfileIds).toEqual([
             "openai:work",
           ]);
-          expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.runtimeLocalProfileIds).toEqual([
-            "openai:work",
-          ]);
+          expect(
+            getInternalRuntimeAuthProfileStoreSnapshot(agentDir)?.runtimeLocalProfileIds,
+          ).toEqual(["openai:work"]);
         } finally {
           clearRuntimeAuthProfileStoreSnapshots();
         }
@@ -446,7 +874,9 @@ describe("promoteAuthProfileInOrder", () => {
           agentDir,
         });
 
-        const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+        const store = loadAuthProfileStoreWithoutExternalProfiles(
+          agentDir,
+        ) as RuntimeAuthProfileStore;
         expect(store.runtimePersistedProfileIds).toEqual(["anthropic:key", "openai:manual"]);
         expect(store.runtimeLocalProfileIds).toEqual(["anthropic:key", "openai:manual"]);
         expect(store.runtimeExternalProfileIds).toBeUndefined();

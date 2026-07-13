@@ -6,10 +6,14 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { cloneAuthProfileStore } from "./clone.js";
 import { resolveAuthStorePath } from "./path-resolve.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
-const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
+const runtimeAuthStoreSnapshots = new Map<string, RuntimeAuthProfileStore>();
 let runtimeAuthStoreCredentialsRevision = 0;
+let runtimeAuthStoreSnapshotsRevision = 0;
+// Per-store generations isolate rollback ownership; the global counter remains
+// the deletion generation for keys no longer present in this map.
+const runtimeAuthStoreSnapshotRevisions = new Map<string, number>();
 let persistedMutationRevision = 0;
 let evictedOwnerMutationFloor = 0;
 const MAX_PERSISTED_MUTATION_OWNERS = 256;
@@ -98,7 +102,7 @@ function getPersistedMutationRecord(ownerKey: string): PersistedMutationRecord |
 }
 
 function credentialState(
-  entries: Iterable<[string, AuthProfileStore]>,
+  entries: Iterable<[string, RuntimeAuthProfileStore]>,
 ): Array<readonly [string, AuthProfileStore["profiles"]]> {
   return Array.from(entries)
     .filter(([, store]) => Object.keys(store.profiles).length > 0)
@@ -107,12 +111,32 @@ function credentialState(
 }
 
 function replaceChangesCredentials(
-  entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
+  entries: Array<{ agentDir?: string; store: RuntimeAuthProfileStore }>,
 ): boolean {
   const next = new Map(
     entries.map((entry) => [resolveRuntimeStoreKey(entry.agentDir), entry.store] as const),
   );
   return !isDeepStrictEqual(credentialState(runtimeAuthStoreSnapshots), credentialState(next));
+}
+
+function recordChangedSnapshotRevisions(
+  entries: Array<{ agentDir?: string; store: RuntimeAuthProfileStore }>,
+): void {
+  const next = new Map(
+    entries.map((entry) => [resolveRuntimeStoreKey(entry.agentDir), entry.store] as const),
+  );
+  const keys = new Set([...runtimeAuthStoreSnapshots.keys(), ...next.keys()]);
+  for (const key of keys) {
+    if (isDeepStrictEqual(runtimeAuthStoreSnapshots.get(key), next.get(key))) {
+      continue;
+    }
+    runtimeAuthStoreSnapshotsRevision += 1;
+    if (next.has(key)) {
+      runtimeAuthStoreSnapshotRevisions.set(key, runtimeAuthStoreSnapshotsRevision);
+    } else {
+      runtimeAuthStoreSnapshotRevisions.delete(key);
+    }
+  }
 }
 
 // Runtime snapshots are keyed by the resolved auth store path so default-agent
@@ -124,7 +148,7 @@ function resolveRuntimeStoreKey(agentDir?: string): string {
 /** Reads a cloned runtime auth profile store snapshot for an agent dir. */
 export function getRuntimeAuthProfileStoreSnapshot(
   agentDir?: string,
-): AuthProfileStore | undefined {
+): RuntimeAuthProfileStore | undefined {
   const store = runtimeAuthStoreSnapshots.get(resolveRuntimeStoreKey(agentDir));
   return store ? cloneAuthProfileStore(store) : undefined;
 }
@@ -132,7 +156,7 @@ export function getRuntimeAuthProfileStoreSnapshot(
 /** Lists cloned live snapshots for transactional rollback composition. */
 export function listRuntimeAuthProfileStoreSnapshots(): Array<{
   agentDir: string;
-  store: AuthProfileStore;
+  store: RuntimeAuthProfileStore;
 }> {
   return Array.from(runtimeAuthStoreSnapshots, ([key, store]) => ({
     agentDir: path.dirname(key),
@@ -160,11 +184,12 @@ export function hasAnyRuntimeAuthProfileStoreSource(agentDir?: string): boolean 
 
 /** Replaces all runtime auth profile snapshots with cloned entries. */
 export function replaceRuntimeAuthProfileStoreSnapshots(
-  entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
+  entries: Array<{ agentDir?: string; store: RuntimeAuthProfileStore }>,
 ): void {
   if (replaceChangesCredentials(entries)) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
+  recordChangedSnapshotRevisions(entries);
   runtimeAuthStoreSnapshots.clear();
   for (const entry of entries) {
     runtimeAuthStoreSnapshots.set(
@@ -179,17 +204,25 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   if (credentialState(runtimeAuthStoreSnapshots).length > 0) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
+  if (runtimeAuthStoreSnapshots.size > 0) {
+    runtimeAuthStoreSnapshotsRevision += 1;
+  }
   runtimeAuthStoreSnapshots.clear();
+  runtimeAuthStoreSnapshotRevisions.clear();
 }
 
 /** Stores a cloned runtime auth profile snapshot for an agent dir. */
 export function setRuntimeAuthProfileStoreSnapshot(
-  store: AuthProfileStore,
+  store: RuntimeAuthProfileStore,
   agentDir?: string,
 ): void {
   const key = resolveRuntimeStoreKey(agentDir);
   if (!isDeepStrictEqual(runtimeAuthStoreSnapshots.get(key)?.profiles ?? {}, store.profiles)) {
     runtimeAuthStoreCredentialsRevision += 1;
+  }
+  if (!isDeepStrictEqual(runtimeAuthStoreSnapshots.get(key), store)) {
+    runtimeAuthStoreSnapshotsRevision += 1;
+    runtimeAuthStoreSnapshotRevisions.set(key, runtimeAuthStoreSnapshotsRevision);
   }
   runtimeAuthStoreSnapshots.set(key, cloneAuthProfileStore(store));
 }
@@ -237,10 +270,16 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   if (ownerKey !== mainKey || (!mutation.credentialsChanged && !mutation.profileSetChanged)) {
     return;
   }
+  let deletedDerivedSnapshot = false;
   for (const key of runtimeAuthStoreSnapshots.keys()) {
     if (key !== mainKey) {
       runtimeAuthStoreSnapshots.delete(key);
+      runtimeAuthStoreSnapshotRevisions.delete(key);
+      deletedDerivedSnapshot = true;
     }
+  }
+  if (deletedDerivedSnapshot) {
+    runtimeAuthStoreSnapshotsRevision += 1;
   }
 }
 
@@ -338,6 +377,14 @@ export function getRuntimeAuthProfileStoreStateMutationRevision(agentDir?: strin
 /** Stable token for credential ownership without coupling to usage bookkeeping. */
 export function getRuntimeAuthProfileStoreCredentialsRevision(): number {
   return runtimeAuthStoreCredentialsRevision;
+}
+
+/** Process-local generation for one exact runtime snapshot rollback owner. */
+export function getRuntimeAuthProfileStoreSnapshotRevision(agentDir?: string): number {
+  return (
+    runtimeAuthStoreSnapshotRevisions.get(resolveRuntimeStoreKey(agentDir)) ??
+    runtimeAuthStoreSnapshotsRevision
+  );
 }
 
 export const testing = {

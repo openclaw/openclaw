@@ -338,9 +338,13 @@ describe("gateway aux handlers", () => {
         snapshot: PreparedSecretsRuntimeSnapshot,
         expectedRevision: number,
         _params: unknown,
-        onActivated?: () => Promise<void>,
+        onActivated?: () => void | Promise<void>,
+        canActivate?: () => boolean,
       ) => {
-        if (getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision) {
+        if (
+          getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision ||
+          (canActivate && !canActivate())
+        ) {
           return null;
         }
         activateSecretsRuntimeSnapshot(snapshot);
@@ -349,12 +353,17 @@ describe("gateway aux handlers", () => {
       },
     );
     const activateRuntimeSecrets = Object.assign(
-      vi.fn(async (config: OpenClawConfig) => {
-        if (activateRuntimeSecrets.mock.calls.length === 1) {
-          activateSecretsRuntimeSnapshot(createSourceSnapshot(canonicalConfig));
-        }
-        return createSourceSnapshot(config);
-      }),
+      vi.fn(
+        async (
+          config: OpenClawConfig,
+          _activationParams: Parameters<GatewayAuxHandlerParams["activateRuntimeSecrets"]>[1],
+        ) => {
+          if (activateRuntimeSecrets.mock.calls.length === 1) {
+            activateSecretsRuntimeSnapshot(createSourceSnapshot(canonicalConfig));
+          }
+          return createSourceSnapshot(config);
+        },
+      ),
       { activatePreparedSnapshotIfCurrent },
     );
     const { reload, respond } = createSecretsReloadHarness({ activateRuntimeSecrets });

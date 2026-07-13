@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -48,6 +49,7 @@ type GatewayStartupStateEmitterMock = ReturnType<
 >;
 
 const RESOLVED_GATEWAY_TOKEN = "resolved-gateway-token";
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function activateSecretsRuntimeSnapshotForTest(snapshot: PreparedSecretsRuntimeSnapshot): void {
   activateSecretsRuntimeSnapshotState({
@@ -1083,7 +1085,7 @@ describe("gateway startup config secret preflight", () => {
   });
 
   it("retries a stale startup fast-path preflight against the newer runtime context", async () => {
-    const agentDir = mkdtempSync(path.join(tmpdir(), "openclaw-startup-fast-path-cas-"));
+    const agentDir = autoCleanupTempDirs.make("openclaw-startup-fast-path-cas-");
     let clearImportedSecretsRuntimeSnapshot: (() => void) | undefined;
     const config = (port: number) =>
       gatewayTokenConfig(

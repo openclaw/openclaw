@@ -11,6 +11,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   beginGatewayRestartSignalAdmission,
+  getActiveGatewayRootWorkCount,
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
   type GatewayRestartSignalAdmissionLease,
@@ -620,9 +621,11 @@ async function emitPreparedGatewayRestartUnderAdmission(
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
   transientGeneration = restartTransientGeneration,
-): Promise<void> {
-  if (transientGeneration !== restartTransientGeneration) {
-    return;
+  canEmit: () => boolean = () => true,
+): Promise<GatewayRestartEmitResult | null> {
+  const isCurrent = () => transientGeneration === restartTransientGeneration && canEmit();
+  if (!isCurrent()) {
+    return null;
   }
   let nextHooks = hooks ?? pendingRestartEmitHooks;
   // Keep pendingRestartSessionKey alive across the await beforeEmit() window:
@@ -637,8 +640,8 @@ async function emitPreparedGatewayRestartUnderAdmission(
     if (preparedHooks) {
       await rejectPreparedRestartHook(preparedHooks);
       preparedHooks = undefined;
-      if (transientGeneration !== restartTransientGeneration) {
-        return;
+      if (!isCurrent()) {
+        return null;
       }
     }
     try {
@@ -649,9 +652,9 @@ async function emitPreparedGatewayRestartUnderAdmission(
         `restart preparation failed; restart will continue without it: ${String(err)}`,
       );
     }
-    if (transientGeneration !== restartTransientGeneration) {
+    if (!isCurrent()) {
       await rejectPreparedRestartHook(preparedHooks);
-      return;
+      return null;
     }
     if (hooks) {
       break;
@@ -661,6 +664,10 @@ async function emitPreparedGatewayRestartUnderAdmission(
   }
   if (!hooks) {
     pendingRestartSessionKey = undefined;
+  }
+  if (!isCurrent()) {
+    await rejectPreparedRestartHook(preparedHooks);
+    return null;
   }
 
   // A managed update can coalesce while beforeEmit awaits. Promote that reason
@@ -680,33 +687,75 @@ async function emitPreparedGatewayRestartUnderAdmission(
   if (emitResult.status === "failed") {
     await preparedHooks?.afterEmitFailed?.();
   }
+  return emitResult;
 }
 
 async function emitPreparedGatewayRestart(
   hooks?: RestartEmitHooks,
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
-): Promise<void> {
+  finalIdleCheck?: () => boolean,
+  setFenceRollback?: (rollback: (() => void) | null) => void,
+): Promise<boolean> {
   const transientGeneration = restartTransientGeneration;
   try {
     // A delayed restart can become due after host suspension prepared. Independent
     // root admission makes the transition atomic: due restarts block preparation,
     // while a prepared suspension defers emission until it resumes.
-    await runWithGatewayIndependentRootWorkAdmission(async () => {
+    return await runWithGatewayIndependentRootWorkAdmission(async () => {
       if (transientGeneration !== restartTransientGeneration) {
-        return;
+        return false;
       }
-      await emitPreparedGatewayRestartUnderAdmission(
+      // Close new roots before the final synchronous idle check. The independent
+      // emission owner is excluded; any other admitted root makes this attempt retry.
+      const signalAdmission = beginGatewayRestartSignalAdmission();
+      pendingRestartSignalAdmission = signalAdmission;
+      let fenceActive = true;
+      const rollbackFence = () => {
+        fenceActive = false;
+        signalAdmission.rollback();
+        if (pendingRestartSignalAdmission === signalAdmission) {
+          pendingRestartSignalAdmission = null;
+        }
+      };
+      setFenceRollback?.(rollbackFence);
+      let isIdle = true;
+      try {
+        isIdle = finalIdleCheck
+          ? finalIdleCheck() && getActiveGatewayRootWorkCount({ excludeCurrent: true }) === 0
+          : true;
+      } catch (err) {
+        rollbackFence();
+        setFenceRollback?.(null);
+        throw err;
+      }
+      if (!isIdle) {
+        rollbackFence();
+        setFenceRollback?.(null);
+        return false;
+      }
+      const emitResult = await emitPreparedGatewayRestartUnderAdmission(
         hooks,
         reasonOverride,
         intent,
         transientGeneration,
+        () => fenceActive,
       );
+      if (
+        !emitResult ||
+        emitResult.status === "failed" ||
+        (emitResult.status === "coalesced" && !hasUnconsumedRestartSignal())
+      ) {
+        rollbackFence();
+      }
+      setFenceRollback?.(null);
+      return emitResult !== null;
     });
   } catch (err) {
     if (!isGatewayRestartDraining()) {
       throw err;
     }
+    return true;
   }
 }
 
@@ -730,11 +779,11 @@ export function deferGatewayRestartUntilIdle(opts: {
       ? Math.max(pollMs, Math.floor(opts.maxWaitMs))
       : undefined;
 
-  let pending: number;
   let cancelled = false;
+  let attemptingEmission = false;
+  let cancelEmissionFence: (() => void) | null = null;
   let poll: ReturnType<typeof setInterval> | null = null;
-  const cancel = () => {
-    cancelled = true;
+  const stopPoll = () => {
     if (!poll) {
       return;
     }
@@ -742,45 +791,67 @@ export function deferGatewayRestartUntilIdle(opts: {
     activeDeferralPolls.delete(poll);
     poll = null;
   };
+  const cancel = () => {
+    cancelled = true;
+    cancelEmissionFence?.();
+    cancelEmissionFence = null;
+    stopPoll();
+  };
   const handle = { cancel };
-  try {
-    pending = opts.getPendingCount();
-  } catch (err) {
-    opts.hooks?.onCheckError?.(err);
-    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-    return handle;
-  }
-  if (pending <= 0) {
-    opts.hooks?.onReady?.();
-    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-    return handle;
-  }
-
-  opts.hooks?.onDeferring?.(pending);
   const startedAt = Date.now();
   let nextStillPendingAt = startedAt + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
-  poll = setInterval(() => {
-    if (cancelled || !poll) {
+  const attemptEmission = (params: {
+    intent?: GatewayRestartIntent;
+    notifyReady: boolean;
+    skipIdleCheck?: boolean;
+  }) => {
+    if (cancelled || attemptingEmission) {
       return;
     }
-    const activePoll = poll;
+    attemptingEmission = true;
+    void emitPreparedGatewayRestart(
+      opts.emitHooks,
+      opts.reason,
+      params.intent,
+      params.skipIdleCheck ? undefined : () => opts.getPendingCount() <= 0,
+      (rollback) => {
+        cancelEmissionFence = rollback;
+      },
+    )
+      .then((attempted) => {
+        attemptingEmission = false;
+        cancelEmissionFence = null;
+        if (cancelled || !attempted) {
+          return;
+        }
+        stopPoll();
+        if (params.notifyReady) {
+          opts.hooks?.onReady?.();
+        }
+      })
+      .catch((err) => {
+        attemptingEmission = false;
+        cancelEmissionFence = null;
+        stopPoll();
+        opts.hooks?.onCheckError?.(err);
+        void emitPreparedGatewayRestart(opts.emitHooks, opts.reason, params.intent);
+      });
+  };
+  const inspectPending = () => {
+    if (cancelled) {
+      return;
+    }
     let current: number;
     try {
       current = opts.getPendingCount();
     } catch (err) {
-      clearInterval(activePoll);
-      activeDeferralPolls.delete(activePoll);
-      poll = null;
+      stopPoll();
       opts.hooks?.onCheckError?.(err);
       void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
       return;
     }
     if (current <= 0) {
-      clearInterval(activePoll);
-      activeDeferralPolls.delete(activePoll);
-      poll = null;
-      opts.hooks?.onReady?.();
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
+      attemptEmission({ notifyReady: true });
       return;
     }
     const elapsedMs = Date.now() - startedAt;
@@ -789,14 +860,31 @@ export function deferGatewayRestartUntilIdle(opts: {
       nextStillPendingAt = Date.now() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
     }
     if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
-      clearInterval(activePoll);
-      activeDeferralPolls.delete(activePoll);
-      poll = null;
+      stopPoll();
       opts.hooks?.onTimeout?.(current, elapsedMs);
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason, opts.timeoutIntent);
+      attemptEmission({
+        intent: opts.timeoutIntent,
+        notifyReady: false,
+        skipIdleCheck: true,
+      });
     }
-  }, pollMs);
+  };
+  let pending: number;
+  try {
+    pending = opts.getPendingCount();
+  } catch (err) {
+    opts.hooks?.onCheckError?.(err);
+    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
+    return handle;
+  }
+  if (pending > 0) {
+    opts.hooks?.onDeferring?.(pending);
+  }
+  poll = setInterval(inspectPending, pollMs);
   activeDeferralPolls.add(poll);
+  if (pending <= 0) {
+    attemptEmission({ notifyReady: true });
+  }
   return handle;
 }
 

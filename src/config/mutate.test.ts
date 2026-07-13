@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
 import { hashConfigIncludeRaw } from "./includes.js";
 import type { ConfigWriteOptions } from "./io.js";
 import {
@@ -17,6 +18,7 @@ import {
   registerRuntimeConfigWriteListener,
   registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
@@ -25,11 +27,20 @@ type MockValidationIssue = { path: string; message: string };
 type MockValidationResult =
   | { ok: true; config: OpenClawConfig; warnings: MockValidationIssue[] }
   | { ok: false; issues: MockValidationIssue[]; warnings: MockValidationIssue[] };
+type ConfigIOReadForWrite = ReturnType<
+  typeof import("./io.js").createConfigIO
+>["readConfigFileSnapshotForWrite"];
 
 const ioMocks = vi.hoisted(() => {
-  const readConfigFileSnapshotForWrite = vi.fn();
+  const readConfigFileSnapshotForWrite = vi.fn<ConfigIOReadForWrite>();
   return {
-    createConfigIO: vi.fn(() => ({ readConfigFileSnapshotForWrite })),
+    createConfigIO: vi.fn(
+      (
+        _options?: Parameters<typeof import("./io.js").createConfigIO>[0],
+      ): { readConfigFileSnapshotForWrite: ConfigIOReadForWrite } => ({
+        readConfigFileSnapshotForWrite,
+      }),
+    ),
     readConfigFileSnapshotForWrite,
     resolveConfigSnapshotHash: vi.fn(),
     writeConfigFile: vi.fn(),
@@ -1419,6 +1430,124 @@ describe("config mutate helpers", () => {
       await fs.readFile(pluginsPath, "utf-8"),
     ) as OpenClawConfig["plugins"];
     expect(persisted?.entries?.demo?.enabled).toBe(true);
+  });
+
+  it("uses the published restart env source for isolated managed include writes", async () => {
+    const home = await suiteRootTracker.make("include-managed-deferred-restart-env");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const envPath = path.join(home, ".openclaw", "config", "env.json5");
+    const envKey = "OC";
+    await fs.mkdir(path.dirname(envPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          env: { $include: "./config/env.json5" },
+          gateway: { auth: { mode: "token", token: "${OC}" } },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      envPath,
+      `${JSON.stringify({ vars: { [envKey]: "live" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    const initialConfig = {
+      env: { vars: { [envKey]: "old" } },
+      gateway: { auth: { mode: "token" as const, token: "old" } },
+    } satisfies OpenClawConfig;
+    const acceptedRestartConfig = {
+      env: { vars: { [envKey]: "live" } },
+      gateway: { auth: { mode: "token" as const, token: "live" } },
+    } satisfies OpenClawConfig;
+    const nextConfig = {
+      env: { vars: { [envKey]: "next" } },
+      gateway: { auth: { mode: "token" as const, token: "live" } },
+    } satisfies OpenClawConfig;
+    const snapshot = createSnapshot({
+      hash: "hash-include-managed-deferred-restart-env",
+      path: configPath,
+      parsed: {
+        env: { $include: "./config/env.json5" },
+        gateway: { auth: { mode: "token", token: "${OC}" } },
+      },
+      sourceConfig: acceptedRestartConfig,
+      runtimeConfig: initialConfig,
+    });
+    const refreshedSnapshot = createSnapshot({
+      hash: "hash-include-managed-deferred-restart-env-written",
+      path: configPath,
+      parsed: snapshot.parsed,
+      sourceConfig: {
+        ...nextConfig,
+        gateway: { auth: { mode: "token", token: "next" } },
+      },
+    });
+    let preflightSource: OpenClawConfig | undefined;
+    const releaseOwner = registerManagedRuntimeConfigWriteOwner(
+      configPath,
+      async (sourceConfig) => {
+        preflightSource = sourceConfig;
+        return { runtimeConfig: sourceConfig, compareConfig: sourceConfig };
+      },
+    );
+    const previousEnv = process.env[envKey];
+    process.env[envKey] = "old";
+    setRuntimeConfigSnapshot(initialConfig, initialConfig);
+    initializePublishedConfigRuntimeEnv(initialConfig, {
+      ownedEnv: { [envKey]: "old" },
+    });
+    const rollbackRestartEnv = prepareConfigRuntimeEnv({
+      previousConfig: initialConfig,
+      nextConfig: acceptedRestartConfig,
+    }).publish();
+    let rereadEnv: NodeJS.ProcessEnv | undefined;
+    ioMocks.createConfigIO.mockImplementation((options?: { env?: NodeJS.ProcessEnv }) => ({
+      readConfigFileSnapshotForWrite: async () => {
+        rereadEnv = options?.env;
+        expect(rereadEnv?.[envKey]).toBeUndefined();
+        if (rereadEnv) {
+          rereadEnv[envKey] = "next";
+        }
+        return {
+          snapshot: refreshedSnapshot,
+          writeOptions: { expectedConfigPath: configPath },
+        };
+      },
+    }));
+
+    try {
+      await replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [envPath]: await resolveIncludeTarget(envPath) },
+        },
+        nextConfig,
+      });
+
+      expect(rereadEnv).toBeDefined();
+      expect(rereadEnv).not.toBe(process.env);
+      expect(rereadEnv?.[envKey]).toBe("next");
+      expect(preflightSource?.gateway?.auth?.token).toBe("next");
+      expect(process.env[envKey]).toBe("live");
+    } finally {
+      rollbackRestartEnv();
+      releaseOwner();
+      ioMocks.createConfigIO.mockImplementation(() => ({
+        readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+      }));
+      if (previousEnv === undefined) {
+        delete process.env[envKey];
+      } else {
+        process.env[envKey] = previousEnv;
+      }
+    }
   });
 
   it("does not overwrite concurrent include edits made during preflight", async () => {

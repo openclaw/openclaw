@@ -194,92 +194,94 @@ describe("gateway e2e", () => {
       const { envSnapshot, tempHome } = await setupGatewayTempHome({
         prefix: "openclaw-gw-direct-reload-",
       });
-      deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
-      const fileToken = nextGatewayId("direct-file-token");
-      const overrideToken = nextGatewayId("direct-override-token");
-      const initialConfig: OpenClawConfig = {
-        ...(authSource !== "generated"
-          ? {
-              gateway: {
-                auth: {
-                  mode: "token",
-                  token:
-                    authSource === "secret-ref-override"
-                      ? {
-                          source: "env" as const,
-                          provider: "default",
-                          id: "OPENCLAW_TEST_MISSING_DISK_TOKEN",
-                        }
-                      : fileToken,
-                },
-              },
-            }
-          : {}),
-        ...(authSource === "runtime-overrides"
-          ? { channels: { whatsapp: { dmPolicy: "pairing" as const } } }
-          : {}),
-        logging: { level: "info" },
-      };
-      const configPath = await createGatewayConfigPath(tempHome);
-      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-      const configIO = createConfigIO({ configPath });
-      await configIO.writeConfigFile(initialConfig);
-      if (authSource === "secret-ref-override") {
-        setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", overrideToken);
-      }
-      if (authSource === "runtime-overrides") {
-        deleteTestEnvValue("OPENCLAW_SKIP_CHANNELS");
-        deleteTestEnvValue("OPENCLAW_SKIP_PROVIDERS");
-        setTestEnvValue("OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN", overrideToken);
-        expect(
-          setConfigOverride("gateway.auth.token", {
-            source: "env",
-            provider: "default",
-            id: "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
-          }).ok,
-        ).toBe(true);
-        expect(
-          setConfigOverride("channels.whatsapp", { dmPolicy: "open", allowFrom: ["*"] }).ok,
-        ).toBe(true);
-      }
-      const callerAuthOverride: GatewayAuthConfig | undefined =
-        authSource === "explicit-override"
-          ? {
-              mode: "token" as const,
-              token: overrideToken,
-              rateLimit: { maxAttempts: 7 },
-            }
-          : authSource === "secret-ref-override"
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      try {
+        deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+        const fileToken = nextGatewayId("direct-file-token");
+        const overrideToken = nextGatewayId("direct-override-token");
+        const initialConfig: OpenClawConfig = {
+          ...(authSource !== "generated"
             ? {
-                mode: "token",
-                token: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+                gateway: {
+                  auth: {
+                    mode: "token",
+                    token:
+                      authSource === "secret-ref-override"
+                        ? {
+                            source: "env" as const,
+                            provider: "default",
+                            id: "OPENCLAW_TEST_MISSING_DISK_TOKEN",
+                          }
+                        : fileToken,
+                  },
                 },
               }
+            : {}),
+          ...(authSource === "runtime-overrides"
+            ? { channels: { whatsapp: { dmPolicy: "pairing" as const } } }
+            : {}),
+          logging: { level: "info" },
+        };
+        const configPath = await createGatewayConfigPath(tempHome);
+        setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+        const configIO = createConfigIO({ configPath });
+        await configIO.writeConfigFile(initialConfig);
+        if (authSource === "secret-ref-override") {
+          setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", overrideToken);
+        }
+        if (authSource === "runtime-overrides") {
+          deleteTestEnvValue("OPENCLAW_SKIP_CHANNELS");
+          deleteTestEnvValue("OPENCLAW_SKIP_PROVIDERS");
+          setTestEnvValue("OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN", overrideToken);
+          expect(
+            setConfigOverride("gateway.auth.token", {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
+            }).ok,
+          ).toBe(true);
+          expect(
+            setConfigOverride("channels.whatsapp", { dmPolicy: "open", allowFrom: ["*"] }).ok,
+          ).toBe(true);
+        }
+        const callerAuthOverride: GatewayAuthConfig | undefined =
+          authSource === "explicit-override"
+            ? {
+                mode: "token" as const,
+                token: overrideToken,
+                rateLimit: { maxAttempts: 7 },
+              }
+            : authSource === "secret-ref-override"
+              ? {
+                  mode: "token",
+                  token: {
+                    source: "env",
+                    provider: "default",
+                    id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+                  },
+                }
+              : undefined;
+        const callerTailscaleOverride: GatewayTailscaleConfig | undefined =
+          authSource === "explicit-override"
+            ? { mode: "off" as const, serviceName: "svc:startup" }
             : undefined;
-      const callerTailscaleOverride: GatewayTailscaleConfig | undefined =
-        authSource === "explicit-override"
-          ? { mode: "off" as const, serviceName: "svc:startup" }
-          : undefined;
-      const port = await getFreeGatewayPort();
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        ...(callerAuthOverride ? { auth: callerAuthOverride } : {}),
-        ...(callerTailscaleOverride ? { tailscale: callerTailscaleOverride } : {}),
-        controlUiEnabled: false,
-      });
-      const expectedToken =
-        authSource === "generated" ? getRuntimeConfig().gateway?.auth?.token : overrideToken;
-      expect(typeof expectedToken).toBe("string");
-      const client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token: expectedToken as string,
-        clientDisplayName: "vitest-direct-reload",
-      });
+        const port = await getFreeGatewayPort();
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          ...(callerAuthOverride ? { auth: callerAuthOverride } : {}),
+          ...(callerTailscaleOverride ? { tailscale: callerTailscaleOverride } : {}),
+          controlUiEnabled: false,
+        });
+        const expectedToken =
+          authSource === "generated" ? getRuntimeConfig().gateway?.auth?.token : overrideToken;
+        expect(typeof expectedToken).toBe("string");
+        client = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token: expectedToken as string,
+          clientDisplayName: "vitest-direct-reload",
+        });
 
-      try {
         const health = await client.request<{
           configReload?: { hotReloadStatus?: string };
         }>("health", { probe: true });
@@ -381,8 +383,12 @@ describe("gateway e2e", () => {
         });
         await disconnectGatewayClient(reconnected);
       } finally {
-        await disconnectGatewayClient(client);
-        await server.close({ reason: "direct reload test complete" });
+        if (client) {
+          await disconnectGatewayClient(client);
+        }
+        if (server) {
+          await server.close({ reason: "direct reload test complete" });
+        }
         await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }
@@ -396,37 +402,39 @@ describe("gateway e2e", () => {
       const { envSnapshot, tempHome } = await setupGatewayTempHome({
         prefix: "openclaw-gw-startup-auth-ref-",
       });
-      const configPath = await createGatewayConfigPath(tempHome);
-      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-      const configIO = createConfigIO({ configPath });
-      const fileToken = nextGatewayId("startup-auth-file-token");
-      const oldToken = nextGatewayId("startup-auth-ref-old");
-      const newToken = nextGatewayId("startup-auth-ref-new");
-      await configIO.writeConfigFile({
-        gateway: { auth: { mode: "token", token: fileToken } },
-        logging: { level: "info" },
-      });
-      setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", oldToken);
-      const port = await getFreeGatewayPort();
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: {
-          mode: "token",
-          token: {
-            source: "env",
-            provider: "default",
-            id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
-          },
-        },
-        controlUiEnabled: false,
-      });
-      const oldClient = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token: oldToken,
-        clientDisplayName: "vitest-startup-auth-ref-old",
-      });
-
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let oldClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       try {
+        const configPath = await createGatewayConfigPath(tempHome);
+        setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+        const configIO = createConfigIO({ configPath });
+        const fileToken = nextGatewayId("startup-auth-file-token");
+        const oldToken = nextGatewayId("startup-auth-ref-old");
+        const newToken = nextGatewayId("startup-auth-ref-new");
+        await configIO.writeConfigFile({
+          gateway: { auth: { mode: "token", token: fileToken } },
+          logging: { level: "info" },
+        });
+        setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", oldToken);
+        const port = await getFreeGatewayPort();
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+            },
+          },
+          controlUiEnabled: false,
+        });
+        oldClient = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token: oldToken,
+          clientDisplayName: "vitest-startup-auth-ref-old",
+        });
+
         setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", newToken);
         const reload = await oldClient
           .request<{ ok?: boolean }>("secrets.reload", {})
@@ -450,8 +458,12 @@ describe("gateway e2e", () => {
         };
         expect(persisted.gateway?.auth?.token).toBe(fileToken);
       } finally {
-        await disconnectGatewayClient(oldClient);
-        await server.close({ reason: "startup auth SecretRef rotation test complete" });
+        if (oldClient) {
+          await disconnectGatewayClient(oldClient);
+        }
+        if (server) {
+          await server.close({ reason: "startup auth SecretRef rotation test complete" });
+        }
         await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }

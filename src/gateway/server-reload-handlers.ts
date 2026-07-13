@@ -57,7 +57,7 @@ import {
 import { resolveHooksConfig } from "./hooks.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
-import { applyGatewayLaneConcurrency } from "./server-lanes.js";
+import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { markGatewayModelCatalogStaleForReload } from "./server-model-catalog.js";
 import type { GatewayConfigReloaderHandle } from "./server-runtime-handles.js";
 import {
@@ -140,6 +140,7 @@ async function restoreSecretsRuntimeSnapshotIfCurrent(
 type GatewayReloadLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
+  error?: (msg: string) => void;
 };
 
 type GatewayGmailRestartAbortController = {
@@ -151,6 +152,7 @@ type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
   isCurrent: () => boolean;
   prepareRestartRuntimeConfig?: () => Promise<OpenClawConfig>;
+  runtimeEnv?: NodeJS.ProcessEnv;
   sourceConfig?: OpenClawConfig;
 };
 
@@ -277,19 +279,17 @@ function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolean {
   );
 }
 
-function hasFalliblePostCommitWork(plan: GatewayReloadPlan): boolean {
+function hasIrreversibleHotReloadWork(plan: GatewayReloadPlan): boolean {
   return (
     plan.restartCron ||
     plan.restartHealthMonitor ||
     plan.restartGmailWatcher ||
     plan.reloadPlugins ||
-    plan.disposeMcpRuntimes ||
-    plan.restartChannels.size > 0 ||
-    shouldRefreshContextWindowCache(plan)
+    plan.restartChannels.size > 0
   );
 }
 
-function assertReloadPlanHasRecoveryOwner(
+function assertIrreversibleReloadPlanHasRecoveryOwner(
   plan: GatewayReloadPlan,
   restartRecoveryAvailable: boolean | undefined,
 ): void {
@@ -299,8 +299,11 @@ function assertReloadPlanHasRecoveryOwner(
   if (plan.restartGateway) {
     throw new GatewayReloadRequiresRecoveryOwnerError("gateway restart");
   }
-  if (hasFalliblePostCommitWork(plan)) {
-    throw new GatewayReloadRequiresRecoveryOwnerError("fallible hot reload");
+  // These plans retire a live service or plugin generation before replacement
+  // can be proven. Context cache refresh also needs recovery because it can
+  // reject after runtime publication; simple in-place updates stay atomic.
+  if (hasIrreversibleHotReloadWork(plan) || shouldRefreshContextWindowCache(plan)) {
+    throw new GatewayReloadRequiresRecoveryOwnerError("irreversible hot reload");
   }
 }
 
@@ -313,9 +316,11 @@ async function disposeMcpRuntimesWithTimeout(params: {
   // MCP runtime disposal may need async provider cleanup. Bound it so config
   // reload can proceed and report the stale runtime risk.
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const disposePromise = params.dispose().catch((error: unknown) => {
-    params.onWarn(`${params.label} failed: ${String(error)}`);
-  });
+  const disposePromise = Promise.resolve()
+    .then(params.dispose)
+    .catch((error: unknown) => {
+      params.onWarn(`${params.label} failed: ${String(error)}`);
+    });
   const timeoutPromise = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => resolve("timeout"), params.timeoutMs);
     timer.unref?.();
@@ -360,6 +365,7 @@ type GatewayReloadHandlerParams = {
     changedPaths: readonly string[];
     beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
     commitRuntime: () => Promise<void>;
+    env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
   }) => Promise<GatewayPluginReloadResult>;
   logHooks: {
@@ -388,7 +394,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash: string | null;
   watchPath: string;
-  readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
+  readSnapshot: typeof import("../config/io.js").readConfigFileSnapshotForRuntimeTransaction;
   promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
   subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
   logReload: GatewayReloadLog & {
@@ -419,6 +425,8 @@ type ManagedGatewayConfigReloaderParams = Omit<
 
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
   const myGeneration = ++currentReloadGeneration;
+  const restartRecoveryAvailable =
+    params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
 
   const getActiveCounts = () => {
     const queueSize = getTotalQueueSize();
@@ -546,7 +554,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     nextConfig: OpenClawConfig,
     publication?: GatewayHotReloadPublication,
   ): Promise<void> => {
-    assertReloadPlanHasRecoveryOwner(plan, params.restartRecoveryAvailable);
+    assertIrreversibleReloadPlanHasRecoveryOwner(plan, restartRecoveryAvailable);
     const isTransactionCurrent = () => !restartRetryStopped && (publication?.isCurrent?.() ?? true);
     const state = params.getState();
     const nextState = { ...state };
@@ -568,6 +576,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
+        env: publication?.runtimeEnv ?? process.env,
       });
     }
 
@@ -583,9 +592,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       pluginReloadAborted || !isTransactionCurrent() || isLifecycleReloadAborted();
     let runtimeCommitted = false;
     let recoveryRestartScheduled = false;
-    const shouldSkipChannelRestart = () =>
-      isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-      isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+    const laneConcurrency = resolveGatewayLaneConcurrency(nextConfig);
+    const candidateEnv = publication?.runtimeEnv ?? process.env;
+    // Planning happens before candidate env publication, while channel starts
+    // happen after it. Use one candidate snapshot across both phases.
+    const shouldSkipChannelRestart =
+      isTruthyEnvValue(candidateEnv.OPENCLAW_SKIP_CHANNELS) ||
+      isTruthyEnvValue(candidateEnv.OPENCLAW_SKIP_PROVIDERS);
     const getChannelAutostartSuppression = () => params.getChannelAutostartSuppression?.() ?? null;
     const logSuppressedChannelRestart = (
       channels: ReadonlySet<ChannelKind>,
@@ -603,14 +616,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       if (runtimeCommitted) {
         return;
       }
-      if (!params.requestRecoveryRestart) {
-        throw new Error("config hot reload recovery is unavailable");
-      }
       const commit = async () => {
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
         params.setState(nextState);
+        // All rejecting work is complete. Publish pre-resolved lane limits at
+        // the final synchronous commit edge, alongside the accepted state.
+        applyGatewayLaneConcurrency(laneConcurrency);
         runtimeCommitted = true;
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
         if (plan.restartCron) {
@@ -651,10 +664,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       restartTransaction: GatewayRestartTransactionResult,
       surface: string,
     ) => {
-      if (
-        restartTransaction.status === "recovery-pending" &&
-        params.restartRecoveryAvailable === false
-      ) {
+      if (restartTransaction.status === "recovery-pending" && !restartRecoveryAvailable) {
         restartTransaction.settle("rejected");
         throw new GatewayHotReloadRecoveryError(surface);
       }
@@ -666,6 +676,23 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       if (restartRetryStopped) {
         params.logReload.warn(`${surface} failed during gateway shutdown${detail}`);
         return;
+      }
+      if (!restartRecoveryAvailable || !params.requestRecoveryRestart) {
+        const message = runtimeCommitted
+          ? `config hot reload committed with unrecovered ${surface} failure${detail}; gateway restart recovery is unavailable; runtime may be inconsistent`
+          : `config hot reload failed before commit during ${surface}${detail}; gateway restart recovery is unavailable`;
+        if (params.logReload.error) {
+          params.logReload.error(message);
+        } else {
+          params.logReload.warn(message);
+        }
+        if (runtimeCommitted) {
+          throw new GatewayHotReloadRecoveryError(surface);
+        }
+        if (err instanceof Error) {
+          throw err;
+        }
+        throw new Error(`config hot reload failed before commit during ${surface}${detail}`);
       }
       const recoveryPlan = {
         ...plan,
@@ -751,7 +778,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         for (const channel of channels) {
           channelsToRestart.add(channel);
         }
-        if (channelsToRestart.size === 0 || shouldSkipChannelRestart()) {
+        if (channelsToRestart.size === 0 || shouldSkipChannelRestart) {
           return;
         }
         if (
@@ -825,6 +852,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             changedPaths: plan.changedPaths,
             beforeReplace: stopChannelsBeforePluginReplace,
             commitRuntime,
+            env: publication?.runtimeEnv ?? process.env,
             isAborted: isPluginReloadAborted,
           });
         } catch (err) {
@@ -863,7 +891,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     }
 
-    if (!plan.reloadPlugins && channelsToRestart.size > 0 && !shouldSkipChannelRestart()) {
+    if (!plan.reloadPlugins && channelsToRestart.size > 0 && !shouldSkipChannelRestart) {
       pluginReloadAborted = await waitForActiveWorkBeforeChannelReload(
         channelsToRestart,
         nextConfig,
@@ -940,7 +968,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (channelsToRestart.size > 0) {
-      if (shouldSkipChannelRestart()) {
+      if (shouldSkipChannelRestart) {
         params.logChannels.info(
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
         );
@@ -1008,20 +1036,16 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     }
 
-    try {
-      applyGatewayLaneConcurrency(nextConfig);
-    } catch (err) {
-      scheduleRecoveryRestart("lane concurrency reload", err);
-    }
-
     if (shouldRefreshContextWindowCache(plan)) {
       try {
         await refreshContextWindowCache(nextConfig);
-        // Provider discovery is best-effort; a slow hook must not hold hot reload open.
-        void loadModelCatalog({ config: nextConfig });
       } catch (err) {
         scheduleRecoveryRestart("context window cache reload", err);
       }
+      // Provider discovery is best-effort; a slow hook must not hold hot reload open.
+      void loadModelCatalog({ config: nextConfig }).catch((err: unknown) => {
+        params.logReload.warn(`model catalog rewarm failed: ${String(err)}`);
+      });
     }
     void warmCurrentProviderAuthStateOffMainThread(nextConfig, {
       isCancelled: () => !isTransactionCurrent(),
@@ -1307,7 +1331,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       : plan.changedPaths.join(", ");
     const restartReason = `config reload: ${reasons}`;
 
-    if (params.restartRecoveryAvailable === false) {
+    if (!restartRecoveryAvailable) {
       params.logReload.warn(
         "gateway restart recovery unavailable; restart-required reload rejected",
       );
@@ -1396,7 +1420,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             if (requestGeneration !== restartRequestGeneration || !failedEmission) {
               return;
             }
-            if (params.restartRecoveryAvailable === false) {
+            if (!restartRecoveryAvailable) {
               params.logReload.warn("gateway restart recovery unavailable; retry skipped");
               return;
             }
@@ -1457,7 +1481,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     if (emitResult.status === "failed") {
       params.logReload.warn("gateway restart recovery emission failed");
-      if (params.restartRecoveryAvailable !== false) {
+      if (restartRecoveryAvailable) {
         scheduleRestartEmissionRetry({
           reason: restartReason,
           requestGeneration,
@@ -1536,6 +1560,8 @@ export function startManagedGatewayConfigReloader(
   };
   const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig =>
     params.applyRuntimeConfigOverrides?.(config) ?? config;
+  const restartRecoveryAvailable =
+    params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
 
   let stopped = false;
   let activeGmailRestartAbortController: GatewayGmailRestartAbortController | null = null;
@@ -1588,9 +1614,7 @@ export function startManagedGatewayConfigReloader(
     ...(params.requestRecoveryRestart
       ? { requestRecoveryRestart: params.requestRecoveryRestart }
       : {}),
-    ...(params.restartRecoveryAvailable !== undefined
-      ? { restartRecoveryAvailable: params.restartRecoveryAvailable }
-      : {}),
+    restartRecoveryAvailable,
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
         cfg: config,
@@ -1636,6 +1660,9 @@ export function startManagedGatewayConfigReloader(
           {
             reason: "restart-check",
             activate: false,
+            ...(transactionOwnership.runtimeEnv
+              ? { env: transactionOwnership.runtimeEnv.env }
+              : {}),
           },
         );
         assertCurrent();
@@ -1676,24 +1703,8 @@ export function startManagedGatewayConfigReloader(
       assertCurrent();
       await beforeRestartRequest?.();
       assertCurrent();
-      restartTransaction = requestGatewayRestart(plan, preparedRuntimeConfig, {
-        ...restartOptions,
-        debtConfig: sourceConfig,
-        prepareRuntimeConfig: async () => {
-          const prepared = await params.activateRuntimeSecrets(
-            prepareRuntimeCandidate(preparedRuntimeConfig, sourceConfig, transactionOwnership),
-            {
-              reason: "restart-check",
-              activate: false,
-            },
-          );
-          assertCurrent();
-          return prepared.config;
-        },
-      });
-      if (restartTransaction.status === "recovery-pending") {
-        throw new GatewayHotReloadRecoveryError("config restart");
-      }
+      // Claim the shared-session requirement before creating any async restart
+      // emission. A rejected generation owner must never leave a live deferral.
       requiredOwnership = setRequiredSharedGatewaySessionGenerationIfOwned(
         params.sharedGatewaySessionGenerationState,
         preparationOwnership,
@@ -1704,6 +1715,30 @@ export function startManagedGatewayConfigReloader(
       if (!requiredOwnership) {
         throw new GatewayHotReloadStaleSecretsError();
       }
+      // Restart successors inherit process.env. Publish the prepared layer at
+      // the admission edge, then roll it back if this restart is rejected.
+      transactionOwnership.publishRuntimeEnv();
+      restartTransaction = requestGatewayRestart(plan, preparedRuntimeConfig, {
+        ...restartOptions,
+        debtConfig: sourceConfig,
+        prepareRuntimeConfig: async () => {
+          const prepared = await params.activateRuntimeSecrets(
+            prepareRuntimeCandidate(preparedRuntimeConfig, sourceConfig, transactionOwnership),
+            {
+              reason: "restart-check",
+              activate: false,
+              ...(transactionOwnership.runtimeEnv
+                ? { env: transactionOwnership.runtimeEnv.env }
+                : {}),
+            },
+          );
+          assertCurrent();
+          return prepared.config;
+        },
+      });
+      if (restartTransaction.status === "recovery-pending") {
+        throw new GatewayHotReloadRecoveryError("config restart");
+      }
       if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
         disconnectStaleSharedGatewayAuthClients({
           clients: params.clients,
@@ -1711,10 +1746,12 @@ export function startManagedGatewayConfigReloader(
         });
       }
       restartTransaction.settle("committed");
+      transactionOwnership.commitRuntimeEnv();
       restartLifecycle.settle("committed");
     } catch (error) {
       restartTransaction?.settle("rejected");
       restartLifecycle.settle("rejected");
+      transactionOwnership.rollbackRuntimeEnv();
       if (requiredOwnership) {
         setRequiredSharedGatewaySessionGenerationIfOwned(
           params.sharedGatewaySessionGenerationState,
@@ -1739,7 +1776,7 @@ export function startManagedGatewayConfigReloader(
     subscribeToWrites: params.subscribeToWrites,
     onConfigCandidateObserved: pauseGatewayRestartForConfigCandidate,
     onConfigChange: (plan, nextConfig) => {
-      assertReloadPlanHasRecoveryOwner(plan, params.restartRecoveryAvailable);
+      assertIrreversibleReloadPlanHasRecoveryOwner(plan, restartRecoveryAvailable);
       params.prepareTerminalConfig(plan, applyRuntimeConfigOverrides(nextConfig));
     },
     onConfigAccepted: async (nextConfig, transactionOwnership, sourceConfig, acceptance) => {
@@ -1757,6 +1794,9 @@ export function startManagedGatewayConfigReloader(
             {
               reason: "restart-check",
               activate: false,
+              ...(transactionOwnership.runtimeEnv
+                ? { env: transactionOwnership.runtimeEnv.env }
+                : {}),
             },
           );
           return prepared.config;
@@ -1779,7 +1819,7 @@ export function startManagedGatewayConfigReloader(
           params.acceptTerminalConfig({
             retireRejectedRestart: acceptedRestart.retireRejectedRestart,
           });
-          return;
+          return undefined;
         }
         if (acceptedRestart.debt) {
           await runManagedRestart(
@@ -1881,6 +1921,9 @@ export function startManagedGatewayConfigReloader(
           {
             reason: "reload",
             activate: false,
+            ...(transactionOwnership.runtimeEnv
+              ? { env: transactionOwnership.runtimeEnv.env }
+              : {}),
             includeAuthStoreRefs: transactionOwnership.runtimeRefresh?.includeAuthStoreRefs,
           },
         );
@@ -1889,6 +1932,7 @@ export function startManagedGatewayConfigReloader(
         }
         const activateIfCurrent = params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
         const publishTerminalConfig = () => {
+          transactionOwnership.publishRuntimeEnv();
           transactionOwnership.markRuntimeCommitted(prepared.config, plan);
           params.reconcileTerminalSessions(plan, prepared.config);
         };
@@ -1929,6 +1973,9 @@ export function startManagedGatewayConfigReloader(
           {
             reason: "reload",
             activate: false,
+            ...(transactionOwnership.runtimeEnv
+              ? { env: transactionOwnership.runtimeEnv.env }
+              : {}),
             includeAuthStoreRefs: transactionOwnership.runtimeRefresh?.includeAuthStoreRefs,
           },
         );
@@ -1950,6 +1997,9 @@ export function startManagedGatewayConfigReloader(
         try {
           await applyHotReload(plan, prepared.config, {
             isCurrent: transactionOwnership.isCurrent,
+            ...(transactionOwnership.runtimeEnv
+              ? { runtimeEnv: transactionOwnership.runtimeEnv.env }
+              : {}),
             sourceConfig,
             prepareRestartRuntimeConfig: async () => {
               const restartPrepared = await params.activateRuntimeSecrets(
@@ -1957,6 +2007,9 @@ export function startManagedGatewayConfigReloader(
                 {
                   reason: "restart-check",
                   activate: false,
+                  ...(transactionOwnership.runtimeEnv
+                    ? { env: transactionOwnership.runtimeEnv.env }
+                    : {}),
                 },
               );
               if (!transactionOwnership.isCurrent()) {
@@ -1975,10 +2028,6 @@ export function startManagedGatewayConfigReloader(
                 if (!publishedSharedGatewaySessionGeneration) {
                   throw new GatewayHotReloadStaleSecretsError();
                 }
-                if (!terminalConfigReconciled) {
-                  params.reconcileTerminalSessions(plan, prepared.config);
-                  terminalConfigReconciled = true;
-                }
               };
               const publishRuntime = async () => {
                 runtimeSecretsPublished = true;
@@ -1986,14 +2035,28 @@ export function startManagedGatewayConfigReloader(
                 // Claim the generation at the snapshot activation edge, but keep
                 // `required` until the runtime commit succeeds.
                 claimGenerationOwnership();
-                if (sharedGatewaySessionGenerationChanged) {
-                  disconnectStaleSharedGatewayAuthClients({
-                    clients: params.clients,
-                    expectedGeneration: nextSharedGatewaySessionGeneration,
-                  });
-                }
                 try {
+                  // Hot-reloaded services inherit process.env. Publish the
+                  // prepared layer at the same edge as secrets/runtime state,
+                  // before any replacement service or channel starts.
+                  transactionOwnership.publishRuntimeEnv();
                   await commit();
+                  // PTY and socket eviction cannot roll back. Run them only after
+                  // the last fallible runtime commit step has accepted this config.
+                  try {
+                    if (!terminalConfigReconciled) {
+                      params.reconcileTerminalSessions(plan, prepared.config);
+                      terminalConfigReconciled = true;
+                    }
+                    if (sharedGatewaySessionGenerationChanged) {
+                      disconnectStaleSharedGatewayAuthClients({
+                        clients: params.clients,
+                        expectedGeneration: nextSharedGatewaySessionGeneration,
+                      });
+                    }
+                  } catch (err) {
+                    scheduleRecoveryRestart("terminal session reconciliation", err);
+                  }
                 } catch (err) {
                   if (!isCommitted()) {
                     let generationRestored = false;
@@ -2099,6 +2162,9 @@ export function startManagedGatewayConfigReloader(
             continue;
           }
           if (err instanceof GatewayHotReloadRecoveryError) {
+            throw err;
+          }
+          if (runtimeCommitted) {
             throw err;
           }
           if (runtimeSecretsPublished) {

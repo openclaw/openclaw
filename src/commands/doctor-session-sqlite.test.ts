@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   loadExactSqliteSessionEntry,
   loadSqliteTranscriptEventsSync,
@@ -32,6 +33,7 @@ const previousEnv = {
   OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
   OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
 };
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -1342,7 +1344,7 @@ function createLegacyStore(
     transcriptLines?: string[];
   } = {},
 ): TestStore {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
+  const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
   const stateDir = path.join(tempDir, "state");
   const configPath = path.join(tempDir, "openclaw.json");
   const sessionDir = params.customStore

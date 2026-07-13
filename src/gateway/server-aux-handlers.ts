@@ -343,6 +343,7 @@ export function createGatewayAuxHandlers(params: {
                 const {
                   prepared,
                   plan,
+                  generationOwnership,
                   nextSharedGatewaySessionGeneration,
                   sharedGatewaySessionGenerationChanged,
                 } = transaction;
@@ -372,7 +373,7 @@ export function createGatewayAuxHandlers(params: {
                     if (
                       !isSharedGatewaySessionGenerationOwnershipCurrent(
                         params.sharedGatewaySessionGenerationState,
-                        transaction.generationOwnership,
+                        generationOwnership,
                       )
                     ) {
                       throw new Error("secrets.reload was superseded by a newer config write");
@@ -386,7 +387,7 @@ export function createGatewayAuxHandlers(params: {
                       if (
                         !isSharedGatewaySessionGenerationOwnershipCurrent(
                           params.sharedGatewaySessionGenerationState,
-                          transaction.generationOwnership,
+                          generationOwnership,
                         )
                       ) {
                         throw new Error("secrets.reload was superseded by a newer config write");
@@ -396,7 +397,7 @@ export function createGatewayAuxHandlers(params: {
                       if (
                         !isSharedGatewaySessionGenerationOwnershipCurrent(
                           params.sharedGatewaySessionGenerationState,
-                          transaction.generationOwnership,
+                          generationOwnership,
                         )
                       ) {
                         throw new Error("secrets.reload was superseded by a newer config write");
@@ -417,7 +418,7 @@ export function createGatewayAuxHandlers(params: {
                 if (
                   !finalizeOwnedSharedGatewaySessionGeneration(
                     params.sharedGatewaySessionGenerationState,
-                    transaction.generationOwnership,
+                    generationOwnership,
                   )
                 ) {
                   throw new Error("secrets.reload was superseded by a newer config write");
@@ -426,18 +427,20 @@ export function createGatewayAuxHandlers(params: {
               } catch (err) {
                 let generationRestored = false;
                 if (transaction) {
+                  const failedTransaction = transaction;
                   await restoreSecretsRuntimeSnapshotIfCurrent(
-                    transaction.previousSnapshot,
-                    transaction.publishedSnapshotRevision,
-                    transaction.prepared,
+                    failedTransaction.previousSnapshot,
+                    failedTransaction.publishedSnapshotRevision,
+                    failedTransaction.prepared,
                     {
                       onActivated: () => {
                         generationRestored = replaceOwnedSharedGatewaySessionGenerationState(
                           params.sharedGatewaySessionGenerationState,
-                          transaction.generationOwnership,
+                          failedTransaction.generationOwnership,
                           {
-                            current: transaction.previousSharedGatewaySessionGeneration,
-                            required: transaction.previousSharedGatewaySessionGenerationRequired,
+                            current: failedTransaction.previousSharedGatewaySessionGeneration,
+                            required:
+                              failedTransaction.previousSharedGatewaySessionGenerationRequired,
                           },
                         );
                       },

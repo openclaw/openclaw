@@ -58,6 +58,7 @@ type PreparedRuntimeSecretsSnapshot = Awaited<ReturnType<PrepareRuntimeSecretsSn
 type RuntimeSecretsActivationParams = {
   reason: "startup" | "reload" | "restart-check";
   activate: boolean;
+  env?: NodeJS.ProcessEnv;
   includeAuthStoreRefs?: boolean;
 };
 
@@ -326,6 +327,7 @@ export function createRuntimeSecretsActivator(params: {
           () =>
             prepareRuntimeSecretsSnapshot({
               config: pruneSkippedStartupSecretSurfaces(config),
+              ...(activationParams.env ? { env: activationParams.env } : {}),
               includeAuthStoreRefs: activationParams.includeAuthStoreRefs,
               ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
               ...(params.pluginMetadataSnapshot
@@ -336,7 +338,7 @@ export function createRuntimeSecretsActivator(params: {
           {
             attributes: secretsPrepareTimelineAttributes(config, activationParams),
             config,
-            env: process.env,
+            env: activationParams.env ?? process.env,
             omitErrorMessage: true,
             phase: activationParams.reason,
           },

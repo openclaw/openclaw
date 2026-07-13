@@ -11,7 +11,11 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { RuntimeAuthProfileStoreMutationToken } from "../agents/auth-profiles/runtime-snapshots.js";
-import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  RuntimeAuthProfileStore,
+} from "../agents/auth-profiles/types.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSourceSnapshotIfCurrent,
@@ -35,7 +39,7 @@ import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 export type PreparedSecretsRuntimeSnapshot = {
   sourceConfig: OpenClawConfig;
   config: OpenClawConfig;
-  authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
+  authStores: Array<{ agentDir: string; store: RuntimeAuthProfileStore }>;
   authStoreCredentialsRevision: number;
   warnings: SecretResolverWarning[];
   webTools: RuntimeWebToolsMetadata;
@@ -146,7 +150,7 @@ function mergeLiveAuthStoreBookkeeping(
   });
 }
 
-function profileOwner(store: AuthProfileStore | undefined, profileId: string): ProfileOwner {
+function profileOwner(store: RuntimeAuthProfileStore | undefined, profileId: string): ProfileOwner {
   if (!store?.profiles[profileId]) {
     return "absent";
   }
@@ -158,7 +162,7 @@ function profileOwner(store: AuthProfileStore | undefined, profileId: string): P
 
 function captureProfileOwnerMutationLineage(
   agentDir: string,
-  store: AuthProfileStore | undefined,
+  store: RuntimeAuthProfileStore | undefined,
   profileId: string,
 ): ProfileOwnerMutationLineage {
   const owner = profileOwner(store, profileId);
@@ -175,7 +179,7 @@ function captureProfileOwnerMutationLineage(
 
 function captureStoreMutationLineage(
   agentDir: string,
-  store: AuthProfileStore | undefined,
+  store: RuntimeAuthProfileStore | undefined,
 ): StoreMutationLineage {
   const includeMain =
     !store ||
@@ -433,8 +437,8 @@ function credentialSecretRef(credential: AuthProfileCredential | undefined): Sec
 }
 
 function rebuildSelectedRuntimeProfileMetadata(
-  store: AuthProfileStore,
-  selectedSources: Map<string, AuthProfileStore>,
+  store: RuntimeAuthProfileStore,
+  selectedSources: Map<string, RuntimeAuthProfileStore>,
 ): void {
   const profileIdsFor = (
     field: "runtimeExternalProfileIds" | "runtimeLocalProfileIds" | "runtimePersistedProfileIds",

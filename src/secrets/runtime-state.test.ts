@@ -1,8 +1,8 @@
 /** Tests secrets runtime state clone isolation and refresh context. */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -38,6 +38,7 @@ import {
 
 describe("secrets runtime state", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
+  const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -1278,7 +1279,7 @@ describe("secrets runtime state", () => {
   it.each(["owner", "profile"] as const)(
     "drops a changed-ref descendant after $eviction lineage eviction",
     (eviction) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-evicted-ref-"));
+      const root = autoCleanupTempDirs.make("openclaw-auth-evicted-ref-");
       const agentDir = path.join(root, eviction);
       fs.mkdirSync(agentDir, { recursive: true });
       const previousRef = {
@@ -1818,13 +1819,25 @@ describe("secrets runtime state", () => {
     }): PreparedSecretsRuntimeSnapshot => ({
       sourceConfig: {
         gateway: { port: params.sourcePort },
-        models: { providers: { openai: { apiKey: params.keyRef, models: [] } } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: params.keyRef,
+              models: [],
+            },
+          },
+        },
       },
       config: {
         gateway: { port: params.runtimePort },
         models: {
           providers: {
-            openai: { apiKey: params.apiKey, models: [] },
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: params.apiKey,
+              models: [],
+            },
           },
         },
       },
@@ -1937,7 +1950,13 @@ describe("secrets runtime state", () => {
         plugins: { entries: { "secret-plugin": { enabled: false } } },
       } satisfies OpenClawConfig,
     },
-  ])(
+  ] as Array<{
+    evictLineage: boolean;
+    label: string;
+    keyRef: SecretRef;
+    previousSourceConfig: OpenClawConfig;
+    candidateSourceConfig: OpenClawConfig;
+  }>)(
     "restores resolved values when a same-ref $label was rejected",
     ({ keyRef, previousSourceConfig, candidateSourceConfig, evictLineage }) => {
       const agentDir = `/tmp/openclaw-auth-provider-dependency-${keyRef.provider}`;
@@ -1949,12 +1968,28 @@ describe("secrets runtime state", () => {
         sourceConfig: {
           ...params.sourceConfig,
           gateway: { port: params.port },
-          models: { providers: { openai: { apiKey: keyRef, models: [] } } },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: keyRef,
+                models: [],
+              },
+            },
+          },
         },
         config: {
           ...params.sourceConfig,
           gateway: { port: params.port },
-          models: { providers: { openai: { apiKey: params.apiKey, models: [] } } },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: params.apiKey,
+                models: [],
+              },
+            },
+          },
         },
         authStores: [
           {

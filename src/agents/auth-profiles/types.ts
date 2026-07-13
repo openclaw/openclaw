@@ -145,15 +145,17 @@ export type AuthProfileStore = AuthProfileSecretsStore &
   AuthProfileState & {
     /** Runtime-only provenance for credentials cloned from persisted auth stores. */
     runtimePersistedProfileIds?: string[];
-    /** Runtime-only profile ids owned by the requested store rather than inherited from main. */
-    runtimeLocalProfileIds?: string[];
-    /** Whether effective runtime selection state contains values inherited from main. */
-    runtimeInheritsMainState?: boolean;
     /** Runtime-only provenance for external OAuth profiles overlaid onto this store. */
     runtimeExternalProfileIds?: string[];
     /** True when the runtime external profile set was freshly resolved, even if empty. */
     runtimeExternalProfileIdsAuthoritative?: boolean;
   };
+
+/** Internal effective-store ownership metadata; never exposed through the plugin SDK. */
+export type RuntimeAuthProfileStore = AuthProfileStore & {
+  runtimeLocalProfileIds?: string[];
+  runtimeInheritsMainState?: boolean;
+};
 
 /** Result returned by config/store auth profile id repair. */
 export type AuthProfileIdRepairResult = {

@@ -349,8 +349,10 @@ describe("runtime snapshot state", () => {
   });
 
   it("keeps prepared candidates scoped to each managed owner", async () => {
-    const candidateA = { runtimeConfig: { identity: { name: "a" } }, compareConfig: {} };
-    const candidateB = { runtimeConfig: { identity: { name: "b" } }, compareConfig: {} };
+    const runtimeConfigA: OpenClawConfig = { gateway: { port: 19001 } };
+    const runtimeConfigB: OpenClawConfig = { gateway: { port: 19002 } };
+    const candidateA = { runtimeConfig: runtimeConfigA, compareConfig: {} };
+    const candidateB = { runtimeConfig: runtimeConfigB, compareConfig: {} };
     const releaseA = registerManagedRuntimeConfigWriteOwner(
       "/tmp/scoped.json",
       async () => candidateA,

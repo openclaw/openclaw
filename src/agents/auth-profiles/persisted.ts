@@ -31,6 +31,7 @@ import type {
   AuthProfileCredential,
   AuthProfileSecretsStore,
   AuthProfileStore,
+  RuntimeAuthProfileStore,
   OAuthCredential,
   OAuthCredentials,
 } from "./types.js";
@@ -583,10 +584,10 @@ function reconcileMainStoreOAuthProfileDrift(params: {
 
 /** Merges two auth profile stores, preserving valid runtime external profile metadata. */
 export function mergeAuthProfileStores(
-  base: AuthProfileStore,
-  override: AuthProfileStore,
+  base: RuntimeAuthProfileStore,
+  override: RuntimeAuthProfileStore,
   options?: { preserveBaseRuntimeExternalProfiles?: boolean },
-): AuthProfileStore {
+): RuntimeAuthProfileStore {
   if (
     Object.keys(override.profiles).length === 0 &&
     !override.order &&
@@ -704,7 +705,7 @@ export function mergeAuthProfileStores(
         : {}),
       ...runtimeExternalProfileMetadata,
     },
-  });
+  }) as RuntimeAuthProfileStore;
 }
 
 /** Builds the persisted secrets store, stripping resolved literals when refs exist. */

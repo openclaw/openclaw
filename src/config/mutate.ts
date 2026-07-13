@@ -12,8 +12,15 @@ import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import {
+  applyConfigEnvVars,
+  cloneEnvWithPlatformSemantics,
+  createConfigRuntimeEnvBase,
+  getPublishedConfigRuntimeEnvState,
+} from "./config-env-vars.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
+import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
   ConfigIncludeError,
   hashConfigIncludeRaw,
@@ -155,6 +162,28 @@ type ConfigMutationOwnership = {
   assertConfigPathForWrite?: () => void;
 };
 
+function resolveManagedRuntimeEnvBaseline(): {
+  generation: number;
+  sourceConfig: OpenClawConfig;
+} {
+  // Accepted restart candidates publish env before the runtime snapshot advances.
+  // Managed writes must stay on that publication generation to avoid mixed env refs.
+  const published = getPublishedConfigRuntimeEnvState();
+  return {
+    generation: published.generation,
+    sourceConfig: published.sourceConfig ?? getRuntimeConfigSourceSnapshot() ?? {},
+  };
+}
+
+function assertManagedRuntimeEnvGeneration(generation: number): void {
+  if (getPublishedConfigRuntimeEnvState().generation !== generation) {
+    throw new ConfigMutationConflictError(
+      "active config environment changed while preparing write",
+      { currentHash: null },
+    );
+  }
+}
+
 function assertBaseHashMatches(snapshot: ConfigFileSnapshot, expectedHash?: string): string | null {
   const currentHash = resolveConfigSnapshotHash(snapshot) ?? null;
   if (expectedHash !== undefined && expectedHash !== currentHash) {
@@ -219,10 +248,23 @@ async function readConfigSnapshotForMutation(params: {
     return await params.io.readConfigFileSnapshotForWrite(options);
   }
   if (params.ownedConfigPathForWrite) {
-    return await createConfigIO({
+    const ioOptions = {
       configPath: params.ownedConfigPathForWrite,
       ...(params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
-    }).readConfigFileSnapshotForWrite();
+    };
+    const io = hasManagedRuntimeConfigWriteOwner(params.ownedConfigPathForWrite)
+      ? createConfigIO({
+          ...ioOptions,
+          env: createConfigRuntimeEnvBase(
+            resolveManagedRuntimeEnvBaseline().sourceConfig,
+            process.env,
+            {
+              preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
+            },
+          ),
+        })
+      : createConfigIO(ioOptions);
+    return await io.readConfigFileSnapshotForWrite();
   }
   return await readConfigFileSnapshotForWrite(options);
 }
@@ -673,10 +715,29 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       );
     }
   }
-  const runtimeConfigToWrite = {
-    ...nextConfig,
-    [key]: resolveConfigEnvVars(includedValueToWrite, writeEnv, { onMissing: () => {} }),
-  } as OpenClawConfig;
+  const deferRuntimeActivation = hasManagedRuntimeConfigWriteOwner(params.snapshot.path);
+  const runtimeEnvBaseline = deferRuntimeActivation
+    ? resolveManagedRuntimeEnvBaseline()
+    : undefined;
+  const runtimeCandidateEnv = runtimeEnvBaseline
+    ? createConfigRuntimeEnvBase(runtimeEnvBaseline.sourceConfig, process.env, {
+        preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
+      })
+    : cloneEnvWithPlatformSemantics(writeEnv);
+  const authoredRuntimeCandidate = restoreEnvVarRefs(
+    nextConfig,
+    params.snapshot.parsed,
+    envForRestore,
+  ) as OpenClawConfig;
+  applyConfigEnvVars(authoredRuntimeCandidate, runtimeCandidateEnv);
+  const runtimeConfigToWrite = resolveConfigEnvVars(
+    {
+      ...authoredRuntimeCandidate,
+      [key]: includedValueToWrite,
+    },
+    runtimeCandidateEnv,
+    { onMissing: () => {} },
+  ) as OpenClawConfig;
   const validated = validateConfigObjectWithPlugins(
     runtimeConfigToWrite,
     params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : undefined,
@@ -692,15 +753,15 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
-  const deferRuntimeActivation = hasManagedRuntimeConfigWriteOwner(params.snapshot.path);
   let managedPreparedCandidates = new Map<symbol, RuntimeConfigWritePreparedCandidate>();
   let runtimePreflightResult: unknown;
-  if (deferRuntimeActivation) {
+  if (runtimeEnvBaseline) {
     managedPreparedCandidates = await preflightManagedRuntimeConfigWrite(
       params.snapshot.path,
       runtimeConfigToWrite,
       params.writeOptions?.runtimeRefresh,
     );
+    assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
   } else {
     runtimePreflightResult = await preflightRuntimeSnapshotWrite({
       nextSourceConfig: runtimeConfigToWrite,
@@ -733,9 +794,15 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     expectedRaw: includeRawAtCommit,
     rootSnapshot: params.snapshot,
     assertConfigPathForWrite,
-    preCommitRuntimePreflight: callerPreCommit
-      ? () => callerPreCommit(runtimeConfigToWrite)
-      : undefined,
+    preCommitRuntimePreflight:
+      runtimeEnvBaseline || callerPreCommit
+        ? async () => {
+            if (runtimeEnvBaseline) {
+              assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+            }
+            await callerPreCommit?.(runtimeConfigToWrite);
+          }
+        : undefined,
   });
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;
