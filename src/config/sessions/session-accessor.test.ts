@@ -16,6 +16,7 @@ import {
   deleteSessionEntryLifecycle,
   findTranscriptEvent,
   listSessionEntries,
+  listSessionEntriesByStatus,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -1427,6 +1428,14 @@ describe("session accessor seam", () => {
             updatedAt: 20,
           },
         },
+        {
+          sessionKey: "agent:main:done",
+          entry: {
+            sessionId: "session-done",
+            status: "done",
+            updatedAt: 25,
+          },
+        },
       ],
       skipMaintenance: true,
     });
@@ -1469,6 +1478,17 @@ describe("session accessor seam", () => {
       update: (entries) => ({ result: entries.map((entry) => entry.sessionKey) }),
     });
     expect(selectedKeys).toEqual(["agent:main:main"]);
+
+    const runningKeys = await applySessionEntryReplacements({
+      statuses: ["running"],
+      storePath,
+      update: (entries) => ({ result: entries.map((entry) => entry.sessionKey) }),
+    });
+    expect(runningKeys).toEqual(["agent:main:main", "agent:main:other"]);
+    expect(
+      listSessionEntriesByStatus({ storePath }, ["done"]).map((entry) => entry.sessionKey),
+    ).toEqual(["agent:main:done"]);
+
     const other = loadSessionEntry({ sessionKey: "agent:main:other", storePath });
     expect(other).toBeDefined();
     await expect(
@@ -1481,6 +1501,35 @@ describe("session accessor seam", () => {
         }),
       }),
     ).rejects.toThrow("outside the selected key set");
+
+    const missingSelectionResult = await applySessionEntryReplacements({
+      sessionKeys: ["agent:main:missing"],
+      storePath,
+      update: () => ({
+        replacements: [
+          {
+            sessionKey: "agent:main:missing",
+            entry: { sessionId: "missing", status: "running", updatedAt: 30 },
+          },
+        ],
+        result: "missing-row-no-op",
+      }),
+    });
+    expect(missingSelectionResult).toBe("missing-row-no-op");
+    expect(loadSessionEntry({ sessionKey: "agent:main:missing", storePath })).toBeUndefined();
+
+    const done = loadSessionEntry({ sessionKey: "agent:main:done", storePath });
+    expect(done).toBeDefined();
+    await expect(
+      applySessionEntryReplacements({
+        statuses: ["running"],
+        storePath,
+        update: () => ({
+          replacements: [{ sessionKey: "agent:main:done", entry: done! }],
+          result: undefined,
+        }),
+      }),
+    ).rejects.toThrow("outside the selected row set");
   });
 
   it("prepares entry replacements without holding a write transaction", async () => {

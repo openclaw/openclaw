@@ -40,6 +40,7 @@ import {
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
   listSqliteSessionEntries,
+  listSqliteSessionEntriesByStatus,
   appendSqliteTranscriptMessageSync,
   findSqliteTranscriptEvent,
   forkSqliteSessionEntryFromParentTarget,
@@ -161,6 +162,7 @@ export type LogicalSessionAccessScope = {
 };
 
 type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey">>;
+type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
 export type ResolvedSessionEntryAccessTarget = {
   /** Agent owner inferred from the canonical session key. */
@@ -1130,6 +1132,14 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
   return listSqliteSessionEntries(scope);
 }
 
+/** Lists entries selected by the indexed normalized session status. */
+export function listSessionEntriesByStatus(
+  scope: SessionEntryListScope,
+  statuses: readonly SessionEntryStatus[],
+): SessionEntrySummary[] {
+  return listSqliteSessionEntriesByStatus(scope, statuses);
+}
+
 /**
  * Borrowed keyed view over one resolved store for synchronous read-only hot paths.
  * Unlike loadSessionEntry, `get` is a raw exact persisted-key probe with no alias
@@ -1868,6 +1878,8 @@ export async function applySessionEntryReplacements<T>(params: {
   activeSessionKey?: string;
   /** Limits snapshots and replacement authority to these exact persisted keys. */
   sessionKeys?: readonly string[];
+  /** Limits snapshots and replacement authority to normalized session statuses. */
+  statuses?: readonly SessionEntryStatus[];
   storePath: string;
   update: (
     entries: SessionEntryReplacementSnapshot[],

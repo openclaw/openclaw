@@ -38,6 +38,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_created_at
   ON sessions(created_at DESC, session_id);
 
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_status
+  ON sessions(status, session_id)
+  WHERE status IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_conversation
   ON sessions(primary_conversation_id, updated_at DESC, session_id)
   WHERE primary_conversation_id IS NOT NULL;

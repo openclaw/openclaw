@@ -22,7 +22,7 @@ import {
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import {
   applySessionEntryReplacements,
-  listSessionEntries,
+  listSessionEntriesByStatus,
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -345,6 +345,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
     const storeResult = await applySessionEntryReplacements({
       storePath,
+      statuses: ["running"],
       update: (entries) => {
         const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
         const counts = { marked: 0, skipped: 0 };
@@ -706,6 +707,7 @@ async function markSessionFailed(params: {
   reason: string;
 }): Promise<boolean> {
   const marked = await applySessionEntryReplacements({
+    sessionKeys: [params.sessionKey],
     storePath: params.storePath,
     update: (entries) => {
       const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
@@ -938,6 +940,7 @@ async function settleRestartRecoveryDispatch(params: {
   terminalStatus?: RestartRecoveryTerminalStatus;
 }): Promise<void> {
   await applySessionEntryReplacements({
+    sessionKeys: [params.sessionKey],
     storePath: params.storePath,
     update: (entries) => {
       const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
@@ -1030,6 +1033,7 @@ async function resumeMainSession(params: {
     // Persist one stable RPC id before dispatch. A transport rejection is
     // ambiguous; retries must reuse this id so an accepted run cannot duplicate.
     const recoveryStatePrepared = await applySessionEntryReplacements({
+      sessionKeys: [params.sessionKey],
       storePath: params.storePath,
       update: (entries) => {
         const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
@@ -1143,6 +1147,7 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
   const storePath = path.join(sessionsDir, "sessions.json");
   const storeResult = await applySessionEntryReplacements({
     storePath,
+    statuses: ["running"],
     update: (entries) => {
       const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
       const counts = { marked: 0, skipped: 0 };
@@ -1217,7 +1222,7 @@ async function recoverStore(params: {
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
   let entries: Array<{ sessionKey: string; entry: SessionEntry }>;
   try {
-    entries = listSessionEntries({ storePath: params.storePath });
+    entries = listSessionEntriesByStatus({ storePath: params.storePath }, ["running"]);
   } catch (err) {
     log.warn(`failed to load session store ${params.storePath}: ${String(err)}`);
     result.failed++;

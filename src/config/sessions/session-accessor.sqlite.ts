@@ -77,6 +77,7 @@ import type {
   SessionEntryPatchOptions,
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,
+  SessionEntryStatus,
   SessionEntrySummary,
   SessionEntryTargetPatchScope,
   SessionLifecycleArtifactCleanupParams,
@@ -408,6 +409,18 @@ export function listSqliteSessionEntries(
       return entry ? { sessionKey: row.session_key, entry } : undefined;
     })
     .filter((entry): entry is SessionEntrySummary => entry !== undefined);
+}
+
+/** Lists only entries whose normalized session row has one of the requested statuses. */
+export function listSqliteSessionEntriesByStatus(
+  scope: Partial<Omit<SessionAccessScope, "sessionKey">>,
+  statuses: readonly SessionEntryStatus[],
+): SessionEntrySummary[] {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return readSqliteSessionEntriesByStatus(database, statuses).filter(
+    ({ sessionKey }) => !isInternalSessionEffectsKey(sessionKey),
+  );
 }
 
 /** Reads a session activity timestamp from the additive SQLite session store. */
@@ -1089,6 +1102,7 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
   agentId?: string;
   requireWriteSuccess?: boolean;
   sessionKeys?: readonly string[];
+  statuses?: readonly SessionEntryStatus[];
   skipMaintenance?: boolean;
   storePath: string;
   update: (
@@ -1102,17 +1116,24 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
   });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const store = readSqliteSessionEntryStore(database);
     const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;
-    const entries = selectedKeys
-      ? [...selectedKeys].flatMap((sessionKey) => {
-          const entry = store[sessionKey];
-          return entry ? [{ entry: cloneSessionEntry(entry), sessionKey }] : [];
-        })
-      : Object.entries(store).map(([sessionKey, entry]) => ({
-          entry: cloneSessionEntry(entry),
-          sessionKey,
-        }));
+    const selectedStatuses = params.statuses ? new Set(params.statuses) : undefined;
+    const entries = selectedStatuses
+      ? readSqliteSessionEntriesByStatus(database, [...selectedStatuses], params.sessionKeys)
+      : selectedKeys
+        ? [...selectedKeys].flatMap((sessionKey) => {
+            const entry = readExactSessionEntryRow(database, sessionKey)?.entry;
+            return entry ? [{ entry: cloneSessionEntry(entry), sessionKey }] : [];
+          })
+        : Object.entries(readSqliteSessionEntryStore(database)).map(([sessionKey, entry]) => ({
+            entry: cloneSessionEntry(entry),
+            sessionKey,
+          }));
+    // Exact-key selection keeps the established missing-row no-op contract.
+    // Status selection authorizes only rows that actually matched the indexed projection.
+    const replacementAuthorityKeys = selectedStatuses
+      ? new Set(entries.map(({ sessionKey }) => sessionKey))
+      : selectedKeys;
     const operation = await params.update(
       entries.map(({ entry, sessionKey }) => ({
         entry: cloneSessionEntry(entry),
@@ -1121,9 +1142,10 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
     );
     const replacements = [...(operation.replacements ?? [])];
     for (const replacement of replacements) {
-      if (selectedKeys && !selectedKeys.has(replacement.sessionKey)) {
+      if (replacementAuthorityKeys && !replacementAuthorityKeys.has(replacement.sessionKey)) {
+        const selectionName = selectedStatuses ? "row" : "key";
         throw new Error(
-          `Session entry replacement is outside the selected key set: ${replacement.sessionKey}`,
+          `Session entry replacement is outside the selected ${selectionName} set: ${replacement.sessionKey}`,
         );
       }
     }
@@ -3158,6 +3180,38 @@ function readExactSessionEntryRow(
   }
   const entry = parseSessionEntryRow(row);
   return entry ? { entry, legacyKeys: [], row } : undefined;
+}
+
+function readSqliteSessionEntriesByStatus(
+  database: OpenClawAgentDatabase,
+  statuses: readonly SessionEntryStatus[],
+  sessionKeys?: readonly string[],
+): SessionEntrySummary[] {
+  const selectedStatuses = [...new Set(statuses)];
+  const selectedSessionKeys = sessionKeys ? [...new Set(sessionKeys)] : undefined;
+  if (selectedStatuses.length === 0 || selectedSessionKeys?.length === 0) {
+    return [];
+  }
+  const db = getSessionKysely(database.db);
+  let query = db
+    .selectFrom("sessions")
+    .innerJoin("session_entries", "session_entries.session_id", "sessions.session_id")
+    .select([
+      "session_entries.session_key",
+      "session_entries.entry_json",
+      "session_entries.session_id",
+      "session_entries.updated_at",
+    ])
+    .where("sessions.status", "in", selectedStatuses);
+  if (selectedSessionKeys) {
+    query = query.where("session_entries.session_key", "in", selectedSessionKeys);
+  }
+  return executeSqliteQuerySync(database.db, query)
+    .rows.flatMap((row) => {
+      const entry = parseSessionEntryRow(row);
+      return entry ? [{ entry, sessionKey: row.session_key }] : [];
+    })
+    .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));
 }
 
 function readSqliteSessionEntryStore(
