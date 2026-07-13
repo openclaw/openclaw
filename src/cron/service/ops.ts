@@ -83,6 +83,7 @@ import {
 import type {
   CronAddOptions,
   CronEvent,
+  CronRunOrigin,
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
@@ -1110,6 +1111,7 @@ type PreparedManualRun =
       streamScheduleKey?: string;
       streamSourceIdentity?: string;
       onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
+      origin: CronRunOrigin;
     }
   | { ok: false };
 
@@ -1130,6 +1132,7 @@ type ManualRunOptions = {
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
+  origin?: CronRunOrigin;
 };
 
 type ManualRunTerminalTracker = { emitted: boolean };
@@ -1206,7 +1209,6 @@ function admitsStreamSourceRun(
 async function skipInvalidPersistedManualRun(params: {
   state: CronServiceState;
   job: CronJob;
-  mode?: "due" | "force";
   runId?: string;
   terminalTracker?: ManualRunTerminalTracker;
   error: unknown;
@@ -1228,7 +1230,7 @@ async function skipInvalidPersistedManualRun(params: {
       startedAt: endedAt,
       endedAt,
     },
-    { scheduleMode: params.mode === "force" ? "preserve" : "advance" },
+    { origin: "operator" },
   );
 
   emitCronRunFinished(
@@ -1295,7 +1297,7 @@ async function inspectManualRunPreflight(
     try {
       assertSupportedJobSpec(job);
     } catch (error) {
-      await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error });
+      await skipInvalidPersistedManualRun({ state, job, runId, terminalTracker, error });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
     if (hasActiveCronRun(job)) {
@@ -1378,7 +1380,6 @@ async function prepareManualRun(
       await skipInvalidPersistedManualRun({
         state,
         job,
-        mode,
         runId: opts?.runId,
         terminalTracker: opts?.terminalTracker,
         error,
@@ -1445,6 +1446,7 @@ async function prepareManualRun(
       reservationAt,
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
+      origin: opts?.origin ?? "operator",
       ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
       ...(opts?.evaluateTrigger ? { evaluateTrigger: true } : {}),
       ...(opts?.streamBatch !== undefined ? { streamBatch: opts.streamBatch } : {}),
@@ -1511,7 +1513,6 @@ async function activatePreparedManualRun(
       await skipInvalidPersistedManualRun({
         state,
         job,
-        mode,
         runId: prepared.runId,
         terminalTracker: prepared.terminalTracker,
         error,
@@ -1651,7 +1652,6 @@ async function releasePreparedManualReservationAfterReloadWithRetry(
 async function finishPreparedManualRun(
   state: CronServiceState,
   prepared: ActivatedManualRun,
-  mode?: "due" | "force",
 ): Promise<void> {
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
@@ -1763,7 +1763,8 @@ async function finishPreparedManualRun(
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
         // Manual due checks share scheduled quiet-tick semantics: persist the
-        // evaluation but create no finished event or run-history entry.
+        // evaluation but create no finished event or run-history entry. Origin
+        // keeps an operator due-check from perturbing scheduler-owned state.
         applyTriggerNoFireResult(
           state,
           job,
@@ -1772,18 +1773,14 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          prepared.origin,
         );
       } else {
-        // A trigger evaluation that never fired ran no payload, so it is
-        // scheduler polling work — not a manual payload run. Manual isolation
-        // (skip deleteAfterRun / preserve retry counters) protects payload
-        // runs; a failing or unavailable watcher script must still bump
-        // consecutiveErrors and back off like the scheduled path, mirroring the
-        // quiet-tick reset above. `force` strips the trigger, so its payload run
-        // stays isolated (#83538, #83933).
-        const triggerEvalOnly =
-          executionJob.trigger !== undefined && coreResult.triggerEval?.fired !== true;
+        // A fired trigger or a stripped-trigger force run executed the payload,
+        // so run attribution follows the invocation origin: operator runs record
+        // the outcome without consuming deleteAfterRun or perturbing scheduler
+        // state, while a watcher-terminal force still consumes it (#83538,
+        // #83933).
         shouldDelete = applyJobResult(
           state,
           job,
@@ -1792,7 +1789,7 @@ async function finishPreparedManualRun(
             startedAt,
             endedAt,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          { origin: prepared.origin },
         );
         applyTriggerRunResult(job, {
           status: coreResult.status,
@@ -1943,7 +1940,7 @@ export async function run(
     if (!activeRun.ran) {
       return activeRun;
     }
-    await finishPreparedManualRun(state, activeRun, mode);
+    await finishPreparedManualRun(state, activeRun);
     return { ok: true, ran: true } as const;
   });
   if (admission.kind === "stopped") {
