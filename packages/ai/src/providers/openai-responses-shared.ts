@@ -14,7 +14,7 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
   AssistantMessage,
@@ -57,6 +57,7 @@ import {
   isResponsesTextContentPartType,
   resolveResponsesMessageSnapshotCollapse,
 } from "./openai-responses-stream-compat.js";
+import { recordResponsesTerminalUsage } from "./openai-responses-terminal-usage.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
@@ -113,10 +114,6 @@ type ResponsesOutputItemDoneEvent = Extract<
   ResponseStreamEvent,
   { type: "response.output_item.done" }
 >;
-type ResponsesInputTokensDetails = {
-  cached_tokens?: number;
-  cache_write_tokens?: number;
-};
 type AzureResponsesContentPartAddedEvent = Omit<ResponsesContentPartAddedEvent, "part"> & {
   part: AzureResponsesTextContentPart;
 };
@@ -1270,48 +1267,6 @@ export async function processResponsesStream<TApi extends Api>(
   }
   if (hasActiveStreamingToolCall()) {
     throw new Error("Responses stream ended with unresolved tool calls");
-  }
-}
-
-function mapResponsesUsage(usage: NonNullable<OpenAI.Responses.Response["usage"]>): Usage {
-  const inputTokenDetails = usage.input_tokens_details as
-    | ResponsesInputTokensDetails
-    | null
-    | undefined;
-  const cachedTokens = inputTokenDetails?.cached_tokens || 0;
-  const cacheWriteTokens = inputTokenDetails?.cache_write_tokens || 0;
-  return {
-    // OpenAI includes cache reads and writes in input_tokens, so split both priced buckets.
-    input: Math.max(0, (usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
-    output: usage.output_tokens || 0,
-    cacheRead: cachedTokens,
-    cacheWrite: cacheWriteTokens,
-    totalTokens: usage.total_tokens || 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
-
-// Record usage and cost for a terminal Responses event (response.completed or
-// response.incomplete). Both carry the same Response shape, and session
-// accounting sums usage.cost.total, so cost must be computed for either path.
-function recordResponsesTerminalUsage<TApi extends Api>(
-  output: AssistantMessage,
-  response: OpenAI.Responses.Response | undefined,
-  model: Model<TApi>,
-  options: OpenAIResponsesProcessStreamOptions | undefined,
-): void {
-  if (response?.id) {
-    output.responseId = response.id;
-  }
-  if (response?.usage) {
-    output.usage = mapResponsesUsage(response.usage);
-  }
-  calculateCost(model, output.usage);
-  if (options?.applyServiceTierPricing) {
-    const serviceTier = options.resolveServiceTier
-      ? options.resolveServiceTier(response?.service_tier, options.serviceTier)
-      : (response?.service_tier ?? options.serviceTier);
-    options.applyServiceTierPricing(output.usage, serviceTier);
   }
 }
 
