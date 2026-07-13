@@ -9,9 +9,12 @@ import { ApiClient } from "@twurple/api";
 import { StaticAuthProvider } from "@twurple/auth";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChannelResolveKind, ChannelResolveResult } from "./types.js";
 import type { ChannelLogSink, TwitchAccountConfig } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
+
+const TWITCH_HELIX_USER_LOOKUP_TIMEOUT_MS = 10_000;
 
 /**
  * Normalize a Twitch username - strip @ prefix and convert to lowercase
@@ -34,6 +37,16 @@ function createLogger(logger?: ChannelLogSink): ChannelLogSink {
     error: (msg: string) => logger?.error(msg),
     debug: (msg: string) => logger?.debug?.(msg) ?? (() => {}),
   };
+}
+
+// Twurple Helix user lookups have no per-call signal; bound the await here so
+// a stalled lookup returns unresolved instead of hanging channel resolution.
+async function resolveHelixUser<T>(request: Promise<T>): Promise<T> {
+  return await withTimeout(
+    request,
+    TWITCH_HELIX_USER_LOOKUP_TIMEOUT_MS,
+    "Twitch Helix user lookup",
+  );
 }
 
 /**
@@ -85,7 +98,7 @@ export async function resolveTwitchTargets(
 
     try {
       if (looksLikeUserId) {
-        const user = await apiClient.users.getUserById(normalized);
+        const user = await resolveHelixUser(apiClient.users.getUserById(normalized));
 
         if (user) {
           results.push({
@@ -104,7 +117,7 @@ export async function resolveTwitchTargets(
           log.warn(`User ID ${normalized} not found`);
         }
       } else {
-        const user = await apiClient.users.getUserByName(normalized);
+        const user = await resolveHelixUser(apiClient.users.getUserByName(normalized));
 
         if (user) {
           results.push({
