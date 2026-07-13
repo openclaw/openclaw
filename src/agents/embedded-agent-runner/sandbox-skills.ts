@@ -169,9 +169,10 @@ export function resolveSandboxSkillRuntimeInputs(params: {
               0,
               limits.maxSkillsInPrompt,
             );
-            // Build name+location lines with canonical sandbox-accessible paths.
-            // Operator is expected to preinstall skills under
-            // <skillsPromptWorkspaceDir>/skills/<name>/SKILL.md.
+            // Name-only catalog, no <location> entries. Without trusted
+            // synchronization, OpenClaw cannot guarantee that host-resolved
+            // names correspond to container-accessible files. Operators are
+            // expected to preinstall skills at discoverable workspace paths.
             const lines: string[] = [];
             const remoteNote = params.sandbox?.skillsEligibility?.remote?.note?.trim();
             if (remoteNote) {
@@ -179,10 +180,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             }
             lines.push("<available_skills>");
             for (const s of skills) {
-              const location = `${skillsPromptWorkspaceDir}/skills/${s.name}/SKILL.md`;
-              const line =
-                `  <skill>\n    <name>${escapeXml(s.name)}</name>\n` +
-                `    <location>${escapeXml(location)}</location>\n  </skill>`;
+              const line = `  <skill>\n    <name>${escapeXml(s.name)}</name>\n  </skill>`;
               if (
                 [...lines, line, "</available_skills>"].join("\n").length >
                 limits.maxSkillsPromptChars

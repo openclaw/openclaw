@@ -98,7 +98,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       skillsPromptWorkspaceDir: "/workspace",
       skillsSnapshot: {
         prompt:
-          "<available_skills>\n  <skill>\n    <name>demo</name>\n    <location>/workspace/skills/demo/SKILL.md</location>\n  </skill>\n</available_skills>",
+          "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
         skills: [{ name: "demo" }],
       },
       skillsWorkspaceDir: "/state/sandbox-skills",
@@ -320,7 +320,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     ).toEqual({
       skillsSnapshot: {
         prompt:
-          "<available_skills>\n  <skill>\n    <name>a&amp;b&lt;evil&gt;&quot;test&quot;</name>\n    <location>/workspace/skills/a&amp;b&lt;evil&gt;&quot;test&quot;/SKILL.md</location>\n  </skill>\n</available_skills>",
+          "<available_skills>\n  <skill>\n    <name>a&amp;b&lt;evil&gt;&quot;test&quot;</name>\n  </skill>\n</available_skills>",
         skills: [{ name: 'a&b<evil>"test"' }],
       },
       skillsPromptWorkspaceDir: "/workspace",
