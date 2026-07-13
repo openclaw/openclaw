@@ -339,7 +339,9 @@ async function resolveOAuthToken(params: {
         ...(cred.type === "oauth" && cred.rateLimitTier
           ? { rateLimitTier: cred.rateLimitTier }
           : {}),
-        ...(cred.type === "oauth" && cred.email ? { email: cred.email } : {}),
+        // Token credentials carry an email too; oauth-only gating would drop
+        // identity for static bearer profiles whose tokens expose no claims.
+        ...(cred.email ? { email: cred.email } : {}),
       };
     } catch {
       // ignore

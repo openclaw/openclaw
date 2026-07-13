@@ -33,6 +33,11 @@ function oauthFixtureToken(): string {
   return ["oauth", "token"].join("-");
 }
 
+// Mirrors the mocked readClaudeCliCredentialsCached access value.
+function cliAccessFixtureToken(): string {
+  return ["cli", "access"].join("-");
+}
+
 const tempHomes: string[] = [];
 
 async function createTempHome(): Promise<string> {
@@ -257,7 +262,7 @@ describe("Anthropic provider usage", () => {
     expect(snapshot.accountEmail).toBe("profile@example.com");
   });
 
-  it("falls back to the Claude CLI config file for the account email", async () => {
+  it("falls back to the Claude CLI config email only when the CLI login fetched the usage", async () => {
     const home = await createTempHome();
     await fs.writeFile(
       path.join(home, ".claude.json"),
@@ -266,7 +271,20 @@ describe("Anthropic provider usage", () => {
     const fetchFn = vi.fn(
       async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
     );
-    const snapshot = await fetchAnthropicUsage({
+    // The mocked CLI credential's access token matches: same account, use email.
+    const matching = await fetchAnthropicUsage({
+      config: {},
+      env: { HOME: home },
+      provider: "anthropic",
+      token: cliAccessFixtureToken(),
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(matching.accountEmail).toBe("cli-login@example.com");
+
+    // A different usage token means the ambient CLI login may be another
+    // account; the snapshot must stay unlabeled instead of guessing.
+    const foreign = await fetchAnthropicUsage({
       config: {},
       env: { HOME: home },
       provider: "anthropic",
@@ -274,7 +292,27 @@ describe("Anthropic provider usage", () => {
       timeoutMs: 5000,
       fetchFn,
     });
-    expect(snapshot.accountEmail).toBe("cli-login@example.com");
+    expect(foreign.accountEmail).toBeUndefined();
+  });
+
+  it("reads the CLI config email from CLAUDE_CONFIG_DIR when set", async () => {
+    const configDir = await createTempHome();
+    await fs.writeFile(
+      path.join(configDir, ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "scoped@example.com" } }),
+    );
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
+    );
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: { HOME: await createTempHome(), CLAUDE_CONFIG_DIR: configDir },
+      provider: "anthropic",
+      token: cliAccessFixtureToken(),
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.accountEmail).toBe("scoped@example.com");
   });
 
   it("does not attach a plan label when usage has no windows", async () => {

@@ -503,29 +503,40 @@ function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string 
 const CLAUDE_CLI_CONFIG_EMAIL_TTL_MS = 5 * 60_000;
 const cachedClaudeCliEmail = new Map<string, { value: string | undefined; readAt: number }>();
 
-// Best-effort account email. Preferred source is the resolved auth profile;
-// keychain-synced Claude CLI logins don't store one, so fall back to the CLI
-// config file (`~/.claude.json` `oauthAccount.emailAddress`). Same caveat as
-// the plan label above: with multiple Claude accounts the CLI login may differ
-// from the profile that fetched usage; a mislabeled email is acceptable.
-function readClaudeCliAccountEmail(env: NodeJS.ProcessEnv): string | undefined {
+// Best-effort account email for keychain-synced Claude CLI logins, which store
+// no email on the auth profile. The CLI config file identifies whichever
+// account the CLI is logged into, so it may only label a snapshot whose usage
+// token IS that login — enforced by comparing against the cached CLI
+// credential instead of trusting the ambient config.
+function readClaudeCliAccountEmail(env: NodeJS.ProcessEnv, usageToken: string): string | undefined {
+  const credential = readClaudeCliCredentialsCached({
+    allowKeychainPrompt: false,
+    ttlMs: CLAUDE_CLI_CONFIG_EMAIL_TTL_MS,
+  });
+  if (!credential || credential.type !== "oauth" || credential.access !== usageToken) {
+    return undefined;
+  }
+  const configDir = env.CLAUDE_CONFIG_DIR?.trim();
   const homeDir = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+  const configPath = configDir
+    ? path.join(configDir, ".claude.json")
+    : path.join(homeDir, ".claude.json");
   const now = Date.now();
-  const cached = cachedClaudeCliEmail.get(homeDir);
+  const cached = cachedClaudeCliEmail.get(configPath);
   if (cached && now - cached.readAt < CLAUDE_CLI_CONFIG_EMAIL_TTL_MS) {
     return cached.value;
   }
   let value: string | undefined;
   try {
-    const raw = JSON.parse(readFileSync(path.join(homeDir, ".claude.json"), "utf8")) as unknown;
+    const raw = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
     const email = objectRecord(objectRecord(raw)?.oauthAccount)?.emailAddress;
     value = typeof email === "string" && email.trim() ? email.trim() : undefined;
   } catch {
     value = undefined;
   }
-  // Single-slot per home dir; usage polls hit one home in steady state.
+  // Single-slot per config path; usage polls hit one config in steady state.
   cachedClaudeCliEmail.clear();
-  cachedClaudeCliEmail.set(homeDir, { value, readAt: now });
+  cachedClaudeCliEmail.set(configPath, { value, readAt: now });
   return value;
 }
 
@@ -544,7 +555,7 @@ export async function fetchAnthropicUsage(
   if (snapshot.error) {
     return snapshot;
   }
-  const accountEmail = ctx.email ?? readClaudeCliAccountEmail(ctx.env);
+  const accountEmail = ctx.email ?? readClaudeCliAccountEmail(ctx.env, ctx.token);
   // Plan labels stay window-gated: a windowless response has no plan quota to
   // label, while the account identity is still worth surfacing.
   const plan =
