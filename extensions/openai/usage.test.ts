@@ -130,11 +130,12 @@ describe("OpenAI provider usage", () => {
   });
 
   it("attaches the ChatGPT account email from the access-token claims", async () => {
+    // Assembled parts keep the fixture from reading as a real credential.
     const claims = Buffer.from(
       JSON.stringify({ "https://api.openai.com/profile": { email: "codex@example.com" } }),
       "utf8",
     ).toString("base64url");
-    const accessToken = `header.${claims}.signature`;
+    const accessToken = ["fake-header", claims, "fake-sig"].join(".");
     const fetchFn = vi.fn(
       async () =>
         new Response(
