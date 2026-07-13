@@ -709,6 +709,18 @@ describe("ci workflow guards", () => {
     const nativeInventoryStep = nativeFinalize.steps.find(
       (step: { name?: string }) => step.name === "Refresh shared native inventory",
     );
+    const nativeAndroidStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Refresh Android native resources",
+    );
+    const nativeAppleStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Refresh Apple native resources",
+    );
+    const nativeValidationStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Validate native locale refresh",
+    );
+    const nativePublishStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Open or update generated locale PR",
+    );
     const controlUiRefreshStep = controlUiWorkflow.jobs.refresh.steps.find(
       (step: { name?: string }) => step.name === "Refresh control UI locale files",
     );
@@ -751,6 +763,8 @@ describe("ci workflow guards", () => {
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
+    expect(workflow.on.push.paths).toContain("scripts/android-app-i18n.ts");
+    expect(workflow.on.push.paths).toContain("scripts/apple-app-i18n.ts");
     expect(refreshStep.run).toContain("run_refresh anthropic");
     expect(refreshStep.run).toContain("retrying with OpenAI");
     expect(refreshStep.run).toContain("run_openai_refresh");
@@ -764,6 +778,32 @@ describe("ci workflow guards", () => {
     expect(nativeInventoryStep.run).toBe(
       "node --import tsx scripts/native-app-i18n.ts sync --write",
     );
+    expect(nativeAndroidStep.run).toBe("node --import tsx scripts/android-app-i18n.ts sync");
+    expect(nativeAppleStep.run).toBe(
+      "node --import tsx scripts/apple-app-i18n.ts sync-ios --write",
+    );
+    expect(nativeValidationStep.run).toContain(
+      "node --import tsx scripts/native-app-i18n.ts check",
+    );
+    expect(nativeValidationStep.run).toContain(
+      "node --import tsx scripts/android-app-i18n.ts check",
+    );
+    expect(nativeValidationStep.run).toContain("node --import tsx scripts/apple-app-i18n.ts check");
+    expect(nativePublishStep.with["generated-paths"].trim().split("\n")).toEqual([
+      "apps/.i18n/native",
+      "apps/.i18n/native-source.json",
+      "apps/.i18n/apple-translation-contradictions.json",
+      "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
+      "apps/android/app/src/main/res/values*/assistant.xml",
+      "apps/android/app/src/main/res/values*/strings.xml",
+      "apps/ios/Resources/Localizable.xcstrings",
+      "apps/ios/Sources/*.lproj/InfoPlist.strings",
+      "apps/ios/WatchApp/*.lproj/InfoPlist.strings",
+      "apps/ios/ShareExtension/*.lproj/InfoPlist.strings",
+      "apps/ios/ActivityWidget/*.lproj/InfoPlist.strings",
+    ]);
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/android-app-i18n.ts");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/apple-app-i18n.ts");
     expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
     expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
     expect(controlUiRefreshStep.run).toContain("run_openai_refresh");

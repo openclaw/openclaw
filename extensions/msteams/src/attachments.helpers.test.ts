@@ -27,8 +27,6 @@ const runtimeStub = {
     },
   },
 } as unknown as PluginRuntime;
-const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
-const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
 const withLabel = <T extends object>(label: string, fields: T): T & { label: string } => ({
   label,
   ...fields,

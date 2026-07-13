@@ -1828,6 +1828,11 @@ function renderQuotaGroup(
         ${icons.externalLink}
       </a>
     </div>
+    ${group.accountEmail
+      ? html`<div class="context-usage__account" data-chat-usage-account="true">
+          ${group.accountEmail}
+        </div>`
+      : nothing}
     <div class="context-usage__limits">
       ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
       ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}

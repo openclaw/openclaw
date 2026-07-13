@@ -412,6 +412,13 @@ export const nl: TranslationMap = {
     getHelp: "Hulp krijgen",
     discord: "Discord-community",
     viewChangelog: "Wijzigingslogboek bekijken",
+    agentSettings: "Agentinstellingen",
+    filterAgents: "Agent zoeken…",
+    noAgentMatches: "Geen overeenkomende agents",
+  },
+  agentScope: {
+    label: "Agentbereik",
+    allAgents: "Alle agents",
   },
   newSession: {
     title: "Nieuwe sessie",
@@ -623,6 +630,8 @@ export const nl: TranslationMap = {
     setDefault: "Als standaard instellen",
     alreadyDefaultTitle: "Al de standaardagent",
     setDefaultTitle: "Als standaardagent instellen",
+    pinToSwitcher: "Vastmaken aan wisselaar",
+    unpinFromSwitcher: "Losmaken van wisselaar",
     selectTitle: "Selecteer een agent",
     selectSubtitle: "Kies een agent om de workspace en tools te bekijken.",
     tabs: {
@@ -647,6 +656,18 @@ export const nl: TranslationMap = {
       default: "Standaard",
       configurationSubtitle: "Workspace-, identiteit- en modelconfiguratie.",
       schedulingSubtitle: "Workspace- en planningsdoelen.",
+    },
+    identity: {
+      title: "Identiteit",
+      subtitle: "Naam, emoji en avatar die worden weergegeven in chats en de zijbalk.",
+      name: "Weergavenaam",
+      namePlaceholder: "Agentnaam",
+      emoji: "Emoji",
+      chooseImage: "Afbeelding kiezen…",
+      replaceImage: "Afbeelding vervangen…",
+      imageUnusable:
+        "Die afbeelding kan niet worden gebruikt. Kies een afbeeldingsbestand van maximaal 2 MB.",
+      fileHint: "Agents kunnen dit zelf instellen door IDENTITY.md in hun werkruimte te bewerken.",
     },
     overview: {
       title: "Overzicht",

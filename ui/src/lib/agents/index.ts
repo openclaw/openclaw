@@ -239,6 +239,27 @@ export async function setDefaultAgent(
   }
 }
 
+type AgentIdentityUpdate = {
+  agentId: string;
+  name?: string;
+  emoji?: string;
+  avatar?: string;
+};
+
+/** Persist identity fields through the gateway; the handler also rewrites the
+    agent's workspace IDENTITY.md so agent and UI share one identity source. */
+export async function updateAgentIdentity(
+  client: GatewayBrowserClient,
+  update: AgentIdentityUpdate,
+): Promise<void> {
+  await client.request("agents.update", {
+    agentId: update.agentId,
+    ...(update.name ? { name: update.name } : {}),
+    ...(update.emoji ? { emoji: update.emoji } : {}),
+    ...(update.avatar ? { avatar: update.avatar } : {}),
+  });
+}
+
 function emptyAgentFilesStatus(): AgentFilesStatus {
   return { list: null, loading: false, error: null };
 }
