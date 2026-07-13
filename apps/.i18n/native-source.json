@@ -28907,7 +28907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 46,
+      "line": 32,
       "path": "apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift",
       "source": "Trace",
       "surface": "apple",
@@ -28915,7 +28915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 47,
+      "line": 33,
       "path": "apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift",
       "source": "Debug",
       "surface": "apple",
@@ -28923,7 +28923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 48,
+      "line": 34,
       "path": "apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift",
       "source": "Info",
       "surface": "apple",
@@ -28931,7 +28931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 49,
+      "line": 35,
       "path": "apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift",
       "source": "Notice",
       "surface": "apple",
@@ -28939,7 +28939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 50,
+      "line": 36,
       "path": "apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift",
       "source": "Warning",
       "surface": "apple",
@@ -28947,7 +28947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 51,
+      "line": 37,
       "path": "apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift",
       "source": "Error",
       "surface": "apple",
@@ -28955,7 +28955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 52,
+      "line": 38,
       "path": "apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift",
       "source": "Critical",
       "surface": "apple",
