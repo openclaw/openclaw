@@ -34,6 +34,7 @@ export function startGatewayCronWithLogging(params: {
   reason: "startup" | "reload";
   config: OpenClawConfig;
   afterStart?: () => Promise<void>;
+  onStartError?: (error: unknown) => void;
   logCron: { error: (message: string) => void };
 }): void {
   const reconciliation = params.cronReconciliation.arm({
@@ -42,10 +43,17 @@ export function startGatewayCronWithLogging(params: {
     cronState: params.cronState,
   });
   void runWithGatewayIndependentRootWorkAdmission(async () => {
-    await params.cronState.cron.start();
-    await params.afterStart?.();
-    await reconciliation.complete();
-  }).catch((err: unknown) => params.logCron.error(`failed to start: ${String(err)}`));
+    try {
+      await params.cronState.cron.start();
+      await params.afterStart?.();
+      await reconciliation.complete();
+    } catch (err) {
+      params.logCron.error(`failed to start: ${String(err)}`);
+      // Recovery callbacks must run before this independent root releases its
+      // admission fence; restart and suspension cannot race past this point.
+      params.onStartError?.(err);
+    }
+  }).catch((err: unknown) => params.logCron.error(`failed to enter start root: ${String(err)}`));
 }
 
 function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles | null): void {

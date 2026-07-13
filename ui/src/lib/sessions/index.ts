@@ -151,6 +151,11 @@ type SessionGateway = {
 
 type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
 
+type SessionDeleteResponse = {
+  deleted: boolean;
+  worktreePreserved?: SessionDeleteOutcome["worktreePreserved"];
+};
+
 type SessionConnectionScope = {
   client: GatewayBrowserClient;
   epoch: number;
@@ -353,11 +358,17 @@ function requestSessionDelete(
   client: SessionRequestClient,
   key: string,
   options: SessionDeleteOptions = {},
-): Promise<{ deleted?: boolean; worktreePreserved?: SessionDeleteOutcome["worktreePreserved"] }> {
-  return client.request("sessions.delete", {
+): Promise<SessionDeleteResponse> {
+  return client.request<SessionDeleteResponse>("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
   });
+}
+
+function confirmsSessionDeletion(response: SessionDeleteResponse): boolean {
+  // A successful RPC can still be a lifecycle no-op. Only the canonical result
+  // may drive optimistic removal, navigation, and model-override cleanup.
+  return response.deleted;
 }
 
 function requestSessionReset(
@@ -1060,6 +1071,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return { deleted: false };
       }
+      if (!confirmsSessionDeletion(response)) {
+        return { deleted: false };
+      }
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refresh({ agentId: options.agentId, force: true });
@@ -1094,6 +1108,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         const response = await requestSessionDelete(scope.client, target.key, target);
         if (!isCurrentConnection(scope)) {
           break;
+        }
+        if (!confirmsSessionDeletion(response)) {
+          continue;
         }
         deleted.push(target.key);
         if (response.worktreePreserved) {
