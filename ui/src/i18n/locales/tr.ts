@@ -400,6 +400,9 @@ export const tr: TranslationMap = {
     working: "Çalışıyor…",
     ready: "Sohbete hazır",
     whatCanAgentDo: "{name} neler yapabilir?",
+    getHelp: "Yardım alın",
+    discord: "Discord topluluğu",
+    viewChangelog: "Değişiklik günlüğünü görüntüleyin",
   },
   newSession: {
     title: "Yeni oturum",

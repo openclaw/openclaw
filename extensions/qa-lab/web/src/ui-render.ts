@@ -1,4 +1,5 @@
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import prettyMilliseconds from "pretty-ms";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -403,16 +404,12 @@ function formatIso(iso?: string) {
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1000) {
-    return `${Math.round(ms)}ms`;
-  }
-  const seconds = ms / 1000;
-  if (seconds < 60) {
-    return `${seconds.toFixed(seconds >= 10 ? 0 : 1)}s`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.round(seconds % 60);
-  return `${minutes}m ${remainingSeconds}s`;
+  const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
+  return prettyMilliseconds(Math.max(0, roundedMs), {
+    millisecondsDecimalDigits: 0,
+    secondsDecimalDigits: 0,
+    unitCount: 2,
+  });
 }
 
 function esc(text: string) {

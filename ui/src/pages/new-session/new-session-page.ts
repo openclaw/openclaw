@@ -1,5 +1,4 @@
-// Full-page new-session draft: pick agent, exec host, folder, and branch/worktree,
-// then the first message creates the session in one sessions.create call.
+// Full-page draft: pick agent, host, folder, and worktree, then create on first message.
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -72,8 +71,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private browserError: string | null = null;
   @state() private browserListing: FsListDirResult | null = null;
   @state() private browserTarget: BrowserTarget | null = null;
-  // The head input's live value; a typed absolute path stays applicable via
-  // "Use this folder" even when the host cannot list it (no fs.listDir).
+  // Live head input; absolute paths stay applicable even without fs.listDir.
   @state() private browserPathDraft = "";
 
   private openedFor: string | null = null;
@@ -87,6 +85,10 @@ class NewSessionPage extends OpenClawLightDomElement {
   // Re-render when agents/sessions hydrate so the hero identity and the
   // recent-chats list appear without a route change.
   private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(() => notify()),
+    )
     .watch(
       () => this.context?.agents,
       (agents, notify) => agents.subscribe(notify),
@@ -219,7 +221,15 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private maybeRetryCatalogTarget() {
     const catalogId = this.data?.catalogId ?? "";
-    const client = this.context?.gateway.snapshot.client ?? null;
+    const gateway = this.context?.gateway.snapshot;
+    if (!gateway?.connected) {
+      // A retained client spans reconnects. Clearing the attempt marker while
+      // offline makes the next connected snapshot a fresh retry generation.
+      this.catalogRetryClient = null;
+      this.catalogRetryId = "";
+      return;
+    }
+    const client = gateway.client;
     if (
       !catalogId ||
       catalog.isTarget(this.data) ||
@@ -228,8 +238,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    this.catalogRetryClient = client;
-    this.catalogRetryId = catalogId;
     void this.retryCatalogTarget(client, catalogId);
   }
 
@@ -237,10 +245,18 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.catalogRetrying) {
       return;
     }
+    this.catalogRetryClient = client;
+    this.catalogRetryId = catalogId;
     this.catalogRetrying = true;
     try {
       const target = await catalog.resolveCreateTarget(client, catalogId);
-      if (target && this.data?.catalogId === catalogId) {
+      const currentGateway = this.context?.gateway.snapshot;
+      if (
+        target &&
+        this.data?.catalogId === catalogId &&
+        currentGateway?.client === client &&
+        currentGateway.connected
+      ) {
         this.data = { ...this.data, ...target };
       }
     } finally {
@@ -250,12 +266,11 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private readonly handleCatalogRetry = () => {
     const catalogId = this.data?.catalogId ?? "";
-    const client = this.context?.gateway.snapshot.client;
-    if (!catalogId || !client) {
+    const gateway = this.context?.gateway.snapshot;
+    const client = gateway?.client;
+    if (!catalogId || !gateway?.connected || !client) {
       return;
     }
-    this.catalogRetryClient = client;
-    this.catalogRetryId = catalogId;
     void this.retryCatalogTarget(client, catalogId);
   };
 
@@ -566,7 +581,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     return this.isAdmin();
   }
 
-  /** Grayed-out device rows must say why: offline vs. node lacks browse support. */
+  /** Unavailable device rows say why; exec-only nodes remain selectable for manual paths. */
   private nodeBrowseBlockedReason(node: DraftNode): string | undefined {
     if (node.canBrowse) {
       return undefined;
@@ -601,12 +616,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserPathDraft = "";
   }
 
-  /** "Use this folder" applies exactly what the head input shows. The draft
-      syncs to every listed directory, covers hosts that cannot list
-      (fs.listDir missing/failing), and an edited path always wins over a
-      stale listing. A cleared input applies "" — the host's default
-      directory (workspace on the Gateway, home on a node) — matching the
-      clearable folder textbox this browser replaced. Null disables Use. */
+  /** Use applies the live path; empty means host default, null disables. */
   private usableBrowserPath(): string | null {
     const draft = this.browserPathDraft.trim();
     if (draft.length === 0) {
@@ -627,6 +637,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     const client = this.context?.gateway.snapshot.client;
     const target = this.browserTarget;
     if (!client || !target) {
+      return;
+    }
+    // Exec-only nodes still accept a typed cwd; never probe an unsupported fs.listDir.
+    const targetNode = this.nodes.find((node) => node.nodeId === target.nodeId);
+    if (targetNode?.canExec && !targetNode.canBrowse) {
+      this.showBrowserRoot();
+      this.browserTarget = target;
+      this.browserPathDraft = path ?? "";
       return;
     }
     const requestId = ++this.browserRequestToken;
@@ -760,7 +778,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                     <button
                       type="button"
                       class="new-session-page__browser-entry"
-                      ?disabled=${!node.canBrowse}
+                      ?disabled=${!node.canExec}
                       title=${this.nodeBrowseBlockedReason(node) ?? nothing}
                       @click=${() =>
                         this.selectBrowserTarget({

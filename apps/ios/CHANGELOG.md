@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Adds Installed and Browse skill management with readiness filters, enable/disable controls, exact-version ClawHub review, and Gateway-enforced risk acknowledgement. (#105741)
 - Routes iPhone and Apple Watch exec approvals through durable Gateway records, preserves safety warnings, shows the first recorded decision across surfaces, reconciles uncertain replies, and remains compatible with shipped Gateway v4 approval RPCs.
 - Improves Gateway onboarding diagnostics, permission registration refreshes, Talk session switching, agent overview refresh ordering, and Apple Watch acknowledgment, activation, and cold-start event handling.
 

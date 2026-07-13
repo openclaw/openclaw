@@ -223,6 +223,7 @@ describe("buildEmbeddedSystemPrompt", () => {
       nativeCommandGuidanceLines: ["Subagent-only command guidance."],
       modelAliasLines: [],
       userTimezone: "UTC",
+      promptMode: "minimal",
     });
 
     expect(prompt).toContain("- sessions_spawn");
@@ -231,6 +232,9 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("Subagent-only command guidance.");
+    expect(prompt).toContain("## Promised Work");
+    expect(prompt).toContain("Progress such as `running` is not completion.");
+    expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 
   it("can omit base memory guidance for non-legacy context engines", () => {

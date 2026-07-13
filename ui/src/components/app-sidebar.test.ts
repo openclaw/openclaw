@@ -419,6 +419,15 @@ describe("AppSidebar agent chip", () => {
     expect(menu?.querySelector(".sidebar-pair-mobile")).not.toBeNull();
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
+    const linkHrefs = [...(menu?.querySelectorAll('a[role="menuitem"]') ?? [])].map((link) =>
+      link.getAttribute("href"),
+    );
+    expect(linkHrefs).toEqual([
+      "https://docs.openclaw.ai",
+      "https://docs.openclaw.ai/help",
+      "https://discord.gg/clawd",
+      "https://docs.openclaw.ai/releases",
+    ]);
 
     const agentRows = [...(menu?.querySelectorAll('[role="menuitemradio"]') ?? [])];
     expect(agentRows).toHaveLength(2);
