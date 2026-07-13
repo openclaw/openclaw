@@ -106,6 +106,8 @@ struct OnboardingWizardView: View {
             ""
         case .tokenMissing:
             "Gateway auth token is missing."
+        case .passwordMissing:
+            self.connectMessage ?? self.statusLine
         case .unauthorized:
             "Gateway rejected credentials."
         case let .pairingRequired(requestId):
@@ -556,8 +558,12 @@ struct OnboardingWizardView: View {
                     onShowDetails: {
                         self.showGatewayProblemDetails = true
                     })
-            } else if self.issue.needsAuthToken {
+            } else if self.issue == .unauthorized {
                 Text("Gateway rejected credentials. Scan a fresh setup code or update token/password.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+            } else if self.issue.needsAuthCredentials {
+                Text(verbatim: self.connectMessage ?? self.statusLine)
                     .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -646,7 +652,7 @@ extension OnboardingWizardView {
         if self.issue.needsPairing || self.currentProblem?.needsPairingApproval == true {
             return "Gateway Approval"
         }
-        if self.issue.needsAuthToken || self.currentProblem != nil {
+        if self.issue.needsAuthCredentials || self.currentProblem != nil {
             return "Authentication"
         }
         return "Gateway Status"
@@ -1065,6 +1071,7 @@ extension OnboardingWizardView {
     }
 
     private func updateConnectionIssue(problem: GatewayConnectionProblem?, statusText: String) {
+        let wasOnAuthStep = self.step == .auth
         let next = GatewayConnectionIssue.detect(problem: problem)
         let fallback = next == .none ? GatewayConnectionIssue.detect(from: statusText) : next
 
@@ -1075,7 +1082,7 @@ extension OnboardingWizardView {
             self.issue = .pairingRequired(requestId: mergedRequestId)
         } else if self.issue.needsPairing, !fallback.needsPairing {
             // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
-        } else if self.issue.needsAuthToken, !fallback.needsAuthToken, !fallback.needsPairing {
+        } else if self.issue.needsAuthCredentials, !fallback.needsAuthCredentials, !fallback.needsPairing {
             // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
             // the user retries/scans again or we successfully connect.
         } else {
@@ -1086,8 +1093,19 @@ extension OnboardingWizardView {
             self.pairingRequestId = requestId
         }
 
-        if self.issue.needsAuthToken || self.issue.needsPairing || problem?.pauseReconnect == true {
+        if self.issue.needsAuthCredentials || self.issue.needsPairing || problem?.pauseReconnect == true {
             self.step = .auth
+            // Focus only on the transition; repeated status updates must not steal an edited field.
+            if !wasOnAuthStep {
+                switch self.issue {
+                case .passwordMissing:
+                    self.focusedField = .gatewayPassword
+                case .tokenMissing:
+                    self.focusedField = .gatewayToken
+                default:
+                    break
+                }
+            }
         }
 
         if let problem {

@@ -11,7 +11,6 @@ import {
   type MemoryQmdSearchMode,
   type MemoryQmdStartupMode,
   type OpenClawConfig,
-  parseDurationMs,
   resolveAgentWorkspaceDir,
   normalizeAgentId,
   resolveUserPath,
@@ -19,6 +18,7 @@ import {
   splitShellArgs,
 } from "./config-utils.js";
 import { isPathInside } from "./fs-utils.js";
+import { parseDurationMs } from "./openclaw-runtime-config.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,

@@ -160,6 +160,9 @@ importers:
       minimatch:
         specifier: 10.2.5
         version: 10.2.5
+      ms:
+        specifier: 2.1.3
+        version: 2.1.3
       node-edge-tts:
         specifier: 1.2.10
         version: 1.2.10
@@ -178,6 +181,9 @@ importers:
       playwright-core:
         specifier: 1.61.1
         version: 1.61.1
+      pretty-ms:
+        specifier: 9.3.0
+        version: 9.3.0
       proper-lockfile:
         specifier: 4.1.2
         version: 4.1.2
@@ -263,6 +269,9 @@ importers:
       '@types/markdown-it':
         specifier: 14.1.2
         version: 14.1.2
+      '@types/ms':
+        specifier: 2.1.0
+        version: 2.1.0
       '@types/node':
         specifier: 26.1.0
         version: 26.1.0
@@ -853,6 +862,9 @@ importers:
       commander:
         specifier: 15.0.0
         version: 15.0.0
+      pretty-ms:
+        specifier: 9.3.0
+        version: 9.3.0
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1423,6 +1435,9 @@ importers:
       playwright-core:
         specifier: 1.61.1
         version: 1.61.1
+      pretty-ms:
+        specifier: 9.3.0
+        version: 9.3.0
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -1454,6 +1469,9 @@ importers:
 
   extensions/qa-matrix:
     dependencies:
+      pretty-ms:
+        specifier: 9.3.0
+        version: 9.3.0
       undici:
         specifier: 8.5.0
         version: 8.5.0
@@ -1485,6 +1503,9 @@ importers:
       p-map:
         specifier: 7.0.5
         version: 7.0.5
+      pretty-ms:
+        specifier: 9.3.0
+        version: 9.3.0
       silk-wasm:
         specifier: 3.7.1
         version: 3.7.1
@@ -13279,8 +13300,7 @@ snapshots:
   parse-ms@3.0.0:
     optional: true
 
-  parse-ms@4.0.0:
-    optional: true
+  parse-ms@4.0.0: {}
 
   parse5@8.0.1:
     dependencies:
@@ -13362,7 +13382,6 @@ snapshots:
   pretty-ms@9.3.0:
     dependencies:
       parse-ms: 4.0.0
-    optional: true
 
   prism-media@1.3.5: {}
 
