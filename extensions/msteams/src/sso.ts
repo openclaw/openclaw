@@ -129,7 +129,11 @@ async function callUserTokenService(
     body: params.body === undefined ? undefined : JSON.stringify(params.body),
   });
   if (!response.ok) {
-    const error = await createMSTeamsHttpError(response, `HTTP ${response.status}`);
+    const error = await createMSTeamsHttpError(
+      response,
+      "msteams.sso: User Token service request failed",
+      { statusPrefix: "HTTP " },
+    );
     return { error: error.message, status: response.status };
   }
   let buf: Buffer;
