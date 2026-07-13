@@ -359,6 +359,96 @@ describe("worker live-event client", () => {
     client.dispose();
   });
 
+  it("renumbers the unacked tail when the gateway resets behind the local cursor", async () => {
+    const harness = connectionHarness();
+    harness.requestLiveEvent
+      .mockResolvedValueOnce({
+        type: "res",
+        id: "live-response-reset",
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "Replay required",
+          details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
+        },
+      })
+      .mockResolvedValueOnce({
+        type: "res",
+        id: "live-response-1",
+        ok: true,
+        payload: { ackedSeq: 1 },
+      })
+      .mockResolvedValueOnce({
+        type: "res",
+        id: "live-response-2",
+        ok: true,
+        payload: { ackedSeq: 2 },
+      });
+    const client = new WorkerLiveEventClient(harness.connection, {
+      runEpoch: 3,
+      initialAckedSeq: 5,
+    });
+
+    const first = client.emit("run-1", LIVE_EVENT);
+    const secondEvent: WorkerLiveEvent = {
+      kind: "assistant",
+      payload: { text: "second", delta: "second" },
+    };
+    const second = client.emit("run-1", secondEvent);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([{ ackedSeq: 1 }, { ackedSeq: 2 }]);
+    expect(harness.requestLiveEvent.mock.calls.map((call) => call[0])).toEqual([
+      expect.objectContaining({ seq: 6, lastAckedSeq: 5, event: LIVE_EVENT }),
+      expect.objectContaining({ seq: 1, lastAckedSeq: 0, event: LIVE_EVENT }),
+      expect.objectContaining({ seq: 2, lastAckedSeq: 1, event: secondEvent }),
+    ]);
+    expect(client.ackedSeq).toBe(2);
+    expect(client.unackedCount).toBe(0);
+    client.dispose();
+  });
+
+  it("rejects a repeated no-progress resync instead of retrying forever", async () => {
+    const harness = connectionHarness();
+    const resyncResponse = {
+      type: "res" as const,
+      id: "live-response-reset",
+      ok: false as const,
+      error: {
+        code: "INVALID_REQUEST" as const,
+        message: "Replay required",
+        details: { reason: "resync-required" as const, ackedSeq: 0, expectedSeq: 1 },
+      },
+    };
+    harness.requestLiveEvent
+      .mockResolvedValueOnce(resyncResponse)
+      .mockResolvedValueOnce(resyncResponse)
+      .mockRejectedValueOnce(new Error("unexpected third replay"));
+    const client = new WorkerLiveEventClient(harness.connection, {
+      runEpoch: 3,
+      initialAckedSeq: 5,
+    });
+
+    await expect(client.emit("run-1", LIVE_EVENT)).rejects.toThrow(
+      "worker live-event resync did not advance",
+    );
+    expect(harness.requestLiveEvent).toHaveBeenCalledTimes(2);
+    client.dispose();
+  });
+
+  it("rejects an event emitted after stop without rescheduling", async () => {
+    const harness = connectionHarness();
+    harness.waitForReady.mockRejectedValue(new WorkerConnectionStoppedError());
+    harness.emitState({ kind: "stopped" });
+    const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
+
+    await expect(client.emit("run-1", LIVE_EVENT)).rejects.toBeInstanceOf(
+      WorkerConnectionStoppedError,
+    );
+    expect(harness.waitForReady).toHaveBeenCalledOnce();
+    expect(harness.requestLiveEvent).not.toHaveBeenCalled();
+    client.dispose();
+  });
+
   it("rejects buffered events when the worker is fenced", async () => {
     const harness = connectionHarness();
     harness.requestLiveEvent.mockImplementationOnce(async () => await new Promise<never>(() => {}));

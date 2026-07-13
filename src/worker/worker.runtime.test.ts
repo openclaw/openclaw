@@ -78,6 +78,9 @@ type FakeGatewayOptions = {
   silenceFirstLiveEvent?: boolean;
   silenceFirstInference?: boolean;
   transcriptFailureAtRequest?: number;
+  liveResyncAckedSeq?: number;
+  liveResyncResponses?: number;
+  liveFailure?: "capacity-exceeded";
   heartbeatFailure?: "credential-expired";
   heartbeatIntervalMs?: number;
 };
@@ -118,6 +121,7 @@ class FakeWorkerGateway {
   private droppedTranscript = false;
   private droppedLiveEvent = false;
   private droppedInference = false;
+  private sentLiveResync = 0;
   private unavailable = false;
   private ignoredAdmission = false;
 
@@ -333,6 +337,40 @@ class FakeWorkerGateway {
     this.liveEventRequests.push(structuredClone(frame.params));
     if (this.options.silenceFirstLiveEvent && !this.droppedLiveEvent) {
       this.droppedLiveEvent = true;
+      return;
+    }
+    if (
+      this.options.liveResyncAckedSeq !== undefined &&
+      this.sentLiveResync < (this.options.liveResyncResponses ?? 1)
+    ) {
+      this.sentLiveResync += 1;
+      this.send(socket, {
+        type: "res",
+        id: frame.id,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "worker live event rejected",
+          details: {
+            reason: "resync-required",
+            ackedSeq: this.options.liveResyncAckedSeq,
+            expectedSeq: this.options.liveResyncAckedSeq + 1,
+          },
+        },
+      });
+      return;
+    }
+    if (this.options.liveFailure) {
+      this.send(socket, {
+        type: "res",
+        id: frame.id,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "worker live event rejected",
+          details: { reason: this.options.liveFailure },
+        },
+      });
       return;
     }
     this.send(socket, {
@@ -772,6 +810,49 @@ describe("worker runtime", () => {
         (request) => request.event.kind === "lifecycle" && request.event.payload.phase === "error",
       ),
     ).toBe(true);
+  });
+
+  it("renumbers live events after a gateway cursor reset without aborting the run", async () => {
+    const { gateway, launch } = await setup({ liveResyncAckedSeq: 0 });
+    launch.assignment.liveEvents = { ackedSeq: 5, nextSeq: 6 };
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests).toHaveLength(1);
+    expect(gateway.acceptedTranscriptRequests).toHaveLength(2);
+    expect(gateway.liveEventRequests.slice(0, 2)).toEqual([
+      expect.objectContaining({ seq: 6, lastAckedSeq: 5 }),
+      expect.objectContaining({ seq: 1, lastAckedSeq: 0 }),
+    ]);
+    expect(gateway.liveEventRequests[1]?.event).toEqual(gateway.liveEventRequests[0]?.event);
+  });
+
+  it("degrades hard live-event failures without affecting inference or transcript commits", async () => {
+    const { gateway, launch } = await setup({ liveFailure: "capacity-exceeded" });
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests).toHaveLength(1);
+    expect(
+      gateway.acceptedTranscriptRequests
+        .flatMap((request) => request.messages)
+        .map((message) => message.role),
+    ).toEqual(["user", "assistant"]);
+    expect(gateway.liveEventRequests).toHaveLength(1);
+  });
+
+  it("degrades a repeated no-progress live resync without hanging the run", async () => {
+    const { gateway, launch } = await setup({
+      liveResyncAckedSeq: 0,
+      liveResyncResponses: 2,
+    });
+    launch.assignment.liveEvents = { ackedSeq: 5, nextSeq: 6 };
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests).toHaveLength(1);
+    expect(gateway.acceptedTranscriptRequests).toHaveLength(2);
+    expect(gateway.liveEventRequests).toHaveLength(2);
   });
 
   it("fails closed when worker admission is rejected", async () => {

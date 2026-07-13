@@ -567,9 +567,9 @@ export async function runWorkerEmbeddedTurn(
 
   const pendingLiveEvents: WorkerLiveEvent[] = [];
   let liveDrain: Promise<void> | undefined;
-  let liveFailure: Error | undefined;
+  let liveDegraded = false;
   const startLiveDrain = () => {
-    if (liveDrain || liveFailure !== undefined || pendingLiveEvents.length === 0) {
+    if (liveDrain || liveDegraded || pendingLiveEvents.length === 0) {
       return;
     }
     liveDrain = (async () => {
@@ -581,9 +581,10 @@ export async function runWorkerEmbeddedTurn(
         await params.live.emit(event);
       }
     })()
-      .catch((error: unknown) => {
-        liveFailure = toError(error, "Worker live-event delivery failed.");
-        session.agent.abort();
+      .catch(() => {
+        // Live events are preview-only; transcript commits and inference stay authoritative.
+        liveDegraded = true;
+        pendingLiveEvents.length = 0;
       })
       .finally(() => {
         liveDrain = undefined;
@@ -591,7 +592,7 @@ export async function runWorkerEmbeddedTurn(
       });
   };
   const enqueueLive = (event: WorkerLiveEvent) => {
-    if (liveFailure !== undefined) {
+    if (liveDegraded) {
       return;
     }
     try {
@@ -600,9 +601,9 @@ export async function runWorkerEmbeddedTurn(
         pendingLiveEvents.push(bounded);
       }
       startLiveDrain();
-    } catch (error) {
-      liveFailure = toError(error, "Worker live-event delivery failed.");
-      session.agent.abort();
+    } catch {
+      liveDegraded = true;
+      pendingLiveEvents.length = 0;
     }
   };
   const flushLive = async () => {
@@ -610,9 +611,6 @@ export async function runWorkerEmbeddedTurn(
     while (drain) {
       await drain;
       drain = liveDrain;
-    }
-    if (liveFailure !== undefined) {
-      throw liveFailure;
     }
   };
   const startedAt = Date.now();

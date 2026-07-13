@@ -222,6 +222,7 @@ type BufferedLiveEvent = {
   seq: number;
   runId: string;
   event: WorkerLiveEvent;
+  lastResync?: { ackedSeq: number; expectedSeq: number };
   resolve: (result: WorkerLiveEventResult) => void;
   reject: (error: Error) => void;
 };
@@ -346,6 +347,17 @@ export class WorkerLiveEventClient {
             this.rejectAll(new Error("worker live-event resync acknowledged an unsent event"));
             return;
           }
+          const cursor = {
+            ackedSeq: response.error.details.ackedSeq,
+            expectedSeq: response.error.details.expectedSeq,
+          };
+          if (
+            current.lastResync?.ackedSeq === cursor.ackedSeq &&
+            current.lastResync.expectedSeq === cursor.expectedSeq
+          ) {
+            throw new Error("worker live-event resync did not advance");
+          }
+          current.lastResync = cursor;
           this.resync(response.error.details.ackedSeq, response.error.details.expectedSeq);
           continue;
         }
@@ -377,11 +389,21 @@ export class WorkerLiveEventClient {
   }
 
   private resync(ackedSeq: number, expectedSeq: number): void {
-    this.ackThrough(ackedSeq);
-    const firstSeq = this.buffered[0]?.seq ?? this.nextSeqValue;
-    if (firstSeq !== expectedSeq) {
-      this.rejectAll(new Error("worker live-event replay window cannot satisfy resync"));
+    if (expectedSeq !== ackedSeq + 1) {
+      this.rejectAll(new Error("worker live-event resync cursor is inconsistent"));
+      return;
     }
+    if (ackedSeq >= this.ackedSeqValue) {
+      this.ackThrough(ackedSeq);
+    } else {
+      this.ackedSeqValue = ackedSeq;
+    }
+    let seq = expectedSeq;
+    for (const entry of this.buffered) {
+      entry.seq = seq;
+      seq += 1;
+    }
+    this.nextSeqValue = seq;
   }
 
   private rejectAll(error: Error): void {
