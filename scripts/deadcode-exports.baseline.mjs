@@ -2943,6 +2943,7 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "ui/src/app-route-paths.ts: normalizePath",
   "ui/src/app-routes.ts: inferBasePathFromPathname",
   "ui/src/app-routes.ts: normalizeBasePath",
+  "ui/src/app/agent-selection.ts: AgentSelectionState",
   "ui/src/app/app-host.ts: navigationSurfaceIsHidden",
   "ui/src/app/app-host.ts: renderFloatingUpdateCard",
   "ui/src/app/custom-theme.ts: buildCustomThemeStyles",
@@ -3163,6 +3164,7 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "ui/src/lib/workspace/widgets/usage.ts: UsageModel",
   "ui/src/pages/about/view.ts: AboutProps",
   "ui/src/pages/about/view.ts: formatControlUiBuildDate",
+  "ui/src/pages/agents/route.ts: loadAgentsRouteData",
   "ui/src/pages/approval/approval-page.ts: ApprovalPage",
   "ui/src/pages/chat/attachment-payload-store.ts: resetChatAttachmentPayloadStoreForTest",
   "ui/src/pages/chat/chat-command-executor.ts: SlashCommandContext",
@@ -3291,6 +3293,7 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "ui/src/pages/usage/view.ts: SessionLogEntry",
   "ui/src/pages/usage/view.ts: SessionLogRole",
   "ui/src/pages/usage/view.ts: UsageColumnId",
+  "ui/src/pages/workboard/agent-filter.ts: WorkboardAgentFilterOption",
 ];
 
 // Platform-variant findings. Allowed when present; never required.
