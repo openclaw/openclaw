@@ -4000,6 +4000,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       seq: 0,
       state: "final" as const,
       message,
+      messageId: appended.messageId,
     };
     context.broadcast("chat", chatPayload);
     sendGlobalAwareNodeChatPayload({

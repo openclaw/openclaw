@@ -196,6 +196,12 @@ export type AgentSessionEvent =
       type: "agent_end";
       messages: AgentMessage[];
       willRetry: boolean;
+      /**
+       * Stable transcript id of the final assistant message this run persisted,
+       * when the run produced one. Lets lifecycle consumers reference the exact
+       * produced message instead of re-deriving "the last transcript entry".
+       */
+      lastAssistantMessageId?: string;
     }
   | {
       type: "queue_update";
@@ -587,6 +593,8 @@ export class AgentSession {
 
   // Track last assistant message for auto-compaction check
   private lastAssistantMessage: AssistantMessage | undefined = undefined;
+  /** Stable transcript id of the last assistant message persisted this run. */
+  private lastAssistantMessageId: string | undefined = undefined;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
   private handleAgentEvent = async (event: AgentEvent): Promise<void> => {
@@ -626,7 +634,13 @@ export class AgentSession {
     // Notify all listeners
     this.emit(
       event.type === "agent_end"
-        ? { ...event, willRetry: this.willRetryAfterAgentEnd(event) }
+        ? {
+            ...event,
+            willRetry: this.willRetryAfterAgentEnd(event),
+            ...(this.lastAssistantMessageId
+              ? { lastAssistantMessageId: this.lastAssistantMessageId }
+              : {}),
+          }
         : event,
     );
 
@@ -650,10 +664,15 @@ export class AgentSession {
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
-        this.sessionManager.appendMessage(event.message, {
+        const appendedMessageId = this.sessionManager.appendMessage(event.message, {
           invalidateSerializedPrefixCache:
             messageChangedByExtension || toolResultChangedByExtension,
         });
+        // Remember the persisted id of the assistant turn so agent_end can carry
+        // a stable reference to the message this run produced.
+        if (event.message.role === "assistant") {
+          this.lastAssistantMessageId = appendedMessageId;
+        }
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -1114,6 +1133,7 @@ export class AgentSession {
   private async handlePostAgentRun(): Promise<boolean> {
     const msg = this.lastAssistantMessage;
     this.lastAssistantMessage = undefined;
+    this.lastAssistantMessageId = undefined;
     if (!msg) {
       return false;
     }
