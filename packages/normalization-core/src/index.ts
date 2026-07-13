@@ -1,5 +1,6 @@
 // Public barrel for shared coercion and normalization helpers.
 
+export * from "./agent-id.js";
 export * from "./boolean-coercion.js";
 export * from "./error-coercion.js";
 export * from "./expect.js";

@@ -392,6 +392,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
       },
       {
+        find: "@openclaw/normalization-core/agent-id",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "agent-id.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/boolean-coercion",
         replacement: path.join(
           repoRoot,
