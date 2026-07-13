@@ -166,7 +166,7 @@ export async function resolveAttemptTrajectorySessionFile(params: {
   ).sessionFile;
 }
 
-export type ExistingAttemptTranscriptState = {
+type ExistingAttemptTranscriptState = {
   hasBootstrapTranscriptState: boolean;
   hasFileTranscriptState: boolean;
 };

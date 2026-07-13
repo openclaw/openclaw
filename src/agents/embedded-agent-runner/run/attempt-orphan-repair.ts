@@ -94,7 +94,7 @@ export function replayTrailingEntriesForOrphanRepair(
   }
 }
 
-export type OrphanRepairPlan = Omit<OrphanRepairCandidate, "messageEntry"> & {
+type OrphanRepairPlan = Omit<OrphanRepairCandidate, "messageEntry"> & {
   contextEnginePrompt: string;
   messageEntry: SessionMessageEntry & { message: UserMessage };
   strategy: MessageMergeStrategy;
