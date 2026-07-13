@@ -403,9 +403,11 @@ describe("AppSidebar agent chip", () => {
       TWO_AGENTS,
     );
     const onNavigate = vi.fn();
+    const onOpenNewSession = vi.fn();
     sidebar.connected = true;
     sidebar.canPairDevice = true;
     sidebar.onNavigate = onNavigate;
+    sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
@@ -420,7 +422,24 @@ describe("AppSidebar agent chip", () => {
 
     const agentRows = [...(menu?.querySelectorAll('[role="menuitemradio"]') ?? [])];
     expect(agentRows).toHaveLength(2);
-    const researchRow = agentRows.find((row) => row.textContent?.includes("research"));
+    const researchAgentRow = [
+      ...(menu?.querySelectorAll(".sidebar-agent-menu__agent-row") ?? []),
+    ].find((row) => row.textContent?.includes("research"));
+    expect(researchAgentRow).toBeDefined();
+    const newSessionButton = researchAgentRow?.querySelector<HTMLButtonElement>(
+      ".sidebar-agent-menu__new",
+    );
+    expect(newSessionButton).toBeInstanceOf(HTMLButtonElement);
+    newSessionButton?.click();
+    await sidebar.updateComplete;
+    expect(onOpenNewSession).toHaveBeenCalledWith("research");
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__menu-toggle")?.click();
+    await sidebar.updateComplete;
+    const researchRow = [...sidebar.querySelectorAll('[role="menuitemradio"]')].find((row) =>
+      row.textContent?.includes("research"),
+    );
     expect(researchRow).toBeDefined();
     (researchRow as HTMLButtonElement).click();
     await sidebar.updateComplete;

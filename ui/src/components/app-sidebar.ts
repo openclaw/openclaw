@@ -1943,27 +1943,44 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const unread = active ? 0 : this.agentUnreadCount(agentId);
     const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
     return html`
-      <button
-        type="button"
-        class="sidebar-customize-menu__item"
-        role="menuitemradio"
-        tabindex="-1"
-        aria-checked=${String(active)}
-        @click=${() => this.switchChipAgent(agentId)}
-      >
-        <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
-        <span class="sidebar-customize-menu__text">${label}</span>
-        ${unread > 0
-          ? html`<span
-              class="session-unread-dot"
-              role="img"
-              aria-label=${t("sessionsView.unread")}
-            ></span>`
-          : nothing}
-        <span class="sidebar-customize-menu__check" aria-hidden="true">
-          ${active ? icons.check : nothing}
-        </span>
-      </button>
+      <div class="sidebar-agent-menu__agent-row">
+        <button
+          type="button"
+          class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
+          role="menuitemradio"
+          tabindex="-1"
+          aria-checked=${String(active)}
+          @click=${() => this.switchChipAgent(agentId)}
+        >
+          <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
+          <span class="sidebar-customize-menu__text">${label}</span>
+          ${unread > 0
+            ? html`<span
+                class="session-unread-dot"
+                role="img"
+                aria-label=${t("sessionsView.unread")}
+              ></span>`
+            : nothing}
+          <span class="sidebar-customize-menu__check" aria-hidden="true">
+            ${active ? icons.check : nothing}
+          </span>
+        </button>
+        <button
+          type="button"
+          class="sidebar-session-sort sidebar-agent-menu__new"
+          role="menuitem"
+          tabindex="-1"
+          title=${`${t("chat.runControls.newSession")} — ${label}`}
+          aria-label=${`${t("chat.runControls.newSession")} — ${label}`}
+          ?disabled=${!this.connected}
+          @click=${() => {
+            this.closeAgentMenu();
+            this.onOpenNewSession?.(agentId);
+          }}
+        >
+          ${icons.plus}
+        </button>
+      </div>
     `;
   }
 
