@@ -22,7 +22,14 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 const wsInstances: MockGoogleLiveWebSocket[] = [];
 const createdSources: MockAudioBufferSource[] = [];
 const inputProcessors: Array<{
+  connect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
   onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
+}> = [];
+const inputSinks: Array<{
+  connect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+  gain: { value: number };
 }> = [];
 let getUserMedia: ReturnType<typeof vi.fn>;
 
@@ -106,6 +113,16 @@ class MockAudioContext {
     };
     inputProcessors.push(processor);
     return processor;
+  }
+
+  createGain() {
+    const sink = {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      gain: { value: 1 },
+    };
+    inputSinks.push(sink);
+    return sink;
   }
 
   createAnalyser() {
@@ -214,6 +231,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     wsInstances.length = 0;
     createdSources.length = 0;
     inputProcessors.length = 0;
+    inputSinks.length = 0;
     vi.stubGlobal("WebSocket", MockGoogleLiveWebSocket);
     vi.stubGlobal("AudioContext", MockAudioContext);
     getUserMedia = vi.fn(async () => ({
@@ -267,9 +285,33 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     await transport.start();
 
     expect(getUserMedia).toHaveBeenCalledWith({
-      audio: { deviceId: { exact: "usb-mic" } },
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+        deviceId: { exact: "usb-mic" },
+      },
     });
     transport.stop();
+  });
+
+  it("keeps the microphone processor inaudible locally", async () => {
+    const transport = createTransport();
+
+    await transport.start();
+    latestWebSocket().emitOpen();
+
+    const processor = inputProcessors.at(-1);
+    const sink = inputSinks.at(-1);
+    if (!processor || !sink) {
+      throw new Error("missing microphone capture graph");
+    }
+    expect(sink.gain.value).toBe(0);
+    expect(processor.connect).toHaveBeenCalledWith(sink);
+    expect(sink.connect).toHaveBeenCalledOnce();
+
+    transport.stop();
+    expect(sink.disconnect).toHaveBeenCalledOnce();
   });
 
   it("releases microphone access that resolves after stop", async () => {
