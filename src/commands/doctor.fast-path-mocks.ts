@@ -51,6 +51,7 @@ vi.mock("./doctor-config-audit-scrub.js", () => ({
 
 vi.mock("./doctor-usage-cost-cache.js", () => ({
   maybeRemoveLegacyUsageCostCacheFiles: vi.fn().mockResolvedValue(undefined),
+  maybeRepairLegacyRuntimeFiles: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor/cron/index.js", () => ({

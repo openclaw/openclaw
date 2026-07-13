@@ -55,12 +55,12 @@ describe("session cost usage", () => {
     }
     return value;
   };
-  const readUsageCostCache = <T>(agentId?: string): T => {
-    const raw = sessionCostUsageCacheTestApi.readCacheJson(agentId);
+  const readUsageCostCache = <T>(parse: (raw: string) => T = (raw) => JSON.parse(raw) as T): T => {
+    const raw = sessionCostUsageCacheTestApi.readCacheJson();
     if (!raw) {
       throw new Error("expected SQLite usage-cost cache row");
     }
-    return JSON.parse(raw) as T;
+    return parse(raw);
   };
   const writeUsageCostCache = (value: unknown, agentId?: string): void => {
     sessionCostUsageCacheTestApi.writeCacheJson(agentId, JSON.stringify(value));

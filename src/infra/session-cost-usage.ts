@@ -1770,7 +1770,7 @@ async function refreshCostUsageCacheForAgent(params?: {
     }
     return "refreshed";
   } finally {
-    await lock.release();
+    lock.release();
   }
 }
 
@@ -1973,7 +1973,6 @@ export async function loadSessionCostSummariesFromCache(params: {
   requestRefresh?: boolean;
 }): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
-  const refreshKey = databasePath;
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
   const fileTasks = params.sessions.map(
     (session) => async () => await resolveUsageCostTranscriptFile(session.sessionFile),
@@ -1982,11 +1981,9 @@ export async function loadSessionCostSummariesFromCache(params: {
     tasks: fileTasks,
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
   }).then(({ results }) => results);
-  const [cache, files, refreshRunning] = await Promise.all([
-    readUsageCostCache(params.agentId, pricingFingerprint, databasePath),
-    filesPromise,
-    isSessionCostUsageRefreshRunning(params.agentId, databasePath),
-  ]);
+  const cache = readUsageCostCache(params.agentId, pricingFingerprint, databasePath);
+  const refreshRunning = isSessionCostUsageRefreshRunning(params.agentId, databasePath);
+  const files = await filesPromise;
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
   const requiresDailyRebucket = params.dayBucket !== undefined;

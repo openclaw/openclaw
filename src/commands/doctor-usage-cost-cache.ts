@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
+import { maybeScrubConfigAuditLog } from "./doctor-config-audit-scrub.js";
 
 const LEGACY_USAGE_COST_TEMP_GRACE_MS = 10_000;
 
@@ -86,4 +87,12 @@ export async function maybeRemoveLegacyUsageCostCacheFiles(params: {
     `Removed ${files.length} rebuildable legacy usage-cost cache ${files.length === 1 ? "file" : "files"}; SQLite rebuilds the cache on demand.`,
     "Usage cost cache",
   );
+}
+
+export async function maybeRepairLegacyRuntimeFiles(
+  shouldRepair: boolean,
+  env?: NodeJS.ProcessEnv,
+): Promise<void> {
+  await maybeScrubConfigAuditLog({ shouldRepair });
+  await maybeRemoveLegacyUsageCostCacheFiles({ shouldRepair, env });
 }
