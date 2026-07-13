@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type {
   ProviderFetchUsageSnapshotContext,
   ProviderResolveUsageAuthContext,
@@ -500,46 +497,6 @@ function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string 
   return formatClaudePlanLabel(credential.subscriptionType, credential.rateLimitTier);
 }
 
-const CLAUDE_CLI_CONFIG_EMAIL_TTL_MS = 5 * 60_000;
-const cachedClaudeCliEmail = new Map<string, { value: string | undefined; readAt: number }>();
-
-// Best-effort account email for keychain-synced Claude CLI logins, which store
-// no email on the auth profile. The CLI config file identifies whichever
-// account the CLI is logged into, so it may only label a snapshot whose usage
-// token IS that login — enforced by comparing against the cached CLI
-// credential instead of trusting the ambient config.
-function readClaudeCliAccountEmail(env: NodeJS.ProcessEnv, usageToken: string): string | undefined {
-  const cliLogin = readClaudeCliCredentialsCached({
-    allowKeychainPrompt: false,
-    ttlMs: CLAUDE_CLI_CONFIG_EMAIL_TTL_MS,
-  });
-  if (!cliLogin || cliLogin.type !== "oauth" || cliLogin.access !== usageToken) {
-    return undefined;
-  }
-  const configDir = env.CLAUDE_CONFIG_DIR?.trim();
-  const homeDir = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
-  const configPath = configDir
-    ? path.join(configDir, ".claude.json")
-    : path.join(homeDir, ".claude.json");
-  const now = Date.now();
-  const cached = cachedClaudeCliEmail.get(configPath);
-  if (cached && now - cached.readAt < CLAUDE_CLI_CONFIG_EMAIL_TTL_MS) {
-    return cached.value;
-  }
-  let value: string | undefined;
-  try {
-    const raw = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
-    const email = objectRecord(objectRecord(raw)?.oauthAccount)?.emailAddress;
-    value = typeof email === "string" && email.trim() ? email.trim() : undefined;
-  } catch {
-    value = undefined;
-  }
-  // Single-slot per config path; usage polls hit one config in steady state.
-  cachedClaudeCliEmail.clear();
-  cachedClaudeCliEmail.set(configPath, { value, readAt: now });
-  return value;
-}
-
 export async function fetchAnthropicUsage(
   ctx: ProviderFetchUsageSnapshotContext,
 ): Promise<ProviderUsageSnapshot> {
@@ -555,7 +512,9 @@ export async function fetchAnthropicUsage(
   if (snapshot.error) {
     return snapshot;
   }
-  const accountEmail = ctx.email ?? readClaudeCliAccountEmail(ctx.env, ctx.token);
+  // Identity is captured on the credential (profile store or the CLI-sync
+  // read), so a fetch-time ambient config read can never mislabel an account.
+  const accountEmail = ctx.email;
   // Plan labels stay window-gated: a windowless response has no plan quota to
   // label, while the account identity is still worth surfacing.
   const plan =

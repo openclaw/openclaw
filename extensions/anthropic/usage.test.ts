@@ -1,7 +1,4 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   fetchAnthropicAdminUsage,
   fetchAnthropicUsage,
@@ -32,25 +29,6 @@ function requestUrl(input: string | URL | Request): URL {
 function oauthFixtureToken(): string {
   return ["oauth", "token"].join("-");
 }
-
-// Mirrors the mocked readClaudeCliCredentialsCached access value.
-function cliAccessFixtureToken(): string {
-  return ["cli", "access"].join("-");
-}
-
-const tempHomes: string[] = [];
-
-async function createTempHome(): Promise<string> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "claude-usage-email-"));
-  tempHomes.push(home);
-  return home;
-}
-
-afterEach(async () => {
-  await Promise.all(
-    tempHomes.splice(0).map((home) => fs.rm(home, { recursive: true, force: true })),
-  );
-});
 
 describe("Anthropic provider usage", () => {
   it("aggregates provider-reported costs, cache tokens, models, and categories", async () => {
@@ -252,7 +230,7 @@ describe("Anthropic provider usage", () => {
     );
     const snapshot = await fetchAnthropicUsage({
       config: {},
-      env: { HOME: await createTempHome() },
+      env: {},
       provider: "anthropic",
       token: oauthFixtureToken(),
       email: "profile@example.com",
@@ -262,57 +240,19 @@ describe("Anthropic provider usage", () => {
     expect(snapshot.accountEmail).toBe("profile@example.com");
   });
 
-  it("falls back to the Claude CLI config email only when the CLI login fetched the usage", async () => {
-    const home = await createTempHome();
-    await fs.writeFile(
-      path.join(home, ".claude.json"),
-      JSON.stringify({ oauthAccount: { emailAddress: "cli-login@example.com" } }),
-    );
-    const fetchFn = vi.fn(
-      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
-    );
-    // The mocked CLI credential's access token matches: same account, use email.
-    const matching = await fetchAnthropicUsage({
-      config: {},
-      env: { HOME: home },
-      provider: "anthropic",
-      token: cliAccessFixtureToken(),
-      timeoutMs: 5000,
-      fetchFn,
-    });
-    expect(matching.accountEmail).toBe("cli-login@example.com");
-
-    // A different usage token means the ambient CLI login may be another
-    // account; the snapshot must stay unlabeled instead of guessing.
-    const foreign = await fetchAnthropicUsage({
-      config: {},
-      env: { HOME: home },
-      provider: "anthropic",
-      token: oauthFixtureToken(),
-      timeoutMs: 5000,
-      fetchFn,
-    });
-    expect(foreign.accountEmail).toBeUndefined();
-  });
-
-  it("reads the CLI config email from CLAUDE_CONFIG_DIR when set", async () => {
-    const configDir = await createTempHome();
-    await fs.writeFile(
-      path.join(configDir, ".claude.json"),
-      JSON.stringify({ oauthAccount: { emailAddress: "scoped@example.com" } }),
-    );
+  it("leaves the account unlabeled when the credential carries no email", async () => {
     const fetchFn = vi.fn(
       async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
     );
     const snapshot = await fetchAnthropicUsage({
       config: {},
-      env: { HOME: await createTempHome(), CLAUDE_CONFIG_DIR: configDir },
+      env: {},
       provider: "anthropic",
-      token: cliAccessFixtureToken(),
+      token: oauthFixtureToken(),
       timeoutMs: 5000,
       fetchFn,
     });
-    expect(snapshot.accountEmail).toBe("scoped@example.com");
+    expect(snapshot.accountEmail).toBeUndefined();
   });
 
   it("does not attach a plan label when usage has no windows", async () => {
