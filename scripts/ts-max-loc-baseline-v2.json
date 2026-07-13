@@ -342,7 +342,7 @@
   "extensions/slack/src/monitor/replies.ts": 623,
   "extensions/slack/src/monitor/slash.ts": 1098,
   "extensions/slack/src/reply-blocks.ts": 505,
-  "extensions/slack/src/send.ts": 1422,
+  "extensions/slack/src/send.ts": 1412,
   "extensions/sms/src/twilio.ts": 566,
   "extensions/synology-chat/src/webhook-handler.ts": 675,
   "extensions/telegram/src/action-runtime.ts": 918,
