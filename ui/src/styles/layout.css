@@ -117,6 +117,48 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
+/* Shipped Mac app builds without web chrome still use openclaw-native-nav
+   above; new hosts render the replacement controls in this document. Unlike
+   that rule this keeps the drawer hamburger: the web toolbar hides at
+   <=1100px, so narrow windows still need the in-page toggle. */
+html.openclaw-native-web-chrome .shell-nav-expand,
+html.openclaw-native-web-chrome .sidebar-brand__collapse {
+  display: none;
+}
+
+.macos-titlebar-controls {
+  position: fixed;
+  top: 0;
+  left: 78px;
+  /* Above app chrome (<=45), below dropdowns/dialogs (>=100). */
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 156px;
+  height: var(--openclaw-native-titlebar-height, 50px);
+}
+
+.macos-titlebar-controls__button.topbar-icon-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.macos-titlebar-controls__button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 96%, transparent);
+  color: var(--text);
+}
+
+.macos-titlebar-controls__button:disabled {
+  opacity: 0.38;
+}
+
+@media (max-width: 1100px) {
+  .macos-titlebar-controls {
+    display: none;
+  }
+}
+
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
@@ -1974,7 +2016,8 @@ openclaw-session-menu[popover] {
 }
 
 .sidebar-agent-chip__main:hover,
-.sidebar-agent-chip__main:focus-visible {
+.sidebar-agent-chip__main:focus-visible,
+.sidebar-agent-chip__main--open {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
@@ -2093,12 +2136,11 @@ openclaw-session-menu[popover] {
   stroke-linejoin: round;
 }
 
-.sidebar-agent-chip__menu-toggle svg {
-  transition: transform var(--duration-fast) ease;
-}
-
-.sidebar-agent-chip__menu-toggle--open svg {
-  transform: rotate(180deg);
+.sidebar-agent-chip__menu-unread {
+  flex: none;
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
 }
 
 /* The docs row is the menu's only real hyperlink; keep it looking like a row. */
@@ -2662,29 +2704,7 @@ openclaw-session-menu[popover] {
   color: var(--muted);
 }
 
-.sidebar-agent-section {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.sidebar-agent-section__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}
-
-.sidebar-agent-section__header:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-}
-
+/* Kept for the agent-chip menu switcher rows (sessions list is single-agent now). */
 .sidebar-agent-section__avatar {
   display: inline-flex;
   align-items: center;
@@ -2696,25 +2716,6 @@ openclaw-session-menu[popover] {
   color: var(--text-strong);
   font-size: 11px;
   font-weight: 600;
-  flex: none;
-}
-
-.sidebar-agent-section__name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.sidebar-agent-section--expanded > .sidebar-agent-section__header .sidebar-agent-section__name {
-  color: var(--text-strong);
-}
-
-.sidebar-agent-section__unread {
   flex: none;
 }
 

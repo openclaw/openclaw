@@ -529,13 +529,15 @@ final class TalkModeManager: NSObject {
         let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if trimmed == self.mainSessionKey { return false }
-        let shouldRestartTalk = self.isEnabled &&
-            (self.hasRealtimeOwnerOrStart || self.hasContinuousTalkOwner)
+        let hasTalkOwner = self.hasRealtimeOwnerOrStart || self.hasContinuousTalkOwner
+        let shouldRestartTalk = self.isEnabled && hasTalkOwner
         if let captureId = self.activePTTCaptureId {
             _ = self.cancelPushToTalk(captureId: captureId)
         }
         self.cancelFinishingPushToTalk()
-        if shouldRestartTalk {
+        if hasTalkOwner {
+            // Session identity owns every in-flight relay/capture generation, even while
+            // Talk is disabled. Leaving one alive can publish work into the replacement session.
             self.cancelPendingStart()
             self.resetRealtimeRestartState()
             self.stopRealtimeSession()

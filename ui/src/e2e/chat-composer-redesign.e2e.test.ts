@@ -147,6 +147,22 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect
         .poll(() => model.evaluate((node) => node.closest(".agent-chat__composer-footer") != null))
         .toBe(true);
+      // The settings chip must sit centered between the footer divider and
+      // the card edge (the old asymmetric footer padding pinned it to the top).
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const footer = document
+              .querySelector(".agent-chat__composer-footer")
+              ?.getBoundingClientRect();
+            const chip = document.querySelector(".chat-settings-chip")?.getBoundingClientRect();
+            if (!footer || !chip) {
+              return null;
+            }
+            return Math.abs(chip.top - footer.top - (footer.bottom - chip.bottom));
+          }),
+        )
+        .toBeLessThanOrEqual(1.5);
       await expect.poll(() => composer.locator(".agent-chat__composer-header").count()).toBe(0);
       await expect
         .poll(() => model.locator(".chat-controls__inline-select-label").textContent())

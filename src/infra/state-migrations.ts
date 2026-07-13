@@ -11,7 +11,10 @@ import {
   listBundledChannelLegacySessionSurfaces,
   listBundledChannelLegacyStateMigrationDetectors,
 } from "../channels/plugins/bundled.js";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import {
   isNamedProfile,
   resolveLegacyStateDirs,
@@ -59,6 +62,7 @@ import {
 } from "../plugins/installed-plugin-index.js";
 import {
   buildAgentMainSessionKey,
+  DEFAULT_ACCOUNT_ID,
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isValidAgentId,
@@ -86,6 +90,11 @@ import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { normalizeConversationRef } from "./outbound/session-binding-normalization.js";
 import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
 import { isWithinDir } from "./path-safety.js";
+import {
+  detectLegacyChannelPairingState,
+  migrateLegacyChannelPairingState,
+  type LegacyChannelPairingStateDetection,
+} from "./state-migrations.channel-pairing.js";
 import {
   detectLegacyDebugProxyCaptureSidecar,
   migrateLegacyDebugProxyCaptureSidecar,
@@ -185,6 +194,7 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  channelPairing: LegacyChannelPairingStateDetection;
   execApprovals: {
     sourcePath: string;
     targetPath: string;
@@ -4369,6 +4379,66 @@ export async function detectLegacyStateMigrations(params: {
     sourcePath: resolveLegacyCurrentConversationBindingsPath(stateDir),
   };
   const hasCurrentConversationBindings = fileExists(currentConversationBindings.sourcePath);
+  const configuredChannels = Object.entries(params.cfg.channels ?? {});
+  const configuredAccountIds = Object.fromEntries(
+    configuredChannels.map(([channelId, value]) => {
+      const channelConfig =
+        value && typeof value === "object" && !Array.isArray(value)
+          ? (value as { accounts?: unknown; defaultAccount?: unknown })
+          : undefined;
+      const plugin = getChannelPlugin(channelId as ChannelId);
+      const accountIds = [
+        ...(plugin?.config.listAccountIds(params.cfg) ?? []),
+        ...(channelConfig?.accounts &&
+        typeof channelConfig.accounts === "object" &&
+        !Array.isArray(channelConfig.accounts)
+          ? Object.keys(channelConfig.accounts)
+          : []),
+        ...(typeof channelConfig?.defaultAccount === "string"
+          ? [channelConfig.defaultAccount]
+          : []),
+        ...(params.cfg.bindings ?? []).flatMap((binding) =>
+          binding.match?.channel === channelId && typeof binding.match.accountId === "string"
+            ? [binding.match.accountId]
+            : [],
+        ),
+      ];
+      return [
+        channelId,
+        Array.from(new Set(accountIds.map((entry) => entry.trim()).filter(Boolean))),
+      ];
+    }),
+  );
+  const channelPairing = detectLegacyChannelPairingState({
+    sourceDir: oauthDir,
+    configuredChannelIds: configuredChannels.map(([channelId]) => channelId),
+    configuredDefaultAccountIds: Object.fromEntries(
+      configuredChannels.flatMap(([channelId, value]) => {
+        const boundAccountId = params.cfg.bindings?.find(
+          (binding) =>
+            normalizeAgentId(binding.agentId) === targetAgentId &&
+            binding.match?.channel === channelId &&
+            typeof binding.match.accountId === "string",
+        )?.match.accountId;
+        if (typeof boundAccountId === "string" && boundAccountId.trim()) {
+          return [[channelId, boundAccountId.trim()]];
+        }
+        const defaultAccount =
+          value && typeof value === "object" && !Array.isArray(value)
+            ? (value as { defaultAccount?: unknown }).defaultAccount
+            : undefined;
+        if (typeof defaultAccount === "string" && defaultAccount.trim()) {
+          return [[channelId, defaultAccount.trim()]];
+        }
+        const plugin = getChannelPlugin(channelId as ChannelId);
+        if (plugin) {
+          return [[channelId, resolveChannelDefaultAccountId({ plugin, cfg: params.cfg })]];
+        }
+        return [[channelId, configuredAccountIds[channelId]?.toSorted()[0] ?? DEFAULT_ACCOUNT_ID]];
+      }),
+    ),
+    configuredAccountIds,
+  });
   const channelPlans = await collectChannelLegacyStateMigrationPlans({
     cfg: params.cfg,
     env,
@@ -4454,6 +4524,9 @@ export async function detectLegacyStateMigrations(params: {
   if (hasCurrentConversationBindings) {
     preview.push("- Current-conversation bindings: legacy JSON file → shared SQLite state");
   }
+  if (channelPairing.hasLegacy) {
+    preview.push("- Channel pairing state: legacy JSON files → shared SQLite state");
+  }
   if (execApprovals.hasLegacy) {
     preview.push(`- Exec approvals: ${execApprovals.sourcePath} → ${execApprovals.targetPath}`);
   }
@@ -4536,6 +4609,7 @@ export async function detectLegacyStateMigrations(params: {
       ...currentConversationBindings,
       hasLegacy: hasCurrentConversationBindings,
     },
+    channelPairing,
     execApprovals,
     warnings: pluginPlanWarnings,
     notices,
@@ -5213,6 +5287,10 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.currentConversationBindings,
     stateDir: detected.stateDir,
   });
+  const channelPairing = migrateLegacyChannelPairingState({
+    detected: detected.channelPairing,
+    env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
+  });
   const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
@@ -5249,6 +5327,7 @@ export async function runLegacyStateMigrations(params: {
       ...configHealth.changes,
       ...pluginBindingApprovals.changes,
       ...currentConversationBindings.changes,
+      ...channelPairing.changes,
       ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
@@ -5270,6 +5349,7 @@ export async function runLegacyStateMigrations(params: {
       ...configHealth.warnings,
       ...pluginBindingApprovals.warnings,
       ...currentConversationBindings.warnings,
+      ...channelPairing.warnings,
       ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
@@ -6100,6 +6180,10 @@ export async function autoMigrateLegacyState(params: {
       detected: detected.currentConversationBindings,
       stateDir: detected.stateDir,
     });
+    const channelPairing = migrateLegacyChannelPairingState({
+      detected: detected.channelPairing,
+      env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
+    });
     const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
     const preSessionChannelPlans = await runLegacyMigrationPlans(
       detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
@@ -6124,6 +6208,7 @@ export async function autoMigrateLegacyState(params: {
       ...configHealth.changes,
       ...pluginBindingApprovals.changes,
       ...currentConversationBindings.changes,
+      ...channelPairing.changes,
       ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
@@ -6144,6 +6229,7 @@ export async function autoMigrateLegacyState(params: {
       ...configHealth.warnings,
       ...pluginBindingApprovals.warnings,
       ...currentConversationBindings.warnings,
+      ...channelPairing.warnings,
       ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
@@ -6170,6 +6256,7 @@ export async function autoMigrateLegacyState(params: {
         configHealth.changes.length > 0 ||
         pluginBindingApprovals.changes.length > 0 ||
         currentConversationBindings.changes.length > 0 ||
+        channelPairing.changes.length > 0 ||
         execApprovals.changes.length > 0 ||
         preSessionChannelPlans.changes.length > 0 ||
         pluginPlans.changes.length > 0,
@@ -6195,6 +6282,7 @@ export async function autoMigrateLegacyState(params: {
     !detected.configHealth.hasLegacy &&
     !detected.pluginBindingApprovals.hasLegacy &&
     !detected.currentConversationBindings.hasLegacy &&
+    !detected.channelPairing.hasLegacy &&
     !detected.execApprovals.hasLegacy
   ) {
     const changes = [
@@ -6262,6 +6350,10 @@ export async function autoMigrateLegacyState(params: {
     detected: detected.currentConversationBindings,
     stateDir: detected.stateDir,
   });
+  const channelPairing = migrateLegacyChannelPairingState({
+    detected: detected.channelPairing,
+    env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
+  });
   const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
@@ -6299,6 +6391,7 @@ export async function autoMigrateLegacyState(params: {
     ...configHealth.changes,
     ...pluginBindingApprovals.changes,
     ...currentConversationBindings.changes,
+    ...channelPairing.changes,
     ...execApprovals.changes,
     ...preSessionChannelPlans.changes,
     ...pluginPlans.changes,
@@ -6323,6 +6416,7 @@ export async function autoMigrateLegacyState(params: {
     ...configHealth.warnings,
     ...pluginBindingApprovals.warnings,
     ...currentConversationBindings.warnings,
+    ...channelPairing.warnings,
     ...execApprovals.warnings,
     ...preSessionChannelPlans.warnings,
     ...pluginPlans.warnings,

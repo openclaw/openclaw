@@ -393,7 +393,6 @@ export const nl: TranslationMap = {
     confirmForceDelete: "Snapshot mislukt: {error}\n\nVerwijderen zonder snapshot?",
   },
   agentChip: {
-    openConversation: "Open je gesprek met {name}",
     menuLabel: "Agentmenu",
     agents: "Agents",
     working: "Bezig…",
@@ -1461,6 +1460,8 @@ export const nl: TranslationMap = {
     blockedAgentFilter: "geblokkeerd door agentfilter",
   },
   nav: {
+    back: "Terug",
+    forward: "Vooruit",
     chat: "Chat",
     settings: "Instellingen",
     settingsGeneral: "Algemeen",
@@ -3594,6 +3595,14 @@ export const nl: TranslationMap = {
       remove: "Verwijderen",
       more: "Meer acties",
       history: "Geschiedenis",
+    },
+    runNotStarted: {
+      notDue: "Deze automatisering hoeft nog niet te worden uitgevoerd.",
+      alreadyRunning: "Deze automatisering wordt al uitgevoerd.",
+      recoveryPending: "Het herstel van de planner is nog bezig.",
+      invalidSpec: "Deze automatisering heeft een ongeldig schema of een ongeldige payload.",
+      stopped: "De planner is gestopt.",
+      unknown: "Deze automatisering kon niet worden gestart.",
     },
     jobs: {
       schedule: "Schema",

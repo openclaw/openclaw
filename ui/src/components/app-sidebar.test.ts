@@ -49,6 +49,7 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   canPairDevice: boolean;
+  sessionKey: string;
   onNavigate: (routeId: string, options?: { search?: string }) => void;
   sessionCatalogs: SessionCatalog[];
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
@@ -227,11 +228,12 @@ async function mountSidebar(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
   sidebar.variant = variant;
-  provider.setContext(createContext(gateway, sessions, agentsList));
+  const context = createContext(gateway, sessions, agentsList);
+  provider.setContext(context);
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
-  return { provider, sidebar };
+  return { provider, sidebar, context };
 }
 
 afterEach(() => {
@@ -274,7 +276,7 @@ describe("AppSidebar agent chip", () => {
     agents: [{ id: "main", identity: { name: "Molty" } }, { id: "research" }],
   } as AgentsListResult;
 
-  it("resumes the newest session for the active agent from the chip body", async () => {
+  it("resumes the newest session when the menu switches to an agent with cached rows", async () => {
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKey = vi.fn();
     (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
@@ -282,6 +284,8 @@ describe("AppSidebar agent chip", () => {
     const { sidebar } = await mountSidebar(
       gatewayHarness.gateway,
       createSessions("main", ["agent:main:main", "agent:main:task"]),
+      "panel",
+      TWO_AGENTS,
     );
     const onNavigate = vi.fn();
     sidebar.connected = true;
@@ -289,24 +293,27 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const rows = [
+      ...(sidebar.querySelectorAll<HTMLButtonElement>(
+        '.sidebar-agent-menu [role="menuitemradio"]',
+      ) ?? []),
+    ];
+    rows.find((row) => row.textContent?.includes("Molty"))?.click();
     // createSessionState stamps ascending updatedAt, so the last key is newest.
     expect(setSessionKey).toHaveBeenCalledWith("agent:main:task");
     expect(onNavigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Atask" });
   });
 
-  it("shows offline and routes the chip body to settings when disconnected", async () => {
+  it("shows offline in the chip subtitle when disconnected", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const onNavigate = vi.fn();
     sidebar.connected = false;
-    sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__subtitle")?.textContent?.trim()).toBe(
       "Offline",
     );
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
-    expect(onNavigate).toHaveBeenCalledWith("config");
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {
@@ -331,6 +338,58 @@ describe("AppSidebar agent chip", () => {
     );
   });
 
+  it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar, context } = await mountSidebar(gateway, harness.sessions, "panel", TWO_AGENTS);
+    sidebar.connected = true;
+    const defaults = { modelProvider: null, model: null, contextTokens: null };
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults,
+        sessions: [
+          {
+            key: "agent:research:one",
+            kind: "direct",
+            label: "Research task",
+            updatedAt: 3,
+            unread: true,
+          },
+        ],
+      },
+      agentId: "research",
+    });
+    harness.publishList({
+      result: {
+        ts: 3,
+        path: "",
+        count: 1,
+        defaults,
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5 }],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+
+    // No per-agent sections: the chip menu owns agent switching now.
+    expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(1);
+    expect(sidebar.querySelector(".sidebar-agent-chip__menu-unread")).not.toBeNull();
+
+    // Mid-switch (selected agent != loaded result agent) the list renders the
+    // target agent's cached rows instead of flashing empty until refresh.
+    // Chip switch and chat-pane both sync agentSelection with the route.
+    context.agentSelection.state.selectedId = "research";
+    sidebar.sessionKey = "agent:research:one";
+    await sidebar.updateComplete;
+    const rows = [...sidebar.querySelectorAll(".sidebar-recent-session")];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("Research task");
+  });
+
   it("opens the footer menu with agent switching and folded-in utilities", async () => {
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKey = vi.fn();
@@ -349,7 +408,7 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__menu-toggle")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
 
     const menu = sidebar.querySelector(".sidebar-agent-menu");

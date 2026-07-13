@@ -170,7 +170,7 @@ export function restoreOwnedCurrentSharedGatewaySessionGeneration(
 }
 
 /** Update the required marker as one ownership-changing mutation. */
-export function setRequiredSharedGatewaySessionGeneration(
+function setRequiredSharedGatewaySessionGeneration(
   state: SharedGatewaySessionGenerationState,
   required: string | undefined | null,
 ): void {
