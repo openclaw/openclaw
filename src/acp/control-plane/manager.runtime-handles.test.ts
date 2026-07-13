@@ -726,6 +726,7 @@ describe("AcpSessionManager runtime handles", () => {
       text: "initial one-shot",
       mode: "prompt",
       requestId: "r-oneshot-initial",
+      provenance: "system",
     });
     const managerB = new AcpSessionManager();
     await managerB.runTurn({
@@ -734,6 +735,7 @@ describe("AcpSessionManager runtime handles", () => {
       text: "follow-up",
       mode: "prompt",
       requestId: "r-oneshot-follow-up",
+      provenance: "system",
     });
 
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
