@@ -2,11 +2,7 @@
  * Prepares the attempt-local tool catalog, schema projection, and diagnostics.
  */
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
-import { copyPluginToolMeta } from "../../../plugins/tools.js";
-import { copyBeforeToolCallHookMarker } from "../../agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
-import { copyChannelAgentToolMeta } from "../../channel-tools.js";
-import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
 import {
   applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
@@ -30,48 +26,17 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
-import { copyToolTerminalPresentation } from "../../tool-terminal-presentation.js";
-import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { buildToolSearchRunPlan } from "./attempt.tool-search-run-plan.js";
-import { notifyToolActivity } from "./tool-activity-heartbeat.js";
+import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedToolBase = ReturnType<typeof prepareEmbeddedAttemptToolBase>;
 type PreparedBundleTools = Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
 type ProviderRuntimeHandle = Parameters<typeof logAgentRuntimeToolDiagnostics>[0]["runtimeHandle"];
-
-export function wrapEmbeddedAttemptToolWithActivity<T extends AnyAgentTool>(
-  tool: T,
-  runId: string,
-): T {
-  const originalExecute = tool.execute;
-  const wrappedTool = {
-    ...tool,
-    execute: (async (...args: Parameters<typeof originalExecute>) => {
-      // Long-running tools keep the attempt's idle watchdog alive.
-      const interval = setInterval(() => notifyToolActivity(runId), 60_000);
-      interval.unref?.();
-      try {
-        notifyToolActivity(runId);
-        return await originalExecute(...args);
-      } finally {
-        clearInterval(interval);
-        notifyToolActivity(runId);
-      }
-    }) as typeof originalExecute,
-  } as T;
-  // Tool metadata lives in identity-keyed WeakMaps, so object spread is insufficient.
-  copyPluginToolMeta(tool, wrappedTool);
-  copyChannelAgentToolMeta(tool, wrappedTool);
-  copyBeforeToolCallHookMarker(tool, wrappedTool);
-  copyToolTerminalPresentation(tool, wrappedTool);
-  copyCodeModeControlToolIdentity(tool, wrappedTool);
-  return wrappedTool;
-}
 
 export function prepareEmbeddedAttemptToolCatalog(input: {
   attempt: EmbeddedRunAttemptParams;
