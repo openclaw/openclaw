@@ -202,7 +202,7 @@ function resolveAttachmentMime(params: {
   );
 }
 
-function isBase64DataCharCode(code: number): boolean {
+export function isBase64DataCharCode(code: number): boolean {
   return (
     (code >= 0x41 && code <= 0x5a) ||
     (code >= 0x61 && code <= 0x7a) ||
@@ -212,7 +212,7 @@ function isBase64DataCharCode(code: number): boolean {
   );
 }
 
-function isValidBase64(value: string): boolean {
+export function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
