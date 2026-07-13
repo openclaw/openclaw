@@ -562,6 +562,10 @@ function createStreamFnWithExtraParams(
       ...streamParams,
       ...(cacheRetention ? { cacheRetention } : {}),
       ...options,
+      // Re-assert the resolved cacheRetention when the caller's options carries
+      // an own-property undefined that would otherwise clobber it via spread
+      // (e.g. the proxy transport always emits cacheRetention as an own key).
+      ...(cacheRetention && options?.cacheRetention == null ? { cacheRetention } : {}),
     });
   };
 
