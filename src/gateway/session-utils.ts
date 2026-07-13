@@ -2203,7 +2203,7 @@ export function buildGatewaySessionRow(params: {
       cfg,
       key,
       sessionAgentId,
-      groupDisplayTitle ?? originLabel,
+      groupDisplayTitle,
       entry,
     ),
     spawnedBy: subagentOwner || entry?.spawnedBy,
