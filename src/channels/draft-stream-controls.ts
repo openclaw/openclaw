@@ -157,15 +157,16 @@ async function deleteFinalizableDraftMessage<T>(
 
 /**
  * Stops a draft stream and deletes its preview message when the stored id is valid.
- * Stateful callers can retain the exact failed target through onDeleteFailure.
+ * Claims the current id before deletion; stateful callers can retain failures through
+ * onDeleteFailure without making overlapping clears delete the same message twice.
  */
 export async function clearFinalizableDraftMessage<T>(
   params: ClearFinalizableDraftMessageParams<T>,
 ): Promise<void> {
   await params.stopForClear();
   const messageId = params.readMessageId();
+  params.clearMessageId();
   if (!params.isValidMessageId(messageId)) {
-    params.clearMessageId();
     return;
   }
   const deleted = await deleteFinalizableDraftMessage(params, messageId);

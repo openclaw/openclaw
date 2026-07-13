@@ -65,15 +65,38 @@ describe("draft-stream-controls", () => {
     expect(deleteMessage).not.toHaveBeenCalled();
   });
 
-  it("clearFinalizableDraftMessage retains failed deletes for retry", async () => {
+  it("clearFinalizableDraftMessage claims a failed delete and reports its retry target", async () => {
     const warn = vi.fn();
     let messageId: string | undefined = "m-3";
-    const deleteMessage = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce(undefined);
-    const clear = async () => {
-      await clearFinalizableDraftMessage({
+    const onDeleteFailure = vi.fn();
+    const deleteMessage = vi.fn(async () => {
+      throw new Error("boom");
+    });
+
+    await clearFinalizableDraftMessage({
+      stopForClear: async () => {},
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
+      onDeleteFailure,
+      warn,
+      warnPrefix: "cleanup failed",
+    });
+
+    expect(messageId).toBeUndefined();
+    expect(onDeleteFailure).toHaveBeenCalledWith("m-3");
+    expect(warn).toHaveBeenCalledWith("cleanup failed: boom");
+  });
+
+  it("clearFinalizableDraftMessage claims an id before concurrent clears", async () => {
+    let messageId: string | undefined = "m-3";
+    const pendingDelete = createDeferred();
+    const deleteMessage = vi.fn(() => pendingDelete.promise);
+    const clear = () =>
+      clearFinalizableDraftMessage({
         stopForClear: async () => {},
         readMessageId: () => messageId,
         clearMessageId: () => {
@@ -81,21 +104,16 @@ describe("draft-stream-controls", () => {
         },
         isValidMessageId: (value): value is string => typeof value === "string",
         deleteMessage,
-        warn,
         warnPrefix: "cleanup failed",
       });
-    };
 
+    const firstClear = clear();
+    await vi.waitFor(() => expect(deleteMessage).toHaveBeenCalledWith("m-3"));
     await clear();
+    pendingDelete.resolve();
+    await firstClear;
 
-    expect(messageId).toBe("m-3");
-    expect(warn).toHaveBeenCalledWith("cleanup failed: boom");
-
-    await clear();
-
-    expect(deleteMessage).toHaveBeenCalledTimes(2);
-    expect(messageId).toBeUndefined();
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(deleteMessage).toHaveBeenCalledTimes(1);
   });
 
   it("clearFinalizableDraftMessage preserves a replacement id while delete is in flight", async () => {
