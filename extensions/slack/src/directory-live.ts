@@ -18,7 +18,7 @@ type SlackChannel = NonNullable<ConversationsListResponse["channels"]>[number];
 function createSlackDirectoryClient(params: DirectoryConfigParams) {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const token = account.userToken ?? account.botToken?.trim();
-  return token ? createSlackWebClient(token) : null;
+  return token ? createSlackWebClient(token, { timeout: 30_000 }) : null;
 }
 
 function normalizeQuery(value?: string | null): string {

@@ -13,13 +13,14 @@ import type { SlackProbe } from "./probe.js";
 const slackClientMocks = vi.hoisted(() => ({
   authTest: vi.fn(),
   usersInfo: vi.fn(),
+  createSlackWebClient: vi.fn(() => ({
+    auth: { test: slackClientMocks.authTest },
+    users: { info: slackClientMocks.usersInfo },
+  })),
 }));
 
 vi.mock("./client.js", () => ({
-  createSlackWebClient: () => ({
-    auth: { test: slackClientMocks.authTest },
-    users: { info: slackClientMocks.usersInfo },
-  }),
+  createSlackWebClient: slackClientMocks.createSlackWebClient,
 }));
 
 describe("Slack directory contract", () => {
@@ -30,6 +31,22 @@ describe("Slack directory contract", () => {
 
   it("keeps public probe aligned with base contract", () => {
     expectTypeOf<SlackProbe>().toMatchTypeOf<BaseProbeResult>();
+  });
+
+  it("passes 30s timeout to createSlackWebClient for directory client", async () => {
+    slackClientMocks.authTest.mockResolvedValue({ ok: true, user_id: "U123", user: "bot" });
+    slackClientMocks.usersInfo.mockResolvedValue({
+      ok: true,
+      user: { id: "U123", name: "bot", profile: { display_name: "Bot" } },
+    });
+
+    await getSlackDirectorySelfLive({
+      cfg: { channels: { slack: { botToken: "xoxb-test" } } },
+    } as Parameters<typeof getSlackDirectorySelfLive>[0]);
+
+    expect(slackClientMocks.createSlackWebClient).toHaveBeenCalledWith(expect.any(String), {
+      timeout: 30_000,
+    });
   });
 
   it("lists peers/groups from config", async () => {
