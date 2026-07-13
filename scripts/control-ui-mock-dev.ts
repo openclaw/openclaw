@@ -345,7 +345,7 @@ function buildChannelWizardMocks() {
     id: "mock-wizard-step-token",
     type: "text",
     message: "Paste the bot token from @BotFather",
-    placeholder: "123456:ABC-DEF…",
+    placeholder: "paste the token here",
     sensitive: true,
     executor: "client",
   };
