@@ -60,7 +60,7 @@ import {
   canonicalizeManifestModelCatalogProviderAlias,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
-  resolveManifestModelCatalogProviderTransportApi,
+  resolveManifestModelCatalogProviderTransport,
 } from "./model.static-catalog.js";
 
 type ProviderRuntimeHooks = {
@@ -627,6 +627,12 @@ function applyConfiguredProviderOverrides(params: {
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
+  const manifestAliasTransport = resolveManifestModelCatalogProviderTransport({
+    provider: params.provider,
+    modelId,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const defaultModelParams = findConfiguredAgentModelParams({
     cfg: params.cfg,
@@ -641,16 +647,34 @@ function applyConfiguredProviderOverrides(params: {
     const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
       stripSecretRefMarkers: true,
     });
+    const aliasTransport = manifestAliasTransport
+      ? resolveProviderTransport({
+          provider: params.provider,
+          modelId,
+          api: manifestAliasTransport.api ?? discoveredModel.api,
+          baseUrl:
+            normalizeTransportBaseUrl(manifestAliasTransport.baseUrl) ?? discoveredModel.baseUrl,
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          runtimeHooks: params.runtimeHooks,
+        })
+      : undefined;
     const requestConfig = resolveProviderRequestConfig({
       provider: params.provider,
-      api: discoveredModel.api,
-      baseUrl: discoveredModel.baseUrl,
+      api: aliasTransport?.api ?? discoveredModel.api,
+      baseUrl: aliasTransport?.baseUrl ?? discoveredModel.baseUrl,
       discoveredHeaders,
       capability: "llm",
       transport: "stream",
     });
     return {
       ...discoveredModel,
+      ...(manifestAliasTransport
+        ? {
+            api: requestConfig.api ?? discoveredModel.api,
+            baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
+          }
+        : {}),
       ...(resolvedParams ? { params: resolvedParams } : {}),
       // Discovered models originate from models.json and may contain persistence markers.
       headers: requestConfig.headers,
@@ -708,7 +732,8 @@ function applyConfiguredProviderOverrides(params: {
     !providerHeaders &&
     !providerRequest &&
     !providerParams &&
-    !providerConfig.localService
+    !providerConfig.localService &&
+    !manifestAliasTransport
   ) {
     const resolvedParams = mergeModelParams(
       readModelParams(discoveredModel.params),
@@ -749,20 +774,17 @@ function applyConfiguredProviderOverrides(params: {
   const configuredStaticCatalogBaseUrl = normalizeTransportBaseUrl(
     configuredStaticCatalogModel?.baseUrl,
   );
+  const manifestAliasBaseUrl = normalizeTransportBaseUrl(manifestAliasTransport?.baseUrl);
   const resolvedTransportApi = params.preferDiscoveredTransport
     ? (discoveredModel.api ??
       metadataOverrideModel?.api ??
       providerConfig.api ??
+      manifestAliasTransport?.api ??
       configuredStaticCatalogModel?.api ??
       providerDefaultApi)
     : (metadataOverrideModel?.api ??
       providerConfig.api ??
-      resolveManifestModelCatalogProviderTransportApi({
-        provider: params.provider,
-        modelId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-      }) ??
+      manifestAliasTransport?.api ??
       discoveredModel.api ??
       configuredStaticCatalogModel?.api ??
       providerDefaultApi);
@@ -770,9 +792,11 @@ function applyConfiguredProviderOverrides(params: {
     ? (discoveredBaseUrl ??
       metadataOverrideBaseUrl ??
       providerConfiguredBaseUrl ??
+      manifestAliasBaseUrl ??
       configuredStaticCatalogBaseUrl)
     : (metadataOverrideBaseUrl ??
       providerConfiguredBaseUrl ??
+      manifestAliasBaseUrl ??
       discoveredBaseUrl ??
       configuredStaticCatalogBaseUrl);
 

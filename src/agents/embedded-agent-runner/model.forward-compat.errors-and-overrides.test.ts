@@ -463,7 +463,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } satisfies OpenClawConfig;
 
     const result = resolveModelForTest(
       "azure-openai-responses",
@@ -485,10 +485,11 @@ describe("resolveModel forward-compat errors and overrides", () => {
           "azure-openai-responses": {
             baseUrl: "https://example.openai.azure.com/openai/v1",
             api: "azure-openai-responses",
+            models: [],
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } satisfies OpenClawConfig;
 
     const result = resolveModelForTest(
       "azure-openai-responses",
@@ -513,10 +514,11 @@ describe("resolveModel forward-compat errors and overrides", () => {
           "azure-openai-responses": {
             baseUrl: "https://example.openai.azure.com/openai/v1",
             api: "azure-openai-responses",
+            models: [],
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } satisfies OpenClawConfig;
 
     const result = resolveModelForTest(
       "azure-openai-responses",

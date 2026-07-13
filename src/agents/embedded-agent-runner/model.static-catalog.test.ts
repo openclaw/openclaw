@@ -57,7 +57,7 @@ import {
   loadBundledProviderStaticCatalogContextModels,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
-  resolveManifestModelCatalogProviderTransportApi,
+  resolveManifestModelCatalogProviderTransport,
 } from "./model.static-catalog.js";
 
 function setManifestPlugins(plugins: unknown[]) {
@@ -122,6 +122,37 @@ function createMistralManifestPlugin(overrides?: {
   };
 }
 
+function setConflictingAzureAliasPlugins() {
+  manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: "openai",
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["openai"],
+        modelCatalog: {
+          aliases: {
+            "azure-openai-responses": {
+              provider: "openai",
+              api: "azure-openai-responses",
+            },
+          },
+        },
+      },
+      {
+        id: "workspace-override",
+        origin: "workspace",
+        providers: ["github-copilot"],
+        modelCatalog: {
+          aliases: {
+            "azure-openai-responses": { provider: "github-copilot" },
+          },
+        },
+      },
+    ],
+  });
+}
+
 beforeEach(() => {
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReset();
   manifestMocks.listOpenClawPluginManifestMetadata.mockReset();
@@ -151,6 +182,9 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     manifestMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
+          id: "moonshot",
+          origin: "bundled",
+          enabledByDefault: true,
           providers: ["moonshot"],
           modelCatalog: {
             aliases: {
@@ -170,6 +204,9 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
   it("reuses the current plugin metadata snapshot for repeated alias lookups", () => {
     const plugins = [
       {
+        id: "moonshot",
+        origin: "bundled",
+        enabledByDefault: true,
         providers: ["moonshot"],
         modelCatalog: {
           aliases: {
@@ -218,6 +255,9 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     manifestMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
+          id: "moonshot",
+          origin: "bundled",
+          enabledByDefault: true,
           providers: ["moonshot"],
           modelCatalog: {
             aliases: {
@@ -239,9 +279,11 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     });
   });
 
-  it("canonicalizes Azure aliases without endpoints and exposes retained transport metadata", () => {
+  it("canonicalizes endpoint-less aliases and retains complete transport metadata", () => {
     const plugin = {
       id: "openai",
+      origin: "bundled",
+      enabledByDefault: true,
       providers: ["openai"],
       modelCatalog: {
         providers: {
@@ -255,6 +297,11 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
           "azure-openai-responses": {
             provider: "openai",
             api: "azure-openai-responses",
+          },
+          "azure-openai-fixed-endpoint": {
+            provider: "openai",
+            api: "azure-openai-responses",
+            baseUrl: "https://manifest-alias.example.com/openai/v1",
           },
         },
         discovery: { openai: "runtime" },
@@ -270,7 +317,7 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       }),
     ).toBe("openai");
     expect(
-      resolveManifestModelCatalogProviderTransportApi({
+      resolveManifestModelCatalogProviderTransport({
         provider: "azure-openai-responses",
         modelId: "gpt-5.5",
         cfg: {
@@ -284,7 +331,87 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
           },
         },
       }),
+    ).toEqual({ api: "azure-openai-responses" });
+    expect(
+      canonicalizeManifestModelCatalogProviderAlias({
+        provider: "azure-openai-fixed-endpoint",
+        modelId: "gpt-5.5",
+        cfg: {},
+      }),
+    ).toBe("azure-openai-fixed-endpoint");
+    expect(
+      resolveManifestModelCatalogProviderTransport({
+        provider: "azure-openai-fixed-endpoint",
+        modelId: "gpt-5.5",
+        cfg: {},
+      }),
+    ).toEqual({
+      api: "azure-openai-responses",
+      baseUrl: "https://manifest-alias.example.com/openai/v1",
+    });
+  });
+
+  it("ignores inactive workspace claims that collide with a bundled transport alias", () => {
+    setConflictingAzureAliasPlugins();
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(
+      canonicalizeManifestModelCatalogProviderAlias({
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.4-mini",
+        cfg,
+      }),
     ).toBe("azure-openai-responses");
+    expect(
+      resolveManifestModelCatalogProviderTransport({
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.4-mini",
+        cfg,
+      }),
+    ).toEqual({ api: "azure-openai-responses" });
+  });
+
+  it("fails closed when activated plugins claim the same provider alias", () => {
+    setConflictingAzureAliasPlugins();
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            models: [],
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "workspace-override": { enabled: true },
+        },
+      },
+    };
+
+    expect(
+      canonicalizeManifestModelCatalogProviderAlias({
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.4-mini",
+        cfg,
+      }),
+    ).toBe("azure-openai-responses");
+    expect(
+      resolveManifestModelCatalogProviderTransport({
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.4-mini",
+        cfg,
+      }),
+    ).toBeUndefined();
   });
 });
 
