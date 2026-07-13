@@ -6,7 +6,6 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   prepareGatewaySuspend,
-  resetGatewaySuspendCoordinatorForTest,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
 import {
@@ -175,12 +174,10 @@ const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
 const sendDurableMessageBatchMock = runtimeMocks.sendDurableMessageBatch;
 
 beforeEach(() => {
-  resetGatewaySuspendCoordinatorForTest();
   resetGatewayWorkAdmission();
 });
 
 afterEach(() => {
-  resetGatewaySuspendCoordinatorForTest();
   resetGatewayWorkAdmission();
 });
 

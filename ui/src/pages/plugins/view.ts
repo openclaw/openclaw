@@ -59,7 +59,7 @@ export type McpServerForm = {
   target: string;
 };
 
-export type PluginsViewProps = {
+type PluginsViewProps = {
   connected: boolean;
   loading: boolean;
   result: PluginListResult | null;
@@ -135,7 +135,7 @@ export function pluginRowKey(pluginId: string): string {
   return `plugin:${pluginId}`;
 }
 
-export function clawHubRowKey(packageName: string): string {
+function clawHubRowKey(packageName: string): string {
   return `clawhub:${packageName}`;
 }
 
@@ -180,7 +180,7 @@ function sortCatalogPlugins(plugins: readonly PluginCatalogItem[]): PluginCatalo
   );
 }
 
-export function installedPlugins(
+function installedPlugins(
   plugins: readonly PluginCatalogItem[],
   query = "",
   filter: InstalledFilter = "all",
@@ -204,15 +204,13 @@ export function installedPlugins(
   );
 }
 
-export type InstalledCategoryGroup = {
+type InstalledCategoryGroup = {
   category: string;
   label: string;
   plugins: PluginCatalogItem[];
 };
 
-export function groupInstalledByCategory(
-  plugins: readonly PluginCatalogItem[],
-): InstalledCategoryGroup[] {
+function groupInstalledByCategory(plugins: readonly PluginCatalogItem[]): InstalledCategoryGroup[] {
   const groups = new Map<string, PluginCatalogItem[]>();
   for (const plugin of plugins) {
     const category = plugin.category ?? "other";
@@ -233,16 +231,13 @@ export function groupInstalledByCategory(
     .toSorted((left, right) => rank(left.category) - rank(right.category));
 }
 
-export type DiscoverShelves = {
+type DiscoverShelves = {
   featured: PluginCatalogItem[];
   official: PluginCatalogItem[];
   connectors: ConnectorSuggestion[];
 };
 
-export function discoverShelves(
-  plugins: readonly PluginCatalogItem[],
-  query = "",
-): DiscoverShelves {
+function discoverShelves(plugins: readonly PluginCatalogItem[], query = ""): DiscoverShelves {
   const featured = sortCatalogPlugins(
     plugins.filter((plugin) => plugin.featured && matchesPlugin(plugin, query)),
   );

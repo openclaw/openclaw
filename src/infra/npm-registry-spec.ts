@@ -186,7 +186,7 @@ function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | nu
 }
 
 /** Returns whether a version is an OpenClaw monthly patch stable correction release. */
-export function isOpenClawStableCorrectionVersion(value: string): boolean {
+function isOpenClawStableCorrectionVersion(value: string): boolean {
   const parsed = parseOpenClawReleaseVersion(value);
   return parsed?.channel === "stable" && parsed.correctionNumber !== undefined;
 }

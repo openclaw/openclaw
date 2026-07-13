@@ -79,6 +79,7 @@ function makeContextParams(
     stopChannel: vi.fn(async () => undefined),
     markChannelLoggedOut: vi.fn(),
     wizardRunner: vi.fn(async () => undefined),
+    channelWizardRunner: vi.fn(async () => undefined),
     broadcastVoiceWakeChanged: vi.fn(),
     broadcastVoiceWakeRoutingChanged: vi.fn(),
     unavailableGatewayMethods: new Set(),

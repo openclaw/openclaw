@@ -95,7 +95,7 @@ const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const BLOCK_ART_LINE_RE = /^[\t \u00a0▀▄█]+$/u;
 const BLOCK_ART_GLYPH_RE = /[▀▄█]/u;
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
-export const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
+const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const FILE_SEGMENT_SOURCE = "[A-Za-z0-9_.@#+-]+";
@@ -450,11 +450,11 @@ function shouldRenderCodeBlockCopy(env: unknown): boolean {
   return (env as Partial<MarkdownRenderEnv> | undefined)?.codeBlockChrome !== "none";
 }
 
-export function encodeBlockArtCodeBlockCopyPayload(value: string): string {
+function encodeBlockArtCodeBlockCopyPayload(value: string): string {
   return `${blockArtCopyPayloadPrefix}${JSON.stringify(value)}`;
 }
 
-export function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {
+function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {
   if (
     encoding !== blockArtCodeBlockCopyPayloadEncoding ||
     !value.startsWith(blockArtCopyPayloadPrefix)
@@ -867,7 +867,7 @@ const autoHighlightLanguages = [
   "yaml",
 ];
 
-export function highlightCode(text: string, lang: string): string {
+function highlightCode(text: string, lang: string): string {
   const language = normalizeHighlightLanguage(lang);
   try {
     if (language && hljs.getLanguage(language)) {
@@ -947,7 +947,7 @@ function codeBlockCopyTextFromMarkdownToken(content: string): string {
   return content.endsWith("\n") ? content.slice(0, -1) : content;
 }
 
-export const md = new MarkdownIt({
+const md = new MarkdownIt({
   html: true, // Enable HTML recognition so html_block/html_inline overrides can escape it
   breaks: true,
   linkify: true,
@@ -1456,7 +1456,6 @@ const streamingRemendOptions = { katex: false, linkMode: "text-only" } satisfies
 function toStreamingTailHtml(tail: string, renderOptions: MarkdownRenderEnv): string {
   return renderSanitizedMarkdown(remend(tail, streamingRemendOptions), renderOptions);
 }
-
 export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},

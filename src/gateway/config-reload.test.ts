@@ -234,6 +234,16 @@ describe("buildGatewayReloadPlan", () => {
       restartHeartbeat: true,
     },
     {
+      path: "worktrees.cleanup.maxCount",
+      restart: false,
+      hot: "worktrees.cleanup.maxCount",
+    },
+    {
+      path: "worktrees.cleanup.maxTotalSizeGb",
+      restart: false,
+      hot: "worktrees.cleanup.maxTotalSizeGb",
+    },
+    {
       path: "unknownField",
       restart: true,
       reason: "unknownField",

@@ -279,6 +279,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const pluginPrereleaseScript = releaseWorkflow.jobs.plugin_prerelease.steps.find(
       (step: WorkflowStep) => step.name === "Dispatch and monitor plugin prerelease",
     ).run;
+    const releaseChecksStep = releaseWorkflow.jobs.release_checks.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
+    );
+    const releaseChecksScript = releaseChecksStep.run;
     const buildDistStep = workflow.jobs["build-artifacts"].steps.find(
       (step: WorkflowStep) => step.name === "Build dist",
     );
@@ -419,6 +423,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_REF")');
     expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_CONTEXT_REF")');
     expect(normalCiScript).toContain('args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")');
+    expect(releaseChecksScript).toContain(
+      'release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"',
+    );
+    expect(releaseChecksStep.env?.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
+    expect(releaseChecksScript).toContain('-f ref="$release_checks_target_ref"');
     expect(releaseWorkflowSource).toContain('--arg targetContextRef "$TARGET_CONTEXT_REF"');
     expect(releaseWorkflowSource).toContain("targetContextRef: $targetContextRef");
     expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');

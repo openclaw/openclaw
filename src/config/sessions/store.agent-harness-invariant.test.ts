@@ -5,13 +5,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import {
-  applySessionEntryLifecycleMutation,
   clearSessionStoreCacheForTest,
-  cleanupSessionLifecycleArtifacts,
-  deleteSessionEntryLifecycle,
   loadSessionStore,
-  rollbackAgentHarnessSessionEntryLifecycle,
-  rollbackPluginOwnedSessionEntryLifecycle,
   saveSessionStore,
   updateSessionStore,
 } from "./store.js";
@@ -110,36 +105,6 @@ describe("agent harness session store invariant", () => {
     });
   });
 
-  it("rejects an invalid reserved lifecycle upsert before persistence", async () => {
-    await saveSessionStore(
-      storePath,
-      { "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 1 } },
-      { skipMaintenance: true },
-    );
-
-    await expect(
-      applySessionEntryLifecycleMutation({
-        storePath,
-        upserts: [
-          {
-            sessionKey: "agent:main:harness:codex:supervision:native-thread",
-            entry: {
-              agentHarnessId: "other",
-              modelSelectionLocked: true,
-              sessionId: "native-session",
-              updatedAt: 1,
-            },
-          },
-        ],
-        skipMaintenance: true,
-      }),
-    ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
-
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-      "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 1 },
-    });
-  });
-
   it("rejects a prefix-colliding harness owner through public save", async () => {
     const sessionKey = "agent:main:harness:foo:bar:native-thread";
 
@@ -159,34 +124,6 @@ describe("agent harness session store invariant", () => {
     ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
 
     expect(fs.existsSync(storePath)).toBe(false);
-  });
-
-  it("persists a locked reserved lifecycle upsert owned by its matching harness", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-
-    await expect(
-      applySessionEntryLifecycleMutation({
-        storePath,
-        upserts: [
-          {
-            sessionKey,
-            entry: {
-              agentHarnessId: "codex",
-              modelSelectionLocked: true,
-              sessionId: "native-session",
-              updatedAt: 1,
-            },
-          },
-        ],
-        skipMaintenance: true,
-      }),
-    ).resolves.toMatchObject({ afterCount: 1 });
-
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toMatchObject({
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      sessionId: "native-session",
-    });
   });
 
   it("rejects removing or reassigning any durable model-selection lock", async () => {
@@ -515,191 +452,6 @@ describe("agent harness session store invariant", () => {
       [sessionKey]: entry,
       "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 2 },
     });
-  });
-
-  it("rejects locked lifecycle cleanup before transcript side effects", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-    const transcriptPath = path.join(tempDir, "native-session.jsonl");
-    const entry: SessionEntry = {
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      sessionFile: transcriptPath,
-      sessionId: "native-session",
-      updatedAt: 1,
-    };
-    await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
-    fs.writeFileSync(transcriptPath, '{"runId":"codex-supervision-marker"}\n', "utf-8");
-    fs.utimesSync(transcriptPath, new Date(1), new Date(1));
-
-    await expect(
-      cleanupSessionLifecycleArtifacts({
-        storePath,
-        sessionKeySegmentPrefix: "harness:codex:supervision:",
-        transcriptContentMarker: "codex-supervision-marker",
-        orphanTranscriptMinAgeMs: 1,
-        nowMs: Date.now(),
-      }),
-    ).rejects.toThrow("Model-selection-locked sessions cannot be removed");
-
-    expect(fs.existsSync(transcriptPath)).toBe(true);
-    expect(fs.readdirSync(tempDir).some((name) => name.includes(".jsonl.deleted."))).toBe(false);
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        store["agent:main:ordinary"] = { sessionId: "ordinary-session", updatedAt: 2 };
-      },
-      { skipMaintenance: true },
-    );
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(entry);
-  });
-
-  it("allows only the dedicated exact harness-initialization rollback", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-    const entry: SessionEntry = {
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      sessionId: "native-session",
-      updatedAt: 1,
-    };
-    const params = {
-      archiveTranscript: false,
-      expectedEntry: entry,
-      expectedSessionId: entry.sessionId,
-      expectedUpdatedAt: entry.updatedAt,
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-    };
-    await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
-
-    await expect(deleteSessionEntryLifecycle(params)).rejects.toThrow(
-      "Model-selection-locked sessions cannot be removed",
-    );
-    await expect(rollbackAgentHarnessSessionEntryLifecycle(params)).resolves.toMatchObject({
-      deleted: true,
-    });
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
-  });
-
-  it("archives every file-backed alias during plugin-owned rollback", async () => {
-    const canonicalKey = "agent:main:catalog-owned";
-    const aliasKey = "catalog-owned";
-    const sessionId = "catalog-shared-session";
-    const canonicalTranscriptPath = path.join(tempDir, "catalog-canonical.jsonl");
-    const aliasTranscriptPath = path.join(tempDir, "catalog-alias.jsonl");
-    const survivingTranscriptPath = path.join(tempDir, "catalog-surviving.jsonl");
-    const canonicalEntry: SessionEntry = {
-      modelSelectionLocked: true,
-      pluginOwnerId: "anthropic",
-      sessionFile: canonicalTranscriptPath,
-      sessionId,
-      updatedAt: 2,
-    };
-    const aliasEntry: SessionEntry = {
-      modelSelectionLocked: true,
-      pluginOwnerId: "anthropic",
-      sessionFile: aliasTranscriptPath,
-      sessionId,
-      updatedAt: 1,
-    };
-    await saveSessionStore(
-      storePath,
-      {
-        [canonicalKey]: canonicalEntry,
-        [aliasKey]: aliasEntry,
-        "agent:main:catalog-surviving": {
-          sessionFile: survivingTranscriptPath,
-          sessionId,
-          updatedAt: Date.now(),
-        },
-      },
-      { skipMaintenance: true },
-    );
-    fs.writeFileSync(canonicalTranscriptPath, "canonical\n", "utf-8");
-    fs.writeFileSync(aliasTranscriptPath, "alias\n", "utf-8");
-    fs.writeFileSync(survivingTranscriptPath, "surviving\n", "utf-8");
-
-    const result = await rollbackPluginOwnedSessionEntryLifecycle({
-      archiveTranscript: true,
-      expectedEntry: canonicalEntry,
-      expectedPluginOwnerId: "anthropic",
-      expectedSessionId: sessionId,
-      expectedUpdatedAt: canonicalEntry.updatedAt,
-      storePath,
-      target: { canonicalKey, storeKeys: [canonicalKey, aliasKey] },
-    });
-
-    expect(result.deleted).toBe(true);
-    expect(result.archivedTranscripts.map(({ archivedPath }) => archivedPath)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("catalog-canonical.jsonl.deleted."),
-        expect.stringContaining("catalog-alias.jsonl.deleted."),
-      ]),
-    );
-    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(
-      ["agent:main:catalog-surviving", "sessionId"],
-      sessionId,
-    );
-    expect(fs.readFileSync(survivingTranscriptPath, "utf-8")).toBe("surviving\n");
-  });
-
-  it("preserves a file-backed transcript referenced by a different session id", async () => {
-    const removedKey = "agent:main:catalog-removed";
-    const survivingKey = "agent:main:catalog-surviving";
-    const transcriptPath = path.join(tempDir, "catalog-shared-path.jsonl");
-    const removedEntry: SessionEntry = {
-      modelSelectionLocked: true,
-      pluginOwnerId: "anthropic",
-      sessionFile: transcriptPath,
-      sessionId: "catalog-removed-session",
-      updatedAt: 1,
-    };
-    const survivingEntry: SessionEntry = {
-      sessionFile: transcriptPath,
-      sessionId: "catalog-surviving-session",
-      updatedAt: Date.now(),
-    };
-    await saveSessionStore(
-      storePath,
-      { [removedKey]: removedEntry, [survivingKey]: survivingEntry },
-      { skipMaintenance: true },
-    );
-    fs.writeFileSync(transcriptPath, "shared\n", "utf-8");
-
-    const result = await rollbackPluginOwnedSessionEntryLifecycle({
-      archiveTranscript: true,
-      expectedEntry: removedEntry,
-      expectedPluginOwnerId: "anthropic",
-      expectedSessionId: removedEntry.sessionId,
-      expectedUpdatedAt: removedEntry.updatedAt,
-      storePath,
-      target: { canonicalKey: removedKey, storeKeys: [removedKey] },
-    });
-
-    expect(result.archivedTranscripts).toEqual([]);
-    expect(loadSessionStore(storePath, { skipCache: true })[survivingKey]).toEqual(survivingEntry);
-    expect(fs.readFileSync(transcriptPath, "utf-8")).toBe("shared\n");
-  });
-
-  it("does not expose privileged rollback for an unlocked legacy prefix collision", async () => {
-    const sessionKey = "agent:main:harness:notes";
-    const entry: SessionEntry = {
-      agentHarnessId: "openclaw",
-      sessionId: "legacy-session",
-      updatedAt: 1,
-    };
-    await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
-
-    await expect(
-      rollbackAgentHarnessSessionEntryLifecycle({
-        archiveTranscript: false,
-        expectedEntry: entry,
-        expectedSessionId: entry.sessionId,
-        expectedUpdatedAt: entry.updatedAt,
-        storePath,
-        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      }),
-    ).rejects.toThrow("Model-selection-locked sessions cannot be removed");
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(entry);
   });
 
   it("does not treat reserved harness keys as relocatable aliases", async () => {

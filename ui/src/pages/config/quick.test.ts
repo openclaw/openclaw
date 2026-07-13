@@ -2,7 +2,9 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderQuickSettings, type QuickSettingsProps } from "./quick.ts";
+import { renderQuickSettings } from "./quick.ts";
+
+type QuickSettingsProps = Parameters<typeof renderQuickSettings>[0];
 
 function expectButtonByText(container: Element, text: string): HTMLButtonElement {
   const button = Array.from(container.querySelectorAll("button")).find(

@@ -17,11 +17,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
-import type {
-  SessionCapability,
-  SessionDeleteOutcome,
-  SessionState,
-} from "../lib/sessions/index.ts";
+import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-sidebar.ts";
 import {
@@ -31,6 +27,8 @@ import {
 } from "./lobster-pet.ts";
 
 type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
+type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
+type SessionState = SessionCapability["state"];
 
 // Keep the attention widget inert: it fires its own health RPCs (cron.list,
 // models.authStatus) on connect, which would interleave with the nth-call
@@ -174,7 +172,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     Promise.resolve(successfulSessionPatch(key)),
   );
   const deleteSession = vi.fn(
-    (): Promise<SessionDeleteOutcome> => Promise.resolve({ deleted: false }),
+    (): Promise<SessionDeleteResult> => Promise.resolve({ deleted: false }),
   );
   const deleteMany = vi.fn(() =>
     Promise.resolve({

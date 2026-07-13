@@ -22,7 +22,7 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
-export type SessionNavigationInput = {
+type SessionNavigationInput = {
   result: SessionsListResult | null;
   resultAgentId?: string | null;
   sessionKey: string;
@@ -32,7 +32,7 @@ export type SessionNavigationInput = {
   compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
 };
 
-export type SessionNavigation = {
+type SessionNavigation = {
   currentSessionKey: string;
   selectedAgentId: string;
   defaultAgentId: string;

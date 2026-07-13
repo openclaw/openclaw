@@ -12,11 +12,6 @@ export type HeartbeatRunResult =
 export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
 export const HEARTBEAT_SKIP_LANES_BUSY = "lanes-busy";
-export type RetryableHeartbeatBusySkipReason =
-  | typeof HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT
-  | typeof HEARTBEAT_SKIP_CRON_IN_PROGRESS
-  | typeof HEARTBEAT_SKIP_LANES_BUSY;
-
 const RETRYABLE_BUSY_SKIP_REASONS = new Set([
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
@@ -45,7 +40,7 @@ export type HeartbeatWakeSource =
   | "retry"
   | "other";
 
-export type HeartbeatWakeOverride = {
+type HeartbeatWakeOverride = {
   target?: string;
   to?: string | undefined;
   accountId?: string | undefined;
@@ -339,26 +334,4 @@ export function requestHeartbeat(opts: {
     heartbeat: opts.heartbeat,
   });
   schedule(opts.coalesceMs ?? DEFAULT_COALESCE_MS, "normal");
-}
-
-export function hasHeartbeatWakeHandler() {
-  return handler !== null;
-}
-
-export function hasPendingHeartbeatWake() {
-  return pendingWakes.size > 0 || Boolean(timer) || scheduled;
-}
-
-export function resetHeartbeatWakeStateForTests() {
-  if (timer) {
-    clearTimeout(timer);
-  }
-  timer = null;
-  timerDueAt = null;
-  timerKind = null;
-  pendingWakes.clear();
-  scheduled = false;
-  running = false;
-  handlerGeneration += 1;
-  handler = null;
 }

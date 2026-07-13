@@ -19,6 +19,8 @@ const rootEntries = [
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
   // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
+  // Jiti virtualizes openclaw/plugin-sdk/agent-sessions through this cycle-safe barrel.
+  "src/agents/sessions/extension-sdk.ts!",
   "src/plugins/runtime/index.ts!",
   "src/plugins/source-display.ts!",
   "src/mcp/codex-supervision-tools-serve.ts!",

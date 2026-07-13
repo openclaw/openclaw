@@ -41,6 +41,10 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("approval.resolve");
   });
 
+  it("appends model probing without shifting older method indices", () => {
+    expect(listGatewayMethods().at(-1)).toBe("models.probe");
+  });
+
   it("advertises ClawHub skill trust methods", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("skills.securityVerdicts");
@@ -86,7 +90,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-5)).toEqual([
+    expect(coreMethods.slice(-6, -1)).toEqual([
       "sessions.catalog.archive",
       "approval.get",
       "approval.resolve",

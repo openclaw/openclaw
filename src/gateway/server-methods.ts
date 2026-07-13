@@ -171,6 +171,10 @@ const loadModelsHandlers = lazyHandlerModule(
   () => import("./server-methods/models.js"),
   (module) => module.modelsHandlers,
 );
+const loadModelsProbeHandlers = lazyHandlerModule(
+  () => import("./server-methods/models-probe.js"),
+  (module) => module.modelsProbeHandlers,
+);
 const loadNativeHookRelayHandlers = lazyHandlerModule(
   () => import("./server-methods/native-hook-relay.js"),
   (module) => module.nativeHookRelayHandlers,
@@ -490,6 +494,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["models.list"],
     loadHandlers: loadModelsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["models.probe"],
+    loadHandlers: loadModelsProbeHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["models.authLogout", "models.authStatus"],

@@ -607,6 +607,9 @@ async function runProvisionSetup(params: {
       "--id",
       params.inspect.id,
       "--keep=true",
+      // Workspace transfer is owned by the worker tunnel; crabbox run must not
+      // rsync the gateway checkout into the box just to execute setup.
+      "--no-sync",
       "--",
       "bash",
       "-lc",

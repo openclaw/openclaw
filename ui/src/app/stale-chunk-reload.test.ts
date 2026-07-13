@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   installStaleChunkReloadListener,
   isStaleChunkImportError,
-  resetStaleChunkReloadStateForTest,
   retryStaleChunkReload,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
@@ -63,7 +62,6 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 afterEach(() => {
-  resetStaleChunkReloadStateForTest();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -115,10 +113,9 @@ describe("scheduleStaleChunkReload", () => {
       }),
     ).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
-    resetStaleChunkReloadStateForTest();
     await expect(
       scheduleStaleChunkReload({
-        now: () => 2000,
+        now: () => 7000,
         buildId: "build-b",
         storage,
         reload,
@@ -153,7 +150,6 @@ describe("scheduleStaleChunkReload", () => {
         reload,
       }),
     ).resolves.toBe(false);
-    resetStaleChunkReloadStateForTest();
     await expect(
       scheduleStaleChunkReload({
         now: () => 1000,
