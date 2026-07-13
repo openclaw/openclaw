@@ -9952,6 +9952,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/self-learning
 - Headings:
   - H2: Enable self-learning
+  - H2: Review past sessions manually
   - H2: What OpenClaw can learn
   - H2: When experience review runs
   - H2: What the reviewer receives
@@ -9986,6 +9987,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Support files
   - H2: Agent tool
   - H2: Suggested skills
+  - H3: Scan past sessions
   - H2: Approval and autonomy
   - H2: Gateway methods
   - H2: Storage

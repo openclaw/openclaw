@@ -16,8 +16,6 @@ import { createSkillWorkshopHistoryScanState, type SkillWorkshopState } from "./
 export {
   createSkillWorkshopState,
   skillWorkshopRouteData,
-  type SkillWorkshopHistoryScanResult,
-  type SkillWorkshopHistoryScanState,
   type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./state.ts";

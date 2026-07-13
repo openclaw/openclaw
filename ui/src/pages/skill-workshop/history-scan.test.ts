@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { loadSkillWorkshopHistoryScanStatus, runSkillWorkshopHistoryScan } from "./history-scan.ts";
-import { createSkillWorkshopState, type SkillWorkshopHistoryScanResult } from "./proposals.ts";
+import { createSkillWorkshopState } from "./proposals.ts";
+import type { SkillWorkshopHistoryScanResult } from "./state.ts";
 
 function createSkillWorkshopHistoryScanState() {
   return createSkillWorkshopState().skillWorkshopHistoryScan;
