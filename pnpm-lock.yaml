@@ -1961,6 +1961,9 @@ importers:
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core
+      '@openclaw/retry':
+        specifier: workspace:*
+        version: link:../retry
 
   packages/model-catalog-core: {}
 
@@ -1971,6 +1974,8 @@ importers:
         version: 2.4.0
 
   packages/normalization-core: {}
+
+  packages/retry: {}
 
   packages/plugin-package-contract: {}
 
