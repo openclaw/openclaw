@@ -21,7 +21,9 @@ env:
 jobs:
   build_and_attach:
     name: Build and attach Linux companion bundles
-    runs-on: ubuntu-latest
+    # Oldest supported build base: bundles link against this glibc, so newer
+    # runners would silently drop Ubuntu 22.04/Debian 12 users.
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - name: Validate tag input format
@@ -29,8 +31,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
-            echo "Invalid release tag format: ${RELEASE_TAG}"
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+            # Prerelease semver (-alpha.N/-beta.N) maps to a Debian revision that
+            # sorts AFTER the plain stable version, breaking beta-to-stable
+            # upgrades; Linux bundles ship for stable tags only.
+            echo "Linux bundles ship for stable release tags only (vYYYY.M.PATCH); got: ${RELEASE_TAG}"
             exit 1
           fi
 

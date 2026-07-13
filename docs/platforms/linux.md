@@ -21,7 +21,7 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - opens the Gateway-served Control UI with its resolved authentication URL
 - remains available from the system tray when its window is closed
 
-Releases built from `main` ship `.deb` and AppImage bundles as assets on the
+Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
 [GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
 named `OpenClaw-<version>-amd64.deb` and `OpenClaw-<version>-amd64.AppImage`,
 with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
