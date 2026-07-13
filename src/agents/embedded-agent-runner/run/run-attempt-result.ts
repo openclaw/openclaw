@@ -4,7 +4,7 @@ import type { ToolSummaryTrace } from "../types.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import { resolveAttemptReplayMetadata } from "./incomplete-turn.js";
 
-export type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
 export function normalizeEmbeddedRunAttemptResult(
   attempt: EmbeddedRunAttemptForRunner,

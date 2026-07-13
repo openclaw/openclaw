@@ -17,14 +17,8 @@ import {
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
 import { splitSdkTools } from "../tool-split.js";
+import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
-
-export type ClientToolCallSlot = {
-  toolCallId: string;
-  name: string;
-  params?: Record<string, unknown>;
-  completed: boolean;
-};
 
 export function prepareEmbeddedAttemptClientTools(params: {
   attempt: EmbeddedRunAttemptParams;
@@ -48,7 +42,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
   });
 
   // Reserve synchronously so parallel client-tool batches preserve assistant source order.
-  const clientToolCallSlots: ClientToolCallSlot[] = [];
+  const clientToolCallSlots: EmbeddedAttemptClientToolCallSlot[] = [];
   const clientToolCallSlotIndexes = new Map<string, number>();
   const reserveClientToolCallSlot = (toolCallId: string, toolName: string) => {
     if (clientToolCallSlotIndexes.has(toolCallId)) {
