@@ -17,6 +17,7 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -178,6 +179,53 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.locator('[data-session-section="category:Recovered group"]').waitFor({
         state: "visible",
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a rejected sidebar mutation visible until the user dismisses it", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.patch"],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:rename-me", "Rename me", Date.now()),
+        ]),
+      },
+      sessionKey: "agent:main:rename-me",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const row = page.locator('[data-session-key="agent:main:rename-me"]');
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await row.hover();
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      page.once("dialog", (dialog) => void dialog.accept("Rejected rename"));
+      await page.getByRole("menuitem", { name: "Rename…" }).click();
+      await gateway.waitForRequest("sessions.patch");
+      await gateway.rejectDeferred("sessions.patch", {
+        code: "INVALID_REQUEST",
+        message: "sidebar rename rejected",
+      });
+
+      const error = page.locator("[data-sidebar-session-error]");
+      await error.waitFor({ state: "visible" });
+      await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
+      expect(
+        await error
+          .locator("xpath=ancestor::*[contains(@class, 'sidebar-recent-sessions')]")
+          .count(),
+      ).toBe(0);
+
+      await error.getByRole("button", { name: "Dismiss error" }).click();
+      await expect.poll(() => error.count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -818,6 +866,85 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.getByRole("menuitemradio", { name: "None" }).click();
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(4);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("preserves a collapsed sidebar group when its rename is rejected", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(
+      ({ key, value }) => {
+        try {
+          if (localStorage.getItem(key) === null) {
+            localStorage.setItem(key, value);
+          }
+        } catch {
+          // The opaque initial document has no storage; the app origin does.
+        }
+      },
+      {
+        key: collapsedSessionSectionsStorageKey,
+        value: JSON.stringify(["category:Research"]),
+      },
+    );
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.groups.rename"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", baseTime),
+          sessionRow("agent:main:paper", "Paper", baseTime - 60_000, {
+            category: "Research",
+          }),
+        ]),
+      },
+      sessionGroups: ["Research"],
+      sessionKey: "agent:main:main",
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const researchGroup = page.locator('[data-session-section="category:Research"]');
+      await researchGroup.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+      await researchGroup.locator(".sidebar-recent-sessions__head").hover();
+      await researchGroup.getByRole("button", { name: "Group options for Research" }).click();
+      page.once("dialog", (dialog) => void dialog.accept("Projects"));
+      await page.getByRole("menuitem", { name: "Rename group…" }).click();
+      await gateway.waitForRequest("sessions.groups.rename");
+      await gateway.rejectDeferred("sessions.groups.rename", {
+        code: "INVALID_REQUEST",
+        message: "rejected group rename",
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), collapsedSessionSectionsStorageKey),
+      ).toBe(JSON.stringify(["category:Research"]));
+      await researchGroup.waitFor({ state: "visible" });
+      expect(await page.locator('[data-session-section="category:Projects"]').count()).toBe(0);
+      expect(pageErrors).toEqual([]);
+
+      await page.reload();
+      await researchGroup.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), collapsedSessionSectionsStorageKey),
+      ).toBe(JSON.stringify(["category:Research"]));
     } finally {
       await context.close();
     }

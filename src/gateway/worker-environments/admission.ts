@@ -18,7 +18,7 @@ export type ExpectedWorkerBuild = {
   protocolFeatures: readonly string[];
 };
 
-export type WorkerConnectionAdmissionResult =
+type WorkerConnectionAdmissionResult =
   | { ok: true; identity: WorkerConnectionIdentity }
   | { ok: false; reason: WorkerAdmissionFailureReason };
 

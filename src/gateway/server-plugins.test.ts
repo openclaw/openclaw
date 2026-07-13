@@ -953,6 +953,34 @@ describe("loadGatewayPlugins", () => {
     expect(result.nodes).toEqual([{ nodeId: "connected", connected: true }]);
   });
 
+  test("projects effective node-command policy into the plugin node runtime", async () => {
+    const command = "agent.cli.claude.run.v1";
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext({
+      getRuntimeConfig: () => ({ gateway: { nodes: { denyCommands: [command] } } }),
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "node-policy",
+          connId: "conn-policy",
+          platform: "linux",
+          commands: [command],
+        }),
+      },
+    } as unknown as GatewayRequestContext);
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(true, {
+        nodes: [{ nodeId: "node-policy", connected: true, commands: [command] }],
+      });
+    });
+
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const result = await runtime.nodes.list({ connected: true });
+
+    expect(result.nodes[0]?.commands).toEqual([command]);
+    expect(result.nodes[0]?.invocableCommands).toEqual([]);
+  });
+
   test("lets trusted official plugin runtime request admin scope for browser proxy", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
     loadGatewayStartupPluginsForTest();

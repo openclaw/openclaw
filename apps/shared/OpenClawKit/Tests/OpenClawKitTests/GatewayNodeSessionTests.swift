@@ -543,6 +543,15 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test func `node connections use the node protocol floor`() {
+        #expect(
+            GatewayChannelActor.minimumProtocolVersion(role: "node", clientMode: "node") ==
+                GATEWAY_MIN_NODE_PROTOCOL_VERSION)
+        #expect(
+            GatewayChannelActor.minimumProtocolVersion(role: "operator", clientMode: "ui") ==
+                GATEWAY_MIN_PROTOCOL_VERSION)
+    }
+
     @Test
     func `watch approval warning text is optional and round trips`() throws {
         let legacy = try JSONDecoder().decode(

@@ -81,7 +81,6 @@ vi.mock("../utils/delivery-context.js", () => ({
 }));
 
 vi.mock("./bash-tools.exec-approval-followup.js", () => ({
-  buildExecApprovalFollowupPrompt: (text: string) => text,
   sendExecApprovalFollowup: vi.fn(async () => false),
 }));
 
