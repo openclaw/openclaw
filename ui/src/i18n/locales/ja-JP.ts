@@ -1760,7 +1760,6 @@ export const ja_JP: TranslationMap = {
     filterAll: "すべて",
     filterIssues: "問題",
     filterLabel: "インストール済みプラグインをフィルター",
-    pulseLabel: "有効 {enabled} 件、無効 {disabled} 件、問題あり {issues} 件",
     categoryChannels: "チャンネル",
     categoryProviders: "モデルプロバイダー",
     categoryMemory: "メモリ",

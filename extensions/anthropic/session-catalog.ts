@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +19,11 @@ export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
 export const CLAUDE_CLI_NODE_RUN_COMMAND = "agent.cli.claude.run.v1";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
-  claudeSessionCatalogSourceKey,
+  adoptedSessionKey,
+  adoptedSourceKey,
+  CLAUDE_LOCAL_SESSION_HOST_ID,
+} from "./session-catalog-adoption.js";
+import {
   currentClaudeSessionCatalogConfig,
   listBoundClaudeSessions,
   resolveClaudeCatalogCreateSession,
@@ -33,7 +36,6 @@ import {
 
 export type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
-const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
 const DEFAULT_TRANSCRIPT_LIMIT = 20;
@@ -52,8 +54,6 @@ const MAX_TRANSCRIPT_SCAN_BYTES = 64 * 1024 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
-const CLAUDE_ADOPTED_SESSION_KEY_PREFIX = "plugin:anthropic:catalog-adopt:claude:";
-
 const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 
@@ -1067,18 +1067,6 @@ async function readClaudeSessionTranscript(params: {
       ? { nextCursor: optionalString(page.nextCursor, MAX_CURSOR_LENGTH) }
       : {}),
   };
-}
-
-function adoptedSourceKey(hostId: string, threadId: string): string {
-  return claudeSessionCatalogSourceKey(hostId, threadId);
-}
-
-function adoptedSessionKey(hostId: string, threadId: string): string {
-  // Local rows hash threadId alone: adopted keys minted before node support
-  // must stay stable, or existing adopted sessions would orphan/duplicate.
-  const source =
-    hostId === CLAUDE_LOCAL_SESSION_HOST_ID ? threadId : adoptedSourceKey(hostId, threadId);
-  return `${CLAUDE_ADOPTED_SESSION_KEY_PREFIX}${createHash("sha256").update(source).digest("hex")}`;
 }
 
 async function readBoundedClaudeHistory(params: {

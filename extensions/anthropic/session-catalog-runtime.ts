@@ -13,15 +13,10 @@ import {
   CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID,
   CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
 } from "./cli-constants.js";
-
-const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
+import { adoptedSourceKey, CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 
 export function currentClaudeSessionCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
-}
-
-export function claudeSessionCatalogSourceKey(hostId: string, threadId: string): string {
-  return `${hostId}\0${threadId}`;
 }
 
 function boundClaudeSource(
@@ -69,7 +64,7 @@ export function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, str
   )) {
     const source = boundClaudeSource(api.id, entry);
     if (source) {
-      bound.set(claudeSessionCatalogSourceKey(source.hostId, source.threadId), sessionKey);
+      bound.set(adoptedSourceKey(source.hostId, source.threadId), sessionKey);
     }
   }
   return bound;

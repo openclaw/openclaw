@@ -6,11 +6,9 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { adoptedSourceKey } from "./session-catalog-adoption.js";
 import { createClaudeSessionNodeHostCommands } from "./session-catalog-node-commands.js";
-import {
-  claudeSessionCatalogSourceKey,
-  listBoundClaudeSessions,
-} from "./session-catalog-runtime.js";
+import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
@@ -139,8 +137,8 @@ describe("Claude session catalog", () => {
 
     expect(listBoundClaudeSessions(api)).toEqual(
       new Map([
-        [claudeSessionCatalogSourceKey("gateway:local", threadId), "agent:main:local"],
-        [claudeSessionCatalogSourceKey("node:node-a", threadId), "agent:main:node"],
+        [adoptedSourceKey("gateway:local", threadId), "agent:main:local"],
+        [adoptedSourceKey("node:node-a", threadId), "agent:main:node"],
       ]),
     );
   });
