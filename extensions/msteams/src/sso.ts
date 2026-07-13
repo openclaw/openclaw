@@ -26,7 +26,7 @@
 
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
-import { readMSTeamsHttpErrorDetail } from "./http-error.js";
+import { createMSTeamsHttpError } from "./http-error.js";
 import type { MSTeamsSsoTokenStore } from "./sso-token-store.js";
 import { buildUserAgent } from "./user-agent.js";
 
@@ -129,8 +129,12 @@ async function callUserTokenService(
     body: params.body === undefined ? undefined : JSON.stringify(params.body),
   });
   if (!response.ok) {
-    const error = await readMSTeamsHttpErrorDetail(response, `HTTP ${response.status}`);
-    return { error, status: response.status };
+    const error = await createMSTeamsHttpError(
+      response,
+      "msteams.sso: User Token service request failed",
+      { statusPrefix: "HTTP " },
+    );
+    return { error: error.message, status: response.status };
   }
   let buf: Buffer;
   try {
