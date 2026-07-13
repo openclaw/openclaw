@@ -1143,12 +1143,14 @@ extension OnboardingWizardView {
     }
 
     private func advanceFromIntro() {
-        OnboardingStateStore.markFirstRunIntroSeen()
         self.statusLine = ""
         self.navigate(to: .permissions)
     }
 
     private func advanceFromPermissions() {
+        // Marked here, not on the intro Continue: an interrupted first run must
+        // replay intro + permissions on relaunch instead of skipping them forever.
+        OnboardingStateStore.markFirstRunIntroSeen()
         self.requestLocalNetworkAccess(reason: "onboarding_continue")
         self.statusLine = ""
         self.navigate(to: .welcome)

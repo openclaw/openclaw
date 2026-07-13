@@ -67,6 +67,7 @@ struct OnboardingPermissionsStep: View {
             detail: kind.detail,
             grant: grant,
             isRequesting: self.permissions.requesting.contains(kind),
+            statusLabel: grant == .limited ? LocalizedStringResource("Limited") : nil,
             actionTitle: Self.actionTitle(for: grant),
             action: self.action(for: kind, grant: grant))
     }
@@ -77,7 +78,9 @@ struct OnboardingPermissionsStep: View {
             LocalizedStringResource("Allow")
         case .denied:
             LocalizedStringResource("Open Settings")
-        case .granted, .limited:
+        case .limited:
+            LocalizedStringResource("Manage")
+        case .granted:
             nil
         }
     }
@@ -86,9 +89,9 @@ struct OnboardingPermissionsStep: View {
         switch grant {
         case .notRequested:
             { Task { await self.permissions.request(kind) } }
-        case .denied:
+        case .denied, .limited:
             { self.openSystemSettings() }
-        case .granted, .limited:
+        case .granted:
             nil
         }
     }
