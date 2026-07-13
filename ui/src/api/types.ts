@@ -17,7 +17,6 @@ export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 export type {
   MemoryMigrationItem,
   MemoryMigrationProviderPlan,
-  MemoryMigrationSummary,
   MigrationsMemoryApplyResult,
   MigrationsMemoryPlanResult,
 } from "../../../packages/gateway-protocol/src/schema/migrations.js";

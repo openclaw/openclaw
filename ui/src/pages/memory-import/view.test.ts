@@ -3,7 +3,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { groupMemoryItems, renderMemoryImport } from "./view.ts";
+import { renderMemoryImport } from "./view.ts";
 
 type MemoryImportProps = Parameters<typeof renderMemoryImport>[0];
 
@@ -97,10 +97,6 @@ describe("renderMemoryImport", () => {
 
   it("groups memory by source collection without rendering file contents", () => {
     const plan = createPlan();
-    const groups = groupMemoryItems(plan.providers[0]?.items ?? []);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.label).toBe("Codex");
-
     const container = document.createElement("div");
     render(renderMemoryImport(createProps({ plan })), container);
 

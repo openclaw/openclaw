@@ -18,7 +18,7 @@ type MemoryCollection = {
   items: MemoryMigrationItem[];
 };
 
-export type MemoryImportViewProps = {
+type MemoryImportViewProps = {
   connected: boolean;
   agents: GatewayAgentRow[];
   selectedAgentId: string | null;
@@ -45,7 +45,7 @@ function detailString(item: MemoryMigrationItem, key: string): string | undefine
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-export function groupMemoryItems(items: readonly MemoryMigrationItem[]): MemoryCollection[] {
+function groupMemoryItems(items: readonly MemoryMigrationItem[]): MemoryCollection[] {
   const groups = new Map<string, MemoryCollection>();
   for (const item of items) {
     const id = detailString(item, "collectionId") ?? item.id;
