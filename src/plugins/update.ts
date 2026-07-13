@@ -1425,7 +1425,7 @@ export async function updateNpmInstalledPlugins(params: {
     pluginId: string,
     message: string,
     channelFallback?: PluginUpdateChannelFallback,
-    code?: PluginInstallErrorCode,
+    code?: string,
   ) => {
     // Metadata/environment failures are not plugin problems — skip disabling
     // so the plugin keeps running and update can be retried after the env issue is resolved.
