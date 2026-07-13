@@ -362,6 +362,7 @@ import {
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
 } from "./secrets.js";
+import { SessionPlacementProtocolSchemas } from "./session-placement.js";
 import {
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
@@ -629,6 +630,7 @@ export const ProtocolSchemas = {
   SessionsSearchResult: SessionsSearchResultSchema,
   SessionCompactionCheckpoint: SessionCompactionCheckpointSchema,
   SessionOperationEvent: SessionOperationEventSchema,
+  ...SessionPlacementProtocolSchemas,
   SessionsCompactionListParams: SessionsCompactionListParamsSchema,
   SessionsCompactionGetParams: SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParams: SessionsCompactionBranchParamsSchema,
