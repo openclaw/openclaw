@@ -509,7 +509,7 @@ describe("Client gateway event queue", () => {
     });
   });
 
-  it("times out hung queued listeners", async () => {
+  it("resolves timed-out dispatches while retaining the hung listener slot", async () => {
     vi.useFakeTimers();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const listener = {
@@ -530,12 +530,62 @@ describe("Client gateway event queue", () => {
     );
     expect(client.getRuntimeMetrics().eventQueue).toEqual({
       queueSize: 0,
-      processing: 0,
+      processing: 1,
       processed: 1,
       dropped: 0,
       timeouts: 1,
       maxQueueSize: 10_000,
       maxConcurrency: 1,
+    });
+  });
+
+  it("holds a timed-out listener slot until its underlying promise settles", async () => {
+    vi.useFakeTimers();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const firstSettlement = createDeferred();
+    const started: string[] = [];
+    const first = {
+      type: "READY",
+      handle: vi.fn(async () => {
+        started.push("first");
+        await firstSettlement.promise;
+      }),
+    } satisfies AnyListener;
+    const second = {
+      type: "READY",
+      handle: vi.fn(async () => {
+        started.push("second");
+      }),
+    } satisfies AnyListener;
+    const client = createQueuedClient({
+      listeners: [first, second],
+      eventQueue: { listenerTimeout: 10, maxConcurrency: 1 },
+    });
+
+    const dispatch = client.dispatchGatewayEvent("READY", {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(started).toEqual(["first"]);
+    expect(client.getRuntimeMetrics().eventQueue).toMatchObject({
+      queueSize: 1,
+      processing: 1,
+      processed: 1,
+      timeouts: 1,
+    });
+
+    firstSettlement.reject(new Error("late listener failure"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(started).toEqual(["first", "second"]);
+    expect(first.handle).toHaveBeenCalledTimes(1);
+    expect(second.handle).toHaveBeenCalledTimes(1);
+    await expect(dispatch).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(client.getRuntimeMetrics().eventQueue).toMatchObject({
+      queueSize: 0,
+      processing: 0,
+      processed: 2,
+      timeouts: 1,
     });
   });
 

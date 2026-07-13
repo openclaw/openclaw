@@ -109,20 +109,25 @@ export class DiscordEventQueue {
         return;
       }
       this.processing += 1;
-      void this.runJob(job)
+      const listenerPromise = Promise.resolve().then(() => job.run());
+      const dispatchPromise = this.runJob(job, listenerPromise)
         .then(job.resolve, job.reject)
         .finally(() => {
-          this.processing -= 1;
           this.processedCount += 1;
-          this.processNext();
         });
+      // A timeout settles enqueue but cannot cancel the listener. Hold its slot
+      // until actual settlement or late listeners can exceed maxConcurrency.
+      void Promise.allSettled([dispatchPromise, listenerPromise]).then(() => {
+        this.processing -= 1;
+        this.processNext();
+      });
     }
   }
 
-  private async runJob(job: DiscordEventQueueJob): Promise<void> {
+  private async runJob(job: DiscordEventQueueJob, listenerPromise: Promise<void>): Promise<void> {
     const startedAt = Date.now();
     try {
-      await this.runWithTimeout(job);
+      await this.runWithTimeout(listenerPromise);
       this.logSlowListener(job, Date.now() - startedAt);
     } catch (error) {
       if (isListenerTimeoutError(error)) {
@@ -139,11 +144,11 @@ export class DiscordEventQueue {
     }
   }
 
-  private async runWithTimeout(job: DiscordEventQueueJob): Promise<void> {
+  private async runWithTimeout(listenerPromise: Promise<void>): Promise<void> {
     let timeout: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
-        job.run(),
+        listenerPromise,
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => {
             reject(createListenerTimeoutError(this.options.listenerTimeout));
