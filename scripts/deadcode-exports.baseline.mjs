@@ -2856,7 +2856,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/gateway/net.ts: __resetContainerCacheForTest",
   "src/gateway/node-catalog.ts: getKnownNodeEntry",
   "src/gateway/node-connection-notifications.ts: NodeConnectionNotificationRouter",
-  "src/gateway/node-pairing-auto-approve.ts: NodePairingAutoApproveClientIpSource",
   "src/gateway/node-pairing-auto-approve.ts: NodePairingAutoApproveReason",
   "src/gateway/node-pairing-ssh-verify.ts: NodePairingSshVerifyOutcome",
   "src/gateway/node-pairing-ssh-verify.ts: NodePairingSshVerifyPlan",
