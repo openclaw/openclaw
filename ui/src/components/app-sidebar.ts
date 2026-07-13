@@ -8,19 +8,14 @@ import type {
   SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult, UpdateAvailable } from "../api/types.ts";
 import {
   cancelRoutePreload,
   DEFAULT_SIDEBAR_PINNED_ROUTES,
-  isPluginsHubRoute,
-  isSettingsNavigationRoute,
-  navigationIconForRoute,
   scheduleRoutePreload,
   type NavigationRouteId,
-  SIDEBAR_NAV_ROUTES,
   type SidebarNavRoute,
-  sidebarMoreRoutes,
   titleForRoute,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
@@ -87,8 +82,17 @@ import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
-import { icons, type IconName } from "./icons.ts";
+import {
+  isSidebarRouteActive,
+  renderSidebarCustomizeMenu,
+  renderSidebarMoreMenu,
+  renderSidebarMoreRow,
+  renderSidebarNavRoute,
+  shouldHandleNavigationClick,
+  sidebarMoreMenuHoldsActiveRoute,
+  sidebarPluginTabs,
+} from "./app-sidebar-nav-menus.ts";
+import { icons } from "./icons.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
   LOBSTER_PET_BUILD_MULS,
@@ -205,17 +209,6 @@ function formatSidebarTimestamp(timestampMs: number | null | undefined): string 
     return "now";
   }
   return value.endsWith(" ago") ? value.slice(0, -" ago".length) : value;
-}
-
-function shouldHandleNavigationClick(event: MouseEvent): boolean {
-  return (
-    !event.defaultPrevented &&
-    event.button === 0 &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !event.altKey
-  );
 }
 
 function sessionCatalogHostKey(catalogId: string, hostId: string): string {
@@ -1887,66 +1880,23 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     items[nextIndex]?.focus();
   }
 
-  private togglePinnedRoute(routeId: SidebarNavRoute) {
-    const pinned = this.sidebarPinnedRoutes;
-    const next = pinned.includes(routeId)
-      ? pinned.filter((route) => route !== routeId)
-      : [...pinned, routeId];
-    this.onUpdatePinnedRoutes?.(next);
-  }
-
   private renderCustomizeMenu() {
-    const position = this.customizeMenuPosition;
-    if (!position) {
-      return nothing;
-    }
-    return html`
-      <openclaw-menu-surface>
-        <div
-          class="sidebar-customize-menu"
-          role="menu"
-          aria-label=${t("nav.customize")}
-          style="left: ${position.x}px; top: ${position.y}px;"
-        >
-          <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
-          ${SIDEBAR_NAV_ROUTES.filter((routeId) => this.isRouteEnabled(routeId)).map((routeId) => {
-            const pinned = this.sidebarPinnedRoutes.includes(routeId);
-            return html`
-              <button
-                type="button"
-                class="sidebar-customize-menu__item"
-                role="menuitemcheckbox"
-                tabindex="-1"
-                aria-checked=${String(pinned)}
-                @click=${() => this.togglePinnedRoute(routeId)}
-              >
-                <span class="nav-item__icon" aria-hidden="true"
-                  >${icons[navigationIconForRoute(routeId)]}</span
-                >
-                <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
-                <span class="sidebar-customize-menu__check" aria-hidden="true">
-                  ${pinned ? icons.check : nothing}
-                </span>
-              </button>
-            `;
-          })}
-          <div class="sidebar-customize-menu__separator" role="separator"></div>
-          <button
-            type="button"
-            class="sidebar-customize-menu__item"
-            role="menuitem"
-            tabindex="-1"
-            @click=${() => {
-              this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
-              this.closeCustomizeMenu({ restoreFocus: true });
-            }}
-          >
-            <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
-            <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
-          </button>
-        </div>
-      </openclaw-menu-surface>
-    `;
+    return renderSidebarCustomizeMenu({
+      position: this.customizeMenuPosition,
+      pinnedRoutes: this.sidebarPinnedRoutes,
+      isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
+      onToggleRoute: (routeId) => {
+        const pinned = this.sidebarPinnedRoutes;
+        const next = pinned.includes(routeId)
+          ? pinned.filter((route) => route !== routeId)
+          : [...pinned, routeId];
+        this.onUpdatePinnedRoutes?.(next);
+      },
+      onReset: () => {
+        this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
+        this.closeCustomizeMenu({ restoreFocus: true });
+      },
+    });
   }
 
   private renderAgentMenuAgentRow(
@@ -2299,98 +2249,27 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
-  /** Settings routes highlight Settings; Plugins hub tabs highlight Plugins. */
-  private isRouteActive(routeId: NavigationRouteId): boolean {
-    if (this.activeRouteId === undefined) {
-      return false;
-    }
-    if (routeId === "config") {
-      return isSettingsNavigationRoute(this.activeRouteId);
-    }
-    if (routeId === "plugins") {
-      return isPluginsHubRoute(this.activeRouteId);
-    }
-    return this.activeRouteId === routeId;
-  }
-
   private renderRoute(routeId: NavigationRouteId) {
-    const active = this.isRouteActive(routeId);
     // Disabled routes (e.g. Workboard with the plugin off) stay hidden rather
     // than rendering an inert nav item.
     if (!this.isRouteEnabled(routeId)) {
       return nothing;
     }
     const routeSessionKey = routeId === "chat" ? this.getRouteSessionKey() : "";
-    const href =
-      routeSessionKey && routeId === "chat"
-        ? `${pathForRoute("chat", this.basePath)}${searchForSession(routeSessionKey)}`
-        : pathForRoute(routeId, this.basePath);
-    const label = titleForRoute(routeId);
-    return html`
-      <a
-        href=${href}
-        class="nav-item ${active ? "nav-item--active" : ""}"
-        @focus=${(event: Event) => this.preloadRoute(routeId, event)}
-        @blur=${this.cancelPreload}
-        @pointerenter=${(event: Event) => this.preloadRoute(routeId, event)}
-        @pointerleave=${this.cancelPreload}
-        @touchstart=${(event: TouchEvent) => this.preloadRoute(routeId, event, true)}
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          this.onNavigate?.(
-            routeId,
-            routeId === "chat" && routeSessionKey
-              ? {
-                  search: searchForSession(routeSessionKey),
-                }
-              : undefined,
-          );
-        }}
-      >
-        <span class="nav-item__icon" aria-hidden="true"
-          >${icons[navigationIconForRoute(routeId)]}</span
-        >
-        <span class="nav-item__text">${label}</span>
-      </a>
-    `;
-  }
-
-  /** Dynamic plugin tabs stay in the More menu; only stable static route ids can be persisted as pins. */
-  private pluginTabs(): GatewayControlUiPluginTab[] {
-    const tabs = this.context?.gateway.snapshot.hello?.controlUiTabs ?? [];
-    return ["chat", "control", "agent", "settings"].flatMap((group) =>
-      tabs.filter((tab) => (tab.group ?? "control") === group),
-    );
-  }
-
-  private renderMoreMenuPluginTab(tab: GatewayControlUiPluginTab) {
-    const ref = { pluginId: tab.pluginId, id: tab.id };
-    const search = pluginTabSearch(ref);
-    const active = this.activeRouteId === "plugin" && this.activePluginTabId === pluginTabKey(ref);
-    const iconName = tab.icon && Object.hasOwn(icons, tab.icon) ? (tab.icon as IconName) : "puzzle";
-    return html`
-      <a
-        href=${`${pathForRoute("plugin", this.basePath)}${search}`}
-        class="sidebar-customize-menu__item ${active ? "sidebar-customize-menu__item--active" : ""}"
-        role="menuitem"
-        tabindex="-1"
-        aria-current=${active ? "page" : nothing}
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          this.closeMoreMenu({ restoreFocus: true });
-          this.onNavigate?.("plugin", { search });
-        }}
-      >
-        <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
-        <span class="sidebar-customize-menu__text">${tab.label}</span>
-      </a>
-    `;
+    const chatSearch =
+      routeId === "chat" && routeSessionKey ? searchForSession(routeSessionKey) : "";
+    return renderSidebarNavRoute({
+      routeId,
+      href: chatSearch
+        ? `${pathForRoute("chat", this.basePath)}${chatSearch}`
+        : pathForRoute(routeId, this.basePath),
+      active: isSidebarRouteActive(this.activeRouteId, routeId),
+      onNavigate: () => {
+        this.onNavigate?.(routeId, chatSearch ? { search: chatSearch } : undefined);
+      },
+      onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
+      onCancelPreload: this.cancelPreload,
+    });
   }
 
   private renderRecentSession(session: SidebarRecentSession) {
@@ -2927,93 +2806,47 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
-  /** Unpinned routes, plugin tabs, and the pin editor live in a popup behind this row. */
   private renderMoreRow() {
-    const open = this.moreMenuPosition !== null;
-    const holdsActiveRoute =
-      this.activeRouteId === "plugin" ||
-      sidebarMoreRoutes(this.sidebarPinnedRoutes).some(
-        (routeId) => this.isRouteEnabled(routeId) && this.isRouteActive(routeId),
-      );
-    return html`
-      <button
-        type="button"
-        class="nav-item nav-item--action ${holdsActiveRoute ? "nav-item--active" : ""}"
-        aria-haspopup="menu"
-        aria-expanded=${String(open)}
-        @click=${(event: MouseEvent) => this.toggleMoreMenu(event.currentTarget as HTMLElement)}
-      >
-        <span class="nav-item__icon" aria-hidden="true">${icons.moreHorizontal}</span>
-        <span class="nav-item__text">${t("nav.more")}</span>
-      </button>
-    `;
-  }
-
-  private renderMoreMenuRoute(routeId: SidebarNavRoute) {
-    const active = this.isRouteActive(routeId);
-    return html`
-      <a
-        href=${pathForRoute(routeId, this.basePath)}
-        class="sidebar-customize-menu__item ${active ? "sidebar-customize-menu__item--active" : ""}"
-        role="menuitem"
-        tabindex="-1"
-        aria-current=${active ? "page" : nothing}
-        @pointerenter=${(event: Event) => this.preloadRoute(routeId, event)}
-        @pointerleave=${this.cancelPreload}
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          this.closeMoreMenu({ restoreFocus: true });
-          this.onNavigate?.(routeId);
-        }}
-      >
-        <span class="nav-item__icon" aria-hidden="true"
-          >${icons[navigationIconForRoute(routeId)]}</span
-        >
-        <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
-      </a>
-    `;
+    return renderSidebarMoreRow({
+      open: this.moreMenuPosition !== null,
+      active: sidebarMoreMenuHoldsActiveRoute({
+        activeRouteId: this.activeRouteId,
+        pinnedRoutes: this.sidebarPinnedRoutes,
+        isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
+      }),
+      onToggle: (trigger) => this.toggleMoreMenu(trigger),
+    });
   }
 
   private renderMoreMenu() {
-    const position = this.moreMenuPosition;
-    if (!position) {
-      return nothing;
-    }
-    const moreRoutes = sidebarMoreRoutes(this.sidebarPinnedRoutes).filter((routeId) =>
-      this.isRouteEnabled(routeId),
-    );
-    return html`
-      <openclaw-menu-surface>
-        <div
-          class="sidebar-customize-menu sidebar-more-menu"
-          role="menu"
-          aria-label=${t("nav.more")}
-          style="left: ${position.x}px; top: ${position.y}px;"
-        >
-          ${moreRoutes.map((routeId) => this.renderMoreMenuRoute(routeId))}
-          ${this.pluginTabs().map((tab) => this.renderMoreMenuPluginTab(tab))}
-          <div class="sidebar-customize-menu__separator" role="separator"></div>
-          <button
-            type="button"
-            class="sidebar-customize-menu__item"
-            role="menuitem"
-            tabindex="-1"
-            @click=${() => {
-              // Hand the durable More row over as the pin editor's trigger so
-              // Escape restores focus there once this menu is gone.
-              const trigger = this.moreMenuTrigger;
-              this.openCustomizeMenu(position.x, position.y, trigger);
-            }}
-          >
-            <span class="nav-item__icon" aria-hidden="true">${icons.penLine}</span>
-            <span class="sidebar-customize-menu__text">${t("nav.customize")}</span>
-          </button>
-        </div>
-      </openclaw-menu-surface>
-    `;
+    return renderSidebarMoreMenu({
+      position: this.moreMenuPosition,
+      basePath: this.basePath,
+      activeRouteId: this.activeRouteId,
+      activePluginTabId: this.activePluginTabId,
+      pinnedRoutes: this.sidebarPinnedRoutes,
+      pluginTabs: sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs),
+      isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
+      onNavigateRoute: (routeId) => {
+        this.closeMoreMenu({ restoreFocus: true });
+        this.onNavigate?.(routeId);
+      },
+      onNavigatePluginTab: (search) => {
+        this.closeMoreMenu({ restoreFocus: true });
+        this.onNavigate?.("plugin", { search });
+      },
+      onPreloadRoute: (routeId, event) => this.preloadRoute(routeId, event),
+      onCancelPreload: this.cancelPreload,
+      onEditPinnedItems: () => {
+        // Hand the durable More row over as the pin editor's trigger so
+        // Escape restores focus there once this menu is gone.
+        const position = this.moreMenuPosition;
+        const trigger = this.moreMenuTrigger;
+        if (position) {
+          this.openCustomizeMenu(position.x, position.y, trigger);
+        }
+      },
+    });
   }
 
   private renderChatFallback() {
