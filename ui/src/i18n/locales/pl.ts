@@ -1762,7 +1762,6 @@ export const pl: TranslationMap = {
     filterAll: "Wszystkie",
     filterIssues: "Problemy",
     filterLabel: "Filtruj zainstalowane wtyczki",
-    pulseLabel: "{enabled} włączone, {disabled} wyłączone, {issues} z problemami",
     categoryChannels: "Kanały",
     categoryProviders: "Dostawcy modeli",
     categoryMemory: "Pamięć",

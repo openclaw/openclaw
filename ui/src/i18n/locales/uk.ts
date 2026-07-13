@@ -1763,7 +1763,6 @@ export const uk: TranslationMap = {
     filterAll: "Усі",
     filterIssues: "Проблеми",
     filterLabel: "Фільтрувати встановлені плагіни",
-    pulseLabel: "{enabled} увімкнено, {disabled} вимкнено, {issues} з проблемами",
     categoryChannels: "Канали",
     categoryProviders: "Постачальники моделей",
     categoryMemory: "Пам’ять",
