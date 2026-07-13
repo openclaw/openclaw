@@ -252,11 +252,10 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
     },
     async removeIfLossless(params) {
       const { managedWorktrees } = await loadService();
-      return managedWorktrees.removeIfLosslessByPathForOwner(
-        params.path,
-        params.ownerKind,
-        params.ownerId,
-      );
+      return managedWorktrees.removeIfLosslessByPath(params.path, {
+        ownerKind: params.ownerKind,
+        ownerId: params.ownerId,
+      });
     },
   };
 }

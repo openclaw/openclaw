@@ -18,6 +18,7 @@ import {
   runGit,
   type GitResult,
 } from "./git.js";
+import { worktreeOwnerMatches } from "./owner.js";
 import {
   deleteRegistryWorktree,
   findRegistryWorktreeByPath,
@@ -106,16 +107,6 @@ function validateName(name: string): string {
 
 function generateName(): string {
   return `wt-${randomBytes(4).toString("hex")}`;
-}
-
-function recordOwnerMatches(
-  record: ManagedWorktreeRecord,
-  params: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
-): boolean {
-  return (
-    record.ownerKind === (params.ownerKind ?? "manual") &&
-    (record.ownerId ?? undefined) === (params.ownerId ?? undefined)
-  );
 }
 
 async function resolveRepository(repoRoot: string): Promise<{
@@ -394,7 +385,7 @@ export class ManagedWorktreeService {
     // Name reuse only ever adopts the caller's own record. Without this guard a
     // caller-chosen name could bind a new owner to another session's or a
     // manual checkout and run inside it.
-    if (existing?.name === name && !existing.removedAt && !recordOwnerMatches(existing, params)) {
+    if (existing?.name === name && !existing.removedAt && !worktreeOwnerMatches(existing, params)) {
       throw new Error(
         `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
       );
@@ -406,7 +397,7 @@ export class ManagedWorktreeService {
       updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
     }
     if (existing?.name === name && existing.removedAt !== undefined && existing.snapshotRef) {
-      if (!recordOwnerMatches(existing, params)) {
+      if (!worktreeOwnerMatches(existing, params)) {
         throw new Error(
           `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
         );
@@ -763,21 +754,12 @@ export class ManagedWorktreeService {
     return true;
   }
 
-  async removeIfLosslessByPath(worktreePath: string): Promise<boolean> {
-    const record = findLiveRegistryWorktreeByPath(this.env, worktreePath);
-    if (!record) {
-      return false;
-    }
-    return await this.removeIfLossless(record.id);
-  }
-
-  async removeIfLosslessByPathForOwner(
+  async removeIfLosslessByPath(
     worktreePath: string,
-    ownerKind: ManagedWorktreeOwnerKind,
-    ownerId: string,
+    owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
   ): Promise<boolean> {
     const record = findLiveRegistryWorktreeByPath(this.env, worktreePath);
-    if (!record || !recordOwnerMatches(record, { ownerKind, ownerId })) {
+    if (!record || !worktreeOwnerMatches(record, owner)) {
       return false;
     }
     return await this.removeIfLossless(record.id);

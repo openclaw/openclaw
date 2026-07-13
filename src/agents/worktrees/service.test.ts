@@ -112,7 +112,10 @@ describe("ManagedWorktreeService", () => {
     });
 
     await expect(
-      service.removeIfLosslessByPathForOwner(created.path, "workboard", "card-1"),
+      service.removeIfLosslessByPath(created.path, {
+        ownerKind: "workboard",
+        ownerId: "card-1",
+      }),
     ).resolves.toBe(false);
     await expect(fs.stat(created.path)).resolves.toBeDefined();
   });
