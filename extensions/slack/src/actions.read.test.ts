@@ -1,23 +1,41 @@
 // Slack tests cover actions.read plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
-import { readSlackMessages } from "./actions.js";
+import { readSlackMessages, resolveSlackConversationName } from "./actions.js";
 
 function createClient() {
   return {
     conversations: {
+      info: vi.fn(async () => ({ channel: { name: "general" } })),
       replies: vi.fn(async () => ({ messages: [], has_more: false })),
       history: vi.fn(async () => ({ messages: [], has_more: false })),
     },
   } as unknown as WebClient & {
     conversations: {
+      info: ReturnType<typeof vi.fn>;
       replies: ReturnType<typeof vi.fn>;
       history: ReturnType<typeof vi.fn>;
     };
   };
 }
 
-describe("readSlackMessages", () => {
+describe("Slack read actions", () => {
+  it("resolves the current Slack conversation name without caching failures", async () => {
+    const client = createClient();
+    client.conversations.info
+      .mockRejectedValueOnce(new Error("temporary_failure"))
+      .mockResolvedValueOnce({ channel: { name: "  allowed-channel  " } });
+
+    await expect(
+      resolveSlackConversationName("C1", { client, token: "xoxp-reader" }),
+    ).rejects.toThrow("temporary_failure");
+    await expect(
+      resolveSlackConversationName("C1", { client, token: "xoxp-reader" }),
+    ).resolves.toBe("allowed-channel");
+    expect(client.conversations.info).toHaveBeenNthCalledWith(1, { channel: "C1" });
+    expect(client.conversations.info).toHaveBeenNthCalledWith(2, { channel: "C1" });
+  });
+
   it("uses conversations.replies and drops the parent message", async () => {
     const client = createClient();
     client.conversations.replies.mockResolvedValueOnce({

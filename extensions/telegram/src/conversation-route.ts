@@ -37,7 +37,7 @@ export type TelegramConversationBindingMode =
     }
   | { kind: "plugin-owned-runtime" };
 
-export type TelegramConversationRouteResult = {
+type TelegramConversationRouteResult = {
   route: TelegramResolvedRoute;
   bindingMode: TelegramConversationBindingMode;
 };

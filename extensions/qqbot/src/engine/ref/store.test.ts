@@ -108,25 +108,4 @@ describe("engine/ref/store", () => {
     expect(() => setRefIndex("ref-unavailable", entry("ignored"))).not.toThrow();
     expect(getRefIndex("ref-unavailable")).toBeNull();
   });
-
-  it("imports legacy ref-index JSONL and drops expired rows", async () => {
-    const { getRefIndex } = await import("./store.js");
-    const legacyPath = refIndexFile(process.env.HOME!);
-    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-    fs.writeFileSync(
-      legacyPath,
-      [
-        JSON.stringify({ k: "valid", v: entry("valid-content"), t: Date.now() }),
-        JSON.stringify({
-          k: "expired",
-          v: entry("expired-content"),
-          t: Date.now() - 8 * 24 * 60 * 60 * 1000,
-        }),
-      ].join("\n"),
-    );
-
-    expect(getRefIndex("valid")?.content).toBe("valid-content");
-    expect(getRefIndex("expired")).toBeNull();
-    expect(fs.existsSync(legacyPath)).toBe(false);
-  });
 });

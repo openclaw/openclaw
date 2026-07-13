@@ -180,7 +180,7 @@ function isServerNotRunningError(error: Error): boolean {
   return (error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING";
 }
 
-export async function closeFeishuHttpServer(server: http.Server): Promise<void> {
+async function closeFeishuHttpServer(server: http.Server): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     const settle = (err?: Error) => {

@@ -1,4 +1,5 @@
 // Test Extension tests cover test extension script behavior.
+/* oxlint-disable typescript/no-unnecessary-type-parameters -- explicit call-site result types keep mock tuple extraction precise. */
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,7 @@ import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
   resolveExtensionBatchPlan,
+  resolveExtensionTestConfig,
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mjs";
 import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mjs";
@@ -26,6 +28,7 @@ import {
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -36,6 +39,29 @@ type RunGroupParams = {
   env: Record<string, string | undefined>;
   targets: string[];
 };
+
+function createConcurrentExtensionBatchPlan() {
+  const groups = [
+    ["light", 10, "one", 1],
+    ["heavy", 30, "two", 3],
+    ["middle", 20, "three", 2],
+  ] as const;
+  return {
+    extensionCount: groups.length,
+    extensionIds: groups.map(([, , extensionId]) => extensionId),
+    estimatedCost: 60,
+    hasTests: true,
+    planGroups: groups.map(([config, estimatedCost, extensionId, testFileCount]) => ({
+      config,
+      estimatedCost,
+      extensionIds: [extensionId],
+      roots: [`extensions/${extensionId}`],
+      testFileCount,
+    })),
+    testFileCount: 6,
+  };
+}
+
 function runScriptResult(args: string[], cwd = process.cwd()) {
   return spawnSync(process.execPath, [scriptPath, ...args], {
     cwd,
@@ -43,7 +69,7 @@ function runScriptResult(args: string[], cwd = process.cwd()) {
   });
 }
 
-function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
+function requireFirstMockArg<T>(mock: { mock: { calls: readonly (readonly unknown[])[] } }): T {
   const [call] = mock.mock.calls;
   if (!call) {
     throw new Error("expected first mock call argument");
@@ -52,7 +78,7 @@ function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> 
   if (arg === undefined) {
     throw new Error("expected first mock call argument");
   }
-  return arg;
+  return arg as T;
 }
 
 function findExtensionWithoutTests() {
@@ -85,6 +111,13 @@ describe("scripts/test-extension.mjs", () => {
         resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
     );
   });
+
+  it.each(extensionCatchAllExcludedTestRoots)(
+    "routes catch-all-excluded extension root %s to a dedicated config",
+    (root) => {
+      expect(resolveExtensionTestConfig(root)).not.toBe("test/vitest/vitest.extensions.config.ts");
+    },
+  );
 
   it("resolves split channel extensions onto their own vitest configs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
@@ -479,7 +512,7 @@ describe("scripts/test-extension.mjs", () => {
     expect(batch.extensionCount).toBe(2);
     expect(batch.noTestExtensionIds).toEqual([extensionId]);
     expect(batch.hasTests).toBe(true);
-    expect(batch.testFileCount).toBe(1);
+    expect(batch.testFileCount).toBe(2);
     expect(batch.planGroups.flatMap((group) => group.extensionIds)).toEqual(["firecrawl"]);
   });
 
@@ -513,7 +546,7 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
     expect(shards.map((shard) => shard.checkName)).toEqual(
-      shards.map((shard, index) => `checks-node-extensions-shard-${index + 1}`),
+      shards.map((_shard, index) => `checks-node-extensions-shard-${index + 1}`),
     );
 
     const assigned = shards.flatMap((shard) => shard.extensionIds);
@@ -551,46 +584,17 @@ describe("scripts/test-extension.mjs", () => {
         resolvers.push(() => resolve(0));
       });
     });
-    const runPromise = runExtensionBatchPlan(
-      {
-        extensionCount: 3,
-        extensionIds: ["one", "two", "three"],
-        estimatedCost: 60,
-        hasTests: true,
-        planGroups: [
-          {
-            config: "light",
-            estimatedCost: 10,
-            extensionIds: ["one"],
-            roots: ["extensions/one"],
-            testFileCount: 1,
-          },
-          {
-            config: "heavy",
-            estimatedCost: 30,
-            extensionIds: ["two"],
-            roots: ["extensions/two"],
-            testFileCount: 3,
-          },
-          {
-            config: "middle",
-            estimatedCost: 20,
-            extensionIds: ["three"],
-            roots: ["extensions/three"],
-            testFileCount: 2,
-          },
-        ],
-        testFileCount: 6,
-      },
-      {
-        env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
-        runGroup,
-        vitestArgs: ["--reporter=dot"],
-      },
-    );
+    const runPromise = runExtensionBatchPlan(createConcurrentExtensionBatchPlan(), {
+      env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+      runGroup: runGroup as NonNullable<
+        NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
+      >,
+      vitestArgs: ["--reporter=dot"],
+    });
 
-    await Promise.resolve();
-    expect(started).toEqual(["heavy", "middle"]);
+    await vi.waitFor(() => {
+      expect(started).toEqual(["heavy", "middle"]);
+    });
     resolvers.shift()?.();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -617,6 +621,40 @@ describe("scripts/test-extension.mjs", () => {
       },
       targets: ["two"],
     });
+  });
+
+  it("stops admitting extension batch groups after a parallel failure", async () => {
+    const started: string[] = [];
+    let resolveHeavy: ((code: number) => void) | undefined;
+    let resolveMiddle: ((code: number) => void) | undefined;
+    const runGroup = vi.fn((params: RunGroupParams) => {
+      started.push(params.config);
+      return new Promise<number>((resolve) => {
+        if (params.config === "heavy") {
+          resolveHeavy = resolve;
+        } else if (params.config === "middle") {
+          resolveMiddle = resolve;
+        }
+      });
+    });
+    const runPromise = runExtensionBatchPlan(createConcurrentExtensionBatchPlan(), {
+      env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+      runGroup: runGroup as NonNullable<
+        NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
+      >,
+    });
+
+    await vi.waitFor(() => {
+      expect(started).toEqual(["heavy", "middle"]);
+    });
+    resolveHeavy?.(7);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(started).toEqual(["heavy", "middle"]);
+    resolveMiddle?.(0);
+    await expect(runPromise).resolves.toBe(7);
+    expect(runGroup).toHaveBeenCalledTimes(2);
   });
 
   it("keeps extension batch parallelism bounded by group count", () => {
@@ -835,7 +873,12 @@ describe("scripts/test-extension.mjs", () => {
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
       {
         runGroup,
-        vitestArgs: ["--exclude", bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts")],
+        vitestArgs: [
+          "--exclude",
+          bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts"),
+          "--exclude",
+          bundledPluginFile("firecrawl", "src/firecrawl-client.test.ts"),
+        ],
       },
     );
 
@@ -849,7 +892,12 @@ describe("scripts/test-extension.mjs", () => {
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
       {
         runGroup,
-        vitestArgs: ["--exclude", "firecrawl/src/firecrawl-tools.test.ts"],
+        vitestArgs: [
+          "--exclude",
+          "firecrawl/src/firecrawl-tools.test.ts",
+          "--exclude",
+          "firecrawl/src/firecrawl-client.test.ts",
+        ],
       },
     );
 
@@ -864,7 +912,12 @@ describe("scripts/test-extension.mjs", () => {
       {
         allowEmptyAfterExclude: true,
         runGroup,
-        vitestArgs: ["--exclude", bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts")],
+        vitestArgs: [
+          "--exclude",
+          bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts"),
+          "--exclude",
+          bundledPluginFile("firecrawl", "src/firecrawl-client.test.ts"),
+        ],
       },
     );
 

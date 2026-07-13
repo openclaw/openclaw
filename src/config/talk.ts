@@ -30,6 +30,27 @@ function normalizeSilenceTimeoutMs(value: unknown): number | undefined {
   return value;
 }
 
+function normalizeVadThreshold(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    return undefined;
+  }
+  return value;
+}
+
 function buildLegacyTalkProviderCompat(
   value: Record<string, unknown>,
 ): TalkProviderConfig | undefined {
@@ -137,6 +158,22 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   ) {
     normalized.transport = source.transport;
   }
+  const vadThreshold = normalizeVadThreshold(source.vadThreshold);
+  if (vadThreshold !== undefined) {
+    normalized.vadThreshold = vadThreshold;
+  }
+  const silenceDurationMs = normalizePositiveInteger(source.silenceDurationMs);
+  if (silenceDurationMs !== undefined) {
+    normalized.silenceDurationMs = silenceDurationMs;
+  }
+  const prefixPaddingMs = normalizeNonNegativeInteger(source.prefixPaddingMs);
+  if (prefixPaddingMs !== undefined) {
+    normalized.prefixPaddingMs = prefixPaddingMs;
+  }
+  const reasoningEffort = normalizeOptionalString(source.reasoningEffort);
+  if (reasoningEffort) {
+    normalized.reasoningEffort = reasoningEffort;
+  }
   if (
     source.brain === "agent-consult" ||
     source.brain === "direct-tools" ||
@@ -157,7 +194,7 @@ function activeProviderFromTalk(talk: TalkConfig): string | undefined {
   const provider = normalizeOptionalString(talk.provider);
   const providers = talk.providers;
   if (provider) {
-    if (providers && !(provider in providers)) {
+    if (providers && !Object.hasOwn(providers, provider)) {
       return undefined;
     }
     return provider;

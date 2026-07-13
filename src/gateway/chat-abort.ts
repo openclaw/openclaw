@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -29,6 +30,8 @@ export type ChatAbortControllerEntry = {
   providerId?: string;
   authProviderId?: string;
   abortStopReason?: string;
+  /** Latest argument-free validation diagnostic for operator-initiated aborts. */
+  toolErrorSummary?: string;
   /**
    * False for backend/internal agent runs that may share a session key but must
    * not be projected into operator chat surfaces.
@@ -50,6 +53,10 @@ export type ChatAbortControllerEntry = {
   projectSessionTerminalPersistence?: Promise<void>;
   /** Caller completion requested cleanup before terminal lifecycle persistence settled. */
   registrationCleanupRequested?: boolean;
+  /** False after the owning reply run commits a terminal outcome. */
+  isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
+  /** Runs once when this registration is actually removed. */
+  onRemoved?: () => void;
   /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
@@ -57,6 +64,8 @@ export type ChatAbortControllerEntry = {
    * is active" must check `kind !== "agent"`, not just `.has(runId)`.
    */
   kind?: "chat-send" | "agent";
+  /** Side questions stay independent from main-turn TUI session stops. */
+  turnKind?: "main" | "btw";
 };
 
 export type RestartRecoveryCandidate = {
@@ -146,7 +155,10 @@ export function registerChatAbortController(params: {
   providerId?: string;
   authProviderId?: string;
   controlUiVisible?: boolean;
+  isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
+  onRemoved?: () => void;
   kind?: ChatAbortControllerEntry["kind"];
+  turnKind?: ChatAbortControllerEntry["turnKind"];
   lifecycleGeneration?: string;
   now?: number;
   expiresAtMs?: number;
@@ -156,7 +168,7 @@ export function registerChatAbortController(params: {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
       if (opts?.force === true) {
-        params.chatAbortControllers.delete(params.runId);
+        removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
         return;
       }
       entry.registrationCleanupRequested = true;
@@ -170,17 +182,17 @@ export function registerChatAbortController(params: {
         void persistence
           .then(() => {
             if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
-              params.chatAbortControllers.delete(params.runId);
+              removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
           })
           .catch(() => {
             if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
-              params.chatAbortControllers.delete(params.runId);
+              removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
           });
         return;
       }
-      params.chatAbortControllers.delete(params.runId);
+      removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
     }
   };
 
@@ -209,8 +221,11 @@ export function registerChatAbortController(params: {
     providerId: normalizeProviderIdForActiveRun(params.providerId),
     authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
     controlUiVisible: params.controlUiVisible,
+    isAbortable: params.isAbortable,
+    onRemoved: params.onRemoved,
     projectSessionActive: true,
     kind: params.kind,
+    turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
   return { controller, registered: true, entry, cleanup };
@@ -412,9 +427,11 @@ function broadcastChatAborted(
     agentId?: string;
     stopReason?: string;
     partialText?: string;
+    errorMessage?: string;
   },
 ) {
   const { runId, sessionKey, stopReason, partialText } = params;
+  const errorMessage = readToolValidationErrorSummary(params.errorMessage);
   const defaultGlobalAgentId =
     sessionKey === "global" ? normalizeActiveAgentId(resolveDefaultGlobalAgentId(ops)) : undefined;
   const payloadAgentId =
@@ -428,6 +445,7 @@ function broadcastChatAborted(
     seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
     state: "aborted" as const,
     stopReason,
+    ...(errorMessage ? { errorMessage } : {}),
     message: partialText
       ? {
           role: "assistant",
@@ -451,6 +469,35 @@ function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
   return cfg ? resolveDefaultAgentId(cfg) : undefined;
 }
 
+export function isChatAbortControllerEntryAbortable(entry: ChatAbortControllerEntry): boolean {
+  if (entry.controller.signal.aborted) {
+    return false;
+  }
+  try {
+    return entry.isAbortable?.(entry) !== false;
+  } catch {
+    return false;
+  }
+}
+
+export function removeChatAbortControllerEntry(
+  entries: Map<string, ChatAbortControllerEntry>,
+  runId: string,
+  expectedEntry?: ChatAbortControllerEntry,
+): boolean {
+  const entry = entries.get(runId);
+  if (!entry || (expectedEntry && entry !== expectedEntry)) {
+    return false;
+  }
+  entries.delete(runId);
+  try {
+    entry.onRemoved?.();
+  } catch {
+    // Removal owns state cleanup even if a caller-provided release hook fails.
+  }
+  return true;
+}
+
 export function abortChatRunById(
   ops: ChatAbortOps,
   params: {
@@ -467,6 +514,9 @@ export function abortChatRunById(
   if (active.sessionKey !== sessionKey) {
     return { aborted: false };
   }
+  if (!isChatAbortControllerEntryAbortable(active)) {
+    return { aborted: false };
+  }
 
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
@@ -474,8 +524,13 @@ export function abortChatRunById(
   if (stopReason) {
     active.abortStopReason = stopReason;
   }
+  active.projectSessionActive = false;
+  // Reserve terminal ownership before abort listeners run; synchronous caller
+  // cleanup must not erase the entry before Gateway observes the event below.
+  active.projectSessionTerminalPending = true;
+  active.projectSessionTerminalObservedAt = undefined;
+  active.registrationCleanupRequested = true;
   active.controller.abort(createChatAbortSignalReason(stopReason));
-  ops.chatAbortControllers.delete(runId);
   ops.clearChatRunState(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   if (active.controlUiVisible !== false) {
@@ -485,6 +540,7 @@ export function abortChatRunById(
       agentId: active.agentId,
       stopReason,
       partialText,
+      errorMessage: active.toolErrorSummary,
     });
   }
   emitAgentEvent({
@@ -498,10 +554,20 @@ export function abortChatRunById(
       status: "cancelled",
       aborted: true,
       stopReason,
+      ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
       startedAt: active.startedAtMs,
       endedAt: Date.now(),
     },
   });
+  // Gateway listeners synchronously stamp the terminal observation. Keep the
+  // entry as suspension-visible ownership until its persistence write settles.
+  if (
+    ops.chatAbortControllers.get(runId) === active &&
+    active.projectSessionTerminalObservedAt === undefined &&
+    !active.projectSessionTerminalPersistence
+  ) {
+    removeChatAbortControllerEntry(ops.chatAbortControllers, runId, active);
+  }
   ops.agentRunSeq.delete(runId);
   if (removed?.clientRunId) {
     ops.agentRunSeq.delete(removed.clientRunId);

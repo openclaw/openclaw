@@ -27,6 +27,7 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
@@ -37,6 +38,7 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 
 type AgentGatewayResult = {
@@ -104,9 +106,7 @@ type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
   "clientName" | "mode" | "scopes"
 >;
-type EmbeddedAgentCommandModule = typeof import("./agent.js");
 type AgentSessionModule = typeof import("./agent/session.js");
-type RuntimeConfigModule = typeof import("../config/io.js");
 type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
 
 const AGENT_CLI_SIGNALS: readonly AgentCliSignal[] = ["SIGINT", "SIGTERM"];
@@ -118,53 +118,50 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
 };
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
-let embeddedAgentCommandPromise: Promise<EmbeddedAgentCommandModule["agentCommand"]> | undefined;
-let agentSessionModulePromise: Promise<AgentSessionModule> | undefined;
-let runtimeConfigModulePromise: Promise<RuntimeConfigModule> | undefined;
-let replyPayloadModulePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/reply-payload")>
-  | undefined;
 const defaultAgentSessionModuleLoader: AgentSessionModuleLoader = () =>
   import("./agent/session.js");
 let agentSessionModuleLoader: AgentSessionModuleLoader = defaultAgentSessionModuleLoader;
+const embeddedAgentCommandLoader = createLazyPromiseLoader(
+  () => import("./agent.js").then((module) => module.agentCommand),
+  { cacheRejections: true },
+);
+const agentSessionModuleCache = createLazyPromiseLoader(() => agentSessionModuleLoader(), {
+  cacheRejections: true,
+});
+const runtimeConfigModuleLoader = createLazyPromiseLoader(() => import("../config/io.js"), {
+  cacheRejections: true,
+});
+const replyPayloadModuleLoader = createLazyPromiseLoader(
+  () => import("openclaw/plugin-sdk/reply-payload"),
+  { cacheRejections: true },
+);
 let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
 
 function resolveGatewayAbortRetryDelaysMs(): readonly number[] {
   return gatewayAbortRetryDelaysMsForTests ?? GATEWAY_ABORT_RETRY_DELAYS_MS;
 }
 
-function loadEmbeddedAgentCommand(): Promise<EmbeddedAgentCommandModule["agentCommand"]> {
-  embeddedAgentCommandPromise ??= import("./agent.js").then((module) => module.agentCommand);
-  return embeddedAgentCommandPromise;
-}
-
-function loadAgentSessionModule(): Promise<AgentSessionModule> {
-  agentSessionModulePromise ??= agentSessionModuleLoader();
-  return agentSessionModulePromise;
-}
+const loadEmbeddedAgentCommand = embeddedAgentCommandLoader.load;
+const loadAgentSessionModule = agentSessionModuleCache.load;
 
 async function loadRuntimeConfig(): Promise<OpenClawConfig> {
-  runtimeConfigModulePromise ??= import("../config/io.js");
-  const { getRuntimeConfig } = await runtimeConfigModulePromise;
+  const { getRuntimeConfig } = await runtimeConfigModuleLoader.load();
   return getRuntimeConfig();
 }
 
-function loadReplyPayloadModule() {
-  replyPayloadModulePromise ??= import("openclaw/plugin-sdk/reply-payload");
-  return replyPayloadModulePromise;
-}
+const loadReplyPayloadModule = replyPayloadModuleLoader.load;
 
 /** Test-only hooks for resetting lazy imports and shortening retry timing. */
 export const agentViaGatewayTesting = {
   resetLazyImportsForTests(): void {
-    embeddedAgentCommandPromise = undefined;
-    agentSessionModulePromise = undefined;
-    runtimeConfigModulePromise = undefined;
-    replyPayloadModulePromise = undefined;
+    embeddedAgentCommandLoader.clear();
+    agentSessionModuleCache.clear();
+    runtimeConfigModuleLoader.clear();
+    replyPayloadModuleLoader.clear();
     agentSessionModuleLoader = defaultAgentSessionModuleLoader;
   },
   setAgentSessionModuleLoaderForTests(loader: AgentSessionModuleLoader): void {
-    agentSessionModulePromise = undefined;
+    agentSessionModuleCache.clear();
     agentSessionModuleLoader = loader;
   },
   resolveGatewayAgentTimeoutMs,
@@ -458,9 +455,7 @@ function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliPro
 }
 
 function createAbortDelayError(): Error {
-  const err = new Error("gateway agent retry aborted");
-  err.name = "AbortError";
-  return err;
+  return createAbortError("gateway agent retry aborted");
 }
 
 function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
@@ -714,9 +709,20 @@ async function agentViaGatewayCommand(
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
   const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
+  const channel = normalizeMessageChannel(opts.channel);
+  const deferExplicitRecipientSession = Boolean(
+    !explicitSessionKey &&
+    !opts.sessionId?.trim() &&
+    agentId &&
+    channel &&
+    channel !== "last" &&
+    opts.to?.trim() &&
+    classifySessionKeyShape(opts.to) !== "agent",
+  );
 
-  const sessionKey =
-    classifySessionKeyShape(explicitSessionKey) === "agent"
+  const sessionKey = deferExplicitRecipientSession
+    ? undefined
+    : classifySessionKeyShape(explicitSessionKey) === "agent"
       ? explicitSessionKey
       : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
           cfg,
@@ -725,12 +731,16 @@ async function agentViaGatewayCommand(
           sessionId: opts.sessionId,
           sessionKey: explicitSessionKey,
         }).sessionKey;
+  const abortSessionKey = deferExplicitRecipientSession
+    ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
+    : sessionKey;
 
-  const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
   const hasModelOverride = Boolean(modelOverride);
   const needsAdminGatewayIdentity = hasModelOverride || isSessionResetCommand(body);
+  const hasGatewayUrlOverride = Boolean(normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL));
+  const usesRemoteGateway = cfg.gateway?.mode === "remote" || hasGatewayUrlOverride;
   const gatewayIdentity: AgentGatewayCallIdentity = needsAdminGatewayIdentity
     ? {
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
@@ -740,10 +750,13 @@ async function agentViaGatewayCommand(
     : {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
+        // The local CLI is the Gateway owner. Keep owner-only run tools available;
+        // remote clients retain the agent method's least-privilege scope.
+        ...(usesRemoteGateway ? {} : { scopes: [ADMIN_SCOPE] }),
       };
 
   let acceptedRunId: string | undefined = idempotencyKey;
-  let acceptedSessionKey: string | undefined = sessionKey;
+  let acceptedSessionKey: string | undefined = abortSessionKey;
   let acceptedGatewayRun = false;
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;

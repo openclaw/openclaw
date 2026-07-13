@@ -1,7 +1,9 @@
 // Msteams plugin module implements sdk behavior.
 import * as fs from "node:fs";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import type { MSTeamsCloudName } from "./cloud.js";
+import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
@@ -164,8 +166,12 @@ export type MSTeamsApp = {
   };
   api: {
     serviceUrl?: string;
+    teams: {
+      getById(teamId: string): Promise<{ aadGroupId?: string }>;
+    };
     conversations: {
       activities(conversationId: string): {
+        create(activity: unknown): Promise<{ id?: string }>;
         update(activityId: string, activity: unknown): Promise<unknown>;
         delete(activityId: string): Promise<unknown>;
       };
@@ -177,7 +183,7 @@ export type MSTeamsApp = {
  * Token provider compatible with the existing codebase, wrapping the Teams
  * SDK App's public tokenManager.
  */
-export type MSTeamsTokenProvider = {
+type MSTeamsTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;
 };
 
@@ -199,31 +205,24 @@ type AzureIdentityModule = {
 
 const AZURE_IDENTITY_MODULE = "@azure/identity";
 
-let azureIdentityModulePromise: Promise<AzureIdentityModule> | null = null;
+const loadAzureIdentity = createLazyRuntimeModule(
+  () => import(AZURE_IDENTITY_MODULE) as Promise<AzureIdentityModule>,
+);
 
-async function loadAzureIdentity(): Promise<AzureIdentityModule> {
-  azureIdentityModulePromise ??= import(AZURE_IDENTITY_MODULE) as Promise<AzureIdentityModule>;
-  return azureIdentityModulePromise;
-}
-
-let sdkAppPromise: Promise<TeamsSdkModules> | null = null;
-
-async function loadSdkModules(): Promise<TeamsSdkModules> {
-  sdkAppPromise ??= Promise.all([
-    import("@microsoft/teams.apps"),
-    import("@microsoft/teams.api"),
-  ]).then(([apps, api]) => ({
-    App: apps.App,
-    // ExpressAdapter is in the runtime barrel but its type is hidden behind
-    // the SDK's chained `export *` (see MSTeamsHttpServerAdapter comment).
-    // Cast to the structural constructor we model locally so the seam stays
-    // typed without depending on the SDK's namespace shape.
-    ExpressAdapter: (apps as unknown as { ExpressAdapter: MSTeamsExpressAdapterCtor })
-      .ExpressAdapter,
-    cloudFromName: (api as unknown as { cloudFromName: (name: string) => unknown }).cloudFromName,
-  }));
-  return sdkAppPromise;
-}
+const loadSdkModules = createLazyRuntimeModule(() =>
+  Promise.all([import("@microsoft/teams.apps"), import("@microsoft/teams.api")]).then(
+    ([apps, api]) => ({
+      App: apps.App,
+      // ExpressAdapter is in the runtime barrel but its type is hidden behind
+      // the SDK's chained `export *` (see MSTeamsHttpServerAdapter comment).
+      // Cast to the structural constructor we model locally so the seam stays
+      // typed without depending on the SDK's namespace shape.
+      ExpressAdapter: (apps as unknown as { ExpressAdapter: MSTeamsExpressAdapterCtor })
+        .ExpressAdapter,
+      cloudFromName: (api as unknown as { cloudFromName: (name: string) => unknown }).cloudFromName,
+    }),
+  ),
+);
 
 /**
  * Lazily construct an ExpressAdapter that the Teams SDK App can register its
@@ -241,7 +240,7 @@ export async function createMSTeamsExpressAdapter(
 /**
  * Options for creating a Teams SDK App instance.
  */
-export type CreateMSTeamsAppOptions = {
+type CreateMSTeamsAppOptions = {
   /**
    * HTTP server adapter to use. When an Express app is available (monitor
    * mode), pass an ExpressAdapter so the SDK registers routes and handles
@@ -295,6 +294,7 @@ export async function createMSTeamsApp(
   const appOptions: Record<string, unknown> = {
     client: options?.httpClient ?? {
       headers: { "User-Agent": buildOpenClawUserAgentFragment() },
+      timeout: MSTEAMS_REQUEST_TIMEOUT_MS,
     },
     ...(options?.httpServerAdapter ? { httpServerAdapter: options.httpServerAdapter } : {}),
     ...(options?.messagingEndpoint ? { messagingEndpoint: options.messagingEndpoint } : {}),

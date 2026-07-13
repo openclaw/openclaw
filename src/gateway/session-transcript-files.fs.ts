@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -107,8 +108,6 @@ function classifySessionTranscriptCandidate(
   return transcriptSessionId === sessionId ? "current" : "stale";
 }
 
-export { extractGeneratedTranscriptSessionId };
-
 function canonicalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);
   try {
@@ -180,7 +179,16 @@ async function resetArchiveHeaderMatchesSessionId(
   sessionId: string,
   archivePath: string,
 ): Promise<boolean> {
-  const stat = await fs.promises.stat(archivePath).catch(() => null);
+  // Compressed archives must be probed through the materialized JSONL cache:
+  // a raw prefix read of zstd bytes never matches a session header, which
+  // would silently drop every compressed archive from fallback history.
+  let probePath: string;
+  try {
+    probePath = materializeSessionArchiveForRead(archivePath);
+  } catch {
+    return false;
+  }
+  const stat = await fs.promises.stat(probePath).catch(() => null);
   if (!stat?.isFile()) {
     return false;
   }
@@ -193,7 +201,7 @@ async function resetArchiveHeaderMatchesSessionId(
   }
 
   let matches = false;
-  const handle = await fs.promises.open(archivePath, "r").catch(() => null);
+  const handle = await fs.promises.open(probePath, "r").catch(() => null);
   if (!handle) {
     return false;
   }
@@ -354,11 +362,7 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   return uniqueStrings(archives.map((archive) => archive.archivePath));
 }
 
-export function archiveFileOnDisk(
-  filePath: string,
-  reason: ArchiveFileReason,
-  timeZone?: string,
-): string {
+function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason, timeZone?: string): string {
   const ts = formatSessionArchiveTimestamp(Date.now(), timeZone);
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
@@ -388,7 +392,6 @@ export function archiveSessionTranscripts(opts: {
    */
   restrictToStoreDir?: boolean;
   onArchiveError?: (err: unknown, sourcePath: string) => void;
-  /** Optional IANA timezone for local-date prefix in archive filenames. */
   timeZone?: string;
 }): string[] {
   return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
@@ -410,7 +413,6 @@ export function archiveSessionTranscriptsDetailed(opts: {
    * caller decides whether to log, warn-deliver, or escalate.
    */
   onArchiveError?: (err: unknown, sourcePath: string) => void;
-  /** Optional IANA timezone for local-date prefix in archive filenames. */
   timeZone?: string;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
@@ -485,7 +487,7 @@ export function resolveStableSessionEndTranscript(params: {
   return {};
 }
 
-export type SessionArchiveCleanupRule = {
+type SessionArchiveCleanupRule = {
   reason: ArchiveFileReason;
   olderThanMs: number;
 };

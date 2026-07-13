@@ -4,6 +4,7 @@ import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
   formatInvalidConfigLogMessage,
+  isInvalidConfigError,
   logInvalidConfigOnce,
   throwInvalidConfig,
 } from "./io.invalid-config.js";
@@ -40,8 +41,14 @@ describe("config io invalid config formatting", () => {
     };
 
     expect(err.message).toBe("Invalid config at /tmp/openclaw.json:\n- gateway.port: bad");
+    expect(err.name).toBe("InvalidConfigError");
     expect(err.code).toBe("INVALID_CONFIG");
     expect(err.details).toBe("- gateway.port: bad");
+    expect(isInvalidConfigError(err)).toBe(true);
+    expect(
+      isInvalidConfigError(Object.assign(new Error(err.message), { code: "INVALID_CONFIG" })),
+    ).toBe(true);
+    expect(isInvalidConfigError(new Error(err.message))).toBe(false);
   });
 
   it("logs invalid config details only once per path", () => {

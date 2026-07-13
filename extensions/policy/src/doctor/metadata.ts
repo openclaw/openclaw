@@ -22,6 +22,7 @@ export const CHECK_IDS = {
   policyGatewayRemoteEnabled: "policy/gateway-remote-enabled",
   policyGatewayHttpEndpointEnabled: "policy/gateway-http-endpoint-enabled",
   policyGatewayHttpUrlFetchUnrestricted: "policy/gateway-http-url-fetch-unrestricted",
+  policyGatewayNodeCommandDenied: "policy/gateway-node-command-denied",
   policyAgentsWorkspaceAccessDenied: "policy/agents-workspace-access-denied",
   policyAgentsToolNotDenied: "policy/agents-tool-not-denied",
   policyToolsElevatedEnabled: "policy/tools-elevated-enabled",
@@ -90,6 +91,7 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyGatewayRemoteEnabled,
   CHECK_IDS.policyGatewayHttpEndpointEnabled,
   CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
+  CHECK_IDS.policyGatewayNodeCommandDenied,
   CHECK_IDS.policyAgentsWorkspaceAccessDenied,
   CHECK_IDS.policyAgentsToolNotDenied,
   CHECK_IDS.policyToolsProfileUnapproved,
@@ -133,7 +135,7 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyUnknownToolSensitivity,
 ] as const;
 
-export type PolicyStrictnessKind =
+type PolicyStrictnessKind =
   | "allowlist-subset"
   | "denylist-superset"
   | "ordered-string"
@@ -141,7 +143,7 @@ export type PolicyStrictnessKind =
   | "requires-false"
   | "exact-list";
 
-export type PolicyEmptyListSemantics = "disabled" | "meaningful";
+type PolicyEmptyListSemantics = "disabled" | "meaningful";
 
 export type PolicyScopeSelectorKind = "agentIds" | "channelIds";
 
@@ -321,6 +323,13 @@ export const POLICY_RULE_METADATA = [
     strictness: "requires-true",
     valueType: "boolean",
     checkIds: [CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted],
+  },
+  {
+    policyPath: ["gateway", "nodes", "denyCommands"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyGatewayNodeCommandDenied],
+    caseSensitive: true,
   },
   {
     policyPath: ["agents", "workspace", "allowedAccess"],

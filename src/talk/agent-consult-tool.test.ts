@@ -11,6 +11,7 @@ import {
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-tool.js";
+import type { RealtimeVoiceTool } from "./provider-types.js";
 
 describe("realtime voice agent consult tool", () => {
   it("normalizes shared tool arguments for browser chat forwarding", () => {
@@ -114,5 +115,39 @@ describe("realtime voice agent consult tool", () => {
       resolveRealtimeVoiceAgentConsultTools("safe-read-only", [duplicateConsultTool, customTool]),
     ).toStrictEqual([REALTIME_VOICE_AGENT_CONSULT_TOOL, customTool]);
     expect(resolveRealtimeVoiceAgentConsultTools("none", [customTool])).toEqual([customTool]);
+  });
+
+  it("quarantines custom realtime tools with unreadable names before dedupe", () => {
+    const unreadableNameTool: RealtimeVoiceTool = {
+      type: "function" as const,
+      get name(): string {
+        throw new Error("unreadable tool name");
+      },
+      description: "Unreadable custom tool",
+      parameters: { type: "object" as const, properties: {} },
+    };
+    const nonStringNameTool = {
+      type: "function" as const,
+      name: undefined,
+      description: "Malformed custom tool",
+      parameters: { type: "object" as const, properties: {} },
+    } as unknown as RealtimeVoiceTool;
+    const customTool: RealtimeVoiceTool = {
+      type: "function" as const,
+      name: "custom_lookup",
+      description: "Custom lookup",
+      parameters: { type: "object" as const, properties: {} },
+    };
+
+    expect(
+      resolveRealtimeVoiceAgentConsultTools("safe-read-only", [
+        unreadableNameTool,
+        nonStringNameTool,
+        customTool,
+      ]),
+    ).toStrictEqual([REALTIME_VOICE_AGENT_CONSULT_TOOL, customTool]);
+    expect(resolveRealtimeVoiceAgentConsultTools("none", [unreadableNameTool, customTool])).toEqual(
+      [customTool],
+    );
   });
 });

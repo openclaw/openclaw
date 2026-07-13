@@ -22,13 +22,20 @@ vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: (...args: unknown[]) => hoisted.isReasoningTagProviderMock(...args),
 }));
 
-const {
-  buildThreadingToolContext,
-  buildEmbeddedRunBaseParams,
-  buildEmbeddedRunExecutionParams,
-  resolveModelFallbackOptions,
-  resolveProviderScopedAuthProfile,
-} = await import("./agent-runner-utils.js");
+const { buildThreadingToolContext, buildEmbeddedRunExecutionParams, resolveModelFallbackOptions } =
+  await import("./agent-runner-utils.js");
+const { resolveProviderScopedAuthProfile } = await import("./agent-runner-auth-profile.js");
+const { buildEmbeddedRunBaseParams: buildEmbeddedRunBaseParamsCore } =
+  await import("./agent-runner-run-params.js");
+
+function buildEmbeddedRunBaseParams(
+  params: Omit<Parameters<typeof buildEmbeddedRunBaseParamsCore>[0], "isReasoningTagProvider">,
+) {
+  return buildEmbeddedRunBaseParamsCore({
+    ...params,
+    isReasoningTagProvider: hoisted.isReasoningTagProviderMock,
+  });
+}
 
 function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"] {
   return {
@@ -107,6 +114,15 @@ describe("agent-runner-utils", () => {
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
+  it("disables model fallback options for a model-locked run", () => {
+    const run = makeRun({ modelSelectionLocked: true });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.fallbacksOverride).toEqual([]);
+  });
+
   it("passes through missing agentId for helper-based fallback resolution", () => {
     hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({ agentId: undefined });
@@ -128,6 +144,7 @@ describe("agent-runner-utils", () => {
     const run = makeRun({
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
+      taskSuggestionDeliveryMode: "gateway",
     });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
@@ -165,6 +182,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.timeoutMs).toBe(run.timeoutMs);
     expect(resolved.runId).toBe("run-1");
     expect(resolved.promptCacheKey).toBe("webchat-cache-key");
+    expect(resolved.taskSuggestionDeliveryMode).toBe("gateway");
   });
 
   it("threads prompt cache affinity through embedded execution params", () => {
@@ -228,6 +246,26 @@ describe("agent-runner-utils", () => {
       hasAutoFallbackProvenance: true,
     });
     expect(resolved.modelFallbacksOverride).toEqual(["fallback-model"]);
+  });
+
+  it("disables embedded model fallbacks for a model-locked run", () => {
+    const run = makeRun({ modelSelectionLocked: true });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "openai",
+      primaryProvider: "openai",
+    });
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.modelFallbacksOverride).toEqual([]);
+    expect(resolved.modelSelectionLocked).toBe(true);
   });
 
   it("does not force final-tag enforcement for minimax providers", () => {

@@ -32,6 +32,18 @@
         "command"
       ]
     },
+    "computer": {
+      "emoji": "🖱️",
+      "title": "Computer",
+      "detailKeys": [
+        "action",
+        "coordinate",
+        "text",
+        "node",
+        "nodeId",
+        "screenIndex"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",
@@ -409,6 +421,23 @@
         "plan.0.step"
       ]
     },
+    "spawn_task": {
+      "emoji": "✨",
+      "title": "Suggest Task",
+      "detailKeys": [
+        "title",
+        "tldr",
+        "cwd"
+      ]
+    },
+    "dismiss_task": {
+      "emoji": "🗑️",
+      "title": "Dismiss Task",
+      "detailKeys": [
+        "task_id",
+        "reason"
+      ]
+    },
     "skill_workshop": {
       "emoji": "🧰",
       "title": "Skill Workshop",
@@ -416,6 +445,15 @@
         "action",
         "name",
         "proposal_id"
+      ]
+    },
+    "crestodian": {
+      "emoji": "🦀",
+      "title": "Crestodian",
+      "detailKeys": [
+        "action",
+        "path",
+        "model"
       ]
     },
     "gateway": {
@@ -488,6 +526,15 @@
         "sessionKey",
         "limit",
         "includeTools"
+      ]
+    },
+    "sessions_search": {
+      "emoji": "🔎",
+      "title": "Session Search",
+      "detailKeys": [
+        "query",
+        "sessionKey",
+        "limit"
       ]
     },
     "transcripts": {

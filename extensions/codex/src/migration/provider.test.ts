@@ -13,7 +13,6 @@ import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
-import { targetCodexMarketplaceDiscoveryTimeoutMs } from "./apply.js";
 import { buildCodexMigrationProvider } from "./provider.js";
 
 const appServerRequest = vi.hoisted(() => vi.fn());
@@ -168,6 +167,7 @@ function sourceAppCacheKey(fixture: { codexHome: string }): string {
         transport: "stdio",
         command: "codex",
         commandSource: "managed",
+        managedCommandOrder: "desktop-first",
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
         env: {
@@ -192,27 +192,6 @@ afterEach(async () => {
 });
 
 describe("buildCodexMigrationProvider", () => {
-  it("parses target marketplace discovery timeout env strictly", () => {
-    expect(
-      targetCodexMarketplaceDiscoveryTimeoutMs({
-        OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: "0",
-      }),
-    ).toBe(0);
-    expect(
-      targetCodexMarketplaceDiscoveryTimeoutMs({
-        OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: "250",
-      }),
-    ).toBe(250);
-
-    for (const value of ["0x10", "1e3", "2.5"]) {
-      expect(
-        targetCodexMarketplaceDiscoveryTimeoutMs({
-          OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: value,
-        }),
-      ).toBe(30_000);
-    }
-  });
-
   beforeEach(() => {
     appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
   });
@@ -292,6 +271,7 @@ describe("buildCodexMigrationProvider", () => {
     expectRecordFields((mockCallArg(appServerRequest) as { startOptions?: unknown }).startOptions, {
       command: "codex",
       commandSource: "managed",
+      managedCommandOrder: "desktop-first",
       env: {
         CODEX_HOME: fixture.codexHome,
         HOME: path.dirname(fixture.codexHome),
@@ -405,9 +385,11 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
     expect(configState.agents?.defaults?.models?.["openai/gpt-5.4-mini"]).toEqual({});
+    expect(configState.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({});
+    expect(configState.agents?.defaults?.models?.["openai/gpt-5.6-sol"]).toEqual({});
     expect(configState.agents?.defaults?.model).toEqual({
       fallbacks: [],
-      primary: "openai/gpt-5.5",
+      primary: "openai/gpt-5.6-sol",
     });
   });
 
@@ -820,9 +802,11 @@ describe("buildCodexMigrationProvider", () => {
         details: expect.objectContaining({
           path: ["agents", "defaults"],
           value: expect.objectContaining({
-            model: { primary: "openai/gpt-5.5" },
+            model: { primary: "openai/gpt-5.6-sol" },
             models: expect.objectContaining({
               "openai/gpt-5.4-mini": {},
+              "openai/gpt-5.5": {},
+              "openai/gpt-5.6-sol": {},
             }),
           }),
         }),
@@ -2103,6 +2087,76 @@ describe("buildCodexMigrationProvider", () => {
           marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
           pluginName: "google-calendar",
           allow_destructive_actions: "auto",
+        },
+      },
+    });
+  });
+
+  it("preserves global ask destructive plugin policy during migration", async () => {
+    const fixture = await createCodexFixture();
+    const configState: MigrationProviderContext["config"] = {
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              codexPlugins: {
+                enabled: true,
+                allow_destructive_actions: "ask",
+                plugins: {},
+              },
+            },
+          },
+        },
+      },
+      agents: { defaults: { workspace: fixture.workspaceDir } },
+    } as MigrationProviderContext["config"];
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("google-calendar");
+      }
+      if (method === "plugin/install") {
+        return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+      }
+      if (method === "skills/list") {
+        return { data: [] } satisfies v2.SkillsListResponse;
+      }
+      if (method === "hooks/list") {
+        return { data: [] } satisfies v2.HooksListResponse;
+      }
+      if (method === "config/mcpServer/reload") {
+        return {};
+      }
+      if (method === "app/list") {
+        return appsList([]);
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider({
+      runtime: createConfigRuntime(configState),
+    });
+
+    const result = await provider.apply(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        config: configState,
+      }),
+    );
+
+    expectRecordFields(findItem(result.items, "config:codex-plugins"), { status: "migrated" });
+    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
+      enabled: true,
+      allow_destructive_actions: "ask",
+      plugins: {
+        "google-calendar": {
+          enabled: true,
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "google-calendar",
         },
       },
     });

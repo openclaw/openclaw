@@ -1,53 +1,63 @@
 // Plugin Sdk Surface Report tests cover plugin sdk surface report script behavior.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  collectPluginSdkSurfaceReport,
+  evaluatePluginSdkSurfaceReport,
+  readPluginSdkSurfaceBudgets,
+} from "../../scripts/plugin-sdk-surface-report.mjs";
+
+const pluginSdkSurfaceBudgetEnvPattern = /^OPENCLAW_PLUGIN_SDK_MAX_/u;
+
+function baseSurfaceReportEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !pluginSdkSurfaceBudgetEnvPattern.test(key)),
+  );
+}
 
 function runSurfaceReport(env: Record<string, string>) {
   return spawnSync(process.execPath, ["scripts/plugin-sdk-surface-report.mjs", "--check"], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...baseSurfaceReportEnv(),
       ...env,
     },
   });
 }
 
-function readCurrentPublicFunctionExportCount() {
-  const result = runSurfaceReport({});
-  expect(result.status).toBe(0);
-  expect(result.stderr).toBe("");
+type PublicSurfaceCounts = {
+  callableExports: number;
+  exports: number;
+  wildcardReexports: number;
+};
 
-  return parseCurrentPublicCounts(result.stdout).functionExports;
-}
-
-function parseCurrentPublicCounts(stdout: string) {
-  const match = /public package SDK entrypoints:[\s\S]*?\n  exports: (\d+)\n  callable exports: (\d+)/u
-    .exec(stdout);
-  if (match === null || match[1] === undefined || match[2] === undefined) {
-    throw new Error("failed to read current public export counts");
-  }
+function readDefaultPublicSurfaceBudgets(): PublicSurfaceCounts {
+  const { budgets } = readPluginSdkSurfaceBudgets({});
   return {
-    exports: Number(match[1]),
-    functionExports: Number(match[2]),
+    exports: budgets.publicExports,
+    callableExports: budgets.publicFunctionExports,
+    wildcardReexports: budgets.publicWildcardReexports,
   };
 }
 
-function readDefaultBudget(envName: string): number {
-  const source = readFileSync("scripts/plugin-sdk-surface-report.mjs", "utf8");
-  const match = new RegExp(
-    `readBudgetEnv\\("${envName}",\\s*(\\d+)\\)`,
-    "u",
-  );
-  const result = match.exec(source);
-  if (result === null || result[1] === undefined) {
-    throw new Error(`failed to read default budget for ${envName}`);
-  }
-  return Number(result[1]);
+type SurfaceReport = ReturnType<typeof collectPluginSdkSurfaceReport>;
+let surfaceReport: SurfaceReport;
+
+function readCurrentPublicSurfaceCounts(): PublicSurfaceCounts {
+  return {
+    exports: surfaceReport.publicStats.totals.exports,
+    callableExports: surfaceReport.publicStats.totals.callableExports,
+    wildcardReexports: surfaceReport.publicWildcards.count,
+  };
 }
 
 describe("plugin SDK surface report", () => {
+  beforeAll(() => {
+    surfaceReport = collectPluginSdkSurfaceReport();
+  });
+
   it("rejects unknown CLI options before collecting SDK stats", () => {
     const result = spawnSync(
       process.execPath,
@@ -107,42 +117,67 @@ describe("plugin SDK surface report", () => {
   });
 
   it("accepts exact deprecated export budget overrides by public entrypoint", () => {
-    const result = runSurfaceReport({
+    const budgetConfig = readPluginSdkSurfaceBudgets({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 2 }),
     });
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
-
-  it("keeps default public budgets tight to the current source surface", () => {
-    const result = runSurfaceReport({});
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-
-    const counts = parseCurrentPublicCounts(result.stdout);
-    expect(readDefaultBudget("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS")).toBe(counts.exports);
-    expect(readDefaultBudget("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS")).toBe(
-      counts.functionExports,
+    expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).not.toContain(
+      expect.stringContaining("public deprecated exports in core"),
     );
   });
 
-  it("keeps generated package declarations out of source surface counts", () => {
-    const budget = readCurrentPublicFunctionExportCount();
-    const result = runSurfaceReport({
+  it("keeps default public surface budgets pinned to current source counts", () => {
+    expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
+  });
+
+  it("keeps approval store internals out of the deprecated infra barrel", () => {
+    const source = fs.readFileSync("src/plugin-sdk/infra-runtime.ts", "utf8");
+    expect(source).not.toMatch(/export\s+(?:type\s+)?\*\s+from\s+["'][^"']*exec-approvals/u);
+
+    for (const internalName of [
+      "ensureExecApprovalsSnapshot",
+      "persistAllowAlwaysDecisionLocked",
+      "recordAllowlistMatchesUseLocked",
+      "resolveExecApprovalsLocked",
+      "restoreExecApprovalsSnapshotLocked",
+      "updateExecApprovals",
+    ]) {
+      expect(source).not.toContain(internalName);
+    }
+  });
+
+  it("rejects callable surface growth from the canonical source graph", () => {
+    const budget = readDefaultPublicSurfaceBudgets().callableExports;
+    const budgetConfig = readPluginSdkSurfaceBudgets({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(budget - 1),
     });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`public callable exports ${budget} > ${budget - 1}`);
+    expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
+      `public callable exports ${budget} > ${budget - 1}`,
+    );
+  });
+
+  it("strips ambient CI budget overrides from CLI checks", () => {
+    const original = process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS;
+    process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS = "1";
+    try {
+      expect(baseSurfaceReportEnv()).not.toHaveProperty("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS");
+    } finally {
+      if (original === undefined) {
+        delete process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS;
+      } else {
+        process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS = original;
+      }
+    }
   });
 
   it("rejects deprecated export growth by public entrypoint", () => {
-    const result = runSurfaceReport({
+    const budgetConfig = readPluginSdkSurfaceBudgets({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 1 }),
     });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("public deprecated exports in core 2 > 1");
+    expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
+      "public deprecated exports in core 2 > 1",
+    );
   });
 });

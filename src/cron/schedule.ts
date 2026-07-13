@@ -77,6 +77,12 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return anchor + steps * everyMs;
   }
 
+  if (schedule.kind === "on-exit") {
+    // Event-driven trigger: never time-due. The gateway watcher calls
+    // enqueueRun when the watched command exits.
+    return undefined;
+  }
+
   const cron = resolveCronFromSchedule(schedule);
   if (!cron) {
     return undefined;

@@ -104,6 +104,7 @@ describe("ClickClack account resolution", () => {
       configured: true,
       defaultTo: "channel:general",
       enabled: true,
+      agentActivity: false,
       reconnectMs: 1_500,
       replyMode: "agent",
       token: "ccb_live",
@@ -150,6 +151,7 @@ describe("ClickClack account resolution", () => {
       configured: true,
       defaultTo: "channel:general",
       enabled: true,
+      agentActivity: false,
       model: "openai/gpt-5.4-mini",
       reconnectMs: 1_500,
       replyMode: "model",
@@ -157,6 +159,28 @@ describe("ClickClack account resolution", () => {
       toolsAllow: ["web_search"],
       workspace: "wsp_1",
     });
+  });
+
+  it("resolves the agent activity opt-in only when explicitly enabled", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          token: "ccb_default",
+          accounts: {
+            bridge: {
+              token: "ccb_bridge",
+              agentActivity: true,
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveClickClackAccount({ cfg }).agentActivity).toBe(false);
+    expect(resolveClickClackAccount({ cfg, accountId: "bridge" }).agentActivity).toBe(true);
   });
 
   it("normalizes reconnect intervals to the public config bounds", () => {

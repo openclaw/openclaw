@@ -95,6 +95,7 @@ export function createChannelApiRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
   verbose?: boolean;
+  retryAfterMaxDelayMs?: number;
   shouldRetry?: (err: unknown) => boolean;
   /**
    * When true, the custom shouldRetry predicate is used exclusively —
@@ -116,6 +117,9 @@ export function createChannelApiRetryRunner(params: {
       label,
       shouldRetry,
       retryAfterMs: getChannelApiRetryAfterMs,
+      ...(params.retryAfterMaxDelayMs !== undefined
+        ? { retryAfterMaxDelayMs: params.retryAfterMaxDelayMs }
+        : {}),
       onRetry: params.verbose
         ? (info) => {
             const maxRetries = Math.max(1, info.maxAttempts - 1);

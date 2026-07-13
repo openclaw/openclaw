@@ -3,10 +3,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { onboardCommand, setupWizardCommand } from "./onboard.js";
+import { setupWizardCommand } from "./onboard.js";
 
 const mocks = vi.hoisted(() => ({
   runInteractiveSetup: vi.fn(async () => {}),
+  runGuidedOnboarding: vi.fn(async () => {}),
   runNonInteractiveSetup: vi.fn(async () => {}),
   readConfigFileSnapshot: vi.fn(async () => ({ exists: false, valid: false, config: {} })),
   handleReset: vi.fn(async () => {}),
@@ -14,6 +15,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./onboard-interactive.js", () => ({
   runInteractiveSetup: mocks.runInteractiveSetup,
+}));
+
+vi.mock("./onboard-guided.js", () => ({
+  runGuidedOnboarding: mocks.runGuidedOnboarding,
 }));
 
 vi.mock("./onboard-non-interactive.js", () => ({
@@ -173,7 +178,62 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
-  it("keeps onboardCommand as an alias for setupWizardCommand", () => {
-    expect(onboardCommand).toBe(setupWizardCommand);
+  it("routes flagless interactive onboarding to the guided flow", async () => {
+    const runtime = makeRuntime();
+
+    // Unset Commander booleans arrive as false and must not force classic.
+    await setupWizardCommand(
+      { skipChannels: false, skipSkills: false, acceptRisk: false, json: false },
+      runtime,
+    );
+
+    expect(mocks.runGuidedOnboarding).toHaveBeenCalledOnce();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["--classic", { classic: true }],
+    ["--flow quickstart", { flow: "quickstart" as const }],
+    ["--mode remote", { mode: "remote" as const }],
+    ["--import-from", { importFrom: "hermes" }],
+    ["--auth-choice", { authChoice: "skip" }],
+    ["--gateway-port", { gatewayPort: 19001 }],
+    ["--remote-url", { remoteUrl: "wss://gw.example.ts.net" }],
+    ["--skip-bootstrap", { skipBootstrap: true }],
+    ["--no-install-daemon", { installDaemon: false }],
+    ["--daemon-runtime", { daemonRuntime: "node" as const }],
+    ["a provider auth flag", { mistralApiKey: "sk-x" }],
+  ])("keeps the classic interactive wizard for %s", async (_label, opts) => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(opts, runtime);
+
+    expect(mocks.runInteractiveSetup).toHaveBeenCalledOnce();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-interactive routing unchanged", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ nonInteractive: true, acceptRisk: true }, runtime);
+
+    expect(mocks.runNonInteractiveSetup).toHaveBeenCalledOnce();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting classic and non-interactive modes", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ classic: true, nonInteractive: true, acceptRisk: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
   });
 });

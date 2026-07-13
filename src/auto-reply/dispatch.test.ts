@@ -2,8 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { registerReplyDispatcherSettledTask } from "./dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
-import type { ReplyDispatchBeforeDeliver, ReplyDispatcher } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
 type DispatchReplyFromConfigFn =
@@ -201,6 +203,9 @@ describe("withReplyDispatcher", () => {
   it("always marks complete and waits for idle after success", async () => {
     const order: string[] = [];
     const dispatcher = createDispatcher(order);
+    registerReplyDispatcherSettledTask(dispatcher, () => {
+      order.push("settledTask");
+    });
 
     const result = await withReplyDispatcher({
       dispatcher,
@@ -214,7 +219,7 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(result).toBe("ok");
-    expect(order).toEqual(["run", "markComplete", "waitForIdle", "onSettled"]);
+    expect(order).toEqual(["run", "markComplete", "waitForIdle", "settledTask", "onSettled"]);
   });
 
   it("still drains dispatcher after run throws", async () => {

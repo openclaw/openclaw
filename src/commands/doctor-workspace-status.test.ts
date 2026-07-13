@@ -1,4 +1,5 @@
 // Doctor workspace status tests cover workspace inspection and status output.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as noteModule from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,8 +8,11 @@ import {
   createPluginLoadResult,
   createPluginRecord,
   createTypedHook,
-} from "../plugins/status.test-helpers.js";
-import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
+} from "../plugins/status.test-fixtures.js";
+import {
+  collectWorkspaceStatusHealthFindings,
+  noteWorkspaceStatus,
+} from "./doctor-workspace-status.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
@@ -125,7 +129,7 @@ describe("noteWorkspaceStatus", () => {
     try {
       const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
       expect(pluginCalls).toHaveLength(1);
-      const [[body]] = pluginCalls;
+      const [body] = expectDefined(pluginCalls[0], "(pluginCalls)[0] test invariant");
       expect(body).toContain("Bundle plugins: 1");
       expect(body).toContain("agents, commands, skills");
     } finally {
@@ -151,11 +155,115 @@ describe("noteWorkspaceStatus", () => {
     try {
       const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
       expect(pluginCalls).toHaveLength(1);
-      const [[body]] = pluginCalls;
+      const [body] = expectDefined(pluginCalls[0], "(pluginCalls)[0] test invariant");
       expect(body).toContain("Imported: 1");
     } finally {
       noteSpy.mockRestore();
     }
+  });
+
+  it("collects plugin version drift as structured findings", async () => {
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
+    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      ...createPluginLoadResult({ plugins: [] }),
+    });
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
+    mocks.listTaskFlowRecords.mockReturnValue([]);
+
+    const findings = collectWorkspaceStatusHealthFindings(
+      {
+        plugins: { entries: { codex: { enabled: true } } },
+      },
+      {
+        pluginVersionDrift: {
+          gatewayVersion: "2026.6.1",
+          drifts: [
+            {
+              pluginId: "codex",
+              installedVersion: "2026.5.30-beta.1",
+              gatewayVersion: "2026.6.1",
+              source: "npm",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-status",
+        severity: "warning",
+        path: "plugins.entries.codex",
+        target: "codex",
+        requirement: "plugin-version-drift",
+        message: expect.stringContaining("2026.5.30-beta.1"),
+        fixHint: expect.stringContaining("openclaw plugins update codex"),
+      }),
+    ]);
+  });
+
+  it("collects compatibility warnings, plugin diagnostics, and TaskFlow recovery findings", async () => {
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
+    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      ...createPluginLoadResult({
+        plugins: [],
+        diagnostics: [
+          {
+            level: "error",
+            pluginId: "broken-plugin",
+            message: "channel setup failed",
+            source: "/tmp/plugin.json",
+            code: "channel-setup-failure",
+          },
+        ],
+      }),
+    });
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([
+      "legacy-plugin still uses legacy before_agent_start",
+    ]);
+    mocks.listTaskFlowRecords.mockReturnValue([
+      {
+        flowId: "flow-123",
+        syncMode: "managed",
+        status: "blocked",
+        blockedTaskId: "task-missing",
+      },
+    ]);
+    mocks.listTasksForFlowId.mockReturnValue([]);
+
+    const findings = collectWorkspaceStatusHealthFindings({});
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-status",
+        severity: "warning",
+        path: "plugins",
+        requirement: "plugin-compatibility",
+        message: "legacy-plugin still uses legacy before_agent_start",
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-status",
+        severity: "error",
+        path: "plugins.entries.broken-plugin",
+        target: "broken-plugin",
+        requirement: "channel-setup-failure",
+        source: "/tmp/plugin.json",
+        message: "channel setup failed",
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-status",
+        severity: "warning",
+        path: "tasks.flows",
+        target: "flow-123",
+        requirement: "taskflow-recovery",
+        message: expect.stringContaining("task-missing"),
+        fixHint: expect.stringContaining("openclaw tasks flow show flow-123"),
+      }),
+    ]);
   });
 
   it("surfaces active official managed plugin version drift", async () => {
@@ -195,7 +303,7 @@ describe("noteWorkspaceStatus", () => {
     try {
       const driftCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugin version drift");
       expect(driftCalls).toHaveLength(1);
-      const [[body]] = driftCalls;
+      const [body] = expectDefined(driftCalls[0], "(driftCalls)[0] test invariant");
       expect(body).toContain("1 active official plugin not on OpenClaw 2026.6.1");
       expect(body).toContain("codex: 2026.5.30-beta.1 (npm) -> expected 2026.6.1");
       expect(body).toContain("openclaw plugins update codex");
@@ -244,7 +352,7 @@ describe("noteWorkspaceStatus", () => {
     try {
       const driftCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugin version drift");
       expect(driftCalls).toHaveLength(1);
-      const [[body]] = driftCalls;
+      const [body] = expectDefined(driftCalls[0], "(driftCalls)[0] test invariant");
       expect(body).toContain("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
       expect(body).not.toContain("openclaw plugins update brave");
       expect(body).toContain("openclaw gateway restart");
@@ -336,7 +444,7 @@ describe("noteWorkspaceStatus", () => {
         ([, title]) => title === "Plugin compatibility",
       );
       expect(compatibilityCalls).toHaveLength(1);
-      const [[body]] = compatibilityCalls;
+      const [body] = expectDefined(compatibilityCalls[0], "(compatibilityCalls)[0] test invariant");
       expect(body).toContain("legacy-plugin still uses legacy before_agent_start");
     } finally {
       noteSpy.mockRestore();
@@ -364,7 +472,7 @@ describe("noteWorkspaceStatus", () => {
     try {
       const recoveryCalls = noteSpy.mock.calls.filter(([, title]) => title === "TaskFlow recovery");
       expect(recoveryCalls).toHaveLength(1);
-      const [[body]] = recoveryCalls;
+      const [body] = expectDefined(recoveryCalls[0], "(recoveryCalls)[0] test invariant");
       expect(body).toContain("flow-123");
       expect(body).toContain("openclaw tasks flow show <flow-id>");
     } finally {
@@ -372,7 +480,10 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
-  const makeSkill = (skillKey: string, fields: { eligible: boolean; platformIncompatible: boolean }) =>
+  const makeSkill = (
+    skillKey: string,
+    fields: { eligible: boolean; platformIncompatible: boolean },
+  ) =>
     ({
       skillKey,
       disabled: false,

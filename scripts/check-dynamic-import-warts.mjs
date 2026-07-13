@@ -178,7 +178,7 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
 /**
  * Collects dynamic import advisories across configured source roots.
  */
-export async function collectDynamicImportAdvisories(options = {}) {
+async function collectDynamicImportAdvisories(options = {}) {
   const roots = options.roots ?? defaultRoots;
   const files = await collectTypeScriptFilesFromRoots(roots, {
     extraTestSuffixes: [".suite.ts"],

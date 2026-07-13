@@ -2,6 +2,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { RECOVERY_REPLAY_SPACING_MS } from "./delivery-recovery.shared.js";
 import {
   drainPendingSessionDeliveries,
   enqueueSessionDelivery,
@@ -38,6 +39,122 @@ describe("session-delivery queue recovery", () => {
       expect(summary.recovered).toBe(1);
       expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
     });
+  });
+
+  it("paces startup replay for multiple eligible session deliveries", async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-04-23T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    try {
+      await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+        await enqueueSessionDelivery(
+          {
+            kind: "systemEvent",
+            sessionKey: "agent:main:main",
+            text: "first",
+          },
+          tempDir,
+        );
+        await enqueueSessionDelivery(
+          {
+            kind: "systemEvent",
+            sessionKey: "agent:main:main",
+            text: "second",
+          },
+          tempDir,
+        );
+
+        let firstDelivered!: () => void;
+        const firstDeliveredPromise = new Promise<void>((resolve) => {
+          firstDelivered = resolve;
+        });
+        const deliveryTimes: number[] = [];
+        const deliver = vi.fn(async () => {
+          deliveryTimes.push(Date.now());
+          if (deliveryTimes.length === 1) {
+            firstDelivered();
+          }
+        });
+
+        const recovery = recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          log: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+          },
+        });
+        await firstDeliveredPromise;
+        expect(deliver).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS - 1);
+        expect(deliver).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1);
+        const summary = await recovery;
+
+        expect(deliver).toHaveBeenCalledTimes(2);
+        expect(deliveryTimes[1]).toBe(startedAt.getTime() + RECOVERY_REPLAY_SPACING_MS);
+        expect(summary.recovered).toBe(2);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts replay pacing against the session recovery budget", async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-04-23T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    try {
+      await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+        for (const text of ["first", "second", "third"]) {
+          await enqueueSessionDelivery(
+            {
+              kind: "systemEvent",
+              sessionKey: "agent:main:main",
+              text,
+            },
+            tempDir,
+          );
+        }
+
+        let firstDelivered!: () => void;
+        const firstDeliveredPromise = new Promise<void>((resolve) => {
+          firstDelivered = resolve;
+        });
+        const deliveryTimes: number[] = [];
+        const deliver = vi.fn(async () => {
+          deliveryTimes.push(Date.now());
+          if (deliveryTimes.length === 1) {
+            firstDelivered();
+          }
+        });
+
+        const recovery = recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          maxRecoveryMs: 1,
+          log: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+          },
+        });
+        await firstDeliveredPromise;
+
+        await vi.advanceTimersByTimeAsync(1);
+        const summary = await recovery;
+
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(deliveryTimes).toEqual([startedAt.getTime()]);
+        expect(summary.recovered).toBe(1);
+        expect(await loadPendingSessionDeliveries(tempDir)).toHaveLength(2);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("defers recovery when the recovery budget would exceed the date range", async () => {

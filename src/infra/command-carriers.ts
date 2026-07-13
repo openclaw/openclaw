@@ -295,7 +295,7 @@ export function unwrapEnvInvocation(argv: string[]): string[] | null {
 }
 
 /** Resolve the command argv behind an `env` carrier, honoring bounded `env -S` recursion. */
-export function resolveEnvCarriedArgv(argv: string[], depth = 0): string[] | null {
+function resolveEnvCarriedArgv(argv: string[], depth = 0): string[] | null {
   const parsed = parseEnvInvocationPrelude(argv, depth);
   return parsed ? (parsed.splitArgv ?? argv.slice(parsed.commandIndex)) : null;
 }

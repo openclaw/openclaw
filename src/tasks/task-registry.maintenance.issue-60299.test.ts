@@ -56,7 +56,7 @@ afterEach(() => {
 function createTaskRegistryMaintenanceHarness(params: {
   tasks: TaskRecord[];
   sessionStore?: Record<string, SessionEntry>;
-  loadSessionStore?: TaskRegistryMaintenanceRuntime["loadSessionStore"];
+  listSessionEntries?: TaskRegistryMaintenanceRuntime["listSessionEntries"];
   resolveStorePath?: TaskRegistryMaintenanceRuntime["resolveStorePath"];
   deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
   acpEntry?: AcpSessionStoreEntry["entry"];
@@ -95,7 +95,13 @@ function createTaskRegistryMaintenanceHarness(params: {
             entry: undefined,
             storeReadFailed: false,
           } satisfies AcpSessionStoreEntry),
-    loadSessionStore: params.loadSessionStore ?? (() => sessionStore),
+    listSessionEntries:
+      params.listSessionEntries ??
+      (() =>
+        Object.entries(sessionStore).map(([sessionKey, entry]) => ({
+          sessionKey,
+          entry,
+        }))),
     resolveStorePath: params.resolveStorePath ?? (() => ""),
     ...(params.deriveSessionChatTypeFromKey
       ? { deriveSessionChatTypeFromKey: params.deriveSessionChatTypeFromKey }
@@ -152,11 +158,17 @@ function createTaskRegistryMaintenanceHarness(params: {
         status: patch.status,
         endedAt: patch.endedAt,
         lastEventAt: patch.lastEventAt ?? patch.endedAt,
-        ...(patch.error !== undefined ? { error: patch.error } : {}),
         ...(patch.terminalSummary !== undefined
           ? { terminalSummary: patch.terminalSummary ?? undefined }
           : {}),
       } satisfies TaskRecord;
+      if (Object.hasOwn(patch, "error")) {
+        if (patch.error === undefined) {
+          delete next.error;
+        } else {
+          next.error = patch.error;
+        }
+      }
       currentTasks.set(patch.taskId, next);
       return next;
     },
@@ -208,7 +220,7 @@ function expectTaskStatus(
 }
 
 describe("task-registry maintenance issue #60299", () => {
-  it("reuses session store reads across stale subagent task checks in one pass", async () => {
+  it("reuses session entry lists across stale subagent task checks in one pass", async () => {
     const tasks = Array.from({ length: 10 }, (_, index) =>
       makeStaleTask({
         runtime: "subagent",
@@ -216,16 +228,16 @@ describe("task-registry maintenance issue #60299", () => {
         childSessionKey: `agent:main:subagent:stale-${index}`,
       }),
     );
-    const loadSessionStoreMock = vi.fn(() => ({}));
+    const listSessionEntriesMock = vi.fn(() => []);
 
     createTaskRegistryMaintenanceHarness({
       tasks,
-      loadSessionStore: loadSessionStoreMock,
+      listSessionEntries: listSessionEntriesMock,
       resolveStorePath: () => "/tmp/openclaw-test-sessions-main.json",
     });
 
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: tasks.length });
-    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(listSessionEntriesMock).toHaveBeenCalledTimes(1);
   });
 
   it("reuses CLI channel session type derivation across duplicate stale task checks", async () => {
@@ -530,6 +542,134 @@ describe("task-registry maintenance issue #60299", () => {
     expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
     expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
+
+  it("recovers terminal lost cron tasks from durable run logs", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-terminal-lost-ok",
+      runId: `cron:cron-job-terminal-lost-ok:${startedAt}`,
+      status: "lost",
+      error: "backing session missing",
+      startedAt,
+      endedAt: startedAt + 60_000,
+      lastEventAt: startedAt + 60_000,
+      cleanupAfter: Date.now() + 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      cronRunLogEntries: {
+        "cron-job-terminal-lost-ok": [
+          {
+            ts: startedAt + 1250,
+            jobId: "cron-job-terminal-lost-ok",
+            action: "finished",
+            status: "ok",
+            summary: "done",
+            runAtMs: startedAt,
+            durationMs: 1250,
+          },
+        ],
+      },
+    });
+
+    const reconciled = reconcileInspectableTasks();
+    expect(reconciled).toEqual([
+      expect.objectContaining({
+        taskId: task.taskId,
+        status: "succeeded",
+        endedAt: startedAt + 1250,
+        terminalSummary: "done",
+      }),
+    ]);
+    expect(reconciled[0]).not.toHaveProperty("error");
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 0, recovered: 1 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0, recovered: 1 });
+    const recoveredTask = currentTasks.get(task.taskId);
+    expect(recoveredTask).toMatchObject({
+      status: "succeeded",
+      endedAt: startedAt + 1250,
+      terminalSummary: "done",
+    });
+    expect(recoveredTask).not.toHaveProperty("error");
+  });
+
+  it("does not recover terminal lost cron tasks without a backing-session error", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-terminal-lost-no-error",
+      runId: `cron:cron-job-terminal-lost-no-error:${startedAt}`,
+      status: "lost",
+      startedAt,
+      endedAt: startedAt + 60_000,
+      lastEventAt: startedAt + 60_000,
+      cleanupAfter: Date.now() + 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      cronRunLogEntries: {
+        "cron-job-terminal-lost-no-error": [
+          {
+            ts: startedAt + 1250,
+            jobId: "cron-job-terminal-lost-no-error",
+            action: "finished",
+            status: "ok",
+            summary: "done",
+            runAtMs: startedAt,
+            durationMs: 1250,
+          },
+        ],
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+    });
+  });
+
+  it("does not recover terminal lost cron tasks with non-backing-session errors", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-terminal-lost-other-error",
+      runId: `cron:cron-job-terminal-lost-other-error:${startedAt}`,
+      status: "lost",
+      error: "operator marked lost",
+      startedAt,
+      endedAt: startedAt + 60_000,
+      lastEventAt: startedAt + 60_000,
+      cleanupAfter: Date.now() + 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      cronRunLogEntries: {
+        "cron-job-terminal-lost-other-error": [
+          {
+            ts: startedAt + 1250,
+            jobId: "cron-job-terminal-lost-other-error",
+            action: "finished",
+            status: "ok",
+            summary: "done",
+            runAtMs: startedAt,
+            durationMs: 1250,
+          },
+        ],
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+      error: "operator marked lost",
+    });
   });
 
   it("recovers interrupted cron tasks from durable cron job state when run logs are absent", async () => {

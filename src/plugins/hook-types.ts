@@ -94,6 +94,7 @@ export type PluginHookName =
   | "after_compaction"
   | "before_reset"
   | "inbound_claim"
+  | "channel_pairing_requested"
   | "message_received"
   | "message_sending"
   | "reply_payload_sending"
@@ -118,6 +119,7 @@ export type PluginHookName =
   | "gateway_start"
   | "gateway_stop"
   | "heartbeat_prompt_contribution"
+  | "cron_reconciled"
   | "cron_changed"
   | "before_dispatch"
   | "reply_dispatch"
@@ -141,6 +143,7 @@ export const PLUGIN_HOOK_NAMES = [
   "after_compaction",
   "before_reset",
   "inbound_claim",
+  "channel_pairing_requested",
   "message_received",
   "message_sending",
   "reply_payload_sending",
@@ -159,6 +162,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "heartbeat_prompt_contribution",
+  "cron_reconciled",
   "cron_changed",
   "before_dispatch",
   "reply_dispatch",
@@ -178,6 +182,25 @@ export type PluginHookDeprecation = {
   replacement: string;
   reason: string;
   removeAfter?: string;
+};
+
+type PluginHookChannelPairingRequestedEvent = {
+  /** Channel that created the pending pairing request. */
+  channel: string;
+  /** Provider account ID for multi-account channel setups. */
+  accountId?: string;
+  /** Channel-scoped sender ID awaiting operator approval. */
+  senderId: string;
+  /** Short-lived code accepted by `openclaw pairing approve`. */
+  code: string;
+  /** Sender-supplied channel metadata for operator notification/audit. Treat as untrusted. */
+  metadata?: Record<string, string | undefined>;
+};
+
+type PluginHookChannelPairingContext = {
+  channelId: string;
+  accountId?: string;
+  senderId: string;
 };
 
 export const DEPRECATED_PLUGIN_HOOKS = {
@@ -433,6 +456,8 @@ export type PluginHookAfterCompactionEvent = {
   tokenCount?: number;
   compactedCount: number;
   sessionFile?: string;
+  /** Physical session generation replaced by this compaction, when it rotated. */
+  previousSessionId?: string;
 };
 
 export type PluginHookInboundClaimResult = {
@@ -837,12 +862,22 @@ export type PluginHookGatewayContext = {
   getCron?: () => PluginHookGatewayCronService | undefined;
 };
 
+export type PluginHookCronReconciledContext = PluginHookGatewayContext & {
+  /** Aborts when this exact scheduler snapshot is superseded or the Gateway closes. */
+  abortSignal: AbortSignal;
+};
+
 export type PluginHookGatewayStartEvent = {
   port: number;
 };
 
 export type PluginHookGatewayStopEvent = {
   reason?: string;
+};
+
+export type PluginHookCronReconciledEvent = {
+  reason: "startup" | "reload";
+  enabled: boolean;
 };
 
 export type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped";
@@ -890,6 +925,11 @@ export type PluginHookGatewayCronJob = {
         kind: "every";
         everyMs?: number;
         anchorMs?: number;
+      }
+    | {
+        kind: "on-exit";
+        command?: string;
+        cwd?: string;
       };
   sessionTarget?: string;
   wakeMode?: string;
@@ -903,7 +943,7 @@ export type PluginHookGatewayCronJob = {
 };
 
 export type PluginHookCronChangedEvent = {
-  action: "added" | "updated" | "removed" | "started" | "finished";
+  action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
   jobId: string;
   job?: PluginHookGatewayCronJob;
   /** Top-level session target for downstream routing (mirrors job.sessionTarget). */
@@ -1139,6 +1179,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,
   ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
+  channel_pairing_requested: (
+    event: PluginHookChannelPairingRequestedEvent,
+    ctx: PluginHookChannelPairingContext,
+  ) => Promise<void> | void;
   before_dispatch: (
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,
@@ -1242,6 +1286,10 @@ export type PluginHookHandlerMap = {
     | Promise<PluginHeartbeatPromptContributionResult | void>
     | PluginHeartbeatPromptContributionResult
     | void;
+  cron_reconciled: (
+    event: PluginHookCronReconciledEvent,
+    ctx: PluginHookCronReconciledContext,
+  ) => Promise<void> | void;
   cron_changed: (
     event: PluginHookCronChangedEvent,
     ctx: PluginHookGatewayContext,

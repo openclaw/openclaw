@@ -60,7 +60,6 @@ const XCRUN_FLAG_OPTIONS = new Set([
   "-v",
   "--verbose",
 ]);
-
 function isArchSelectorToken(token: string): boolean {
   return /^-[A-Za-z0-9_]+$/.test(token);
 }
@@ -481,6 +480,9 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
 const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(
   DISPATCH_WRAPPER_SPECS.map((spec) => [spec.name, spec] as const),
 );
+function normalizeDispatchWrapperName(token: string): string {
+  return normalizeExecutableToken(token);
+}
 
 type DispatchWrapperUnwrapResult =
   | { kind: "not-wrapper" }
@@ -508,7 +510,7 @@ function unwrapDispatchWrapper(
 }
 
 export function isDispatchWrapperExecutable(token: string): boolean {
-  return DISPATCH_WRAPPER_SPEC_BY_NAME.has(normalizeExecutableToken(token));
+  return DISPATCH_WRAPPER_SPEC_BY_NAME.has(normalizeDispatchWrapperName(token));
 }
 
 export function unwrapKnownDispatchWrapperInvocation(
@@ -519,7 +521,7 @@ export function unwrapKnownDispatchWrapperInvocation(
   if (!token0) {
     return { kind: "not-wrapper" };
   }
-  const wrapper = normalizeExecutableToken(token0);
+  const wrapper = normalizeDispatchWrapperName(token0);
   const spec = DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper);
   if (!spec) {
     return { kind: "not-wrapper" };

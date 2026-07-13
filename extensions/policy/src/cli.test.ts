@@ -257,9 +257,22 @@ describe("policy commands", () => {
           ocPath: "oc://openclaw.config/channels/telegram",
           target: "oc://openclaw.config/channels/telegram",
           requirement: "oc://policy.jsonc/channels/denyRules/#0",
+          policy: {
+            fixRecommendation: {
+              fixClass: "automatic",
+              policyPath: ["channels", "denyRules"],
+              configTargets: ["channels"],
+              summary: "Disable product-managed channels matching the denied provider.",
+            },
+          },
         },
       ],
     });
+    const attestedFinding = { ...parsed.findings[0] };
+    expect(attestedFinding.policy).toBeDefined();
+    delete attestedFinding.policy;
+    expect(parsed.attestation.findingsHash).toBe(policyFindingsHash([attestedFinding]));
+    expect(parsed.attestation.findingsHash).not.toBe(policyFindingsHash(parsed.findings));
   });
 
   it("attests underlying policy findings when the accepted attestation is stale", async () => {

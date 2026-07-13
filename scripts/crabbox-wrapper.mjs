@@ -19,9 +19,24 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  canonicalProviderName,
+  isProviderAdvertised,
+  parseProvidersFromHelp,
+} from "./crabbox-wrapper-providers.mjs";
+import {
+  prepareTestboxLeaseFreshness,
+  recordTestboxLeaseFreshness,
+} from "./testbox-lease-freshness.mjs";
 import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
+// A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
+// exceed the snappy default probe timeout while it renders `run --help` or does
+// first-run init. Retry the metadata probes once with this generous timeout so a
+// single slow probe does not hard-fail the wrapper and block all remote validation.
+const CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS = 20_000;
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
 const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
@@ -354,14 +369,18 @@ function buildBatchCommandLine(command, commandArgs) {
   return `"${[escapedCommand, ...escapedArgs].join(" ")}"`;
 }
 
-function checkedOutput(command, commandArgs) {
+function checkedOutput(
+  command,
+  commandArgs,
+  timeoutMs = resolveMetadataProbeTimeoutMs(process.env),
+) {
   const invocation = spawnInvocation(command, commandArgs, process.env, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    timeout: 5_000,
+    timeout: timeoutMs,
     killSignal: "SIGKILL",
   });
   const timedOut = result.error?.name === "Error" && result.signal === "SIGKILL";
@@ -370,6 +389,19 @@ function checkedOutput(command, commandArgs) {
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
     stdout: (result.stdout ?? "").trim(),
   };
+}
+
+// Probe Crabbox metadata (`--version` / `run --help`) with one generous retry.
+// A cold Crabbox can be SIGKILLed by the snappy default timeout or emit nothing
+// on the first call, then be instant and clean on the next. Retrying keeps the
+// warm path fast (one ~instant probe) while stopping a single slow probe from
+// tripping the sanity/provider-list guards and blocking all remote validation.
+function probeCrabboxMetadata(command, commandArgs) {
+  const first = checkedOutput(command, commandArgs);
+  if (first.status === 0 && first.text.length > 0) {
+    return first;
+  }
+  return checkedOutput(command, commandArgs, CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS);
 }
 
 function parseCrabboxVersion(value) {
@@ -427,10 +459,12 @@ function satisfiesMinimumCrabboxVersion(version, minimum) {
 
 function gitOutput(commandArgs) {
   const gitBinary = resolvePathBinary("git", process.env, process.platform) ?? "git";
-  const invocation = spawnInvocation(gitBinary, commandArgs, process.env, process.platform);
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" };
+  const invocation = spawnInvocation(gitBinary, commandArgs, gitEnv, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     encoding: "utf8",
+    env: gitEnv,
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
@@ -659,7 +693,7 @@ function shouldRequireBrokeredAws(commandArgs, providerName) {
   if (process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS === "1") {
     return false;
   }
-  const canonicalProvider = providerAliases.get(providerName) ?? providerName;
+  const canonicalProvider = canonicalProviderName(providerName);
   if (canonicalProvider !== "aws") {
     return false;
   }
@@ -902,6 +936,21 @@ function blacksmithTestboxPrivateKeyPath(id) {
   return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
 }
 
+// Crabbox claims bind raw Testbox ids to one repo before remote execution.
+// Check the same sidecar so a dependency exit bug cannot make refusal green.
+function blacksmithTestboxClaimRepoRoot(id) {
+  const configuredStateRoot = process.env.XDG_STATE_HOME?.trim();
+  const stateDir = configuredStateRoot
+    ? resolve(configuredStateRoot, "crabbox")
+    : resolve(crabboxConfigDir(), "state");
+  const claimPath = resolve(stateDir, "claims", `${id}.json`);
+  if (!pathExists(claimPath)) {
+    return "";
+  }
+  const claim = JSON.parse(readFileSync(claimPath, "utf8"));
+  return typeof claim.repoRoot === "string" ? claim.repoRoot : "";
+}
+
 function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
   if (commandArgs[0] !== "run") {
     return;
@@ -915,18 +964,24 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
   }
 
   const keyPath = blacksmithTestboxPrivateKeyPath(id);
-  if (pathExists(keyPath)) {
-    return;
+  if (!pathExists(keyPath)) {
+    console.error(
+      [
+        `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
+        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+        "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
+      ].join("\n"),
+    );
+    process.exit(2);
   }
 
-  console.error(
-    [
-      `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
-      "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
-      "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
-    ].join("\n"),
-  );
-  process.exit(2);
+  const claimRepoRoot = blacksmithTestboxClaimRepoRoot(id);
+  if (claimRepoRoot && claimRepoRoot !== repoRoot && !hasOption(commandArgs, "--reclaim")) {
+    console.error(
+      `[crabbox] lease ${id} is claimed by repo ${claimRepoRoot}; use --reclaim to claim it for ${repoRoot}`,
+    );
+    process.exit(2);
+  }
 }
 
 function preserveTemporaryCrabboxRuns() {
@@ -2056,7 +2111,7 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
 }
 
 function isBrokeredWsl2RemoteTarget(commandArgs, providerName) {
-  const canonicalProvider = providerAliases.get(providerName) ?? providerName;
+  const canonicalProvider = canonicalProviderName(providerName);
   return (
     commandArgs[0] === "run" &&
     (canonicalProvider === "aws" || canonicalProvider === "azure") &&
@@ -2905,7 +2960,8 @@ function isSparseCheckout() {
 }
 
 function isWorktreeClean() {
-  return gitOutput(["status", "--porcelain=v1"]).stdout === "";
+  const status = gitOutput(["status", "--porcelain=v1"]);
+  return status.status === 0 && status.stdout === "";
 }
 
 function shouldUseFullCheckoutForCleanRemoteSync(commandArgs, _providerName) {
@@ -3149,101 +3205,29 @@ function injectFullCheckoutLeaseReclaim(commandArgs) {
   return normalizedArgs;
 }
 
-const version = checkedOutput(binary, ["--version"]);
-const help = checkedOutput(binary, ["run", "--help"]);
-const providerAliases = new Map([
-  ["blacksmith", "blacksmith-testbox"],
-  ["cf", "cloudflare"],
-  ["container", "local-container"],
-  ["docker", "local-container"],
-  ["exe", "exe-dev"],
-  ["exedev", "exe-dev"],
-  ["google", "gcp"],
-  ["google-cloud", "gcp"],
-  ["local-docker", "local-container"],
-  ["namespace", "namespace-devbox"],
-  ["namespace-devboxes", "namespace-devbox"],
-  ["rail", "railway"],
-  ["railwayapp", "railway"],
-  ["run-pod", "runpod"],
-  ["runpodio", "runpod"],
-  ["sem", "semaphore"],
-  ["static", "ssh"],
-  ["static-ssh", "ssh"],
-  ["tensorlake-sbx", "tensorlake"],
-  ["tl", "tensorlake"],
-]);
-// Crabbox providerHelpAll can omit Tensorlake even when the binary accepts it.
-const providerHelpOmissions = new Set(["tensorlake"]);
-
-function addProviderNames(names, text) {
-  for (const name of text
-    .replace(/\s+\(default\b.*$/u, "")
-    .split(/\s*(?:,|\||\bor\b)\s*/u)
-    .map((s) => s.trim())
-    .filter(Boolean)) {
-    if (/^[a-z0-9][a-z0-9-]*$/u.test(name)) {
-      names.add(name);
-    }
+function injectRemoteTestboxCi(commandArgs, providerName) {
+  if (commandArgs[0] !== "run" || canonicalProviderName(providerName) !== "blacksmith-testbox") {
+    return commandArgs;
   }
+  const normalizedArgs = [...commandArgs];
+  const { start } = runCommandBounds(normalizedArgs);
+  if (start < 0) {
+    return normalizedArgs;
+  }
+  if (hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs[start] = `export CI=true; ${normalizedArgs[start]}`;
+  } else {
+    normalizedArgs.splice(start, 0, "env", "CI=true");
+  }
+  return normalizedArgs;
 }
 
-function providerListContinuation(line, previousText) {
-  const match = line.match(
-    /^\s*((?:or\s+)?[a-z0-9][a-z0-9-]*(?:\s*(?:,|\||\bor\b)\s*(?:or\s+)?[a-z0-9][a-z0-9-]*)*\s*(?:,|\|)?)(?:\s+\(default\b.*)?\s*$/u,
-  );
-  if (!match) {
-    return "";
-  }
-  if (/[,|]\s*$/u.test(previousText) || /[,|]|\bor\b|\(default\b/u.test(line)) {
-    return match[1];
-  }
-  return "";
-}
-
-function parseProvidersFromHelp(text) {
-  const names = new Set();
-  const lines = text.split(/\r?\n/u);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const providerMatch = line.match(/provider:\s*([a-z0-9][a-z0-9, -]*)(?:\s*\(default\b|$)/u);
-    if (providerMatch) {
-      let providerText = providerMatch[1];
-      while (!/\(default\b/u.test(lines[index]) && index + 1 < lines.length) {
-        const continuation = providerListContinuation(lines[index + 1], providerText);
-        if (!continuation) {
-          break;
-        }
-        index += 1;
-        providerText = `${providerText} ${continuation}`;
-      }
-      addProviderNames(names, providerText);
-      continue;
-    }
-
-    const flagMatch = line.match(
-      /^\s+-{1,2}provider(?:[=\s]+)([a-z0-9][a-z0-9|, -]*)(?:\s{2,}|\s+\(|$)/u,
-    );
-    if (flagMatch && /[,|]|\bor\b/u.test(flagMatch[1])) {
-      addProviderNames(names, flagMatch[1]);
-    }
-  }
-  return [...names];
-}
-
-function isProviderAdvertised(provider, advertisedProviders) {
-  const canonicalProvider = providerAliases.get(provider) ?? provider;
-  return (
-    advertisedProviders.includes(provider) ||
-    advertisedProviders.includes(canonicalProvider) ||
-    providerHelpOmissions.has(canonicalProvider)
-  );
-}
-
+const version = probeCrabboxMetadata(binary, ["--version"]);
+const help = probeCrabboxMetadata(binary, ["run", "--help"]);
 const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args, providers);
-const canonicalProvider = providerAliases.get(provider) ?? provider;
+const canonicalProvider = canonicalProviderName(provider);
 const commandProviderValue = commandProvider(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
   ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
@@ -3312,7 +3296,23 @@ if (canonicalProvider === "blacksmith-testbox") {
   console.error(
     `[crabbox] provider=blacksmith-testbox ${source}; if Testbox is queued or down, ${fallback}`,
   );
+  console.error(
+    "[crabbox] delegated Testbox proof uses the wrapper exitCode and timing JSON; the linked Actions run can show cancelled during external lease cleanup",
+  );
   enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
+}
+
+let testboxLeaseFreshness;
+try {
+  testboxLeaseFreshness = prepareTestboxLeaseFreshness({
+    args: normalizedArgs,
+    env: { ...process.env, CI: process.env.CI || "true" },
+    provider: canonicalProvider,
+    repoRoot,
+  });
+} catch (error) {
+  console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
 }
 
 let childCwd = repoRoot;
@@ -3391,6 +3391,9 @@ if (normalizedArgs[0] === "run" && isBrokeredWsl2RemoteTarget(normalizedArgs, pr
 }
 
 const childEnv = { ...process.env };
+if (canonicalProvider === "blacksmith-testbox" && !childEnv.CI) {
+  childEnv.CI = "true";
+}
 if (
   isLocalContainerProvider(provider) &&
   !childEnv.CRABBOX_LOCAL_CONTAINER_DOCKER_SOCKET &&
@@ -3426,7 +3429,7 @@ try {
   cleanupOnce();
   throw error;
 }
-const childArgs =
+const childArgs = injectRemoteTestboxCi(
   childCwd === repoRoot
     ? injectRemoteWindowsHydratedNodeModulesBootstrap(
         injectRemoteAwsMacosSwiftBootstrap(
@@ -3446,7 +3449,9 @@ const childArgs =
           provider,
         ),
         remoteChangedGateBase,
-      );
+      ),
+  provider,
+);
 let fullCheckoutKeepaliveIntervalMsValue = 0;
 if (fullCheckout) {
   try {
@@ -3457,6 +3462,11 @@ if (fullCheckout) {
   }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
+// Fast-fail hint context: run --id reuse dies in under a second when the
+// lease hit its idle timeout, with only a bare nonzero exit from the binary.
+const reusedRunLeaseId = normalizedArgs[0] === "run" ? optionValue(normalizedArgs, "--id") : "";
+const childStartedAtMs = Date.now();
+const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
   stdio: "inherit",
@@ -3464,7 +3474,7 @@ const child = spawn(childInvocation.command, childInvocation.args, {
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
-const childKillGraceMs = 5_000;
+const childKillGraceMs = resolveChildKillGraceMs(process.env);
 let childForceKillTimer;
 let childTreeShutdownStarted = false;
 if (fullCheckout) {
@@ -3499,16 +3509,37 @@ child.on("exit", (code, signal) => {
   if (childTreeShutdownStarted) {
     return;
   }
+  let exitCode = code;
   let fullCheckoutAvailable = true;
   if (fullCheckout) {
     fullCheckoutAvailable = assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
+  }
+  if (!signal && code === 0) {
+    try {
+      recordTestboxLeaseFreshness(testboxLeaseFreshness);
+    } catch (error) {
+      console.error(
+        `[crabbox] failed to record Testbox lease freshness: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      exitCode = 2;
+    }
   }
   cleanupOnce();
   if (signal) {
     process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
-  process.exit(fullCheckoutAvailable ? (code ?? 1) : 1);
+  const finalExitCode = fullCheckoutAvailable ? (exitCode ?? 1) : 1;
+  if (
+    finalExitCode !== 0 &&
+    reusedRunLeaseId &&
+    Date.now() - childStartedAtMs < FAST_FAIL_HINT_WINDOW_MS
+  ) {
+    console.error(
+      `[crabbox] run --id ${reusedRunLeaseId} failed fast; reusable leases expire after their idle timeout and rejected flags also exit immediately. Check the first error line above, verify the lease with \`node scripts/crabbox-wrapper.mjs list\`, or warm a fresh one with \`node scripts/crabbox-wrapper.mjs warmup\`.`,
+    );
+  }
+  process.exit(finalExitCode);
 });
 
 child.on("error", (error) => {
@@ -3600,4 +3631,20 @@ async function waitForChildTreeExit(childProcess, timeoutMs) {
     });
   }
   return !childProcessTreeIsAlive(childProcess);
+}
+
+function resolveChildKillGraceMs(env) {
+  if (!env.VITEST || !env.OPENCLAW_TEST_CRABBOX_CHILD_KILL_GRACE_MS) {
+    return 5_000;
+  }
+  const value = Number.parseInt(env.OPENCLAW_TEST_CRABBOX_CHILD_KILL_GRACE_MS, 10);
+  return Number.isFinite(value) && value >= 0 ? value : 5_000;
+}
+
+function resolveMetadataProbeTimeoutMs(env) {
+  if (!env.VITEST || !env.OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS) {
+    return CRABBOX_METADATA_PROBE_TIMEOUT_MS;
+  }
+  const value = Number.parseInt(env.OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS, 10);
+  return Number.isFinite(value) && value > 0 ? value : CRABBOX_METADATA_PROBE_TIMEOUT_MS;
 }

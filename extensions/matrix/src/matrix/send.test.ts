@@ -685,6 +685,27 @@ describe("sendMessageMatrix threads", () => {
     expectTextReceiptPart(parts[2], "$m3");
   });
 
+  it("reports the first Matrix event before a later event fails", async () => {
+    const { client, sendMessage } = makeClient();
+    sendMessage
+      .mockReset()
+      .mockResolvedValueOnce("$m1")
+      .mockRejectedValueOnce(new Error("second event failed"));
+    convertMarkdownTablesMock.mockImplementation(() => "part1|part2");
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageMatrix("room:!room:example", "ignored", {
+        client,
+        cfg: {} as never,
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second event failed");
+
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["$m1"]);
+  });
+
   it("merges extra content into only the first chunked text event", async () => {
     const { client, sendMessage } = makeClient();
     convertMarkdownTablesMock.mockImplementation(() => "first|second|third");

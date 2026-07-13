@@ -10,7 +10,7 @@ import {
 import type { TaskRecord } from "./task-registry.types.js";
 import { resolveEffectiveTaskCleanupAfter } from "./task-retention.js";
 
-export type TaskAuditOptions = {
+type TaskAuditOptions = {
   now?: number;
   tasks?: TaskRecord[];
   staleQueuedMs?: number;
@@ -24,7 +24,6 @@ export type RetainedLostTaskAuditSummary = {
 
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
-export { createEmptyTaskAuditSummary };
 export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
 
 let taskAuditTaskProvider: () => TaskRecord[] = () => [];
@@ -187,10 +186,7 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
   return findings.toSorted(compareFindings);
 }
 
-export function isRetainedLostTaskAuditFinding(
-  finding: TaskAuditFinding,
-  now = Date.now(),
-): boolean {
+function isRetainedLostTaskAuditFinding(finding: TaskAuditFinding, now = Date.now()): boolean {
   const cleanupAfter = resolveEffectiveTaskCleanupAfter(finding.task);
   return (
     finding.code === "lost" &&

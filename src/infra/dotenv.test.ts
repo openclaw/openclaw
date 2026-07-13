@@ -215,6 +215,22 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("loads global env when the working directory was deleted", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        vi.spyOn(process, "cwd").mockImplementation(() => {
+          throw new Error("ENOENT: uv_cwd");
+        });
+        delete process.env.FOO;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+      });
+    });
+  });
+
   it("loads the Ubuntu gateway.env compatibility fallback after ~/.openclaw/.env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
@@ -286,6 +302,8 @@ describe("loadDotEnv", () => {
             "CLOUDSDK_PYTHON=./attacker-python",
             "EXAMPLE_API_HOST=https://evil-api.example.com",
             "MINIMAX_API_HOST=https://evil.example.com",
+            "SLACK_API_URL=http://evil-slack.example.com/api/",
+            "ZALO_API_URL=http://evil-zalo.example.com/",
             "HTTP_PROXY=http://evil-proxy:8080",
             "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
             "HOMEBREW_PREFIX=./evil-brew",
@@ -309,6 +327,8 @@ describe("loadDotEnv", () => {
         delete process.env.CLOUDSDK_PYTHON;
         delete process.env.EXAMPLE_API_HOST;
         delete process.env.MINIMAX_API_HOST;
+        delete process.env.SLACK_API_URL;
+        delete process.env.ZALO_API_URL;
         delete process.env.HTTP_PROXY;
         delete process.env.HOMEBREW_BREW_FILE;
         delete process.env.HOMEBREW_PREFIX;
@@ -332,6 +352,8 @@ describe("loadDotEnv", () => {
         expect(process.env.CLOUDSDK_PYTHON).toBeUndefined();
         expect(process.env.EXAMPLE_API_HOST).toBeUndefined();
         expect(process.env.MINIMAX_API_HOST).toBeUndefined();
+        expect(process.env.SLACK_API_URL).toBeUndefined();
+        expect(process.env.ZALO_API_URL).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
         expect(process.env.HOMEBREW_BREW_FILE).toBeUndefined();
         expect(process.env.HOMEBREW_PREFIX).toBeUndefined();
@@ -433,27 +455,31 @@ describe("loadDotEnv", () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         const bundledPluginsDir = path.join(base, "attacker-bundled");
+        const pathOverrideEnvKeys = [
+          "NPM_CONFIG_PREFIX",
+          "OPENCLAW_AGENT_DIR",
+          "OPENCLAW_BUNDLED_PLUGINS_DIR",
+          "OPENCLAW_OAUTH_DIR",
+          "PI_CODING_AGENT_DIR",
+          "PNPM_HOME",
+        ] as const;
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
+            `NPM_CONFIG_PREFIX=${path.join(cwdDir, ".npm-prefix")}`,
             "OPENCLAW_AGENT_DIR=./evil-agent",
             `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "OPENCLAW_OAUTH_DIR=./evil-oauth",
             "PI_CODING_AGENT_DIR=./evil-pi-agent",
+            `PNPM_HOME=${path.join(cwdDir, ".pnpm")}`,
           ].join("\n"),
         );
 
-        deleteTestEnvValue("OPENCLAW_AGENT_DIR");
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        delete process.env.OPENCLAW_OAUTH_DIR;
-        delete process.env.PI_CODING_AGENT_DIR;
+        clearEnv(pathOverrideEnvKeys);
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
-        expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+        expectEnvUndefined(pathOverrideEnvKeys);
       });
     });
   });
@@ -557,6 +583,8 @@ describe("loadDotEnv", () => {
             "HTTP_PROXY=http://proxy.test:8080",
             "OPENCLAW_PINNED_PYTHON=/trusted/python",
             "OPENCLAW_PINNED_WRITE_PYTHON=/trusted/write-python",
+            "SLACK_API_URL=http://trusted-slack.example.com/api/",
+            "ZALO_API_URL=http://trusted-zalo.example.com/",
           ].join("\n"),
         );
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
@@ -564,6 +592,8 @@ describe("loadDotEnv", () => {
         delete process.env.HTTP_PROXY;
         delete process.env.OPENCLAW_PINNED_PYTHON;
         delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
+        delete process.env.SLACK_API_URL;
+        delete process.env.ZALO_API_URL;
 
         loadDotEnv({ quiet: true });
 
@@ -571,6 +601,8 @@ describe("loadDotEnv", () => {
         expect(process.env.HTTP_PROXY).toBe("http://proxy.test:8080");
         expect(process.env.OPENCLAW_PINNED_PYTHON).toBe("/trusted/python");
         expect(process.env.OPENCLAW_PINNED_WRITE_PYTHON).toBe("/trusted/write-python");
+        expect(process.env.SLACK_API_URL).toBe("http://trusted-slack.example.com/api/");
+        expect(process.env.ZALO_API_URL).toBe("http://trusted-zalo.example.com/");
       });
     });
   });
@@ -703,6 +735,22 @@ describe("loadCliDotEnv", () => {
         expect(process.env.FOO).toBeUndefined();
         expect(process.env.BAR).toBeUndefined();
         expect(process.env.BAZ).toBe("from-workspace");
+      });
+    });
+  });
+
+  it("loads global CLI env when the working directory was deleted", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        vi.spyOn(process, "cwd").mockImplementation(() => {
+          throw new Error("ENOENT: uv_cwd");
+        });
+        delete process.env.FOO;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
       });
     });
   });
@@ -908,13 +956,13 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_GATEWAY_URL",
           "OPENCLAW_CLAWHUB_URL",
           "CLAWHUB_URL",
-          "OPENCLAW_CLAWHUB_TOKEN",
           "CLAWHUB_TOKEN",
           "CLAWHUB_AUTH_TOKEN",
           "CLAWHUB_CONFIG_PATH",
           "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
           "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
           "OPENCLAW_BROWSER_EXECUTABLE_PATH",
+          "OPENCLAW_WHATSAPP_WEB_SOCKET_URL",
           "EXAMPLE_API_HOST",
           "HOMEBREW_BREW_FILE",
           "HOMEBREW_PREFIX",

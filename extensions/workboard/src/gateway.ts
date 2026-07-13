@@ -383,7 +383,7 @@ export function registerWorkboardGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "workboard.cards.dispatch",
-    async ({ params: requestParams, respond }) => {
+    async ({ params: requestParams, respond, client }) => {
       try {
         const boardId =
           requestParams && typeof requestParams === "object" && "boardId" in requestParams
@@ -392,8 +392,12 @@ export function registerWorkboardGatewayMethods(params: {
         const result = await dispatchAndStartWorkboardCards({
           store,
           subagent: api.runtime.subagent,
+          worktrees: api.runtime.worktrees,
           options: {
             boardId: typeof boardId === "string" ? boardId : undefined,
+            allowManagedWorktrees:
+              Array.isArray(client?.connect?.scopes) &&
+              client.connect.scopes.includes("operator.admin"),
           },
         });
         respond(true, {

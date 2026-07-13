@@ -1,9 +1,11 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   approveDevicePairing,
+  listDevicePairing,
   requestDevicePairing,
   revokeDeviceToken,
+  withPairedDeviceRecords,
 } from "../../infra/device-pairing.js";
 import {
   onInternalDiagnosticEvent,
@@ -11,7 +13,7 @@ import {
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
-import { resolvePairingPaths } from "../../infra/pairing-files.js";
+import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -29,6 +31,7 @@ async function createState(label: string): Promise<OpenClawTestState> {
 
 afterEach(async () => {
   resetDiagnosticEventsForTest();
+  resetRemoteNodeSkillsForTests();
   vi.clearAllMocks();
   while (createdStates.length > 0) {
     await createdStates.pop()?.cleanup();
@@ -62,6 +65,7 @@ function createContext() {
     nodeRegistry: {
       listConnected: vi.fn(() => []),
       updateSurface: vi.fn(),
+      updateNodeSkills: vi.fn(),
     },
   };
 }
@@ -95,6 +99,42 @@ function createOptions(
   } as unknown as GatewayRequestHandlerOptions;
   return { context, opts };
 }
+
+describe("nodeHandlers node.skills.update", () => {
+  it("stores and publishes a validated replacement catalog for the calling node", async () => {
+    const skill = {
+      name: "release-helper",
+      description: "Prepare a release",
+      content: "---\nname: release-helper\ndescription: Prepare a release\n---\n",
+    };
+    const { context, opts } = createOptions(
+      { skills: [skill] },
+      {
+        client: {
+          connId: "conn-1",
+          connect: { device: { id: "node-1" }, client: { id: "node-client" } },
+        } as never,
+      },
+    );
+    context.nodeRegistry.updateNodeSkills.mockReturnValue({
+      nodeId: "node-1",
+      displayName: "Build Mac",
+      nodeSkills: [skill],
+    });
+
+    await expectDefined(
+      nodeHandlers["node.skills.update"],
+      'nodeHandlers["node.skills.update"] test invariant',
+    )(opts);
+
+    expect(context.nodeRegistry.updateNodeSkills).toHaveBeenCalledWith("node-1", "conn-1", [skill]);
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      { nodeId: "node-1", skills: [skill] },
+      undefined,
+    );
+  });
+});
 
 async function pairAndroidNodeDevice(stateDir: string, nodeId: string): Promise<void> {
   const pending = await requestDevicePairing(
@@ -144,7 +184,7 @@ async function pairMixedRoleAndroidDevice(stateDir: string, nodeId: string): Pro
   expect(approved?.status).toBe("approved");
 }
 
-async function pairLegacyNode(stateDir: string, nodeId: string): Promise<void> {
+async function approveNodeSurface(stateDir: string, nodeId: string): Promise<void> {
   const pending = await requestNodePairing(
     {
       nodeId,
@@ -164,21 +204,18 @@ async function pairLegacyNode(stateDir: string, nodeId: string): Promise<void> {
   expect(approved).toEqual(expect.objectContaining({ node: expect.objectContaining({ nodeId }) }));
 }
 
-async function readPaired(
-  stateDir: string,
-  subdir: "devices" | "nodes",
-): Promise<Record<string, unknown>> {
-  const { pairedPath } = resolvePairingPaths(stateDir, subdir);
-  return JSON.parse(await readFile(pairedPath, "utf8")) as Record<string, unknown>;
+async function readPaired(stateDir: string): Promise<Record<string, unknown>> {
+  const { paired } = await listDevicePairing(stateDir);
+  return Object.fromEntries(paired.map((device) => [device.deviceId, device]));
 }
 
 describe("nodeHandlers node.pair.remove", () => {
-  it("removes Android device-backed node rows from devices paired.json", async () => {
+  it("removes Android device-backed node rows from the paired-device store", async () => {
     const state = await createState("node-remove-android-device-backed");
     const nodeId = "android-node-1";
     await pairAndroidNodeDevice(state.stateDir, nodeId);
 
-    expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(true);
+    expect(Object.hasOwn(await readPaired(state.stateDir), nodeId)).toBe(true);
 
     const { context, opts } = createOptions({ nodeId: ` ${nodeId} ` });
     const captured = captureSecurityEvents();
@@ -192,14 +229,17 @@ describe("nodeHandlers node.pair.remove", () => {
     });
 
     try {
-      await nodeHandlers["node.pair.remove"](opts);
+      await expectDefined(
+        nodeHandlers["node.pair.remove"],
+        'nodeHandlers["node.pair.remove"] test invariant',
+      )(opts);
       await Promise.resolve();
     } finally {
       captured.stop();
     }
 
     expect(respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
-    expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(false);
+    expect(Object.hasOwn(await readPaired(state.stateDir), nodeId)).toBe(false);
     expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
       role: "node",
       reason: "device-pair-removed",
@@ -249,30 +289,32 @@ describe("nodeHandlers node.pair.remove", () => {
         });
         expect(revoked.ok).toBe(true);
       } else {
-        const { pairedPath } = resolvePairingPaths(state.stateDir, "devices");
-        const paired = await readPaired(state.stateDir, "devices");
-        delete (paired[nodeId] as { tokens?: Record<string, unknown> }).tokens;
-        await writeFile(pairedPath, `${JSON.stringify(paired, null, 2)}\n`, "utf8");
+        await withPairedDeviceRecords(state.stateDir, (pairedByDeviceId) => {
+          delete pairedByDeviceId[nodeId]?.tokens;
+          return { value: undefined, persist: true };
+        });
       }
 
       const { context, opts } = createOptions({ nodeId });
-      await nodeHandlers["node.pair.remove"](opts);
+      await expectDefined(
+        nodeHandlers["node.pair.remove"],
+        'nodeHandlers["node.pair.remove"] test invariant',
+      )(opts);
       await Promise.resolve();
 
       expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
-      expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(false);
+      expect(Object.hasOwn(await readPaired(state.stateDir), nodeId)).toBe(false);
       expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
     },
   );
 
-  it("removes both backing records when a node row is merged from node and device stores", async () => {
+  it("removes the device row together with its approved node surface", async () => {
     const state = await createState("node-remove-merged-backing-stores");
     const nodeId = "merged-android-node-1";
-    await pairLegacyNode(state.stateDir, nodeId);
     await pairAndroidNodeDevice(state.stateDir, nodeId);
+    await approveNodeSurface(state.stateDir, nodeId);
 
-    expect(Object.hasOwn(await readPaired(state.stateDir, "nodes"), nodeId)).toBe(true);
-    expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(true);
+    expect(Object.hasOwn(await readPaired(state.stateDir), nodeId)).toBe(true);
 
     const { context, opts } = createOptions({ nodeId: ` ${nodeId} ` });
     const respond = vi.mocked(opts.respond);
@@ -284,12 +326,14 @@ describe("nodeHandlers node.pair.remove", () => {
       expect(context.disconnectClientsForDevice).not.toHaveBeenCalled();
     });
 
-    await nodeHandlers["node.pair.remove"](opts);
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
-    expect(Object.hasOwn(await readPaired(state.stateDir, "nodes"), nodeId)).toBe(false);
-    expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(false);
+    expect(Object.hasOwn(await readPaired(state.stateDir), nodeId)).toBe(false);
     expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
       role: "node",
       reason: "device-pair-removed",
@@ -311,53 +355,26 @@ describe("nodeHandlers node.pair.remove", () => {
     );
   });
 
-  it("clears and disconnects a removed device-backed node when legacy cleanup fails", async () => {
-    const state = await createState("node-remove-legacy-cleanup-failure");
-    const nodeId = "legacy-cleanup-failure-node-1";
-    await pairLegacyNode(state.stateDir, nodeId);
-    await pairAndroidNodeDevice(state.stateDir, nodeId);
-    const { pairedPath: legacyPairedPath } = resolvePairingPaths(state.stateDir, "nodes");
-    await writeFile(legacyPairedPath, "{invalid-json", "utf8");
-
-    const { context, opts } = createOptions({ nodeId });
-    await nodeHandlers["node.pair.remove"](opts);
-    await Promise.resolve();
-
-    expect(opts.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("Failed to parse JSON file") }),
-    );
-    expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(false);
-    expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
-      role: "node",
-      reason: "device-pair-removed",
-    });
-    expect(context.nodeRegistry.updateSurface).toHaveBeenCalledWith(nodeId, {
-      caps: [],
-      commands: [],
-      permissions: undefined,
-    });
-    expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
-  });
-
   it("preserves non-node device roles when removing a mixed-role node row", async () => {
     const state = await createState("node-remove-mixed-role-device");
     const nodeId = "mixed-role-android-node-1";
     await pairMixedRoleAndroidDevice(state.stateDir, nodeId);
 
-    const before = await readPaired(state.stateDir, "devices");
+    const before = await readPaired(state.stateDir);
     expect(
       (before[nodeId] as { roles?: string[]; tokens?: Record<string, unknown> }).roles,
     ).toEqual(["operator", "node"]);
 
     const { context, opts } = createOptions({ nodeId });
 
-    await nodeHandlers["node.pair.remove"](opts);
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
-    const after = await readPaired(state.stateDir, "devices");
+    const after = await readPaired(state.stateDir);
     expect((after[nodeId] as { roles?: string[]; tokens?: Record<string, unknown> }).roles).toEqual(
       ["operator"],
     );
@@ -385,7 +402,7 @@ describe("nodeHandlers node.pair.remove", () => {
     const nodeId = "shared-auth-mixed-role-android-node-1";
     await pairMixedRoleAndroidDevice(state.stateDir, nodeId);
 
-    const before = await readPaired(state.stateDir, "devices");
+    const before = await readPaired(state.stateDir);
     expect((before[nodeId] as { roles?: string[] }).roles).toEqual(["operator", "node"]);
 
     const { context, opts } = createOptions(
@@ -393,11 +410,14 @@ describe("nodeHandlers node.pair.remove", () => {
       { client: createClient(["operator.pairing"]) },
     );
 
-    await nodeHandlers["node.pair.remove"](opts);
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
-    const after = await readPaired(state.stateDir, "devices");
+    const after = await readPaired(state.stateDir);
     expect((after[nodeId] as { roles?: string[] }).roles).toEqual(["operator"]);
     expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
       role: "node",
@@ -421,7 +441,10 @@ describe("nodeHandlers node.pair.remove", () => {
     const captured = captureSecurityEvents();
 
     try {
-      await nodeHandlers["node.pair.remove"](opts);
+      await expectDefined(
+        nodeHandlers["node.pair.remove"],
+        'nodeHandlers["node.pair.remove"] test invariant',
+      )(opts);
     } finally {
       captured.stop();
     }
@@ -431,7 +454,7 @@ describe("nodeHandlers node.pair.remove", () => {
       undefined,
       expect.objectContaining({ message: "node pairing removal denied" }),
     );
-    expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(true);
+    expect(Object.hasOwn(await readPaired(state.stateDir), nodeId)).toBe(true);
     expect(context.invalidateClientsForDevice).not.toHaveBeenCalled();
     expect(context.disconnectClientsForDevice).not.toHaveBeenCalled();
     expect(captured.events).toHaveLength(1);

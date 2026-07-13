@@ -11,7 +11,7 @@ function hasStaticAwsCredentialEnv(env: NodeJS.ProcessEnv): boolean {
 }
 
 /** Return whether Bedrock should refresh the AWS shared config cache before discovery. */
-export function shouldRefreshAwsSharedConfigCacheForBedrock(env: NodeJS.ProcessEnv): boolean {
+function shouldRefreshAwsSharedConfigCacheForBedrock(env: NodeJS.ProcessEnv): boolean {
   if (env.AWS_BEDROCK_SKIP_AUTH === "1" || env.AWS_BEARER_TOKEN_BEDROCK) {
     return false;
   }

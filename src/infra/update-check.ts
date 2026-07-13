@@ -1,11 +1,12 @@
 // Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
-import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
+import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
@@ -35,7 +36,26 @@ export type RegistryStatus = {
   latestVersion: string | null;
   tag?: string;
   error?: string;
+  reason?: ExtendedStableFailureReason;
 };
+
+export type ExtendedStableFailureReason =
+  | "selector_missing"
+  | "selector_query_failed"
+  | "exact_package_mismatch"
+  | "unsupported_git_channel";
+
+export type ExtendedStableResolutionResult =
+  | {
+      status: "resolved";
+      selector: "extended-stable";
+      version: string;
+      packageSpec: string;
+    }
+  | {
+      status: "failed";
+      reason: ExtendedStableFailureReason;
+    };
 
 export type NpmTagStatus = {
   tag: string;
@@ -81,7 +101,12 @@ function parseNpmPackageTargetMetadata(raw: string): {
   version: string | null;
   nodeEngine: string | null;
 } {
-  const parsed = JSON.parse(raw.trim()) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.trim()) as unknown;
+  } catch (err) {
+    throw new Error(`npm view returned invalid JSON: ${String(err)}`, { cause: err });
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { version: null, nodeEngine: null };
   }
@@ -106,14 +131,67 @@ function packageTargetSpec(params: { target: string; spec?: string }): string {
   return spec || `openclaw@${params.target.trim() || "latest"}`;
 }
 
-async function fetchPublicNpmPackageTargetStatus(params: {
+const PUBLIC_NPM_REGISTRY_URL = "https://registry.npmjs.org/";
+const PUBLIC_NPM_PACKAGE_NAME = "openclaw";
+
+function isLoopbackNpmRegistry(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function resolveExtendedStableRegistryTarget(params: {
+  packageName?: string;
+  env?: NodeJS.ProcessEnv;
+}): { registryUrl: string; packageName: string } {
+  const env = params.env ?? process.env;
+  const packageName = params.packageName?.trim() || PUBLIC_NPM_PACKAGE_NAME;
+  const packageSpecOverride = env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim();
+  const registryOverride = env.NPM_CONFIG_REGISTRY?.trim() || env.npm_config_registry?.trim() || "";
+
+  // A matching package override plus a loopback registry is the explicit local
+  // integration-test seam. Production resolution remains pinned to public npm.
+  if (packageSpecOverride === packageName && isLoopbackNpmRegistry(registryOverride)) {
+    return { registryUrl: registryOverride, packageName };
+  }
+  return {
+    registryUrl: PUBLIC_NPM_REGISTRY_URL,
+    packageName: PUBLIC_NPM_PACKAGE_NAME,
+  };
+}
+
+function npmRegistryTargetUrl(params: {
+  registryUrl: string;
+  packageName: string;
+  target: string;
+}): string {
+  const baseUrl = params.registryUrl.endsWith("/") ? params.registryUrl : `${params.registryUrl}/`;
+  return new URL(
+    `${encodeURIComponent(params.packageName)}/${encodeURIComponent(params.target)}`,
+    baseUrl,
+  ).toString();
+}
+
+async function fetchNpmPackageTargetStatusFromRegistry(params: {
   target: string;
   timeoutMs: number;
+  registryUrl?: string;
+  packageName?: string;
 }): Promise<NpmPackageTargetStatus> {
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(
-      `https://registry.npmjs.org/openclaw/${encodeURIComponent(params.target)}`,
+      npmRegistryTargetUrl({
+        registryUrl: params.registryUrl ?? PUBLIC_NPM_REGISTRY_URL,
+        packageName: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
+        target: params.target,
+      }),
       {},
       Math.max(250, params.timeoutMs),
     );
@@ -125,10 +203,10 @@ async function fetchPublicNpmPackageTargetStatus(params: {
         error: `HTTP ${res.status}`,
       };
     }
-    const json = (await res.json()) as {
+    const json = await readProviderJsonResponse<{
       version?: unknown;
       engines?: { node?: unknown };
-    };
+    }>(res, "npm package target status");
     return {
       target: params.target,
       version: toOptionalTrimmedString(json.version),
@@ -141,6 +219,48 @@ async function fetchPublicNpmPackageTargetStatus(params: {
       await res?.body?.cancel().catch(() => undefined);
     }
   }
+}
+
+/** Resolves the extended-stable selector and verifies its exact package manifest. */
+export async function resolveExtendedStablePackage(params: {
+  installKind: "git" | "package" | "unknown";
+  timeoutMs?: number;
+  packageName?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ExtendedStableResolutionResult> {
+  if (params.installKind === "git") {
+    return { status: "failed", reason: "unsupported_git_channel" };
+  }
+
+  const timeoutMs = params.timeoutMs ?? 3500;
+  const registryTarget = resolveExtendedStableRegistryTarget(params);
+  const selector = await fetchNpmPackageTargetStatusFromRegistry({
+    target: "extended-stable",
+    timeoutMs,
+    ...registryTarget,
+  });
+  if (!selector.version) {
+    return {
+      status: "failed",
+      reason: selector.error === "HTTP 404" ? "selector_missing" : "selector_query_failed",
+    };
+  }
+
+  const exact = await fetchNpmPackageTargetStatusFromRegistry({
+    target: selector.version,
+    timeoutMs,
+    ...registryTarget,
+  });
+  if (exact.version !== selector.version) {
+    return { status: "failed", reason: "exact_package_mismatch" };
+  }
+
+  return {
+    status: "resolved",
+    selector: "extended-stable",
+    version: selector.version,
+    packageSpec: `${registryTarget.packageName}@${selector.version}`,
+  };
 }
 
 export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
@@ -182,7 +302,7 @@ async function detectGitRoot(root: string): Promise<string | null> {
   return top ? path.resolve(top) : null;
 }
 
-export async function checkGitUpdateStatus(params: {
+async function checkGitUpdateStatus(params: {
   root: string;
   timeoutMs?: number;
   fetch?: boolean;
@@ -418,6 +538,7 @@ export async function fetchNpmRegistryVersionForChannel(params: {
   return {
     latestVersion: res.version,
     tag: res.tag,
+    ...(res.reason ? { error: res.reason, reason: res.reason } : {}),
   };
 }
 
@@ -433,7 +554,7 @@ export async function fetchNpmPackageTargetStatus(params: {
   const timeoutMs = params.timeoutMs ?? 3500;
   const target = params.target;
   if (!params.command && !params.runCommand) {
-    return await fetchPublicNpmPackageTargetStatus({ target, timeoutMs });
+    return await fetchNpmPackageTargetStatusFromRegistry({ target, timeoutMs });
   }
   const runCommand = params.runCommand ?? runCommandWithTimeout;
   try {
@@ -501,8 +622,21 @@ export async function resolveNpmChannelTag(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
-}): Promise<{ tag: string; version: string | null }> {
+}): Promise<{
+  tag: string;
+  version: string | null;
+  reason?: ExtendedStableFailureReason;
+}> {
   const channelTag = channelToNpmTag(params.channel);
+  if (params.channel === "extended-stable") {
+    const resolved = await resolveExtendedStablePackage({
+      installKind: "package",
+      timeoutMs: params.timeoutMs,
+    });
+    return resolved.status === "resolved"
+      ? { tag: resolved.selector, version: resolved.version }
+      : { tag: channelTag, version: null, reason: resolved.reason };
+  }
   const channelStatus = await fetchNpmTagVersion({
     tag: channelTag,
     timeoutMs: params.timeoutMs,
@@ -543,10 +677,9 @@ export function compareSemverStrings(a: string | null, b: string | null): number
       return openClawReleaseCmp;
     }
   }
-  return compareComparableSemver(
-    parseComparableSemver(a, { normalizeLegacyDotBeta: true }),
-    parseComparableSemver(b, { normalizeLegacyDotBeta: true }),
-  );
+  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
+  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
+  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
 }
 
 export async function checkUpdateStatus(params: {
@@ -575,12 +708,19 @@ export async function checkUpdateStatus(params: {
   }
 
   const rootRealpath = await fs.realpath(root).catch(() => root);
-  const [pm, gitRoot, registry] = await Promise.all([
-    detectPackageManager(root),
-    detectGitRoot(root),
-    params.includeRegistry ? fetchRegistry() : Promise.resolve(undefined),
-  ]);
+  const [pm, gitRoot] = await Promise.all([detectPackageManager(root), detectGitRoot(root)]);
   const isGit = gitRoot && path.resolve(gitRoot) === path.resolve(rootRealpath);
+
+  const registry = params.includeRegistry
+    ? params.registryChannel === "extended-stable" && isGit
+      ? {
+          latestVersion: null,
+          tag: "extended-stable",
+          error: "unsupported_git_channel",
+          reason: "unsupported_git_channel" as const,
+        }
+      : await fetchRegistry()
+    : undefined;
 
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const [git, deps] = await Promise.all([

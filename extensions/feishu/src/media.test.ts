@@ -214,6 +214,8 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("uses msg_type=media for mp4 video", async () => {
+    runFfprobeMock.mockResolvedValueOnce("4.2\n");
+
     await sendMediaFeishu({
       cfg: emptyConfig,
       to: "user:ou_target",
@@ -222,6 +224,17 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
+    expect(callData<{ duration?: number }>(fileCreateMock).duration).toBe(4200);
+    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
+    expect(ffprobeArgs.slice(0, -1)).toEqual([
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "csv=p=0",
+    ]);
+    expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 
@@ -297,6 +310,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("uses msg_type=media for remote mp4 content even when the filename is generic", async () => {
+    runFfprobeMock.mockResolvedValueOnce("6.789\n");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("remote-video"),
       fileName: "download",
@@ -311,6 +325,9 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
+    expect(callData<{ duration?: number }>(fileCreateMock).duration).toBe(6789);
+    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
+    expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 

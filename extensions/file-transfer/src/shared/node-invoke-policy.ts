@@ -1,12 +1,15 @@
 // File Transfer plugin module implements node invoke policy behavior.
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { appendBoundedTextTail, projectBoundedTextTail } from "./append-bounded-text-tail.js";
 import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
+import { consumeChildOutput } from "./child-output.js";
 import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
   type FileTransferNodeInvokeCommand,
@@ -21,6 +24,7 @@ const DIR_FETCH_MAX_ENTRIES = 5000;
 const DIR_FETCH_ARCHIVE_LIST_TIMEOUT_MS = 30_000;
 const DIR_FETCH_ARCHIVE_LIST_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 const DIR_FETCH_ARCHIVE_LIST_STDERR_TAIL_CHARS = 4096;
+const DIR_FETCH_ARCHIVE_LIST_ERROR_STDERR_CHARS = 200;
 
 type FileTransferCommand = FileTransferNodeInvokeCommand;
 
@@ -28,11 +32,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-}
-
-function appendBoundedTextTail(current: string, chunk: Buffer, maxChars: number): string {
-  const next = current + chunk.toString();
-  return next.length > maxChars ? next.slice(-maxChars) : next;
 }
 
 function readPath(params: Record<string, unknown>): string {
@@ -155,28 +154,37 @@ async function requestApproval(input: {
     severity: input.kind === "write" ? "warning" : "info",
     toolName: input.op,
   });
+  const approvalDecision: unknown = approval.decision;
 
-  if (approval.decision === "deny" || approval.decision === null || !approval.decision) {
+  if (approvalDecision !== "allow-once" && approvalDecision !== "allow-always") {
+    const unavailable = approvalDecision === null || approvalDecision === undefined;
+    const deniedByOperator = approvalDecision === "deny";
+    const reason = deniedByOperator
+      ? "operator denied"
+      : unavailable
+        ? "no operator available"
+        : "invalid approval decision";
     await appendFileTransferAudit({
       op: input.op,
       nodeId: input.ctx.nodeId,
       nodeDisplayName,
       requestedPath: input.path,
       decision: "denied:approval",
-      reason: approval.decision === "deny" ? "operator denied" : "no operator available",
+      reason,
       durationMs: Date.now() - input.startedAt,
     });
     return {
       ok: false,
-      code: approval.decision === "deny" ? "APPROVAL_DENIED" : "APPROVAL_UNAVAILABLE",
-      message:
-        approval.decision === "deny"
+      code: unavailable ? "APPROVAL_UNAVAILABLE" : "APPROVAL_DENIED",
+      message: unavailable
+        ? `${input.op} APPROVAL_UNAVAILABLE: no operator client connected to approve the request`
+        : deniedByOperator
           ? `${input.op} APPROVAL_DENIED: operator denied the prompt`
-          : `${input.op} APPROVAL_UNAVAILABLE: no operator client connected to approve the request`,
+          : `${input.op} APPROVAL_DENIED: invalid approval decision`,
     };
   }
 
-  if (approval.decision === "allow-always") {
+  if (approvalDecision === "allow-always") {
     try {
       await persistAllowAlways({
         nodeId: input.ctx.nodeId,
@@ -229,7 +237,7 @@ async function requestApproval(input: {
     nodeId: input.ctx.nodeId,
     nodeDisplayName,
     requestedPath: input.path,
-    decision: approval.decision === "allow-always" ? "allowed:always" : "allowed:once",
+    decision: approvalDecision === "allow-always" ? "allowed:always" : "allowed:once",
     durationMs: Date.now() - input.startedAt,
   });
   return {
@@ -274,6 +282,20 @@ function readResultPayload(result: { payload?: unknown }): Record<string, unknow
     : null;
 }
 
+function readAuditSizeBytes(
+  command: FileTransferCommand,
+  payload: Record<string, unknown> | null,
+  verifiedDirFetchBytes?: number,
+): number | undefined {
+  if (command === "dir.fetch") {
+    return verifiedDirFetchBytes;
+  }
+  if (command === "dir.list") {
+    return undefined;
+  }
+  return typeof payload?.size === "number" ? payload.size : undefined;
+}
+
 function joinRemotePolicyPath(root: string, relPath: string): string {
   const rel = relPath.replace(/\\/gu, "/").replace(/^\.\//u, "");
   if (!rel || rel === ".") {
@@ -311,7 +333,10 @@ function normalizeTarEntryPath(entry: string): string | null {
 
 async function listDirFetchArchiveEntries(
   payload: Record<string, unknown> | null,
-): Promise<{ ok: true; entries: string[] } | { ok: false; code: string; reason: string }> {
+): Promise<
+  | { ok: true; entries: string[]; sizeBytes: number; sha256: string }
+  | { ok: false; code: string; reason: string }
+> {
   const tarBase64 = typeof payload?.tarBase64 === "string" ? payload.tarBase64 : "";
   if (!tarBase64) {
     return {
@@ -321,8 +346,25 @@ async function listDirFetchArchiveEntries(
     };
   }
   const tarBuffer = Buffer.from(tarBase64, "base64");
+  const sizeBytes = tarBuffer.byteLength;
+  if (typeof payload?.tarBytes === "number" && payload.tarBytes !== sizeBytes) {
+    return {
+      ok: false,
+      code: "ARCHIVE_SIZE_MISMATCH",
+      reason: `dir.fetch archive size mismatch: payload says ${payload.tarBytes} bytes, decoded ${sizeBytes}`,
+    };
+  }
+  const sha256 = crypto.createHash("sha256").update(tarBuffer).digest("hex");
+  if (typeof payload?.sha256 === "string" && payload.sha256.toLowerCase() !== sha256) {
+    return {
+      ok: false,
+      code: "ARCHIVE_INTEGRITY_FAILURE",
+      reason: `dir.fetch archive sha256 mismatch: payload says ${payload.sha256.toLowerCase()}, decoded ${sha256}`,
+    };
+  }
   return await new Promise<
-    { ok: true; entries: string[] } | { ok: false; code: string; reason: string }
+    | { ok: true; entries: string[]; sizeBytes: number; sha256: string }
+    | { ok: false; code: string; reason: string }
   >((resolve) => {
     const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
     const child = spawn(tarBin, ["-tzf", "-"], { stdio: ["pipe", "pipe", "pipe"] });
@@ -332,7 +374,9 @@ async function listDirFetchArchiveEntries(
     let stderr = "";
     let settled = false;
     const finish = (
-      result: { ok: true; entries: string[] } | { ok: false; code: string; reason: string },
+      result:
+        | { ok: true; entries: string[]; sizeBytes: number; sha256: string }
+        | { ok: false; code: string; reason: string },
     ): void => {
       if (settled) {
         return;
@@ -375,30 +419,45 @@ async function listDirFetchArchiveEntries(
         reason: "tar -tzf timed out",
       });
     }, DIR_FETCH_ARCHIVE_LIST_TIMEOUT_MS);
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (settled) {
-        return;
-      }
-      outputBytes += chunk.byteLength;
-      if (outputBytes > DIR_FETCH_ARCHIVE_LIST_MAX_OUTPUT_BYTES) {
+    consumeChildOutput(child.stdout, {
+      onData: (chunk) => {
+        if (settled) {
+          return;
+        }
+        outputBytes += chunk.byteLength;
+        if (outputBytes > DIR_FETCH_ARCHIVE_LIST_MAX_OUTPUT_BYTES) {
+          stopChild();
+          finish({
+            ok: false,
+            code: "ARCHIVE_ENTRIES_UNREADABLE",
+            reason: "tar -tzf output too large",
+          });
+          return;
+        }
+        const lines = `${pending}${chunk.toString()}`.split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!appendLine(line)) {
+            return;
+          }
+        }
+      },
+      onError: (error) => {
         stopChild();
         finish({
           ok: false,
           code: "ARCHIVE_ENTRIES_UNREADABLE",
-          reason: "tar -tzf output too large",
+          reason: `tar -tzf stdout error: ${String(error)}`,
         });
-        return;
-      }
-      const lines = `${pending}${chunk.toString()}`.split("\n");
-      pending = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!appendLine(line)) {
-          return;
-        }
-      }
+      },
     });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr = appendBoundedTextTail(stderr, chunk, DIR_FETCH_ARCHIVE_LIST_STDERR_TAIL_CHARS);
+    consumeChildOutput(child.stderr, {
+      onData: (chunk) => {
+        stderr = appendBoundedTextTail(stderr, chunk, DIR_FETCH_ARCHIVE_LIST_STDERR_TAIL_CHARS);
+      },
+      onError: (error) => {
+        stderr = `[stderr unavailable: ${String(error)}]`;
+      },
     });
     child.on("close", (code) => {
       if (settled) {
@@ -408,7 +467,7 @@ async function listDirFetchArchiveEntries(
         finish({
           ok: false,
           code: "ARCHIVE_ENTRIES_UNREADABLE",
-          reason: `tar -tzf exited ${code}: ${stderr.slice(-200)}`,
+          reason: `tar -tzf exited ${code}: ${projectBoundedTextTail(stderr, DIR_FETCH_ARCHIVE_LIST_ERROR_STDERR_CHARS)}`,
         });
         return;
       }
@@ -417,7 +476,7 @@ async function listDirFetchArchiveEntries(
           return;
         }
       }
-      finish({ ok: true, entries });
+      finish({ ok: true, entries, sizeBytes, sha256 });
     });
     child.on("error", (error) => {
       finish({
@@ -889,6 +948,7 @@ async function handleFileTransferInvoke(
       };
     }
   }
+  let verifiedDirFetchArchive: { sizeBytes: number; sha256: string } | undefined;
   if (command === "dir.fetch") {
     const archiveEntries = await listDirFetchArchiveEntries(payload);
     if (!archiveEntries.ok) {
@@ -922,6 +982,10 @@ async function handleFileTransferInvoke(
     if (archiveDeny) {
       return archiveDeny;
     }
+    verifiedDirFetchArchive = {
+      sizeBytes: archiveEntries.sizeBytes,
+      sha256: archiveEntries.sha256,
+    };
   }
 
   await appendFileTransferAudit({
@@ -931,8 +995,13 @@ async function handleFileTransferInvoke(
     requestedPath,
     canonicalPath,
     decision: "allowed",
-    sizeBytes: typeof payload?.size === "number" ? payload.size : undefined,
-    sha256: typeof payload?.sha256 === "string" ? payload.sha256 : undefined,
+    sizeBytes: readAuditSizeBytes(command, payload, verifiedDirFetchArchive?.sizeBytes),
+    sha256:
+      command === "dir.fetch"
+        ? verifiedDirFetchArchive?.sha256
+        : typeof payload?.sha256 === "string"
+          ? payload.sha256
+          : undefined,
     durationMs: Date.now() - startedAt,
   });
 
@@ -945,3 +1014,8 @@ export function createFileTransferNodeInvokePolicy(): OpenClawPluginNodeInvokePo
     handle: handleFileTransferInvoke,
   };
 }
+
+export const testing = {
+  listDirFetchArchiveEntries,
+  readAuditSizeBytes,
+};

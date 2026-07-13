@@ -20,6 +20,8 @@ import {
   handleStatusCommand,
   handleToolsCommand,
 } from "./commands-info.js";
+import { handleLearnCommand } from "./commands-learn.js";
+import { handleLoginCommand } from "./commands-login.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handleNameCommand } from "./commands-name.js";
@@ -45,6 +47,7 @@ import { handleWhoamiCommand } from "./commands-whoami.js";
 export function loadCommandHandlers(): CommandHandler[] {
   return [
     handlePluginCommand,
+    handleLoginCommand,
     handleDockCommand,
     handleBtwCommand,
     handleBashCommand,
@@ -63,6 +66,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleToolsCommand,
     handleStatusCommand,
     handleGoalCommand,
+    handleLearnCommand,
     handleNameCommand,
     handleDiagnosticsCommand,
     handleTasksCommand,

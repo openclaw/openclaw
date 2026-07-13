@@ -207,7 +207,16 @@ export const SecretsConfigSchema = z
   .strict()
   .optional();
 
-const ModelApiSchema = z.enum(MODEL_APIS);
+const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_CHATGPT_RESPONSES_API =
+  "openai-chatgpt-responses" satisfies (typeof MODEL_APIS)[number];
+
+const ModelApiSchema = z.enum(MODEL_APIS, {
+  error: (issue) =>
+    issue.input === LEGACY_OPENAI_CODEX_RESPONSES_API
+      ? `"${LEGACY_OPENAI_CODEX_RESPONSES_API}" is a removed api id; use "${OPENAI_CHATGPT_RESPONSES_API}"`
+      : undefined,
+});
 
 const ModelCompatSchema = z
   .object({
@@ -215,6 +224,7 @@ const ModelCompatSchema = z
     supportsPromptCacheKey: z.boolean().optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
+    supportsTemperature: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
@@ -429,10 +439,13 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "anthropic",
   "anthropic-vertex",
   "arcee",
+  "azure-openai-responses",
   "byteplus",
   "byteplus-plan",
   "cerebras",
   "chutes",
+  "claude-cli",
+  "clawrouter",
   "cloudflare-ai-gateway",
   "codex",
   "comfy",
@@ -443,6 +456,9 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "fal",
   "fireworks",
   "github-copilot",
+  "gmi",
+  "gmi-cloud",
+  "gmicloud",
   "google",
   "google-antigravity",
   "google-gemini-cli",
@@ -454,26 +470,38 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "kimi-coding",
   "litellm",
   "lmstudio",
+  "meta",
   "microsoft-foundry",
   "minimax",
   "minimax-portal",
   "mistral",
   "modelstudio",
   "moonshot",
+  "moonshot-ai",
+  "moonshotai",
   "nvidia",
+  "novita",
+  "novita-ai",
+  "novitaai",
   "ollama",
+  "ollama-cloud",
   "openai",
   "opencode",
   "opencode-go",
   "openrouter",
   "qianfan",
   "qwen",
+  "qwen-cli",
+  "qwen-oauth",
+  "qwen-portal",
+  "qwen-token-plan",
   "qwencloud",
   "sglang",
   "stepfun",
   "stepfun-plan",
   "synthetic",
   "tencent-tokenhub",
+  "tencent-tokenplan",
   "together",
   "venice",
   "vercel-ai-gateway",
@@ -481,9 +509,12 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "volcengine",
   "volcengine-plan",
   "vydra",
+  "x-ai",
   "xai",
   "xiaomi",
   "xiaomi-token-plan",
+  "z.ai",
+  "z-ai",
   "zai",
 ]);
 
@@ -645,15 +676,30 @@ export const BlockStreamingCoalesceSchema = z
   })
   .strict();
 
+export const TextChunkModeSchema = z.enum(["length", "newline"]);
+
+export const ChannelStreamingBlockSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    coalesce: BlockStreamingCoalesceSchema.optional(),
+  })
+  .strict();
+
+/** Delivery-only nested streaming config for channels without preview modes. */
+export const ChannelDeliveryStreamingConfigSchema = z
+  .object({
+    chunkMode: TextChunkModeSchema.optional(),
+    block: ChannelStreamingBlockSchema.optional(),
+  })
+  .strict();
+
 export const ReplyRuntimeConfigSchemaShape = {
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   textChunkLimit: z.number().int().positive().optional(),
-  chunkMode: z.enum(["length", "newline"]).optional(),
-  blockStreaming: z.boolean().optional(),
-  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
   responsePrefix: z.string().optional(),
   mediaMaxMb: z.number().positive().optional(),
 };
@@ -797,6 +843,7 @@ export const CliBackendSchema = z
     sessionArg: z.string().optional(),
     sessionArgs: z.array(z.string()).optional(),
     resumeArgs: z.array(z.string()).optional(),
+    forkArg: z.string().optional(),
     sessionMode: z
       .union([z.literal("always"), z.literal("existing"), z.literal("none")])
       .optional(),

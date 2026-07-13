@@ -7,6 +7,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as readline from "node:readline";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   DEFAULT_PROVIDER,
   parseModelRef,
@@ -30,6 +31,16 @@ import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/p
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
+  cleanupSessionLifecycleArtifacts,
+  formatSqliteSessionFileMarker,
+  patchSessionEntry,
+  parseSqliteSessionFileMarker,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  readSessionTranscriptEvents,
+  type SessionTranscriptTargetParams,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
   asOptionalRecord as asRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -37,6 +48,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -56,6 +68,7 @@ const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
+const ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS = [0, 50, 250] as const;
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
@@ -293,6 +306,16 @@ type TranscriptReadLimits = {
   maxLines?: number;
   maxBytes?: number;
 };
+
+type ActiveMemoryTranscriptSource =
+  | {
+      kind: "runtime";
+      target: SessionTranscriptTargetParams;
+    }
+  | {
+      kind: "file";
+      sessionFile: string;
+    };
 
 type RecallSubagentResult = {
   rawReply: string;
@@ -827,12 +850,18 @@ function updateActiveMemoryGlobalEnabledInConfig(
   };
 }
 
-function requiresAdminToMutateActiveMemoryGlobal(gatewayClientScopes?: readonly string[]): boolean {
-  return Array.isArray(gatewayClientScopes) && !gatewayClientScopes.includes("operator.admin");
+function lacksAdminToMutateActiveMemoryGlobal(params: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  if (Array.isArray(params.gatewayClientScopes)) {
+    return !params.gatewayClientScopes.includes("operator.admin");
+  }
+  return params.senderIsOwner !== true;
 }
 
 const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
-  "⚠️ /active-memory global enable/disable changes require operator.admin for gateway clients.";
+  "⚠️ /active-memory global enable/disable changes require owner or operator.admin.";
 
 function normalizePluginConfig(
   pluginConfig: unknown,
@@ -1084,6 +1113,8 @@ function buildRecallPrompt(params: {
     "Questions like 'what is my favorite food', 'do you remember my flight preferences', or 'what do i usually get' should normally return memory when relevant results exist.",
     "If the provided conversation context already contains recalled-memory summaries, debug output, or prior memory/tool traces, ignore that surfaced text unless the latest user message clearly requires re-checking it.",
     "Return memory only when it would materially help the other model answer the user's latest message.",
+    "Mutable operational facts (cron/job health, automation status, deployments, incidents, service availability) go stale quickly: include the source timestamp when available, say when the memory may be stale, and tell the answering model to verify live before relying on it.",
+    "Do not summarize mutable operational facts as simply current/running/healthy unless the memory result itself contains a current source timestamp and matching health state.",
     "If the connection is weak, broad, or only vaguely related, reply with NONE.",
     "If nothing clearly useful is found, reply with NONE.",
     "Return exactly one of these two forms:",
@@ -1143,6 +1174,40 @@ function isEnabledForAgent(
     return false;
   }
   return config.agents.includes(agentId);
+}
+
+function isAgentHarnessSessionKey(sessionKey: string): boolean {
+  const normalized = sessionKey.trim().toLowerCase();
+  const rest = parseAgentSessionKey(normalized)?.rest ?? normalized;
+  return rest.startsWith("harness:");
+}
+
+function shouldSkipActiveMemoryForHarnessSession(params: {
+  api: OpenClawPluginApi;
+  agentId?: string;
+  sessionKey?: string;
+}): boolean {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  try {
+    const entry = params.api.runtime.agent.session.getSessionEntry({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      sessionKey,
+      readConsistency: "latest",
+    });
+    // A missing reserved key must not synthesize work, while unlocked rows are
+    // grandfathered user sessions from before the namespace was introduced.
+    return (
+      entry?.modelSelectionLocked === true ||
+      (entry === undefined && isAgentHarnessSessionKey(sessionKey))
+    );
+  } catch {
+    // Recall is optional. If durable ownership cannot be checked, do not risk
+    // crossing a harness/model boundary with an independently selected model.
+    return true;
+  }
 }
 
 function isEligibleInteractiveSession(ctx: {
@@ -1425,7 +1490,7 @@ function toSingleLineLogValue(value: unknown): string {
     .replace(/\s+/g, " ")
     .trim();
   return singleLine.length > MAX_LOG_VALUE_CHARS
-    ? `${singleLine.slice(0, MAX_LOG_VALUE_CHARS)}...`
+    ? `${truncateUtf16Safe(singleLine, MAX_LOG_VALUE_CHARS)}...`
     : singleLine;
 }
 
@@ -1706,6 +1771,90 @@ async function streamBoundedTranscriptJsonl(params: {
   }
 }
 
+function fileTranscriptSource(sessionFile: string): ActiveMemoryTranscriptSource {
+  return { kind: "file", sessionFile };
+}
+
+function transcriptSourceFromReturnedSessionFile(params: {
+  sessionFile: string;
+  sessionKey: string;
+}): ActiveMemoryTranscriptSource {
+  const marker = parseSqliteSessionFileMarker(normalizeOptionalString(params.sessionFile));
+  if (!marker) {
+    return fileTranscriptSource(params.sessionFile);
+  }
+  return {
+    kind: "runtime",
+    target: {
+      agentId: marker.agentId,
+      sessionId: marker.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: marker.storePath,
+    },
+  };
+}
+
+function estimateTranscriptEventsBytes(events: readonly unknown[]): number {
+  let total = 0;
+  for (const event of events) {
+    try {
+      total += Buffer.byteLength(`${JSON.stringify(event)}\n`, "utf8");
+    } catch {
+      total += 1;
+    }
+  }
+  return total;
+}
+
+async function streamRuntimeTranscriptEvents(params: {
+  target: SessionTranscriptTargetParams;
+  limits?: TranscriptReadLimits;
+  onRecord: (record: unknown) => boolean | void;
+}): Promise<void> {
+  const limits = resolveTranscriptReadLimits(params.limits);
+  let events: readonly unknown[];
+  try {
+    events = await readSessionTranscriptEvents(params.target);
+  } catch {
+    return;
+  }
+  if (estimateTranscriptEventsBytes(events) > limits.maxBytes) {
+    return;
+  }
+  let seenLines = 0;
+  for (const event of events) {
+    seenLines += 1;
+    if (seenLines > limits.maxLines) {
+      break;
+    }
+    try {
+      if (params.onRecord(event)) {
+        break;
+      }
+    } catch {}
+  }
+}
+
+async function streamActiveMemoryTranscriptRecords(params: {
+  source: ActiveMemoryTranscriptSource;
+  limits?: TranscriptReadLimits;
+  onRecord: (record: unknown) => boolean | void;
+}): Promise<void> {
+  if (params.source.kind === "runtime") {
+    await streamRuntimeTranscriptEvents({
+      target: params.source.target,
+      limits: params.limits,
+      onRecord: params.onRecord,
+    });
+    return;
+  }
+  await streamBoundedTranscriptJsonl({
+    sessionFile: params.source.sessionFile,
+    limits: params.limits,
+    onRecord: params.onRecord,
+  });
+}
+
 function extractActiveMemorySearchDebugFromSessionRecord(
   value: unknown,
 ): ActiveMemorySearchDebug | undefined {
@@ -1943,7 +2092,7 @@ function hasUsableMemoryResultInSessionRecord(
 }
 
 async function readActiveMemoryTranscriptState(
-  sessionFile: string,
+  source: ActiveMemoryTranscriptSource | string,
   limits?: TranscriptReadLimits,
   toolsAllow?: readonly string[],
 ): Promise<{
@@ -1954,8 +2103,8 @@ async function readActiveMemoryTranscriptState(
   let searchDebug: ActiveMemorySearchDebug | undefined;
   let hasUsableMemoryResult = false;
   let hasUnavailableMemorySearchResult = false;
-  await streamBoundedTranscriptJsonl({
-    sessionFile,
+  await streamActiveMemoryTranscriptRecords({
+    source: typeof source === "string" ? fileTranscriptSource(source) : source,
     limits,
     onRecord: (record) => {
       const debug = extractActiveMemorySearchDebugFromSessionRecord(record);
@@ -1973,14 +2122,14 @@ async function readActiveMemoryTranscriptState(
 }
 
 async function readActiveMemorySearchDebug(
-  sessionFile: string,
+  source: ActiveMemoryTranscriptSource | string,
   limits?: TranscriptReadLimits,
 ): Promise<ActiveMemorySearchDebug | undefined> {
-  return (await readActiveMemoryTranscriptState(sessionFile, limits)).searchDebug;
+  return (await readActiveMemoryTranscriptState(source, limits)).searchDebug;
 }
 
 async function readMergedActiveMemoryTranscriptState(params: {
-  sessionFiles: readonly string[];
+  sources: readonly ActiveMemoryTranscriptSource[];
   toolsAllow: readonly string[];
 }): Promise<{
   searchDebug?: ActiveMemorySearchDebug;
@@ -1990,8 +2139,17 @@ async function readMergedActiveMemoryTranscriptState(params: {
   let searchDebug: ActiveMemorySearchDebug | undefined;
   let hasUsableMemoryResult = false;
   let hasUnavailableMemorySearchResult = false;
-  for (const sessionFile of new Set(params.sessionFiles)) {
-    const state = await readActiveMemoryTranscriptState(sessionFile, undefined, params.toolsAllow);
+  const seen = new Set<string>();
+  for (const source of params.sources) {
+    const key =
+      source.kind === "runtime"
+        ? `runtime:${source.target.agentId ?? ""}:${source.target.sessionId}:${source.target.sessionKey}:${source.target.storePath ?? ""}:${source.target.threadId ?? ""}`
+        : `file:${source.sessionFile}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const state = await readActiveMemoryTranscriptState(source, undefined, params.toolsAllow);
     searchDebug = state.searchDebug ?? searchDebug;
     hasUsableMemoryResult ||= state.hasUsableMemoryResult;
     hasUnavailableMemorySearchResult ||= state.hasUnavailableMemorySearchResult;
@@ -2000,7 +2158,7 @@ async function readMergedActiveMemoryTranscriptState(params: {
 }
 
 async function readTerminalMemorySearchResult(
-  sessionFile: string,
+  source: ActiveMemoryTranscriptSource,
   limits?: TranscriptReadLimits,
   toolsAllow?: readonly string[],
 ): Promise<TerminalMemorySearchResult | undefined> {
@@ -2017,8 +2175,8 @@ async function readTerminalMemorySearchResult(
   const unavailablePathNames = new Set<string>();
   let hasUsableMemoryResult = false;
   let searchDebug: ActiveMemorySearchDebug | undefined;
-  await streamBoundedTranscriptJsonl({
-    sessionFile,
+  await streamActiveMemoryTranscriptRecords({
+    source,
     limits,
     onRecord: (record) => {
       hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
@@ -2045,8 +2203,22 @@ async function readTerminalMemorySearchResult(
   };
 }
 
+async function readTerminalMemorySearchResultFromSources(
+  sources: readonly ActiveMemoryTranscriptSource[],
+  limits: TranscriptReadLimits | undefined,
+  toolsAllow: readonly string[],
+): Promise<TerminalMemorySearchResult | undefined> {
+  for (const source of sources) {
+    const result = await readTerminalMemorySearchResult(source, limits, toolsAllow);
+    if (result) {
+      return result;
+    }
+  }
+  return undefined;
+}
+
 function watchTerminalMemorySearchResult(params: {
-  getSessionFile: () => string | undefined;
+  getTranscriptSources: () => readonly ActiveMemoryTranscriptSource[];
   abortSignal: AbortSignal;
   toolsAllow: readonly string[];
 }): TerminalMemorySearchWatch {
@@ -2088,10 +2260,11 @@ function watchTerminalMemorySearchResult(params: {
     }
     inFlight = true;
     try {
-      const sessionFile = params.getSessionFile();
-      const result = sessionFile
-        ? await readTerminalMemorySearchResult(sessionFile, undefined, params.toolsAllow)
-        : undefined;
+      const result = await readTerminalMemorySearchResultFromSources(
+        params.getTranscriptSources(),
+        undefined,
+        params.toolsAllow,
+      );
       if (result) {
         finish(result);
         return;
@@ -2222,17 +2395,17 @@ function extractAssistantTextFromSessionRecord(value: unknown): string {
 }
 
 async function readPartialAssistantText(
-  sessionFile: string | undefined,
+  source: ActiveMemoryTranscriptSource | string | undefined,
   limits?: TranscriptReadLimits,
 ): Promise<string | null> {
-  if (!sessionFile) {
+  if (!source) {
     return null;
   }
   const texts: string[] = [];
   const resolvedLimits = resolveTranscriptReadLimits(limits);
   let collectedChars = 0;
-  await streamBoundedTranscriptJsonl({
-    sessionFile,
+  await streamActiveMemoryTranscriptRecords({
+    source: typeof source === "string" ? fileTranscriptSource(source) : source,
     limits: resolvedLimits,
     onRecord: (record) => {
       const text = extractAssistantTextFromSessionRecord(record);
@@ -2242,21 +2415,34 @@ async function readPartialAssistantText(
         if (remaining <= 0) {
           return true;
         }
-        const nextText = text.slice(0, remaining);
+        const nextText = truncateUtf16Safe(text, remaining);
+        if (!nextText) {
+          return true;
+        }
         texts.push(nextText);
         collectedChars += separatorChars + nextText.length;
-        return collectedChars >= resolvedLimits.maxChars;
+        // A surrogate backoff leaves spare code units; stop instead of skipping ahead.
+        return nextText.length < text.length || collectedChars >= resolvedLimits.maxChars;
       }
       return false;
     },
   });
-  const joined = texts
-    .map((text) => text.trim())
-    .filter(Boolean)
-    .join("\n")
-    .slice(0, resolvedLimits.maxChars)
-    .trim();
+  // Accepted chunks and separators are charged before append, so the join is already bounded.
+  const joined = texts.join("\n").trim();
   return joined || null;
+}
+
+async function readPartialAssistantTextFromSources(
+  sources: readonly ActiveMemoryTranscriptSource[],
+  limits?: TranscriptReadLimits,
+): Promise<string | null> {
+  for (const source of sources) {
+    const text = await readPartialAssistantText(source, limits);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
 }
 
 function attachPartialTimeoutData(
@@ -2330,7 +2516,7 @@ async function waitForSubagentPartialTimeoutData(
 async function buildTimeoutRecallResult(params: {
   elapsedMs: number;
   maxSummaryChars: number;
-  sessionFile?: string;
+  transcriptSources: readonly ActiveMemoryTranscriptSource[];
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
   hasUnavailableMemorySearchResult?: boolean;
@@ -2343,14 +2529,18 @@ async function buildTimeoutRecallResult(params: {
   const rawReply =
     params.rawReply ??
     subagentPartialData.rawReply ??
-    (await readPartialAssistantText(params.sessionFile));
+    (await readPartialAssistantTextFromSources(params.transcriptSources));
   const summary = truncateSummary(
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
   );
-  const transcriptState = params.sessionFile
-    ? await readActiveMemoryTranscriptState(params.sessionFile, undefined, params.toolsAllow)
-    : undefined;
+  const transcriptState =
+    params.transcriptSources.length > 0
+      ? await readMergedActiveMemoryTranscriptState({
+          sources: params.transcriptSources,
+          toolsAllow: params.toolsAllow,
+        })
+      : undefined;
   const searchDebug =
     params.searchDebug ?? subagentPartialData.searchDebug ?? transcriptState?.searchDebug;
   if (
@@ -2557,18 +2747,24 @@ function truncateSummary(summary: string, maxSummaryChars: number): string {
     return trimmed;
   }
 
-  const bounded = trimmed.slice(0, maxSummaryChars).trimEnd();
-  const nextChar = trimmed.charAt(maxSummaryChars);
+  const ellipsis = "…";
+  if (maxSummaryChars <= ellipsis.length) {
+    return ellipsis.slice(0, Math.max(0, maxSummaryChars));
+  }
+  const contentMaxChars = maxSummaryChars - ellipsis.length;
+  const rawBounded = trimmed.slice(0, contentMaxChars).trimEnd();
+  const bounded = truncateUtf16Safe(trimmed, contentMaxChars).trimEnd();
+  const nextChar = trimmed.charAt(contentMaxChars);
   if (!nextChar || /\s/.test(nextChar)) {
-    return bounded;
+    return `${bounded}${ellipsis}`;
   }
 
-  const lastBoundary = bounded.search(/\s\S*$/);
+  const lastBoundary = rawBounded.search(/\s\S*$/);
   if (lastBoundary > 0) {
-    return bounded.slice(0, lastBoundary).trimEnd();
+    return `${truncateUtf16Safe(trimmed, lastBoundary).trimEnd()}${ellipsis}`;
   }
 
-  return bounded;
+  return `${bounded}${ellipsis}`;
 }
 
 function buildMetadata(summary: string | null): string | undefined {
@@ -2625,7 +2821,10 @@ function buildQuery(params: {
       remainingUser -= 1;
       selected.push({
         role: "user",
-        text: turn.text.trim().replace(/\s+/g, " ").slice(0, params.config.recentUserChars),
+        text: truncateUtf16Safe(
+          turn.text.trim().replace(/\s+/g, " "),
+          params.config.recentUserChars,
+        ),
       });
       continue;
     }
@@ -2635,7 +2834,10 @@ function buildQuery(params: {
     remainingAssistant -= 1;
     selected.push({
       role: "assistant",
-      text: turn.text.trim().replace(/\s+/g, " ").slice(0, params.config.recentAssistantChars),
+      text: truncateUtf16Safe(
+        turn.text.trim().replace(/\s+/g, " "),
+        params.config.recentAssistantChars,
+      ),
     });
   }
   const recentTurns = selected.toReversed().filter((turn) => turn.text.length > 0);
@@ -2696,7 +2898,7 @@ function normalizeSearchQueryText(text: string): string {
 function clampSearchQuery(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS
-    ? normalized.slice(0, MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS).trim()
+    ? truncateUtf16Safe(normalized, MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS).trim()
     : normalized;
 }
 
@@ -2720,11 +2922,10 @@ function buildSearchQuery(params: {
   if (!previousUser) {
     return latest || clampSearchQuery(params.latestUserMessage);
   }
-  const context = clampSearchQuery(
-    normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text)),
-  )
-    .slice(0, 120)
-    .trim();
+  const context = truncateUtf16Safe(
+    clampSearchQuery(normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text))),
+    120,
+  ).trim();
   return clampSearchQuery(context ? `${context} ${latest}` : latest);
 }
 
@@ -2891,6 +3092,101 @@ function getModelRef(
   return undefined;
 }
 
+function collectActiveMemoryTranscriptSources(params: {
+  artifactSessionFile: string;
+  runtimeSource: ActiveMemoryTranscriptSource;
+  activeSessionFile?: string;
+  activeSessionKey: string;
+}): ActiveMemoryTranscriptSource[] {
+  const sources: ActiveMemoryTranscriptSource[] = [params.runtimeSource];
+  sources.push(fileTranscriptSource(params.artifactSessionFile));
+  if (params.activeSessionFile && params.activeSessionFile !== params.artifactSessionFile) {
+    sources.push(
+      transcriptSourceFromReturnedSessionFile({
+        sessionFile: params.activeSessionFile,
+        sessionKey: params.activeSessionKey,
+      }),
+    );
+  }
+  return sources;
+}
+
+async function persistActiveMemoryTranscriptArtifact(params: {
+  sources: readonly ActiveMemoryTranscriptSource[];
+  sessionFile: string;
+}): Promise<void> {
+  const events: unknown[] = [];
+  const seen = new Set<string>();
+  for (const source of params.sources) {
+    if (source.kind !== "runtime") {
+      continue;
+    }
+    let sourceEvents: readonly unknown[];
+    try {
+      sourceEvents = await readSessionTranscriptEvents(source.target);
+    } catch {
+      continue;
+    }
+    for (const event of sourceEvents) {
+      const serialized = JSON.stringify(event);
+      if (seen.has(serialized)) {
+        continue;
+      }
+      seen.add(serialized);
+      events.push(event);
+    }
+  }
+  if (events.length === 0) {
+    return;
+  }
+  await fs.mkdir(path.dirname(params.sessionFile), { recursive: true, mode: 0o700 });
+  await fs.writeFile(
+    params.sessionFile,
+    `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    {
+      encoding: "utf8",
+      mode: 0o600,
+    },
+  );
+}
+
+async function cleanupActiveMemoryRecallSession(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  const sessionKeySegmentPrefix =
+    parseAgentSessionKey(params.sessionKey)?.rest ?? params.sessionKey;
+  let lastError: unknown;
+  for (const delayMs of ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    try {
+      const result = await cleanupSessionLifecycleArtifacts({
+        agentId: params.agentId,
+        archiveRemovedEntryTranscripts: false,
+        orphanTranscriptMinAgeMs: 0,
+        sessionKeySegmentPrefix,
+        storePath: params.storePath,
+        transcriptContentMarker: `"runId":"${params.sessionId}"`,
+      });
+      if (result.removedEntries !== 1) {
+        throw new Error(
+          `active-memory recall cleanup removed ${String(result.removedEntries)} sessions`,
+        );
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`active-memory recall cleanup failed: ${String(lastError)}`);
+}
+
 async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
   config: ResolvedActiveRecallPluginConfig;
@@ -2905,7 +3201,7 @@ async function runRecallSubagent(params: {
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
   abortSignal?: AbortSignal;
-  onSessionFile?: (sessionFile: string) => void;
+  onTranscriptSources?: (sources: readonly ActiveMemoryTranscriptSource[]) => void;
 }): Promise<RecallSubagentResult> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
@@ -2929,7 +3225,7 @@ async function runRecallSubagent(params: {
   const subagentScope = parentSessionKey ?? params.sessionId ?? crypto.randomUUID();
   const subagentSuffix = `active-memory:${crypto
     .createHash("sha1")
-    .update(`${subagentScope}:${params.query}`)
+    .update(`${subagentScope}:${params.query}:${subagentSessionId}`)
     .digest("hex")
     .slice(0, 12)}`;
   const subagentSessionKey = parentSessionKey
@@ -2948,42 +3244,93 @@ async function runRecallSubagent(params: {
         params.config.transcriptDir,
       )
     : undefined;
-  const sessionFile =
+  const artifactSessionFile =
     persistedDir !== undefined
       ? path.join(persistedDir, `${subagentSessionId}.jsonl`)
       : path.join(requireTransientWorkspaceDir(tempDir), "session.jsonl");
-  params.onSessionFile?.(sessionFile);
-  if (persistedDir) {
-    await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
-    await fs.chmod(persistedDir, 0o700).catch(() => undefined);
-  }
-  const prompt = buildRecallPrompt({
-    config: params.config,
-    query: params.query,
-    searchQuery: params.searchQuery,
-  });
-  const { messageChannel, messageProvider } = resolveRecallRunChannelContext({
-    api: params.api,
+  const storePath = params.api.runtime.agent.session.resolveStorePath(
+    params.api.config.session?.store,
+    {
+      agentId: params.agentId,
+    },
+  );
+  const runtimeSessionFile = formatSqliteSessionFileMarker({
     agentId: params.agentId,
-    sessionKey: parentSessionKey,
-    sessionId: params.sessionId,
-    messageProvider: params.messageProvider,
-    channelId: params.channelId,
+    sessionId: subagentSessionId,
+    storePath,
+  });
+  const runtimeSource: ActiveMemoryTranscriptSource = {
+    kind: "runtime",
+    target: {
+      agentId: params.agentId,
+      sessionId: subagentSessionId,
+      sessionKey: subagentSessionKey,
+      storePath,
+    },
+  };
+  let transcriptSources = collectActiveMemoryTranscriptSources({
+    artifactSessionFile,
+    runtimeSource,
+    activeSessionKey: subagentSessionKey,
   });
 
-  let activeSessionFile = sessionFile;
   let harnessHasUsableMemoryResult = false;
   let harnessHasUnavailableMemorySearchResult = false;
+  let transcriptArtifactPersisted = false;
+  let runtimeSessionCreated = false;
   try {
+    const runtimeEntry = {
+      pluginOwnerId: params.api.id,
+      sessionId: subagentSessionId,
+      sessionFile: runtimeSessionFile,
+      updatedAt: Date.now(),
+    };
+    const createdEntry = await patchSessionEntry({
+      agentId: params.agentId,
+      fallbackEntry: runtimeEntry,
+      replaceEntry: true,
+      sessionKey: subagentSessionKey,
+      skipMaintenance: true,
+      storePath,
+      update: (_entry, context) => (context.existingEntry ? null : runtimeEntry),
+    });
+    if (createdEntry?.sessionId !== subagentSessionId) {
+      throw new Error(`active-memory recall session already exists: ${subagentSessionKey}`);
+    }
+    runtimeSessionCreated = true;
+    params.onTranscriptSources?.(transcriptSources);
+    if (persistedDir) {
+      await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
+      await fs.chmod(persistedDir, 0o700).catch(() => undefined);
+    }
+    const prompt = buildRecallPrompt({
+      config: params.config,
+      query: params.query,
+      searchQuery: params.searchQuery,
+    });
+    const { messageChannel, messageProvider } = resolveRecallRunChannelContext({
+      api: params.api,
+      agentId: params.agentId,
+      sessionKey: parentSessionKey,
+      sessionId: params.sessionId,
+      messageProvider: params.messageProvider,
+      channelId: params.channelId,
+    });
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
     const result = await params.api.runtime.agent.runEmbeddedAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
       agentId: params.agentId,
+      sessionTarget: {
+        agentId: params.agentId,
+        sessionId: subagentSessionId,
+        sessionKey: subagentSessionKey,
+        storePath,
+      },
       messageChannel,
       messageProvider,
-      sessionFile,
+      sessionFile: runtimeSessionFile,
       workspaceDir,
       agentDir,
       config: embeddedConfig,
@@ -3014,7 +3361,15 @@ async function runRecallSubagent(params: {
         harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
       },
     });
-    activeSessionFile = readActiveMemorySessionFileFromRunResult(result) ?? sessionFile;
+    const activeSessionFile =
+      readActiveMemorySessionFileFromRunResult(result) ?? runtimeSessionFile;
+    transcriptSources = collectActiveMemoryTranscriptSources({
+      artifactSessionFile,
+      runtimeSource,
+      activeSessionFile,
+      activeSessionKey: subagentSessionKey,
+    });
+    params.onTranscriptSources?.(transcriptSources);
     if (params.abortSignal?.aborted) {
       const reason = params.abortSignal.reason;
       if (reason instanceof Error) {
@@ -3032,15 +3387,22 @@ async function runRecallSubagent(params: {
       .filter(Boolean)
       .join("\n")
       .trim();
+    if (params.config.persistTranscripts) {
+      await persistActiveMemoryTranscriptArtifact({
+        sources: transcriptSources,
+        sessionFile: artifactSessionFile,
+      });
+      transcriptArtifactPersisted = true;
+    }
     const transcriptState = await readMergedActiveMemoryTranscriptState({
-      sessionFiles: [sessionFile, activeSessionFile],
+      sources: transcriptSources,
       toolsAllow: params.config.toolsAllow,
     });
     const searchDebug =
       transcriptState.searchDebug ?? readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
-      transcriptPath: params.config.persistTranscripts ? activeSessionFile : undefined,
+      transcriptPath: params.config.persistTranscripts ? artifactSessionFile : undefined,
       searchDebug,
       hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
       hasUnavailableMemorySearchResult:
@@ -3048,12 +3410,11 @@ async function runRecallSubagent(params: {
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      const partialReply = await readPartialAssistantText(activeSessionFile);
-      const transcriptState = await readActiveMemoryTranscriptState(
-        activeSessionFile,
-        undefined,
-        params.config.toolsAllow,
-      );
+      const partialReply = await readPartialAssistantTextFromSources(transcriptSources);
+      const transcriptState = await readMergedActiveMemoryTranscriptState({
+        sources: transcriptSources,
+        toolsAllow: params.config.toolsAllow,
+      });
       attachPartialTimeoutData(
         error,
         partialReply,
@@ -3079,7 +3440,39 @@ async function runRecallSubagent(params: {
     }
     throw error;
   } finally {
-    await transientWorkspace?.cleanup();
+    try {
+      if (runtimeSessionCreated) {
+        if (params.config.persistTranscripts && !transcriptArtifactPersisted) {
+          await persistActiveMemoryTranscriptArtifact({
+            sources: transcriptSources,
+            sessionFile: artifactSessionFile,
+          }).catch((error: unknown) => {
+            const message = toSingleLineLogValue(
+              error instanceof Error ? error.message : String(error),
+            );
+            params.api.logger.debug?.(
+              `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
+            );
+          });
+        }
+        await cleanupActiveMemoryRecallSession({
+          agentId: params.agentId,
+          sessionId: subagentSessionId,
+          sessionKey: subagentSessionKey,
+          storePath,
+        }).catch((error: unknown) => {
+          const message = toSingleLineLogValue(
+            error instanceof Error ? error.message : String(error),
+          );
+          params.api.logger.warn?.(
+            `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
+          );
+          throw error;
+        });
+      }
+    } finally {
+      await transientWorkspace?.cleanup();
+    }
   }
 }
 
@@ -3204,7 +3597,7 @@ async function maybeResolveActiveRecall(params: {
     abortFromParent();
   }
   const TIMEOUT_SENTINEL = Symbol("timeout");
-  let sessionFile: string | undefined;
+  let transcriptSources: readonly ActiveMemoryTranscriptSource[] = [];
   let recallTimedOut = false;
   const watchdogTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
   const timeoutId = setTimeout(() => {
@@ -3234,12 +3627,12 @@ async function maybeResolveActiveRecall(params: {
       ...params,
       modelRef: resolvedModelRef,
       abortSignal: controller.signal,
-      onSessionFile: (value) => {
-        sessionFile = value;
+      onTranscriptSources: (sources) => {
+        transcriptSources = sources;
       },
     });
     terminalMemorySearchWatch = watchTerminalMemorySearchResult({
-      getSessionFile: () => sessionFile,
+      getTranscriptSources: () => transcriptSources,
       abortSignal: controller.signal,
       toolsAllow: params.config.toolsAllow,
     });
@@ -3287,7 +3680,7 @@ async function maybeResolveActiveRecall(params: {
         : await buildTimeoutRecallResult({
             elapsedMs,
             maxSummaryChars: params.config.maxSummaryChars,
-            sessionFile,
+            transcriptSources,
             subagentPromise,
             toolsAllow: params.config.toolsAllow,
           });
@@ -3386,7 +3779,7 @@ async function maybeResolveActiveRecall(params: {
       const result = await buildTimeoutRecallResult({
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
-        sessionFile,
+        transcriptSources,
         rawReply: partialTimeoutData.rawReply,
         searchDebug: partialTimeoutData.searchDebug,
         hasUnavailableMemorySearchResult: partialTimeoutData.hasUnavailableMemorySearchResult,
@@ -3487,6 +3880,7 @@ export default definePluginEntry({
       name: "active-memory",
       description: "Enable, disable, or inspect Active Memory for this session.",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const tokens = ctx.args?.trim().split(/\s+/).filter(Boolean) ?? [];
         const isGlobal = tokens.includes("--global");
@@ -3501,7 +3895,12 @@ export default definePluginEntry({
               text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.`,
             };
           }
-          if (requiresAdminToMutateActiveMemoryGlobal(ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutateActiveMemoryGlobal({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
             };
@@ -3609,6 +4008,15 @@ export default definePluginEntry({
                 : undefined);
             const effectiveAgentId =
               resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
+            if (
+              shouldSkipActiveMemoryForHarnessSession({
+                api,
+                agentId: effectiveAgentId,
+                sessionKey: resolvedSessionKey,
+              })
+            ) {
+              return undefined;
+            }
             const sessionDisabled = await isSessionActiveMemoryDisabled({
               api,
               sessionKey: resolvedSessionKey,
@@ -3734,6 +4142,7 @@ export default definePluginEntry({
 });
 
 const testing = {
+  buildSearchQuery,
   buildCacheKey,
   buildCircuitBreakerKey,
   buildMetadata,

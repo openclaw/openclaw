@@ -4,6 +4,7 @@
  * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
  */
 import { spawn } from "node:child_process";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   materializeWindowsSpawnProgram,
@@ -32,12 +33,6 @@ type ExecDockerRawError = Error & {
   stdout: Buffer;
   stderr: Buffer;
 };
-
-function createAbortError(): Error {
-  const err = new Error("Aborted");
-  err.name = "AbortError";
-  return err;
-}
 
 type DockerSpawnRuntime = {
   platform: NodeJS.Platform;
@@ -86,6 +81,7 @@ export function execDockerRaw(
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let aborted = false;
+    let outputStreamError: Error | undefined;
 
     const signal = opts?.signal;
     const handleAbort = () => {
@@ -103,9 +99,20 @@ export function execDockerRaw(
       }
     }
 
+    const handleStreamError = (error: Error) => {
+      if (outputStreamError) {
+        return;
+      }
+      // Broken stdio means the command exchange is incomplete, so it cannot
+      // report success even if Docker later exits with code 0.
+      outputStreamError = error;
+      child.kill("SIGTERM");
+    };
+    child.stdout?.on("error", handleStreamError);
     child.stdout?.on("data", (chunk) => {
       stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
+    child.stderr?.on("error", handleStreamError);
     child.stderr?.on("data", (chunk) => {
       stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
@@ -139,7 +146,11 @@ export function execDockerRaw(
       const stdout = Buffer.concat(stdoutChunks);
       const stderr = Buffer.concat(stderrChunks);
       if (aborted || signal?.aborted) {
-        reject(createAbortError());
+        reject(createAbortError("Aborted"));
+        return;
+      }
+      if (outputStreamError) {
+        reject(outputStreamError);
         return;
       }
       const exitCode = code ?? 0;
@@ -161,6 +172,7 @@ export function execDockerRaw(
 
     const stdin = child.stdin;
     if (stdin) {
+      stdin.on("error", handleStreamError);
       if (opts?.input !== undefined) {
         stdin.end(opts.input);
       } else {
@@ -177,7 +189,7 @@ import {
   computeSandboxConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
 } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
+import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
@@ -195,7 +207,7 @@ const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
-export type ExecDockerOptions = ExecDockerRawOptions;
+type ExecDockerOptions = ExecDockerRawOptions;
 
 function envRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftEntries = Object.entries(left).toSorted(([leftKey], [rightKey]) =>
@@ -426,10 +438,14 @@ export function buildSandboxCreateArgs(params: {
 
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
+  // Docker's init owns PID 1 so orphaned children from long-running tool and
+  // browser workloads are reaped instead of accumulating against pidsLimit.
+  args.push("--init");
   args.push("--label", "openclaw.sandbox=1");
   args.push("--label", `openclaw.sessionKey=${params.scopeKey}`);
   args.push("--label", `openclaw.createdAtMs=${createdAtMs}`);
   args.push("--label", `openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`);
+  args.push("--label", `openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`);
   if (params.configHash) {
     args.push("--label", `openclaw.configHash=${params.configHash}`);
   }
@@ -615,6 +631,7 @@ export async function ensureSandboxContainer(params: {
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
     mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
     readOnlyWorkspaceSkillMounts: formatReadOnlyWorkspaceSkillMountHashState(
       readOnlyWorkspaceSkillMounts,
     ),

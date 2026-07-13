@@ -34,6 +34,11 @@ function pluginIds(plugins: ReturnType<typeof listReadOnlyChannelPluginsForConfi
   return plugins.map((entry) => entry.id);
 }
 
+function modulePathEndsWith(modulePath: string, suffix: string): boolean {
+  const normalized = modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;
+  return normalized.replace(/\\/g, "/").endsWith(suffix);
+}
+
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -157,8 +162,8 @@ vi.mock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) =>
       const actualLoader = actual.getCachedPluginModuleLoader(params);
       return ((modulePath: string) => {
         if (
-          modulePath.endsWith("/plugins/loader.js") ||
-          modulePath.endsWith("/plugins/loader.ts")
+          modulePathEndsWith(modulePath, "/plugins/loader.js") ||
+          modulePathEndsWith(modulePath, "/plugins/loader.ts")
         ) {
           return { loadOpenClawPlugins };
         }
@@ -547,8 +552,8 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       moduleLoaderParams.some(
         (entry) =>
           entry.tryNative === true &&
-          (entry.modulePath.endsWith("/plugins/loader.js") ||
-            entry.modulePath.endsWith("/plugins/loader.ts")),
+          (modulePathEndsWith(entry.modulePath, "/plugins/loader.js") ||
+            modulePathEndsWith(entry.modulePath, "/plugins/loader.ts")),
       ),
     ).toBe(true);
   });
@@ -903,26 +908,30 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       channelId: "external-chat",
       manifestChannelConfig: true,
     });
-    const plugins = listReadOnlyChannelPluginsForConfig(
-      {
-        channels: {
-          "external-chat": { token: "configured" },
+    const cfg = {
+      channels: {
+        "external-chat": {
+          defaultAccount: "Ops Team",
+          accounts: {
+            "Ops Team": { token: "configured" },
+            chat: { token: "chat-token" },
+          },
         },
-        plugins: {
-          load: { paths: [pluginDir] },
-          allow: ["external-chat-plugin"],
-        },
-      } as never,
-      {
-        env: { ...process.env },
-        includePersistedAuthState: false,
-        includeSetupFallbackPlugins: true,
       },
-    );
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: ["external-chat-plugin"],
+      },
+    } as never;
+    const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+      env: { ...process.env },
+      includePersistedAuthState: false,
+      includeSetupFallbackPlugins: true,
+    });
 
-    expect(plugins.find((entry) => entry.id === "external-chat")?.meta.blurb).toBe(
-      "manifest config",
-    );
+    const plugin = plugins.find((entry) => entry.id === "external-chat");
+    expect(plugin?.meta.blurb).toBe("manifest config");
+    expect(plugin?.config.defaultAccountId?.(cfg)).toBe("ops-team");
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -1073,6 +1082,81 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       | { config?: { token?: string } }
       | undefined;
     expect(inheritedAccount?.config?.token).not.toBe("prototype-token");
+  });
+
+  it("ignores manifest account keys that normalize to blocked object keys", () => {
+    const { pluginDir } = writeExternalSetupChannelPlugin({
+      setupEntry: false,
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+      manifestChannelConfig: true,
+    });
+    const cfg = {
+      channels: {
+        "external-chat": {
+          accounts: {
+            "constructor ": {
+              token: "blocked-token",
+            },
+          },
+        },
+      },
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: ["external-chat-plugin"],
+      },
+    } as never;
+    const plugin = listReadOnlyChannelPluginsForConfig(cfg, {
+      env: { ...process.env },
+      includePersistedAuthState: false,
+    }).find((entry) => entry.id === "external-chat");
+
+    expect(plugin?.config.listAccountIds(cfg)).toEqual([]);
+    const account = plugin?.config.resolveAccount(cfg, "default");
+    const accountFields = expectRecordFields(account, {
+      accountId: "default",
+    });
+    const configFields = expectRecordFields(accountFields.config, {});
+    expect(configFields.token).toBeUndefined();
+  });
+
+  it("resolves manifest channel account config from raw account keys with opaque provider ids", () => {
+    const { pluginDir } = writeExternalSetupChannelPlugin({
+      setupEntry: false,
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+      manifestChannelConfig: true,
+    });
+    const cfg = {
+      channels: {
+        "external-chat": {
+          accounts: {
+            "59000514e8ad@im.bot": {
+              enabled: true,
+              baseUrl: "https://ilinkai.weixin.qq.com",
+            },
+          },
+        },
+      },
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: ["external-chat-plugin"],
+      },
+    } as never;
+    const plugin = listReadOnlyChannelPluginsForConfig(cfg, {
+      env: { ...process.env },
+      includePersistedAuthState: false,
+    }).find((entry) => entry.id === "external-chat");
+
+    expect(plugin?.config.listAccountIds(cfg)).toEqual(["59000514e8ad-im-bot"]);
+    const account = plugin?.config.resolveAccount(cfg, "59000514e8ad-im-bot");
+    const fields = expectRecordFields(account, {
+      accountId: "59000514e8ad-im-bot",
+    });
+    expectRecordFields(fields.config, {
+      enabled: true,
+      baseUrl: "https://ilinkai.weixin.qq.com",
+    });
   });
 
   it("keeps setup-entry precedence when channel config descriptors are not runtime cutoffs", () => {

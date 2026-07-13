@@ -148,12 +148,10 @@ describe("session artifact helpers", () => {
   });
 
   it("formats archive timestamps with timezone prefix", () => {
-    // A known UTC timestamp: 2026-06-24T17:00:00.000Z = 2026-06-25 01:00 Asia/Shanghai
-    const now = Date.UTC(2026, 5, 24, 17, 0, 0, 0); // June is month 5 in JS
+    const now = Date.UTC(2026, 5, 24, 17, 0, 0, 0);
     const stamp = formatSessionArchiveTimestamp(now, "Asia/Shanghai");
     expect(stamp).toBe("2026-06-25_2026-06-24T17-00-00.000Z");
 
-    // Without timezone, behavior is unchanged (no prefix)
     const stampNoTz = formatSessionArchiveTimestamp(now);
     expect(stampNoTz).toBe("2026-06-24T17-00-00.000Z");
   });
@@ -167,23 +165,20 @@ describe("session artifact helpers", () => {
     expect(parseSessionArchiveTimestamp(file, "reset")).toBe(now);
     expect(parseSessionArchiveTimestamp(file, "deleted")).toBeNull();
 
-    // Old format (no prefix) still parses correctly
     const oldFile = "abc.jsonl.reset.2026-06-24T17-00-00.000Z";
     expect(parseSessionArchiveTimestamp(oldFile, "reset")).toBe(now);
   });
 
   it("classifies archived artifact files with timezone prefix", () => {
-    // New format (with local-date prefix)
     expect(
       isSessionArchiveArtifactName("abc.jsonl.reset.2026-06-25_2026-06-24T17-00-00.000Z"),
     ).toBe(true);
     expect(
       isSessionArchiveArtifactName("abc.jsonl.deleted.2026-06-25_2026-06-24T17-00-00.000Z"),
     ).toBe(true);
-    expect(
-      isSessionArchiveArtifactName("abc.jsonl.bak.2026-06-25_2026-06-24T17-00-00.000Z"),
-    ).toBe(true);
-    // The prefix is pure decoration — a malformed prefix without _ is not accepted
+    expect(isSessionArchiveArtifactName("abc.jsonl.bak.2026-06-25_2026-06-24T17-00-00.000Z")).toBe(
+      true,
+    );
     expect(
       isSessionArchiveArtifactName("abc.jsonl.reset.2026-06-25-2026-06-24T17-00-00.000Z"),
     ).toBe(false);

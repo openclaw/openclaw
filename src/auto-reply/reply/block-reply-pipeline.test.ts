@@ -101,6 +101,26 @@ describe("createBlockReplyContentKey", () => {
 });
 
 describe("createBlockReplyPipeline dedup with threading", () => {
+  it("does not count reasoning or commentary as a terminal reply", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "reasoning", isReasoning: true });
+    pipeline.enqueue({ text: "commentary", isCommentary: true });
+    pipeline.enqueue({ audioAsVoice: true });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.didStreamTerminalReply?.()).toBe(false);
+
+    pipeline.enqueue({ text: "final answer" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStreamTerminalReply?.()).toBe(true);
+  });
+
   it("keeps separate deliveries for same text with different replyToId", async () => {
     const sent: Array<{ text?: string; replyToId?: string }> = [];
     const pipeline = createBlockReplyPipeline({

@@ -1,7 +1,8 @@
 // Covers exec approval forwarding to channel plugins.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -262,12 +263,9 @@ const TARGETS_CFG = makeTargetsCfg([{ channel: "slack", to: "U123" }]);
 function createForwarder(params: {
   cfg: OpenClawConfig;
   deliver?: ReturnType<typeof vi.fn>;
-  resolveSessionTarget?: () => {
-    channel: string;
-    to: string;
-    accountId?: string;
-    threadId?: string | number;
-  } | null;
+  resolveSessionTarget?: NonNullable<
+    NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["resolveSessionTarget"]
+  >;
 }) {
   const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
   const deps: NonNullable<Parameters<typeof createExecApprovalForwarder>[0]> = {
@@ -529,6 +527,39 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it.each(["webchat", "tui"])(
+    "preserves configured session fallback for %s-originated exec approvals",
+    async (turnSourceChannel) => {
+      const resolveSessionTarget = vi.fn(async ({ request }) =>
+        request.request.turnSourceChannel
+          ? null
+          : { channel: "telegram" as const, to: "123", accountId: "default" },
+      );
+      const cfg = {
+        approvals: { exec: { enabled: true, mode: "session" } },
+      } as OpenClawConfig;
+      const { deliver, forwarder } = createForwarder({ cfg, resolveSessionTarget });
+
+      await expect(
+        forwarder.handleRequested({
+          ...baseRequest,
+          request: {
+            ...baseRequest.request,
+            turnSourceChannel,
+          },
+        }),
+      ).resolves.toBe(true);
+      expect(resolveSessionTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            request: expect.objectContaining({ turnSourceChannel: null }),
+          }),
+        }),
+      );
+      expect(deliver).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("attaches shared presentation approval buttons in forwarded fallback payloads", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({
@@ -764,8 +795,11 @@ describe("exec approval forwarder", () => {
 
       expect(deliver).toHaveBeenCalledTimes(1);
       const expiryText =
-        (deliver.mock.calls[0][0] as { payloads?: Array<{ text?: string }> }).payloads?.[0]?.text ??
-        "";
+        (
+          expectDefined(deliver.mock.calls[0], "deliver.mock.calls[0] test invariant")[0] as {
+            payloads?: Array<{ text?: string }>;
+          }
+        ).payloads?.[0]?.text ?? "";
       expect(expiryText).toContain("expired");
 
       // After expiry, the pending entry should be cleaned up.

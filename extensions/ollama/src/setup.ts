@@ -1,5 +1,6 @@
-// Ollama setup module handles plugin onboarding behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Ollama setup module handles plugin onboarding behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type {
   OpenClawConfig,
   SecretInput,
@@ -13,6 +14,7 @@ import {
   upsertAuthProfileWithLock,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
@@ -148,7 +150,10 @@ export async function checkOllamaCloudAuth(
     });
     try {
       if (response.status === 401) {
-        const data = (await response.json()) as { signin_url?: string };
+        const data = await readProviderJsonResponse<{ signin_url?: string }>(
+          response,
+          "ollama.cloud-auth",
+        );
         return { signedIn: false, signinUrl: data.signin_url };
       }
       if (!response.ok) {
@@ -451,7 +456,8 @@ function mergeUniqueModelNames(...groups: string[][]): string[] {
       const key = getOllamaLatestDedupeKey(name);
       const existingIndex = indexByKey.get(key);
       if (existingIndex !== undefined) {
-        if (shouldReplaceOllamaModelName(merged[existingIndex], name)) {
+        const existing = expectDefined(merged[existingIndex], "indexed Ollama model name");
+        if (shouldReplaceOllamaModelName(existing, name)) {
           merged[existingIndex] = name;
         }
         continue;
@@ -665,7 +671,9 @@ export async function configureOllamaNonInteractive(params: {
   const modelNames = models.map((model) => model.name);
   const orderedModelNames = mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_LOCAL, modelNames);
 
-  const requestedDefaultModelId = explicitModel ?? OLLAMA_SUGGESTED_MODELS_LOCAL[0];
+  const requestedDefaultModelId =
+    explicitModel ??
+    expectDefined(OLLAMA_SUGGESTED_MODELS_LOCAL[0], "default suggested Ollama model");
   const availableModelNames = new Set(modelNames);
   const availableDefaultModelId = findAvailableOllamaModelName(
     requestedDefaultModelId,
@@ -710,7 +718,7 @@ export async function configureOllamaNonInteractive(params: {
 
     defaultModelId =
       allModelNames.find((name) => findAvailableOllamaModelName(name, availableModelNames)) ??
-      Array.from(availableModelNames)[0];
+      expectDefined(availableModelNames.values().next().value, "available Ollama setup model");
     params.runtime.log(
       `Ollama model ${requestedDefaultModelId} was not available; using ${defaultModelId} instead.`,
     );

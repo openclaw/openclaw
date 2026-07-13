@@ -19,11 +19,6 @@ import {
   formatMissingSkillSummary,
 } from "./doctor-skills-core.js";
 
-export {
-  collectUnavailableAgentSkills,
-  disableUnavailableSkillsInConfig,
-} from "./doctor-skills-core.js";
-
 function formatInstallHints(skill: SkillStatusEntry): string[] {
   if (skill.install.length === 0) {
     return [];
@@ -40,7 +35,7 @@ function defaultGhConfigDiscoveryInput(): GhConfigDiscoveryInput {
 }
 
 /** Builds a GitHub CLI config-dir hint for eligible GitHub skill setups. */
-export function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
+function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   return describeGhConfigDirHintFromDiscovery(skills, defaultGhConfigDiscoveryInput());
 }
 

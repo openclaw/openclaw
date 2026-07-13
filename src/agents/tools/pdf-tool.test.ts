@@ -17,6 +17,7 @@ import * as pdfModelConfigModule from "./pdf-tool.model-config.js";
 import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
+const registerProviderStreamForModelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
@@ -25,6 +26,10 @@ vi.mock("../../llm/stream.js", async () => {
     complete: completeMock,
   };
 });
+
+vi.mock("../provider-stream.js", () => ({
+  registerProviderStreamForModel: registerProviderStreamForModelMock,
+}));
 
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
@@ -126,9 +131,8 @@ async function stubPdfToolInfra(
     loadSpy.mockResolvedValue(FAKE_PDF_MEDIA as never);
   }
 
-  vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({
-    setRuntimeApiKey: vi.fn(),
-  } as never);
+  const setRuntimeApiKey = vi.fn();
+  vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({ setRuntimeApiKey } as never);
   const find =
     params?.modelFound === false
       ? () => null
@@ -155,7 +159,7 @@ async function stubPdfToolInfra(
   vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
   vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
 
-  return { loadSpy };
+  return { loadSpy, setRuntimeApiKey };
 }
 
 async function withManagedInboundPdf(
@@ -184,6 +188,7 @@ describe("createPdfTool", () => {
   beforeEach(() => {
     resetPdfToolAuthEnv();
     completeMock.mockReset();
+    registerProviderStreamForModelMock.mockReset();
   });
 
   afterEach(() => {
@@ -205,7 +210,52 @@ describe("createPdfTool", () => {
     await withConfiguredPdfTool(async (tool) => {
       expect(tool.name).toBe("pdf");
       expect(tool.label).toBe("PDF");
-      expect(tool.description).toContain("Analyze PDFs");
+      expect(tool.description).toContain("Analyze PDF(s)");
+    });
+  });
+
+  it("auto-selects Bedrock PDF models with AWS SDK auth", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      vi.stubEnv("AWS_PROFILE", "");
+      vi.stubEnv("AWS_ACCESS_KEY_ID", "");
+      vi.stubEnv("AWS_SECRET_ACCESS_KEY", "");
+      vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "amazon-bedrock/text-1" } } },
+        models: {
+          mode: "replace",
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              auth: "aws-sdk",
+              api: "bedrock-converse-stream",
+              models: [
+                {
+                  id: "text-1",
+                  name: "Bedrock Text",
+                  input: ["text"],
+                  contextWindow: 16_000,
+                  maxTokens: 4_096,
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+                {
+                  id: "vision-1",
+                  name: "Bedrock Vision",
+                  input: ["text", "image"],
+                  contextWindow: 16_000,
+                  maxTokens: 4_096,
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      const tool = (await loadCreatePdfTool())({ config: cfg, agentDir });
+      expect(typeof tool?.execute).toBe("function");
     });
   });
 
@@ -327,6 +377,9 @@ describe("createPdfTool", () => {
 
       const [, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
       expectFields(loadOptions, { maxBytes: 524_288 });
+      expect(modelAuth.getApiKeyForModel).toHaveBeenCalledWith(
+        expect.objectContaining({ secretSentinels: true }),
+      );
     });
   });
 
@@ -521,6 +574,7 @@ describe("createPdfTool", () => {
       expect(modelsAgentDir).toBe(agentDir);
       expect(modelsOptions).toEqual({ workspaceDir });
       expect(modelDiscovery.discoverModels).toHaveBeenCalledWith(expect.anything(), agentDir, {
+        config: modelsConfigArg,
         workspaceDir,
       });
       expect(extractSpy).not.toHaveBeenCalled();
@@ -547,6 +601,60 @@ describe("createPdfTool", () => {
       ).rejects.toThrow("pages is not supported with native PDF providers");
     });
   });
+
+  it("rejects explicit page ranges that resolve to no pages before native PDF analysis", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
+      const nativeSpy = vi
+        .spyOn(pdfNativeProviders, "anthropicAnalyzePdf")
+        .mockResolvedValue("native summary");
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+          pages: "999",
+        }),
+      ).rejects.toThrow('No PDF pages matched requested range "999"');
+      expect(nativeSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    ["1.5", "1.5"],
+    ["1,2.5", "2.5"],
+    [`1,${String(Number.MAX_SAFE_INTEGER + 1)}`, String(Number.MAX_SAFE_INTEGER + 1)],
+  ])(
+    "rejects invalid page selection %s before loading or fallback extraction",
+    async (pages, invalidPage) => {
+      await withTempPdfAgentDir(async (agentDir) => {
+        const { loadSpy } = await stubPdfToolInfra(agentDir, {
+          provider: "openai",
+          api: "openai-responses",
+          input: ["text"],
+        });
+        const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+          text: "Extracted content",
+          images: [],
+        });
+        const cfg = withPdfModel(OPENAI_PDF_MODEL);
+        const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+        await expect(
+          tool.execute("t1", {
+            prompt: "summarize",
+            pdf: "/tmp/doc.pdf",
+            pages,
+          }),
+        ).rejects.toThrow(`Invalid page number: "${invalidPage}"`);
+        expect(loadSpy).not.toHaveBeenCalled();
+        expect(extractSpy).not.toHaveBeenCalled();
+        expect(completeMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("rejects password parameter for native PDF providers", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
@@ -596,6 +704,59 @@ describe("createPdfTool", () => {
         model: OPENAI_PDF_MODEL,
       });
       expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
+    });
+  });
+
+  it("uses the AWS SDK credential chain for Bedrock PDF models", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { setRuntimeApiKey } = await stubPdfToolInfra(agentDir, {
+        provider: "amazon-bedrock",
+        api: "bedrock-converse-stream",
+        input: ["text", "image"],
+      });
+      vi.mocked(modelAuth.getApiKeyForModel).mockResolvedValue({
+        apiKey: "",
+        source: "aws-sdk default chain",
+        mode: "aws-sdk",
+      });
+      vi.mocked(modelAuth.requireApiKey).mockImplementation(() => {
+        throw new Error("Bedrock aws-sdk auth must not require a literal API key");
+      });
+      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [],
+      });
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Bedrock summary" }],
+      } as never);
+
+      const bedrockModel = "amazon-bedrock/us.anthropic.claude-sonnet-4-6";
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({ config: withPdfModel(bedrockModel), agentDir }),
+      );
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "Bedrock summary" }]);
+      expect(modelAuth.requireApiKey).not.toHaveBeenCalled();
+      expect(setRuntimeApiKey).not.toHaveBeenCalled();
+      expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
+        model: expect.objectContaining({
+          provider: "amazon-bedrock",
+          api: "bedrock-converse-stream",
+        }),
+        cfg: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({ pdfModel: { primary: bedrockModel } }),
+          }),
+        }),
+        agentDir,
+      });
+      expect(firstMockCall(completeMock, "complete")[2]).toMatchObject({ apiKey: "" });
     });
   });
 

@@ -1,7 +1,7 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, type UserConfig } from "tsdown";
+import type { UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
@@ -40,6 +40,7 @@ const env = {
 };
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
+const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -137,6 +138,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
     env,
+    outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
     platform: "node",
     sourcemap: OUTPUT_SOURCE_MAPS,
@@ -198,6 +200,7 @@ const explicitNeverBundleDependencies = [
   "@lancedb/lancedb",
   "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@openclaw/ai",
   "@vitest/expect",
   "jimp",
   "matrix-js-sdk",
@@ -216,10 +219,12 @@ function shouldNeverBundleDependency(id: string): boolean {
 
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
+    id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
     id === "@openclaw/fs-safe" ||
     id.startsWith("@openclaw/fs-safe/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
+    id === "@openclaw/retry" ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
     id === "@openclaw/acp-core" ||
@@ -263,10 +268,12 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
+    "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
+    "gateway/worker-environments/runtime": "src/gateway/worker-environments/runtime.ts",
     "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
@@ -297,6 +304,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
     "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
+    "mcp/openclaw-tools-serve": "src/mcp/openclaw-tools-serve.ts",
   };
 }
 
@@ -318,6 +326,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "config/config": "src/config/config.ts",
     "crestodian/crestodian": "src/crestodian/crestodian.ts",
     "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
+    "crestodian/setup-inference": "src/crestodian/setup-inference.ts",
     "gateway/protocol/index": "packages/gateway-protocol/src/index.ts",
     "infra/errors": "src/infra/errors.ts",
     "infra/ws": "src/infra/ws.ts",
@@ -362,6 +371,7 @@ function buildGatewayProtocolDistEntries(): Record<string, string> {
     index: "packages/gateway-protocol/src/index.ts",
     "client-info": "packages/gateway-protocol/src/client-info.ts",
     "connect-error-details": "packages/gateway-protocol/src/connect-error-details.ts",
+    "frame-guards": "packages/gateway-protocol/src/frame-guards.ts",
     schema: "packages/gateway-protocol/src/schema.ts",
     "startup-unavailable": "packages/gateway-protocol/src/startup-unavailable.ts",
     version: "packages/gateway-protocol/src/version.ts",
@@ -373,6 +383,7 @@ function buildGatewayClientDistEntries(): Record<string, string> {
     // Keep package entrypoints explicit so package.json exports and root build
     // config cannot drift when client internals are split again.
     index: "packages/gateway-client/src/index.ts",
+    browser: "packages/gateway-client/src/browser.ts",
     readiness: "packages/gateway-client/src/readiness.ts",
     timeouts: "packages/gateway-client/src/timeouts.ts",
   };
@@ -386,6 +397,7 @@ function buildNetPolicyDistEntries(): Record<string, string> {
     ip: "packages/net-policy/src/ip.ts",
     ipv4: "packages/net-policy/src/ipv4.ts",
     "redact-sensitive-url": "packages/net-policy/src/redact-sensitive-url.ts",
+    "url-protocol": "packages/net-policy/src/url-protocol.ts",
     "url-userinfo": "packages/net-policy/src/url-userinfo.ts",
   };
 }
@@ -402,7 +414,6 @@ function buildMediaGenerationCoreDistEntries(): Record<string, string> {
 
 function buildMediaUnderstandingCoreDistEntries(): Record<string, string> {
   return {
-    index: "packages/media-understanding-common/src/index.ts",
     "active-model": "packages/media-understanding-common/src/active-model.ts",
     defaults: "packages/media-understanding-common/src/defaults.ts",
     errors: "packages/media-understanding-common/src/errors.ts",
@@ -431,29 +442,15 @@ function buildMarkdownCoreDistEntries(): Record<string, string> {
 }
 
 function buildNormalizationCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/normalization-core/src/index.ts",
-    "number-coercion": "packages/normalization-core/src/number-coercion.ts",
-    "record-coerce": "packages/normalization-core/src/record-coerce.ts",
-    "string-coerce": "packages/normalization-core/src/string-coerce.ts",
-    "string-normalization": "packages/normalization-core/src/string-normalization.ts",
-  };
+  return buildPackageDistEntriesFromExports("normalization-core");
+}
+
+function buildRetryDistEntries(): Record<string, string> {
+  return buildPackageDistEntriesFromExports("retry");
 }
 
 function buildMediaCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/media-core/src/index.ts",
-    base64: "packages/media-core/src/base64.ts",
-    constants: "packages/media-core/src/constants.ts",
-    "content-length": "packages/media-core/src/content-length.ts",
-    "file-name": "packages/media-core/src/file-name.ts",
-    "inbound-path-policy": "packages/media-core/src/inbound-path-policy.ts",
-    "inline-image-data-url": "packages/media-core/src/inline-image-data-url.ts",
-    "media-source-url": "packages/media-core/src/media-source-url.ts",
-    mime: "packages/media-core/src/mime.ts",
-    "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
-    "read-response-with-limit": "packages/media-core/src/read-response-with-limit.ts",
-  };
+  return buildPackageDistEntriesFromExports("media-core");
 }
 
 function buildPackageDistEntriesFromExports(packageDir: string): Record<string, string> {
@@ -512,7 +509,6 @@ function buildTerminalCoreDistEntries(): Record<string, string> {
 
 function buildWebContentCoreDistEntries(): Record<string, string> {
   return {
-    index: "packages/web-content-core/src/index.ts",
     "provider-runtime-shared": "packages/web-content-core/src/provider-runtime-shared.ts",
   };
 }
@@ -550,16 +546,10 @@ function buildModelCatalogCoreDistEntries(): Record<string, string> {
   };
 }
 
-function buildLlmRuntimeDistEntries(): Record<string, string> {
-  return {
-    index: "packages/llm-runtime/src/index.ts",
-    "api-registry": "packages/llm-runtime/src/api-registry.ts",
-    stream: "packages/llm-runtime/src/stream.ts",
-  };
-}
-
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
+    id === "@openclaw/ai" ||
+    id.startsWith("@openclaw/ai/") ||
     id === "@openclaw/llm-core" ||
     id.startsWith("@openclaw/llm-core/") ||
     id === "ignore" ||
@@ -577,11 +567,8 @@ function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
 }
 
 function shouldExternalizeGatewayClientDependency(id: string): boolean {
-  return (
-    id === "ws" ||
-    id.startsWith("ws/") ||
-    id === "@openclaw/gateway-protocol" ||
-    id.startsWith("@openclaw/gateway-protocol/")
+  return ["ws", "@openclaw/net-policy", "@openclaw/gateway-protocol"].some(
+    (dependency) => id === dependency || id.startsWith(`${dependency}/`),
   );
 }
 
@@ -595,10 +582,6 @@ function shouldExternalizeSpeechCoreDependency(id: string): boolean {
 
 function shouldExternalizeLlmCoreDependency(id: string): boolean {
   return id === "typebox" || id.startsWith("typebox/");
-}
-
-function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
-  return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
 function shouldExternalizeMarkdownCoreDependency(id: string): boolean {
@@ -626,6 +609,9 @@ function buildUnifiedDistEntries(): Record<string, string> {
         `normalization-core/${entry}`,
         source,
       ]),
+    ),
+    ...Object.fromEntries(
+      Object.entries(buildRetryDistEntries()).map(([entry, source]) => [`retry/${entry}`, source]),
     ),
     ...Object.fromEntries(
       Object.entries(buildMediaCoreDistEntries()).map(([entry, source]) => [
@@ -667,10 +653,10 @@ function buildUnifiedDistEntries(): Record<string, string> {
   };
 }
 
-export default defineConfig([
+const configs = [
   nodeBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildAgentCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("agent-core"),
     deps: {
@@ -679,7 +665,7 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildGatewayProtocolDistEntries(),
     outDir: tsdownPackageOutputRoot("gateway-protocol"),
     deps: {
@@ -688,7 +674,7 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildGatewayClientDistEntries(),
     outDir: tsdownPackageOutputRoot("gateway-client"),
     deps: {
@@ -697,7 +683,7 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildNetPolicyDistEntries(),
     outDir: tsdownPackageOutputRoot("net-policy"),
     deps: {
@@ -706,19 +692,19 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildMediaGenerationCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("media-generation-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildMediaUnderstandingCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("media-understanding-common"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildMarkdownCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("markdown-core"),
     deps: {
@@ -727,25 +713,31 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildNormalizationCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("normalization-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
+    entry: buildRetryDistEntries(),
+    outDir: tsdownPackageOutputRoot("retry"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildMediaCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("media-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildAcpCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("acp-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildTerminalCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("terminal-core"),
     deps: {
@@ -754,13 +746,13 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildWebContentCoreDistEntries(),
     outDir: "packages/web-content-core/dist",
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildSpeechCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("speech-core"),
     deps: {
@@ -769,7 +761,7 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildLlmCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("llm-core"),
     deps: {
@@ -778,28 +770,23 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildModelCatalogCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("model-catalog-core"),
-  }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildLlmRuntimeDistEntries(),
-    outDir: tsdownPackageOutputRoot("llm-runtime"),
-    deps: {
-      neverBundle: shouldExternalizeLlmRuntimeDependency,
-    },
   }),
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildUnifiedDistEntries(),
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
+      // Keep dts generation from inlining externalized package types.
+      dts: { neverBundle: shouldNeverBundleDependency },
     },
   }),
-]);
+] satisfies UserConfig[];
+
+export default configs;

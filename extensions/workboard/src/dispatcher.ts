@@ -1,38 +1,41 @@
 // Workboard plugin module implements dispatcher behavior.
+import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
-import type { WorkboardCard, WorkboardExecution } from "./types.js";
+import type { WorkboardCard, WorkboardExecution, WorkboardWorkspace } from "./types.js";
 
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
 const DEFAULT_DISPATCH_OWNER = "workboard-dispatcher";
 const DEFAULT_DISPATCH_MODEL = "default";
 
 export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
+export type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
 
-export type WorkboardDispatchStartOptions = {
+type WorkboardDispatchStartOptions = {
   maxStarts?: number;
   model?: string;
   provider?: string;
   ownerId?: string;
   boardId?: string;
   now?: number;
+  allowManagedWorktrees?: boolean;
 };
 
-export type WorkboardStartedRun = {
+type WorkboardStartedRun = {
   cardId: string;
   title: string;
   sessionKey: string;
   runId: string;
 };
 
-export type WorkboardStartFailure = {
+type WorkboardStartFailure = {
   cardId: string;
   title: string;
   error: string;
 };
 
-export type WorkboardDispatchAndStartResult = WorkboardDispatchResult & {
+type WorkboardDispatchAndStartResult = WorkboardDispatchResult & {
   started: WorkboardStartedRun[];
   startFailures: WorkboardStartFailure[];
 };
@@ -85,6 +88,53 @@ function buildExecution(params: {
     runId: params.runId,
     startedAt: params.now,
     updatedAt: params.now,
+  };
+}
+
+function managedWorktreeName(cardId: string): string {
+  const suffix = cardId
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-");
+  return `wb-${suffix}`.slice(0, 64).replace(/-$/, "");
+}
+
+async function materializeWorkspace(params: {
+  card: WorkboardCard;
+  worktrees?: WorkboardWorktreeRuntime;
+  allowManagedWorktrees: boolean;
+}): Promise<{ workspace?: WorkboardWorkspace; cwd?: string }> {
+  const workspace = params.card.metadata?.automation?.workspace;
+  if (workspace?.kind !== "worktree") {
+    return {};
+  }
+  if (!params.allowManagedWorktrees) {
+    throw new Error("managed worktree dispatch requires operator.admin");
+  }
+  const sourcePath = workspace.sourcePath ?? workspace.path;
+  const sourceBranch = workspace.sourcePath ? workspace.sourceBranch : workspace.branch;
+  if (!sourcePath || !path.isAbsolute(sourcePath)) {
+    throw new Error("worktree workspace path must be an absolute git checkout path");
+  }
+  if (!params.worktrees) {
+    throw new Error("managed worktree runtime is unavailable");
+  }
+  const worktree = await params.worktrees.create({
+    repoRoot: sourcePath,
+    name: managedWorktreeName(params.card.id),
+    ...(sourceBranch ? { baseRef: sourceBranch } : {}),
+    ownerKind: "workboard",
+    ownerId: params.card.id,
+  });
+  return {
+    cwd: worktree.path,
+    workspace: {
+      kind: "worktree",
+      path: worktree.path,
+      branch: worktree.branch,
+      sourcePath,
+      ...(sourceBranch ? { sourceBranch } : {}),
+    },
   };
 }
 
@@ -164,6 +214,7 @@ function selectStartableCards(
 export async function dispatchAndStartWorkboardCards(params: {
   store: WorkboardStore;
   subagent: WorkboardSubagentRuntime;
+  worktrees?: WorkboardWorktreeRuntime;
   options?: WorkboardDispatchStartOptions;
 }): Promise<WorkboardDispatchAndStartResult> {
   const now = params.options?.now ?? Date.now();
@@ -183,6 +234,19 @@ export async function dispatchAndStartWorkboardCards(params: {
     const ownerId = params.options?.ownerId?.trim() || card.agentId || DEFAULT_DISPATCH_OWNER;
     const sessionKey = buildSessionKey(card);
     let token = "";
+    let materializedWorkspace: WorkboardWorkspace | undefined;
+    let runStarted = false;
+    if (
+      card.metadata?.automation?.workspace?.kind === "worktree" &&
+      params.options?.allowManagedWorktrees === false
+    ) {
+      startFailures.push({
+        cardId: card.id,
+        title: card.title,
+        error: "managed worktree dispatch requires operator.admin",
+      });
+      continue;
+    }
     try {
       const claimed = await params.store.claim(card.id, {
         ownerId,
@@ -190,6 +254,15 @@ export async function dispatchAndStartWorkboardCards(params: {
       });
       token = claimed.token;
       const context = await params.store.buildWorkerContext(card.id);
+      const materialized = await materializeWorkspace({
+        card: claimed.card,
+        worktrees: params.worktrees,
+        allowManagedWorktrees: params.options?.allowManagedWorktrees !== false,
+      });
+      materializedWorkspace = materialized.workspace;
+      if (materializedWorkspace) {
+        await params.store.update(card.id, { workspace: materializedWorkspace });
+      }
       const run = await params.subagent.run({
         sessionKey,
         message: buildWorkerPrompt({
@@ -204,7 +277,9 @@ export async function dispatchAndStartWorkboardCards(params: {
         idempotencyKey: `workboard:${card.id}:${claimed.card.updatedAt}`,
         lightContext: true,
         deliver: false,
+        ...(materialized.cwd ? { cwd: materialized.cwd } : {}),
       });
+      runStarted = true;
       const updated = await params.store.update(card.id, {
         sessionKey,
         runId: run.runId,
@@ -215,6 +290,7 @@ export async function dispatchAndStartWorkboardCards(params: {
           model,
           now,
         }),
+        ...(materializedWorkspace ? { workspace: materializedWorkspace } : {}),
       });
       await params.store.addWorkerLog(
         updated.id,
@@ -233,6 +309,15 @@ export async function dispatchAndStartWorkboardCards(params: {
         runId: run.runId,
       });
     } catch (error) {
+      if (!runStarted && materializedWorkspace?.path && params.worktrees) {
+        await params.worktrees
+          .removeIfLossless({ path: materializedWorkspace.path })
+          .catch(() => undefined);
+        const sourceWorkspace = card.metadata?.automation?.workspace;
+        if (sourceWorkspace) {
+          await params.store.update(card.id, { workspace: sourceWorkspace }).catch(() => undefined);
+        }
+      }
       const message = formatErrorMessage(error);
       startFailures.push({ cardId: card.id, title: card.title, error: message });
       if (!token) {
@@ -260,4 +345,17 @@ export async function dispatchAndStartWorkboardCards(params: {
     startFailures,
     count: dispatch.count + started.length + startFailures.length,
   };
+}
+
+export async function cleanupWorkboardRunWorktree(params: {
+  store: WorkboardStore;
+  worktrees: WorkboardWorktreeRuntime;
+  runId: string;
+}): Promise<void> {
+  const card = (await params.store.list()).find((entry) => entry.runId === params.runId);
+  const workspace = card?.metadata?.automation?.workspace;
+  if (workspace?.kind !== "worktree" || !workspace.path) {
+    return;
+  }
+  await params.worktrees.removeIfLossless({ path: workspace.path });
 }

@@ -31,7 +31,7 @@ export function listManagedPluginNpmProjectRootsSync(npmRoot: string): string[] 
 }
 
 /** Async variant of project-level managed npm root discovery. */
-export async function listManagedPluginNpmProjectRoots(npmRoot: string): Promise<string[]> {
+async function listManagedPluginNpmProjectRoots(npmRoot: string): Promise<string[]> {
   const projectsDir = resolvePluginNpmProjectsDir(npmRoot);
   try {
     return sortPaths(

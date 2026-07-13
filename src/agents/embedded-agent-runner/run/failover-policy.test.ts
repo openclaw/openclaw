@@ -20,12 +20,39 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("escalates retry-limit for model_not_found when fallback is configured", () => {
+    // model_not_found should trigger fallback to configured alternatives
+    // when the primary model is decommissioned by the provider.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: true,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "model_not_found",
+    });
+  });
+
   it("keeps retry-limit as a local error for non-escalating reasons", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "retry_limit",
         fallbackConfigured: true,
         failoverReason: "timeout",
+      }),
+    ).toEqual({
+      action: "return_error_payload",
+    });
+  });
+
+  it("returns error payload for model_not_found when no fallback is configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: false,
+        failoverReason: "model_not_found",
       }),
     ).toEqual({
       action: "return_error_payload",
@@ -64,6 +91,61 @@ describe("resolveRunFailoverDecision", () => {
       }),
     ).toEqual({
       action: "fallback_model",
+      reason: "rate_limit",
+    });
+  });
+
+  it("surfaces max-turn prompt failures without profile rotation or model fallback", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverCode: "cli_max_turns",
+        failoverFailure: true,
+        failoverReason: "unknown",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "unknown",
+    });
+  });
+
+  it("surfaces prompt run-budget timeouts instead of model fallback (#60388)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        promptTimeoutFallbackSafe: true,
+        timedOutByRunBudget: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
+  it("does not rotate prompt failures after the run budget is exhausted (#60388)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "rate_limit",
+        timedOutByRunBudget: true,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
       reason: "rate_limit",
     });
   });
@@ -118,6 +200,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -138,6 +221,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -160,6 +244,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -181,6 +266,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -202,6 +288,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -222,6 +309,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -259,6 +347,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: true,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -321,6 +410,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: true,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -341,6 +431,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -450,6 +541,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: true,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -471,6 +563,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: true,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -492,6 +585,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -513,6 +607,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -534,6 +629,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -581,6 +677,44 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("falls back on fallback-safe harness-owned prompt timeouts", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        harnessOwnsTransport: true,
+        promptTimeoutFallbackSafe: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
+  it("surfaces fallback-safe harness-owned prompt timeouts when no fallback is configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: false,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        harnessOwnsTransport: true,
+        promptTimeoutFallbackSafe: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
   it("surfaces error on LLM idle timeout when no fallback is configured and rotation is exhausted", () => {
     expect(
       resolveRunFailoverDecision({
@@ -594,6 +728,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -615,11 +750,54 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
       action: "surface_error",
       reason: null,
+    });
+  });
+
+  it("does not rotate or fallback assistant timeouts that exhausted the run budget (#60388)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        timedOutByRunBudget: true,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "continue_normal",
+    });
+  });
+
+  it("does not fallback assistant run-budget timeouts even after profile rotation exhausted (#60388)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        timedOutByRunBudget: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "continue_normal",
     });
   });
 });

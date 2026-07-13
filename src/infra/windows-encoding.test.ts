@@ -1,4 +1,6 @@
 // Covers Windows command-output code page parsing and decoding.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   createWindowsOutputDecoder,
@@ -100,6 +102,20 @@ describe("windows output encoding", () => {
     expect(decoder.decode(raw.subarray(0, 1))).toBe("");
     expect(decoder.decode(raw.subarray(1, 3))).toBe("测");
     expect(decoder.decode(raw.subarray(3))).toBe("试");
+    expect(decoder.flush()).toBe("");
+  });
+
+  it("keeps split UTF-8 output intact on POSIX", () => {
+    const decoder = createWindowsOutputDecoder({ platform: "linux" });
+    const raw = Buffer.from(JSON.stringify({ text: "hello 世" }), "utf8");
+    const splitIndex = raw.indexOf(
+      expectDefined(Buffer.from("世", "utf8")[0], 'Buffer.from("世", "utf8")[0] test invariant'),
+    );
+
+    expect(decoder.decode(raw.subarray(0, splitIndex + 1))).toBe(
+      raw.subarray(0, splitIndex).toString("utf8"),
+    );
+    expect(decoder.decode(raw.subarray(splitIndex + 1))).toBe('世"}');
     expect(decoder.flush()).toBe("");
   });
 });

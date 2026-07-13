@@ -1,14 +1,15 @@
 // Agents add tests cover agent creation, workspace setup, channel binding, and onboarding integration.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -85,9 +86,9 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../cli/plugins-install-record-commit.js", async () => ({
-  ...(await vi.importActual<typeof import("../cli/plugins-install-record-commit.js")>(
-    "../cli/plugins-install-record-commit.js",
+vi.mock("../plugins/install-record-commit.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/install-record-commit.js")>(
+    "../plugins/install-record-commit.js",
   )),
   commitConfigWithPendingPluginInstalls: commitConfigWithPendingPluginInstallsMock,
   transformConfigWithPendingPluginInstalls: transformConfigWithPendingPluginInstallsMock,
@@ -116,6 +117,18 @@ import { agentsAddCommand, testing } from "./agents.commands.add.js";
 const runtime = createTestRuntime();
 
 describe("agents add command", () => {
+  const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agents-add-" });
+
+  beforeAll(async () => {
+    await suiteTempDirs.setup();
+  });
+
+  afterAll(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    await suiteTempDirs.cleanup();
+  });
+
   beforeEach(() => {
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
@@ -136,14 +149,8 @@ describe("agents add command", () => {
     prefix: string,
     run: (root: string) => Promise<void>,
   ): Promise<void> {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => await run(root));
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    const root = await suiteTempDirs.make(prefix);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => await run(root));
   }
 
   it("requires --workspace when flags are present", async () => {
@@ -231,6 +238,11 @@ describe("agents add command", () => {
               provider: "openai",
               key: "sk-test",
             },
+            "openai:backup": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-backup",
+            },
             "github-copilot:default": {
               type: "token",
               provider: "github-copilot",
@@ -244,6 +256,12 @@ describe("agents add command", () => {
               expires: Date.now() + 60_000,
             },
           },
+          order: {
+            openai: ["openai:oauth", "openai:backup", "openai:default"],
+            "github-copilot": ["github-copilot:default"],
+          },
+          lastGood: { openai: "openai:default" },
+          usageStats: { "openai:default": { lastUsed: 1_000 } },
         },
         sourceAgentDir,
       );
@@ -253,10 +271,21 @@ describe("agents add command", () => {
         destAgentDir,
       });
 
-      expect(result).toEqual({ copied: 2, skipped: 1 });
+      expect(result).toEqual({ copied: 3, skipped: 1 });
       const copied = loadPersistedAuthProfileStore(destAgentDir);
       expect(Object.keys(copied?.profiles ?? {}).toSorted()).toEqual([
         "github-copilot:default",
+        "openai:backup",
+        "openai:default",
+      ]);
+      expect(copied?.order).toEqual({
+        openai: ["openai:backup", "openai:default"],
+        "github-copilot": ["github-copilot:default"],
+      });
+      expect(copied?.lastGood).toBeUndefined();
+      expect(copied?.usageStats).toBeUndefined();
+      expect(resolveAuthProfileOrder({ store: copied!, provider: "openai" })).toEqual([
+        "openai:backup",
         "openai:default",
       ]);
     });

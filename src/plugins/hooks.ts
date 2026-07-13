@@ -30,6 +30,7 @@ import type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookHandlerMap,
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
@@ -57,10 +58,9 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
   PluginHookBeforeAgentRunEvent,
+  PluginHookCronReconciledContext,
+  PluginHookCronReconciledEvent,
   PluginHookCronChangedEvent,
-  PluginHookGatewayCronDeliveryStatus,
-  PluginHookGatewayCronJobState,
-  PluginHookGatewayCronRunStatus,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -95,85 +95,14 @@ import type {
 } from "./hook-types.js";
 
 // Re-export types for consumers
-export type {
-  PluginHookAgentContext,
-  PluginHookBeforeAgentReplyEvent,
-  PluginHookBeforeAgentReplyResult,
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
-  PluginHookBeforeDispatchContext,
-  PluginHookBeforeDispatchEvent,
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyPayloadSendingContext,
-  PluginHookReplyPayloadSendingEvent,
-  PluginHookReplyPayloadSendingResult,
-  PluginHookReplyPayload,
-  PluginHookReplyDispatchContext,
-  PluginHookReplyDispatchEvent,
-  PluginHookReplyDispatchResult,
-  PluginHookBeforeModelResolveEvent,
-  PluginHookBeforeModelResolveResult,
-  PluginHookBeforePromptBuildEvent,
-  PluginHookBeforePromptBuildResult,
-  PluginHookModelCallEndedEvent,
-  PluginHookModelCallStartedEvent,
-  PluginHookLlmInputEvent,
-  PluginHookLlmOutputEvent,
-  PluginHookBeforeAgentFinalizeEvent,
-  PluginHookBeforeAgentFinalizeResult,
-  PluginHookAgentEndEvent,
-  PluginHookBeforeCompactionEvent,
-  PluginHookBeforeResetEvent,
-  PluginHookInboundClaimContext,
-  PluginHookInboundClaimEvent,
-  PluginHookInboundClaimResult,
-  PluginHookAfterCompactionEvent,
-  PluginHookMessageContext,
-  PluginHookMessageReceivedEvent,
-  PluginHookMessageSendingEvent,
-  PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
-  PluginHookToolContext,
-  PluginHookBeforeToolCallEvent,
-  PluginHookBeforeToolCallResult,
-  PluginHookBeforeAgentRunEvent,
-  PluginHookAfterToolCallEvent,
-  PluginHookToolResultPersistContext,
-  PluginHookToolResultPersistEvent,
-  PluginHookToolResultPersistResult,
-  PluginHookBeforeMessageWriteEvent,
-  PluginHookBeforeMessageWriteResult,
-  PluginHookSessionContext,
-  PluginHookSessionStartEvent,
-  PluginHookSessionEndEvent,
-  PluginHookSubagentContext,
-  PluginHookSubagentDeliveryTargetEvent,
-  PluginHookSubagentDeliveryTargetResult,
-  PluginHookSubagentSpawningEvent,
-  PluginHookSubagentSpawningResult,
-  PluginHookSubagentSpawnedEvent,
-  PluginHookSubagentEndedEvent,
-  PluginHookCronChangedEvent,
-  PluginHookGatewayCronDeliveryStatus,
-  PluginHookGatewayCronJobState,
-  PluginHookGatewayCronRunStatus,
-  PluginHookGatewayContext,
-  PluginHookGatewayStartEvent,
-  PluginHookGatewayStopEvent,
-  PluginHookBeforeInstallContext,
-  PluginHookBeforeInstallEvent,
-  PluginHookBeforeInstallResult,
-  PluginHookResolveExecEnvContext,
-  PluginHookResolveExecEnvEvent,
-};
 
-export type HookRunnerLogger = {
+type HookRunnerLogger = {
   debug?: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
 };
 
-export type HookFailurePolicy = "fail-open" | "fail-closed";
+type HookFailurePolicy = "fail-open" | "fail-closed";
 export type VoidHookRunOptions = {
   unrefTimeout?: boolean;
 };
@@ -183,7 +112,7 @@ type BeforeAgentFinalizeResultWithRetryCandidates = PluginHookBeforeAgentFinaliz
   retryCandidates?: BeforeAgentFinalizeRetry[];
 };
 
-export type HookRunnerOptions = {
+type HookRunnerOptions = {
   logger?: HookRunnerLogger;
   /** If true, errors in hooks will be caught and logged instead of thrown */
   catchErrors?: boolean;
@@ -206,6 +135,7 @@ export type HookRunnerOptions = {
 
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
+  channel_pairing_requested: 2_000,
   // Defensive default for the compaction lifecycle hooks. Without a budget an
   // unresponsive handler runs fully unbounded, and in the codex agent harness
   // these hooks fire on the serialized notification queue
@@ -228,7 +158,15 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   // The runner is fail-open for this hook name, so a timed-out handler is
   // logged and the run proceeds without its modifications.
   before_agent_start: 15_000,
+  // Terminal finalization hooks sit on the runner's completion path. A hung
+  // handler must not freeze final delivery or keep compaction retry recovery
+  // unresolved; timeout fail-opens with the original final answer.
+  before_agent_finalize: 15_000,
   before_prompt_build: 15_000,
+  // Outbound modifying hooks run inside the serialized reply delivery lane.
+  // A hung plugin must fail open so later hooks and queued replies can settle.
+  message_sending: 15_000,
+  reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
 };
 
@@ -244,7 +182,7 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
 };
 
-export type PluginTargetedInboundClaimOutcome =
+type PluginTargetedInboundClaimOutcome =
   | {
       status: "handled";
       result: PluginHookInboundClaimResult;
@@ -1065,6 +1003,17 @@ export function createHookRunner(
   }
 
   /**
+   * Run channel_pairing_requested hook.
+   * Observation-only; slow/failing handlers must not block pairing flow.
+   */
+  async function runChannelPairingRequested(
+    event: Parameters<PluginHookHandlerMap["channel_pairing_requested"]>[0],
+    ctx: Parameters<PluginHookHandlerMap["channel_pairing_requested"]>[1],
+  ): Promise<void> {
+    return runVoidHook("channel_pairing_requested", event, ctx);
+  }
+
+  /**
    * Run before_dispatch hook.
    * Allows plugins to inspect or handle a message before model dispatch.
    * First handler returning { handled: true } wins.
@@ -1547,6 +1496,16 @@ export function createHookRunner(
   }
 
   /**
+   * Run cron_reconciled after the Gateway scheduler reaches a complete state.
+   */
+  async function runCronReconciled(
+    event: PluginHookCronReconciledEvent,
+    ctx: PluginHookCronReconciledContext,
+  ): Promise<void> {
+    return runVoidHook("cron_reconciled", event, ctx);
+  }
+
+  /**
    * Run cron_changed hook for gateway-owned cron lifecycle changes.
    */
   async function runCronChanged(
@@ -1643,6 +1602,7 @@ export function createHookRunner(
     runInboundClaim,
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
+    runChannelPairingRequested,
     runMessageReceived,
     runBeforeDispatch,
     runReplyDispatch,
@@ -1666,6 +1626,7 @@ export function createHookRunner(
     runGatewayStart,
     runGatewayStop,
     runHeartbeatPromptContribution,
+    runCronReconciled,
     runCronChanged,
     // Install hooks
     runBeforeInstall,

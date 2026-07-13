@@ -29,6 +29,20 @@ afterEach(async () => {
 });
 
 describe("skill_workshop tool", () => {
+  it("describes action selection and pending-proposal discovery in its schema", () => {
+    const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
+    const schema = JSON.stringify(tool.parameters);
+
+    expect(schema).toContain("create = new skill");
+    expect(schema).toContain("update = existing live skill");
+    expect(schema).toContain("revise = existing pending proposal");
+    expect(schema).toContain("not filesystem search");
+    expect(schema).toContain("when proposal_id is unknown");
+    expect(schema).toContain("returns candidates");
+    expect(schema).toContain("max 160 bytes");
+    expect(schema).toContain("shortens the proposal listing entry");
+  });
+
   it("is exposed in the OpenClaw tool set", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tools = createOpenClawTools({
@@ -57,6 +71,91 @@ describe("skill_workshop tool", () => {
     expect(tools.some((tool) => tool.name === "skill_workshop")).toBe(true);
   });
 
+  it("does not nudge the foreground model when autonomy is enabled", () => {
+    const disabled = createSkillWorkshopTool({
+      workspaceDir: "/tmp/openclaw",
+      config: { skills: { workshop: { autonomous: { enabled: false } } } },
+    });
+    const enabled = createSkillWorkshopTool({
+      workspaceDir: "/tmp/openclaw",
+      config: { skills: { workshop: { autonomous: { enabled: true } } } },
+    });
+
+    expect(enabled.description).toBe(disabled.description);
+    expect(enabled.description).not.toContain("Experience capture");
+  });
+
+  it("restricts internal review runs to one pending proposal mutation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-");
+    const proposalMutationBudget = { remaining: 1 };
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+      proposalOnly: true,
+      proposalMutationBudget,
+    });
+
+    expect(
+      (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
+    ).toEqual(["create", "revise", "list", "inspect"]);
+    await expect(
+      tool.execute("call-apply", { action: "apply", proposal_id: "proposal-1" }),
+    ).rejects.toThrow("only inspect or draft proposals");
+    await expect(
+      tool.execute("call-update", {
+        action: "update",
+        skill_name: "existing-skill",
+        proposal_content: "# Replacement\n",
+      }),
+    ).rejects.toThrow("only inspect or draft proposals");
+
+    await tool.execute("call-create", {
+      action: "create",
+      name: "Review Learning",
+      description: "Reuse a recovered workflow",
+      proposal_content: "# Review Learning\n\nFollow the recovered workflow.\n",
+    });
+    const retryTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      proposalMutationBudget,
+    });
+    await expect(
+      retryTool.execute("call-create-2", {
+        action: "create",
+        name: "Second Learning",
+        description: "Should stay blocked",
+        proposal_content: "# Second Learning\n",
+      }),
+    ).rejects.toThrow("limited to one proposal mutation");
+  });
+
+  it("does not refund the review mutation budget after a failed mutation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-failure-");
+    const proposalMutationBudget = { remaining: 1 };
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      proposalMutationBudget,
+    });
+
+    await expect(
+      tool.execute("call-revise-missing", {
+        action: "revise",
+        proposal_id: "missing-proposal",
+        proposal_content: "# Missing Skill\n",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      tool.execute("call-create-after-failure", {
+        action: "create",
+        name: "Second Mutation",
+        description: "Must remain blocked after a failed mutation",
+        proposal_content: "# Second Mutation\n",
+      }),
+    ).rejects.toThrow("limited to one proposal mutation");
+  });
+
   it("is not exposed from sandboxed OpenClaw tool sets", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tools = createOpenClawTools({
@@ -67,6 +166,50 @@ describe("skill_workshop tool", () => {
     });
 
     expect(tools.some((tool) => tool.name === "skill_workshop")).toBe(false);
+  });
+
+  it.each([0, 1.5, "1.5", "25items", "many"])(
+    "rejects invalid list limit %s before touching proposal state",
+    async (limit) => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+      const tool = createSkillWorkshopTool({
+        workspaceDir,
+        config: {},
+        agentId: "main",
+      });
+
+      await expect(tool.execute("call-list-limit", { action: "list", limit })).rejects.toThrow(
+        "limit must be a positive integer",
+      );
+      await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+    },
+  );
+
+  it("preserves list limits through 50 and clamps larger requests", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { maxPending: 200 } } },
+      agentId: "main",
+    });
+
+    for (let index = 0; index < 51; index += 1) {
+      await tool.execute(`call-create-${index}`, {
+        action: "create",
+        name: `Limit Proposal ${index}`,
+        description: `Proposal ${index}`,
+        proposal_content: `# Limit Proposal ${index}\n`,
+      });
+    }
+
+    for (const [limit, expectedCount] of [
+      [49, 49],
+      [50, 50],
+      [51, 50],
+    ] as const) {
+      const result = await tool.execute(`call-list-${limit}`, { action: "list", limit });
+      expect((result.details as { proposals: unknown[] }).proposals).toHaveLength(expectedCount);
+    }
   });
 
   it("creates pending skill proposals without applying them", async () => {
@@ -128,6 +271,19 @@ describe("skill_workshop tool", () => {
             "skill-workshop",
             "proposals",
             (result.details as { id: string }).id,
+            "PROPOSAL.md",
+          ),
+        )
+        .then((buffer) => buffer.at(-1)),
+    ).resolves.toBe(0x0a);
+    await expect(
+      fs
+        .readFile(
+          path.join(
+            stateDir,
+            "skill-workshop",
+            "proposals",
+            (result.details as { id: string }).id,
             "proposal.json",
           ),
           "utf8",
@@ -155,7 +311,19 @@ describe("skill_workshop tool", () => {
       fs.access(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md")),
     ).rejects.toThrow();
 
-    const revised = await tool.execute("call-2", {
+    const reviewerOrigin = {
+      agentId: "main",
+      sessionKey: "agent:main:skill-workshop-review:review-test",
+      runId: "run-review-test",
+    };
+    const reviewerTool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      origin: reviewerOrigin,
+      proposalOnly: true,
+    });
+    const revised = await reviewerTool.execute("call-2", {
       action: "revise",
       proposal_id: (result.details as { id: string }).id,
       proposal_content: "# Weather Planner\n\nCheck weather, alerts, and timing.\n",
@@ -190,6 +358,20 @@ describe("skill_workshop tool", () => {
         "utf8",
       ),
     ).resolves.toContain('version: "v2"');
+    await expect(
+      fs
+        .readFile(
+          path.join(
+            stateDir,
+            "skill-workshop",
+            "proposals",
+            (result.details as { id: string }).id,
+            "proposal.json",
+          ),
+          "utf8",
+        )
+        .then((raw) => JSON.parse(raw).origin),
+    ).resolves.toEqual(reviewerOrigin);
 
     const listed = await tool.execute("call-3", {
       action: "list",
@@ -243,7 +425,7 @@ describe("skill_workshop tool", () => {
       },
     ]);
 
-    const revisedByName = await tool.execute("call-5", {
+    const revisedByName = await reviewerTool.execute("call-5", {
       action: "revise",
       name: "weather-planner",
       proposal_content: "# Weather Planner\n\nCheck weather, alerts, timing, and location.\n",
@@ -257,6 +439,45 @@ describe("skill_workshop tool", () => {
     expect((revisedByName.content[0] as { text: string }).text).toBe(
       `Revised skill proposal ${(result.details as { id: string }).id} (pending) for weather-planner.`,
     );
+  });
+
+  it("rejects whitespace-only proposal content while preserving raw valid markdown", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    await expect(
+      tool.execute("call-blank", {
+        action: "create",
+        name: "Blank Proposal",
+        description: "Rejected blank content",
+        proposal_content: " \n\t\n ",
+      }),
+    ).rejects.toThrow("proposal_content required");
+
+    const result = await tool.execute("call-valid", {
+      action: "create",
+      name: "Raw Markdown",
+      description: "Valid content keeps trailing newline",
+      proposal_content: "# Raw Markdown\n\nKeep this terminal newline.\n",
+    });
+
+    await expect(
+      fs
+        .readFile(
+          path.join(
+            stateDir,
+            "skill-workshop",
+            "proposals",
+            (result.details as { id: string }).id,
+            "PROPOSAL.md",
+          ),
+        )
+        .then((buffer) => buffer.at(-1)),
+    ).resolves.toBe(0x0a);
   });
 
   it("applies, rejects, and quarantines proposals through the workshop service", async () => {

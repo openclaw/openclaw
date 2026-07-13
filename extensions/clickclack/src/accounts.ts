@@ -143,6 +143,10 @@ export function resolveClickClackAccount(params: {
       min: MIN_RECONNECT_MS,
       max: MAX_RECONNECT_MS,
     }),
+    // Durable activity rows require an agent_activity:write bot token scope on
+    // the ClickClack side, so this stays a per-account opt-in (default off),
+    // matching the streaming-progress commentary opt-in precedent.
+    agentActivity: merged.agentActivity === true,
     config: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],

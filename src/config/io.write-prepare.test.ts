@@ -2,8 +2,9 @@
 import { describe, expect, it } from "vitest";
 import {
   collectChangedPaths,
-  formatConfigValidationFailure,
   applyUnsetPathsForWrite,
+  createMergePatch,
+  formatConfigValidationFailure,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
@@ -12,6 +13,25 @@ import {
 import type { OpenClawConfig } from "./types.js";
 
 describe("config io write prepare", () => {
+  it("ignores prototype-chain keys when building merge patches", () => {
+    // Discriminating fixture: `collision` is own on base and only inherited on
+    // target. With `key in target` the old code treated the inherited value as
+    // present and emitted it in the patch; Object.hasOwn deletes the own key.
+    const base = {
+      safe: { mode: "local" },
+      collision: { mode: "owned-base" },
+    };
+    const target = Object.create({
+      collision: { mode: "inherited-target" },
+    }) as Record<string, unknown>;
+    target.safe = { mode: "cloud" };
+
+    expect(createMergePatch(base, target)).toEqual({
+      safe: { mode: "cloud" },
+      collision: null,
+    });
+  });
+
   it("persists caller changes onto resolved config without leaking runtime defaults", () => {
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: {
@@ -217,6 +237,7 @@ describe("config io write prepare", () => {
             primary: "google/gemini-3-pro-preview",
             fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
           },
+          utilityModel: "google/gemini-3-pro-preview",
           heartbeat: { model: "google/gemini-3-pro-preview" },
           subagents: {
             model: {
@@ -241,6 +262,7 @@ describe("config io write prepare", () => {
               primary: "google/gemini-3-pro-preview",
               fallbacks: ["google/gemini-3-pro-preview"],
             },
+            utilityModel: "google/gemini-3-pro-preview",
             heartbeat: { model: "google/gemini-3-pro-preview" },
             subagents: { model: "google/gemini-3-pro-preview" },
             models: {
@@ -260,6 +282,7 @@ describe("config io write prepare", () => {
             primary: "google/gemini-3.1-pro-preview",
             fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
           },
+          utilityModel: "google/gemini-3.1-pro-preview",
           heartbeat: { model: "google/gemini-3.1-pro-preview" },
           subagents: {
             model: {
@@ -284,6 +307,7 @@ describe("config io write prepare", () => {
               primary: "google/gemini-3.1-pro-preview",
               fallbacks: ["google/gemini-3.1-pro-preview"],
             },
+            utilityModel: "google/gemini-3.1-pro-preview",
             heartbeat: { model: "google/gemini-3.1-pro-preview" },
             subagents: { model: "google/gemini-3.1-pro-preview" },
             models: {
@@ -309,6 +333,7 @@ describe("config io write prepare", () => {
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
     });
+    expect(persisted.agents?.defaults?.utilityModel).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.defaults?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.defaults?.subagents?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
@@ -327,6 +352,7 @@ describe("config io write prepare", () => {
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview"],
     });
+    expect(persisted.agents?.list?.[0]?.utilityModel).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.list?.[0]?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.list?.[0]?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.list?.[0]?.models).toEqual({
@@ -1038,6 +1064,25 @@ describe("config io write prepare", () => {
         { id: "a", token: "${TOKEN_A}" },
       ],
     });
+  });
+
+  it("ignores prototype-chain keys when collecting changed paths", () => {
+    // Same one-sided collision as the merge-patch fixture: own on base, only
+    // inherited on target. Old `in` checks walked into collision.mode; hasOwn
+    // reports the top-level own-key removal instead.
+    const base = {
+      safe: { mode: "local" },
+      collision: { mode: "owned-base" },
+    };
+    const target = Object.create({
+      collision: { mode: "inherited-target" },
+    }) as Record<string, unknown>;
+    target.safe = { mode: "cloud" };
+
+    const changedPaths = new Set<string>();
+    collectChangedPaths(base, target, "", changedPaths);
+
+    expect([...changedPaths].toSorted()).toEqual(["collision", "safe.mode"]);
   });
 
   it("does not overwrite identity-restored escaped refs with positional map entries", () => {

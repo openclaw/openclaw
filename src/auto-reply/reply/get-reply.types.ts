@@ -1,5 +1,6 @@
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -10,12 +11,21 @@ export type ReplySessionBinding = {
   storePath?: string;
 };
 
-export type InternalReplySessionOptions = {
+type InternalReplySessionOptions = {
+  expectedExistingSessionId?: string;
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  /** Prevent implicit rollover after a caller has durably admitted this exact session. */
+  pinExpectedExistingSession?: boolean;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
+  sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
+  /** Marks queued follow-up admission waits on an older owner's delivery barrier. */
+  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
 };
 
-export type InternalGetReplyOptions = GetReplyOptions & InternalReplySessionOptions;
+export type InternalGetReplyOptions = GetReplyOptions &
+  InternalReplySessionOptions &
+  ReplyOptionsWithHeartbeatRunScope;
 
 /** Reply resolver signature used by dispatchers and tests for dependency injection. */
 export type GetReplyFromConfig = (

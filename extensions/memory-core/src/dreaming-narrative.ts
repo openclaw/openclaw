@@ -15,6 +15,8 @@ import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { cleanupSessionLifecycleArtifacts } from "openclaw/plugin-sdk/session-store-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import pLimit from "p-limit";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -455,7 +457,7 @@ function clampDiaryContextEntry(entry: string): string {
   if (normalized.length <= RECENT_DIARY_CONTEXT_MAX_CHARS) {
     return normalized;
   }
-  return `${normalized.slice(0, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
+  return `${truncateUtf16Safe(normalized, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
 }
 
 function normalizeDiaryBlockBody(block: string): string {
@@ -996,44 +998,20 @@ export async function generateAndAppendDreamNarrative(params: {
 // write-lock while it runs and burns a model slot, which caused lock
 // contention (>30 s) and cascading narrative timeouts (#73198).
 //
-// `runDetachedDreamNarrative` wraps `generateAndAppendDreamNarrative` with a
-// FIFO queue capped at `DETACHED_NARRATIVE_CONCURRENCY` so the total in-flight
-// detached narratives across phases/workspaces stays bounded.
+// `runDetachedDreamNarrative` caps total in-flight detached narratives across
+// phases/workspaces so cron sweeps cannot exhaust model and session-lock slots.
 const DETACHED_NARRATIVE_CONCURRENCY = 3;
-
-let activeDetachedNarratives = 0;
-const detachedNarrativeQueue: Array<() => void> = [];
-
-function releaseDetachedNarrativeSlot(): void {
-  activeDetachedNarratives -= 1;
-  detachedNarrativeQueue.shift()?.();
-}
-
-async function acquireDetachedNarrativeSlot(): Promise<void> {
-  if (activeDetachedNarratives >= DETACHED_NARRATIVE_CONCURRENCY) {
-    await new Promise<void>((resolve) => {
-      detachedNarrativeQueue.push(resolve);
-    });
-  }
-  activeDetachedNarratives += 1;
-}
+const detachedNarrativeLimit = pLimit(DETACHED_NARRATIVE_CONCURRENCY);
 
 export function runDetachedDreamNarrative(
   params: Parameters<typeof generateAndAppendDreamNarrative>[0],
 ): void {
   queueMicrotask(() => {
-    void (async () => {
-      await acquireDetachedNarrativeSlot();
-      try {
-        await generateAndAppendDreamNarrative(params);
-      } catch {
-        // Detached narratives intentionally swallow errors — callers (cron
-        // sweeps) cannot recover, and surfacing here would only cause noisy
-        // unhandled rejections. Logging happens inside
-        // generateAndAppendDreamNarrative.
-      } finally {
-        releaseDetachedNarrativeSlot();
-      }
-    })();
+    void detachedNarrativeLimit(() => generateAndAppendDreamNarrative(params)).catch(() => {
+      // Detached narratives intentionally swallow errors — callers (cron
+      // sweeps) cannot recover, and surfacing here would only cause noisy
+      // unhandled rejections. Logging happens inside
+      // generateAndAppendDreamNarrative.
+    });
   });
 }

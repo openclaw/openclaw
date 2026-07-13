@@ -1,3 +1,5 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 /**
@@ -33,6 +35,34 @@ class TestProxyAgent {
   constructor(readonly options: unknown) {}
 }
 
+function useBodylessForeignResponse(params: { text: string; contentLength?: string }) {
+  const text = vi.fn(async () => params.text);
+  const headers = new Headers({ "content-type": "application/json" });
+  if (params.contentLength !== undefined) {
+    headers.set("content-length", params.contentLength);
+  }
+  testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: TestAgent,
+    EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+    ProxyAgent: TestProxyAgent,
+    fetch: async () =>
+      ({
+        status: 400,
+        statusText: "Bad Request",
+        headers,
+        body: null,
+        ok: false,
+        text,
+      }) as unknown as Response,
+  };
+  return text;
+}
+
+async function fetchOAuthRegistrationError(): Promise<Response> {
+  const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+  return await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+}
+
 function redirectResponse(location: string, status = 302): Response {
   return new Response(null, {
     status,
@@ -54,6 +84,43 @@ function getDispatcherConnectOptions(init: unknown): Record<string, unknown> | u
   }
   const options = dispatcher.options as { connect?: Record<string, unknown> };
   return options.connect;
+}
+
+async function listenOnLoopback(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeLoopbackServer(server: Server): Promise<void> {
+  const closed = new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  server.closeAllConnections();
+  await closed;
+}
+
+function expectBoundedTimeout(error: unknown, undiciCode: string): void {
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return;
+  }
+  expect(error).toMatchObject({
+    name: "TypeError",
+    cause: expect.objectContaining({ code: undiciCode }),
+  });
+}
+
+async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
+  return await promise.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
 }
 
 describe("MCP HTTP fetch helpers", () => {
@@ -212,37 +279,91 @@ describe("MCP HTTP fetch helpers", () => {
     expect(calls[1]?.[1]?.headers).toBeUndefined();
   });
 
-  it("returns fetch responses compatible with MCP SDK OAuth error parsing", async () => {
-    class ForeignResponse {
-      status = 400;
-      statusText = "Bad Request";
-      headers = new Headers({ "content-type": "application/json" });
-      body = null;
-      get ok() {
-        return false;
-      }
-      async text() {
-        return '{"error":"invalid_client_metadata","error_description":"bad redirect"}';
-      }
-    }
+  it.each([undefined, "64", "1048577"])(
+    "drops body-less foreign OAuth text without trusting Content-Length %s",
+    async (contentLength) => {
+      const text = useBodylessForeignResponse({
+        text: '{"error_description":"unbounded"}',
+        contentLength,
+      });
 
+      const response = await fetchOAuthRegistrationError();
+
+      expect(response).toBeInstanceOf(Response);
+      expect(response.status).toBe(400);
+      expect(response.body).toBeNull();
+      expect(text).not.toHaveBeenCalled();
+      const error = await parseErrorResponse(response);
+      expect(error.message).toContain("HTTP 400");
+    },
+  );
+
+  it("never materializes a body-less foreign response with a lying safe length", async () => {
+    const text = useBodylessForeignResponse({
+      text: "x".repeat(1024 * 1024 + 1),
+      contentLength: "64",
+    });
+
+    const response = await fetchOAuthRegistrationError();
+
+    expect(response).toBeInstanceOf(Response);
+    expect(response.status).toBe(400);
+    expect(response.body).toBeNull();
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it.each(["headers", "body"] as const)(
+    "aborts a hung OAuth request while awaiting %s",
+    async (stage) => {
+      delete testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY];
+      const server = createServer((_request, response) => {
+        if (stage === "body") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"access_token":');
+        }
+      });
+      const baseUrl = await listenOnLoopback(server);
+      const fetch = buildMcpHttpFetch({ resourceUrl: `${baseUrl}/mcp`, timeoutMs: 500 });
+
+      try {
+        const pending = fetch(`${baseUrl}/token`, { method: "POST" });
+        if (stage === "headers") {
+          const error = await captureRejection(pending);
+          expect(error).toBeDefined();
+          expectBoundedTimeout(error, "UND_ERR_HEADERS_TIMEOUT");
+          return;
+        }
+        const response = await pending;
+        const error = await captureRejection(response.json());
+        expect(error).toBeDefined();
+        expectBoundedTimeout(error, "UND_ERR_BODY_TIMEOUT");
+      } finally {
+        await closeLoopbackServer(server);
+      }
+    },
+  );
+
+  it("composes caller cancellation with the configured timeout", async () => {
+    const controller = new AbortController();
     testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: TestAgent,
       EnvHttpProxyAgent: TestEnvHttpProxyAgent,
       ProxyAgent: TestProxyAgent,
-      fetch: async (url: string | URL | Request, init?: unknown) => {
-        fetchCalls.push({ url, init });
-        return new ForeignResponse() as unknown as Response;
+      fetch: async (_url: string | URL | Request, init?: unknown) => {
+        const signal =
+          typeof init === "object" && init !== null && "signal" in init
+            ? (init as { signal?: AbortSignal }).signal
+            : undefined;
+        controller.abort();
+        expect(signal?.aborted).toBe(true);
+        return new Response(null, { status: 204 });
       },
     };
     const fetch = buildMcpHttpFetch({
       resourceUrl: "https://mcp.example.com/mcp",
+      timeoutMs: 60_000,
     });
 
-    const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
-    expect(response).toBeInstanceOf(Response);
-    const error = await parseErrorResponse(response);
-    expect(error.message).toContain("bad redirect");
-    expect(error.message).not.toContain("[object Response]");
+    await fetch("https://mcp.example.com/token", { signal: controller.signal });
   });
 });

@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +20,7 @@ const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
+let sendTypingWhatsApp: typeof import("./send.js").sendTypingWhatsApp;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
@@ -26,13 +28,13 @@ const WHATSAPP_TEST_CFG: OpenClawConfig = {
   channels: { whatsapp: {} },
 };
 
-vi.mock("./connection-controller-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
-    "./connection-controller-registry.js",
+vi.mock("./connection-controller-runtime-context.js", async () => {
+  const actual = await vi.importActual<typeof import("./connection-controller-runtime-context.js")>(
+    "./connection-controller-runtime-context.js",
   );
   return {
     ...actual,
-    getRegisteredWhatsAppConnectionController: vi.fn((accountId: string) => {
+    getWhatsAppConnectionController: vi.fn((accountId: string) => {
       const listener = hoisted.controllerListeners.get(accountId) ?? null;
       return listener
         ? {
@@ -80,7 +82,8 @@ describe("web outbound", () => {
   );
 
   beforeAll(async () => {
-    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
+    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } =
+      await import("./send.js"));
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
   });
 
@@ -137,6 +140,30 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
+  it("checks send readiness before composing or sending direct messages", async () => {
+    const assertSendReady = vi.fn(async () => {
+      throw new Error("WhatsApp reachout timelock is active");
+    });
+    hoisted.controllerListeners.set("default", {
+      assertSendReady,
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+      }),
+    ).rejects.toThrow("WhatsApp reachout timelock is active");
+
+    expect(assertSendReady).toHaveBeenCalledWith("+1555");
+    expect(sendComposingTo).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("returns the actual outbound key remote JID when Baileys resolves a LID target", async () => {
@@ -258,29 +285,61 @@ describe("web outbound", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("checks send readiness before standalone direct typing", async () => {
+    const assertSendReady = vi.fn(async () => {
+      throw new Error("WhatsApp reachout timelock is active");
+    });
+    hoisted.controllerListeners.set("default", {
+      assertSendReady,
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    await expect(
+      sendTypingWhatsApp("+1555", {
+        cfg: WHATSAPP_TEST_CFG,
+      }),
+    ).rejects.toThrow("WhatsApp reachout timelock is active");
+
+    expect(assertSendReady).toHaveBeenCalledWith("+1555");
+    expect(sendComposingTo).not.toHaveBeenCalled();
+  });
+
+  it("skips standalone newsletter typing without readiness checks", async () => {
+    const assertSendReady = vi.fn(async () => undefined);
+    hoisted.controllerListeners.set("default", {
+      assertSendReady,
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    await sendTypingWhatsApp("120363401234567890@newsletter", {
+      cfg: WHATSAPP_TEST_CFG,
+    });
+
+    expect(assertSendReady).not.toHaveBeenCalled();
+    expect(sendComposingTo).not.toHaveBeenCalled();
+  });
+
   it("throws a helpful error when no active listener exists", async () => {
     hoisted.controllerListeners.clear();
-    await expect(
-      sendMessageWhatsApp("+1555", "hi", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-        accountId: "work",
-      }),
-    ).rejects.toThrow(/No active WhatsApp Web listener/);
-    await expect(
-      sendMessageWhatsApp("+1555", "hi", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-        accountId: "work",
-      }),
-    ).rejects.toThrow(/channels login/);
-    await expect(
-      sendMessageWhatsApp("+1555", "hi", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-        accountId: "work",
-      }),
-    ).rejects.toThrow(/account: work/);
+    const error = await sendMessageWhatsApp("+1555", "hi", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      accountId: "work",
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+      message: expect.stringMatching(
+        /No active WhatsApp Web listener.*channels login.*account work/,
+      ),
+    });
   });
 
   it("maps audio to PTT with opus mime when ogg", async () => {
@@ -297,6 +356,33 @@ describe("web outbound", () => {
     });
     expect(sendMessage).toHaveBeenNthCalledWith(1, "+1555", "", buf, "audio/ogg; codecs=opus");
     expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
+  });
+
+  it("reports the accepted voice send before a caption failure", async () => {
+    const buf = Buffer.from("audio");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "audio/ogg",
+      kind: "audio",
+    });
+    sendMessage
+      .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "voice-accepted"))
+      .mockRejectedValueOnce(new Error("caption failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageWhatsApp("+1555", "voice note", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        mediaUrl: "/tmp/voice.ogg",
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("caption failed");
+
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "voice-accepted" }),
+    );
   });
 
   it.each([
@@ -694,6 +780,30 @@ describe("web outbound", () => {
       durationSeconds: undefined,
       durationHours: undefined,
     });
+  });
+
+  it("checks send readiness before sending direct polls", async () => {
+    const assertSendReady = vi.fn(async () => {
+      throw new Error("WhatsApp reachout timelock is active");
+    });
+    hoisted.controllerListeners.set("default", {
+      assertSendReady,
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    await expect(
+      sendPollWhatsApp(
+        "+1555",
+        { question: "Lunch?", options: ["Pizza", "Sushi"] },
+        { verbose: false, cfg: WHATSAPP_TEST_CFG },
+      ),
+    ).rejects.toThrow("WhatsApp reachout timelock is active");
+
+    expect(assertSendReady).toHaveBeenCalledWith("+1555");
+    expect(sendPoll).not.toHaveBeenCalled();
   });
 
   it("redacts recipients and poll text in outbound logs", async () => {

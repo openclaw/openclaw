@@ -18,27 +18,48 @@ extension AgentProTab {
             self.usageDestination
         case .dreaming:
             self.dreamingDestination
+        case .files:
+            self.filesDestination
         }
     }
 
+    var filesDestination: some View {
+        AgentWorkspaceFilesScreen(
+            agentId: self.activeAgentID,
+            headerLeadingAction: self.directHeaderLeadingAction(for: .files))
+    }
+
     var agentsDestination: some View {
-        ZStack {
-            OpenClawProBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    self.rosterHeader
-                    self.agentFilters
-                    self.agentsSection
+        List {
+            Section {
+                if self.filteredAgents.isEmpty {
+                    self.emptyAgentsRow
+                } else {
+                    ForEach(self.filteredAgents, id: \.id) { agent in
+                        self.agentRow(agent)
+                    }
                 }
-                .padding(.vertical, 18)
             }
-            .refreshable {
-                await self.refreshOverview(force: true)
-            }
-            .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
         }
-        .navigationTitle("Agents")
-        .navigationBarTitleDisplayMode(.inline)
+        .listStyle(.insetGrouped)
+        .navigationTitle(self.headerTitle)
+        .navigationBarTitleDisplayMode(.large)
+        .searchable(text: self.$agentSearchText, prompt: "Search agents")
+        .refreshable {
+            await self.refreshOverview(force: true)
+        }
+        .font(OpenClawType.body)
+        .toolbar {
+            if let headerLeadingAction {
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                }
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                self.agentFilterMenu
+                self.gatewayToolbarButton
+            }
+        }
     }
 
     var skillsDestination: some View {
@@ -58,6 +79,7 @@ extension AgentProTab {
                     self.skillsList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -101,6 +123,7 @@ extension AgentProTab {
                     self.cronJobsList(limit: nil)
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -130,6 +153,7 @@ extension AgentProTab {
                     self.usageDailyList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -158,10 +182,10 @@ extension AgentProTab {
     func directHeader(for route: AgentRoute, title: String, subtitle: String) -> some View {
         if let headerLeadingAction = self.directHeaderLeadingAction(for: route) {
             OpenClawAdaptiveHeaderRow(
-                title: title,
-                subtitle: subtitle,
-                titleFont: .title3.weight(.semibold),
-                subtitleFont: .callout)
+                title: .localized(title),
+                subtitle: .localized(subtitle),
+                titleFont: OpenClawType.title3SemiBold,
+                subtitleFont: OpenClawType.subheadMedium)
             {
                 OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
             } accessory: {
@@ -187,9 +211,9 @@ extension AgentProTab {
                 ProIconBadge(systemName: icon, color: color)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)

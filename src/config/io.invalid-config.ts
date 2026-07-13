@@ -3,6 +3,7 @@
  * All terminal-facing text is sanitized here so callers can reuse the same failure surface.
  */
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { extractErrorCode } from "../infra/errors.js";
 
 /** Minimal validation issue shape accepted from schema and mutation validation paths. */
 type ConfigValidationIssueLike = {
@@ -45,9 +46,17 @@ export function logInvalidConfigOnce(params: {
 export function createInvalidConfigError(configPath: string, details: string): Error {
   const error = new Error(`Invalid config at ${configPath}:\n${details}`);
   // Keep metadata non-class-based so cross-module callers can inspect plain Error instances.
-  (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
-  (error as { code?: string; details?: string }).details = details;
+  error.name = "InvalidConfigError";
+  (error as { code?: "INVALID_CONFIG"; details?: string }).code = "INVALID_CONFIG";
+  (error as { code?: "INVALID_CONFIG"; details?: string }).details = details;
   return error;
+}
+
+export function isInvalidConfigError(err: unknown): err is Error & {
+  code: "INVALID_CONFIG";
+  details?: string;
+} {
+  return extractErrorCode(err) === "INVALID_CONFIG";
 }
 
 /** Logs and throws the standard invalid-config error for a validation result. */

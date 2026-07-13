@@ -7,7 +7,7 @@ import type { GatewayServiceEnv } from "./service-types.js";
 
 export const GATEWAY_RESTART_LOG_FILENAME = "gateway-restart.log";
 
-export type GatewayLogPaths = {
+type GatewayLogPaths = {
   logDir: string;
   stdoutPath: string;
   stderrPath: string;
@@ -35,7 +35,7 @@ export function resolveGatewayLogPaths(env: GatewayServiceEnv): GatewayLogPaths 
   };
 }
 
-export function resolveMacLaunchAgentLogPaths(env: GatewayServiceEnv): GatewayLogPaths {
+function resolveMacLaunchAgentLogPaths(env: GatewayServiceEnv): GatewayLogPaths {
   const home = resolveHomeDir(env).replaceAll("\\", "/");
   const logDir = path.posix.join(home, "Library", "Logs", "openclaw");
   const prefix = resolveMacLaunchAgentLogPrefix(env);

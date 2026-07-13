@@ -52,12 +52,15 @@ describe("stopSlackStream finalize error handling", () => {
       threadTs: "1700000000.000100",
       chunks,
       taskDisplayMode: "plan",
+      identity: { username: "Research Agent", iconEmoji: ":mag:" },
     });
 
     expect(client.chatStream).toHaveBeenCalledWith({
       channel: "C123",
       thread_ts: "1700000000.000100",
       task_display_mode: "plan",
+      username: "Research Agent",
+      icon_emoji: ":mag:",
     });
     expect(append).toHaveBeenCalledWith({ chunks });
     expect(session.delivered).toBe(true);
@@ -96,6 +99,20 @@ describe("stopSlackStream finalize error handling", () => {
 
     await expect(stopSlackStream({ session })).resolves.toEqual({});
     expect(session.stopped).toBe(true);
+  });
+
+  it("falls back when deferred stream start rejects custom identity scope", async () => {
+    const session = makeSession({
+      stopImpl: async () => {
+        throw slackApiError("missing_scope");
+      },
+    });
+    session.pendingText = "short reply";
+
+    const thrown = await stopSlackStream({ session }).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
+    expect(thrown).toMatchObject({ pendingText: "short reply", slackCode: "missing_scope" });
   });
 
   it("throws SlackStreamNotDeliveredError when user_not_found fires before any flush", async () => {

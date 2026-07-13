@@ -1,4 +1,5 @@
 // Gateway RPC handlers for safe gateway restart requests and preflight state.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createSafeGatewayRestartPreflight,
@@ -13,7 +14,9 @@ function isRestartRequestParams(value: unknown): value is Record<string, unknown
 function normalizeReason(value: unknown): string | undefined {
   // Restart reasons are operator-visible log context, not payload storage.
   // Trim and cap them before passing through to the coordinator.
-  return typeof value === "string" && value.trim() ? value.trim().slice(0, 200) : undefined;
+  return typeof value === "string" && value.trim()
+    ? truncateUtf16Safe(value.trim(), 200)
+    : undefined;
 }
 
 function normalizeSkipDeferral(value: unknown): boolean {

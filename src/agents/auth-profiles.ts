@@ -15,7 +15,6 @@ export {
   externalCliDiscoveryForConfigStatus,
   externalCliDiscoveryForProviderAuth,
   externalCliDiscoveryForProviders,
-  externalCliDiscoveryNone,
   externalCliDiscoveryScoped,
   type ExternalCliAuthDiscovery,
 } from "./auth-profiles/external-cli-discovery.js";
@@ -48,7 +47,7 @@ export {
   suggestOAuthProfileIdForLegacyDefault,
 } from "./auth-profiles/repair.js";
 export {
-  buildPortableAuthProfileSecretsStoreForAgentCopy,
+  buildPortableAuthProfileStoreForAgentCopy,
   isAuthProfileCredentialPortableForAgentCopy,
   resolveAuthProfilePortability,
   type AuthProfilePortability,
@@ -59,6 +58,7 @@ export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   getRuntimeAuthProfileStoreSnapshot,
+  hasAuthProfileStoreSourceForProvider,
   hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,

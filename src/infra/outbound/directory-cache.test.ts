@@ -13,7 +13,7 @@ describe("buildDirectoryCacheKey", () => {
         kind: "channel",
         source: "cache",
       },
-      expected: "workspace:default:channel:cache:default",
+      expected: "workspace:default:channel:cache:default:query:",
     },
     {
       input: {
@@ -22,8 +22,9 @@ describe("buildDirectoryCacheKey", () => {
         kind: "user",
         source: "live",
         signature: "v2",
+        query: "alice",
       },
-      expected: "richchat:work:user:live:v2",
+      expected: "richchat:work:user:live:v2:query:alice",
     },
   ] satisfies Array<{ input: DirectoryCacheKey; expected: string }>)(
     "includes account and signature fallbacks for %j",

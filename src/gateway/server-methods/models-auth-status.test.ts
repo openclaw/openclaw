@@ -1,5 +1,7 @@
 // Model auth status tests cover profile health summaries, provider usage,
 // credential cleanup, secret refresh, and provider run abort side effects.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
@@ -29,7 +31,7 @@ const mocks = vi.hoisted(() => ({
     (params: { agentDir?: string }) => params.agentDir,
   ),
   clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
-  refreshActiveSecretsRuntimeSnapshot: vi.fn(async () => false),
+  refreshActiveProviderAuthRuntimeSnapshot: vi.fn(async () => false),
   clearCurrentProviderAuthState: vi.fn(),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
   buildAuthHealthSummary: vi.fn(
@@ -77,7 +79,7 @@ vi.mock("../../infra/provider-usage.load.js", () => ({
 }));
 
 vi.mock("../../secrets/runtime.js", () => ({
-  refreshActiveSecretsRuntimeSnapshot: mocks.refreshActiveSecretsRuntimeSnapshot,
+  refreshActiveProviderAuthRuntimeSnapshot: mocks.refreshActiveProviderAuthRuntimeSnapshot,
 }));
 
 vi.mock("../../agents/model-provider-auth.js", () => ({
@@ -86,7 +88,7 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
 }));
 
 import {
-  aggregateOAuthStatus,
+  aggregateRefreshableAuthStatus,
   invalidateModelAuthStatusCache,
   modelsAuthStatusHandlers,
   type ModelAuthLogoutResult,
@@ -107,8 +109,14 @@ function createOptions(
   } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 }
 
-const handler = modelsAuthStatusHandlers["models.authStatus"];
-const logoutHandler = modelsAuthStatusHandlers["models.authLogout"];
+const handler = expectDefined(
+  modelsAuthStatusHandlers["models.authStatus"],
+  'modelsAuthStatusHandlers["models.authStatus"] test invariant',
+);
+const logoutHandler = expectDefined(
+  modelsAuthStatusHandlers["models.authLogout"],
+  'modelsAuthStatusHandlers["models.authLogout"] test invariant',
+);
 
 function createActiveRun(providerId: string, authProviderId?: string) {
   return {
@@ -222,7 +230,7 @@ function resetAuthStatusMocks(): void {
     providers: [],
   });
   mocks.loadProviderUsageSummary.mockResolvedValue(emptyUsageSummary());
-  mocks.refreshActiveSecretsRuntimeSnapshot.mockResolvedValue(false);
+  mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValue(false);
 }
 
 function firstExternalCliAuthOption() {
@@ -309,10 +317,21 @@ describe("models.authStatus", () => {
     expect(error).toBeUndefined();
     const result = payload as ModelAuthStatusResult;
     expect(result.providers).toHaveLength(1);
-    expect(result.providers[0].provider).toBe("openai");
-    expect(result.providers[0].status).toBe("ok");
-    expect(result.providers[0].expiry?.at).toBe(1_000_000);
-    expect(result.providers[0].profiles[0].type).toBe("oauth");
+    expect(expectDefined(result.providers[0], "result.providers[0] test invariant").provider).toBe(
+      "openai",
+    );
+    expect(expectDefined(result.providers[0], "result.providers[0] test invariant").status).toBe(
+      "ok",
+    );
+    expect(
+      expectDefined(result.providers[0], "result.providers[0] test invariant").expiry?.at,
+    ).toBe(1_000_000);
+    expect(
+      expectDefined(
+        expectDefined(result.providers[0], "result.providers[0] test invariant").profiles[0],
+        'expectDefined(result.providers[0], "result.providers[0] test invarian... test invariant',
+      ).type,
+    ).toBe("oauth");
   });
 
   it("forwards unresolved auth reason codes to status clients", async () => {
@@ -368,7 +387,7 @@ describe("models.authStatus", () => {
 
     await handler(createOptions({ refresh: true }));
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
-    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.clearRuntimeAuthProfileStoreSnapshots).toHaveBeenCalledTimes(1);
     const clearOrder = mocks.clearRuntimeAuthProfileStoreSnapshots.mock.invocationCallOrder[0];
     const refreshReadOrder = mocks.ensureAuthProfileStore.mock.invocationCallOrder.at(-1);
@@ -376,21 +395,23 @@ describe("models.authStatus", () => {
   });
 
   it("keeps refreshed secrets runtime snapshots on explicit refresh", async () => {
-    mocks.refreshActiveSecretsRuntimeSnapshot.mockResolvedValueOnce(true);
+    mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValueOnce(true);
 
     await handler(createOptions({ refresh: true }));
 
-    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.clearRuntimeAuthProfileStoreSnapshots).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
   });
 
   it("keeps last-good secrets runtime snapshots when explicit refresh fails", async () => {
-    mocks.refreshActiveSecretsRuntimeSnapshot.mockRejectedValueOnce(new Error("refresh failed"));
+    mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValueOnce(
+      new Error("refresh failed"),
+    );
 
     await handler(createOptions({ refresh: true }));
 
-    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.clearRuntimeAuthProfileStoreSnapshots).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
   });
@@ -398,6 +419,40 @@ describe("models.authStatus", () => {
   it("invalidateModelAuthStatusCache() clears the cached response", async () => {
     await handler(createOptions());
     invalidateModelAuthStatusCache();
+    await handler(createOptions());
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache status captured before a concurrent logout", async () => {
+    let releaseUsage: (() => void) | undefined;
+    const usageBlocked = new Promise<void>((resolve) => {
+      releaseUsage = resolve;
+    });
+    const oauthProfile = {
+      profileId: "openrouter:default",
+      provider: "openrouter",
+      type: "oauth",
+      status: "ok",
+      source: "store",
+      label: "openrouter:default",
+    } satisfies AuthHealthSummary["profiles"][number];
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [oauthProfile],
+      providers: [{ provider: "openrouter", status: "ok", profiles: [oauthProfile] }],
+    });
+    mocks.loadProviderUsageSummary.mockImplementationOnce(async () => {
+      await usageBlocked;
+      return emptyUsageSummary();
+    });
+
+    const inFlightStatus = handler(createOptions());
+    await vi.waitFor(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
+    await logoutHandler(createLogoutOptions({ provider: "openrouter" }));
+    releaseUsage?.();
+    await inFlightStatus;
+
     await handler(createOptions());
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
   });
@@ -412,6 +467,55 @@ describe("models.authStatus", () => {
 
     await handler(createOptions());
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+  });
+
+  it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
+    const profile = {
+      profileId: "claude-cli",
+      provider: "claude-cli",
+      type: "oauth",
+      status: "ok",
+      source: "store",
+      label: "claude-cli",
+    } satisfies AuthHealthSummary["profiles"][number];
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [profile],
+      providers: [{ provider: "claude-cli", status: "ok", profiles: [profile] }],
+    });
+    mocks.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      providers: [
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          plan: "Max (20x)",
+          accountEmail: "clawd@example.com",
+          windows: [{ label: "5h", usedPercent: 22 }],
+          billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
+        },
+      ],
+    });
+
+    const opts = createOptions();
+    await handler(opts);
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      providers: ["anthropic"],
+      agentDir: "/tmp/agent",
+      timeoutMs: 3500,
+    });
+    const [, payload] = firstRespondCall(opts) ?? [];
+    const result = payload as ModelAuthStatusResult;
+    expect(result.providers[0]?.displayName).toBe("Claude");
+    expect(result.providers[0]?.usage).toEqual({
+      providerId: "anthropic",
+      windows: [{ label: "5h", usedPercent: 22 }],
+      plan: "Max (20x)",
+      billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
+      accountEmail: "clawd@example.com",
+    });
   });
 
   it("adds DeepSeek API-key balance summaries to auth status usage", async () => {
@@ -444,6 +548,7 @@ describe("models.authStatus", () => {
     const [, payload] = firstRespondCall(opts) ?? [];
     const result = payload as ModelAuthStatusResult;
     expect(result.providers[0]?.usage).toEqual({
+      providerId: "deepseek",
       windows: [],
       summary: "Balance ¥42.50",
     });
@@ -503,7 +608,9 @@ describe("models.authStatus", () => {
     expect(ok).toBe(true);
     const result = payload as ModelAuthStatusResult;
     expect(result.providers).toHaveLength(1);
-    expect(result.providers[0].usage).toBeUndefined();
+    expect(
+      expectDefined(result.providers[0], "result.providers[0] test invariant").usage,
+    ).toBeUndefined();
   });
 
   it("does not leak secret-looking fields from upstream profile data", async () => {
@@ -684,6 +791,41 @@ describe("models.authStatus", () => {
     expect(provider?.status).toBe("missing");
   });
 
+  it("reports setup-token health after an OAuth credential migration", async () => {
+    const profile = {
+      profileId: "claude-cli:setup-token",
+      provider: "claude-cli",
+      type: "token",
+      status: "static",
+      source: "store",
+      label: "claude-cli:setup-token",
+    } satisfies AuthHealthSummary["profiles"][number];
+    mocks.getRuntimeConfig.mockReturnValue({
+      auth: {
+        profiles: {
+          "claude-cli:setup-token": { provider: "claude-cli", mode: "oauth" },
+        },
+        order: { "claude-cli": ["claude-cli:setup-token"] },
+      },
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [profile],
+      providers: [
+        {
+          provider: "claude-cli",
+          status: "static",
+          effectiveProfiles: [profile],
+          profiles: [profile],
+        },
+      ],
+    });
+
+    const provider = await firstAuthStatusProvider();
+    expect(provider?.status).toBe("static");
+  });
+
   it("responds with UNAVAILABLE when buildAuthHealthSummary throws", async () => {
     mocks.buildAuthHealthSummary.mockImplementation(() => {
       throw new Error("boom");
@@ -715,7 +857,7 @@ describe("models.authLogout", () => {
       provider: "openrouter",
       agentDir: "/tmp/agent",
     });
-    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.clearCurrentProviderAuthState).toHaveBeenCalled();
     expect(mocks.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith({});
     const [ok, payload] = firstRespondCall(opts) ?? [];
@@ -838,7 +980,9 @@ describe("models.authLogout", () => {
   it("does not abort runs when runtime auth snapshot refresh fails", async () => {
     await expectLogoutFailureDoesNotAbortRun({
       arrangeFailure: () => {
-        mocks.refreshActiveSecretsRuntimeSnapshot.mockRejectedValue(new Error("refresh failed"));
+        mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValue(
+          new Error("refresh failed"),
+        );
       },
       message: "refresh failed",
     });
@@ -853,11 +997,11 @@ describe("models.authLogout", () => {
   });
 });
 
-// Direct unit tests for aggregateOAuthStatus — this helper was introduced to
+// Direct unit tests for aggregateRefreshableAuthStatus — this helper was introduced to
 // prevent a specific regression (mixed OAuth+token rollup mis-reporting
 // providers). Pinning its behavior here so refactors can't silently re-break
 // the same bug.
-describe("aggregateOAuthStatus", () => {
+describe("aggregateRefreshableAuthStatus", () => {
   const NOW = 1_000_000;
   const expiring = NOW + 60_000; // 1 min in future
 
@@ -874,21 +1018,21 @@ describe("aggregateOAuthStatus", () => {
     };
   }
 
-  function token(status: "ok" | "expired") {
+  function token(status: "ok" | "expiring" | "expired" | "missing" | "static", expiresAt?: number) {
     return {
       profileId: `t-${status}`,
       provider: "openai",
       type: "token" as const,
       status,
-      expiresAt: status === "expired" ? NOW - 1 : undefined,
-      remainingMs: status === "expired" ? -1 : undefined,
+      expiresAt,
+      remainingMs: expiresAt !== undefined ? expiresAt - NOW : undefined,
       source: "store" as const,
       label: `t-${status}`,
     };
   }
 
   it("ignores token profiles — healthy OAuth + expired token stays ok", () => {
-    const result = aggregateOAuthStatus(
+    const result = aggregateRefreshableAuthStatus(
       {
         provider: "openai",
         status: "expired",
@@ -902,7 +1046,7 @@ describe("aggregateOAuthStatus", () => {
   it("uses effective OAuth profiles while keeping stale inventory visible", () => {
     const healthy = oauth("ok", expiring + 10_000_000);
     const stale = oauth("expired", NOW - 1);
-    const result = aggregateOAuthStatus(
+    const result = aggregateRefreshableAuthStatus(
       {
         provider: "openai",
         status: "ok",
@@ -916,7 +1060,7 @@ describe("aggregateOAuthStatus", () => {
   });
 
   it("falls back to prov.status when no OAuth profiles exist", () => {
-    const result = aggregateOAuthStatus(
+    const result = aggregateRefreshableAuthStatus(
       {
         provider: "anthropic",
         status: "static",
@@ -937,7 +1081,7 @@ describe("aggregateOAuthStatus", () => {
   });
 
   it("keeps missing distinct from expired", () => {
-    const expiredResult = aggregateOAuthStatus(
+    const expiredResult = aggregateRefreshableAuthStatus(
       {
         provider: "openai",
         status: "expired",
@@ -947,7 +1091,7 @@ describe("aggregateOAuthStatus", () => {
     );
     expect(expiredResult.status).toBe("expired");
 
-    const missingResult = aggregateOAuthStatus(
+    const missingResult = aggregateRefreshableAuthStatus(
       {
         provider: "openai",
         status: "missing",
@@ -960,7 +1104,7 @@ describe("aggregateOAuthStatus", () => {
 
   it("precedence: expired/missing > expiring > ok > static", () => {
     // expiring + ok → expiring (expired-marker absent)
-    const res1 = aggregateOAuthStatus(
+    const res1 = aggregateRefreshableAuthStatus(
       {
         provider: "openai",
         status: "expiring",
@@ -971,7 +1115,7 @@ describe("aggregateOAuthStatus", () => {
     expect(res1.status).toBe("expiring");
 
     // expired beats expiring
-    const res2 = aggregateOAuthStatus(
+    const res2 = aggregateRefreshableAuthStatus(
       {
         provider: "openai",
         status: "expired",
@@ -985,7 +1129,7 @@ describe("aggregateOAuthStatus", () => {
   it("picks the earliest expiresAt across OAuth profiles", () => {
     const earlier = NOW + 1_000;
     const later = NOW + 99_999;
-    const result = aggregateOAuthStatus(
+    const result = aggregateRefreshableAuthStatus(
       {
         provider: "openai",
         status: "ok",
@@ -997,9 +1141,48 @@ describe("aggregateOAuthStatus", () => {
     expect(result.remainingMs).toBe(1_000);
   });
 
+  it.each([
+    ["ok", undefined],
+    ["expiring", expiring],
+    ["expired", NOW - 1],
+    ["missing", undefined],
+    ["static", undefined],
+  ] as const)(
+    "uses token status %s when no effective OAuth profile exists",
+    (status, expiresAt) => {
+      const result = aggregateRefreshableAuthStatus(
+        {
+          provider: "claude-cli",
+          status,
+          profiles: [token(status, expiresAt)],
+        },
+        NOW,
+        true,
+      );
+      expect(result).toEqual({
+        status,
+        ...(expiresAt === undefined ? {} : { expiresAt, remainingMs: expiresAt - NOW }),
+      });
+    },
+  );
+
+  it("keeps an empty effective profile selection missing", () => {
+    const result = aggregateRefreshableAuthStatus(
+      {
+        provider: "claude-cli",
+        status: "missing",
+        effectiveProfiles: [],
+        profiles: [token("ok")],
+      },
+      NOW,
+      true,
+    );
+    expect(result).toEqual({ status: "missing" });
+  });
+
   it("ignores out-of-range OAuth expiry timestamps", () => {
     const valid = NOW + 5_000;
-    const result = aggregateOAuthStatus(
+    const result = aggregateRefreshableAuthStatus(
       {
         provider: "openai-codex",
         status: "ok",

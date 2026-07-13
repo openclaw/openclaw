@@ -2,13 +2,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
-import type { ProviderWizardOption } from "../plugins/provider-wizard.js";
 import {
   buildAuthChoiceGroups,
   buildAuthChoiceOptions,
   formatAuthChoiceChoicesForCli,
 } from "./auth-choice-options.js";
 import { formatStaticAuthChoiceChoicesForCli } from "./auth-choice-options.static.js";
+
+type ProviderWizardOption = ReturnType<
+  (typeof import("../plugins/provider-wizard.js"))["resolveProviderWizardOptions"]
+>[number];
 
 const resolveManifestProviderAuthChoices = vi.hoisted(() =>
   vi.fn<() => ProviderAuthChoiceMetadata[]>(() => []),
@@ -37,6 +40,7 @@ vi.mock("../flows/provider-flow.js", () => ({
         ...resolveManifestProviderAuthChoices()
           .filter((choice) => includesOnboardingScope(choice.onboardingScopes, scope))
           .map((choice) => ({
+            providerId: choice.providerId,
             option: {
               value: choice.choiceId,
               label: choice.choiceLabel,
@@ -62,6 +66,7 @@ vi.mock("../flows/provider-flow.js", () => ({
         ...resolveProviderWizardOptions()
           .filter((option) => includesOnboardingScope(option.onboardingScopes, scope))
           .map((option) => ({
+            providerId: option.groupId,
             option: {
               value: option.value,
               label: option.label,
@@ -625,6 +630,7 @@ describe("buildAuthChoiceOptions", () => {
       "openai-chatgpt-device-code",
       "openai-api-key",
     ]);
+    expect(openAIGroup.providerIds).toEqual(["openai"]);
     expect(openAIGroup.options[0]?.onboardingFeatured).toBe(true);
   });
 

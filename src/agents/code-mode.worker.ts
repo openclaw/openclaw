@@ -5,7 +5,10 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import { EvalFlags, Intrinsics, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
+import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
@@ -25,12 +28,7 @@ type PendingBridgeRequest = {
   args: unknown[];
 };
 
-type SettledBridgeRequest = {
-  id: string;
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-};
+type SettledBridgeRequest = { id: string } & Result<unknown, string>;
 
 type SerializedCodeModeNamespaceValue =
   | { kind: "array"; items: SerializedCodeModeNamespaceValue[] }
@@ -43,12 +41,6 @@ type CodeModeNamespaceDescriptor = {
   globalName: string;
   description?: string;
   scope: SerializedCodeModeNamespaceValue;
-};
-
-type CodeModeApiVirtualFile = {
-  path: string;
-  description?: string;
-  content: string;
 };
 
 type CodeModeWorkerInput =
@@ -131,6 +123,11 @@ function isQuickJsInterruptedError(error: unknown): boolean {
   if (error instanceof CodeModeGuestError) {
     return false;
   }
+  // Match on the raw QuickJS message, not the formatted errorMessage() string,
+  // which now leads with the error name and appends backtrace frames.
+  if (error instanceof JSException) {
+    return error.message === "interrupted";
+  }
   return errorMessage(error) === "interrupted";
 }
 
@@ -146,13 +143,22 @@ function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
   return quickJsWasmModulePromise;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+// QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
+// no leading "Name: message" header like V8. Returning .stack alone therefore
+// dropped the actual cause, surfacing failures to the model as a bare location
+// (e.g. "at openclaw-code-mode:user.js:2:37"). Lead with name+message so the
+// model can self-correct, and keep the frames for location.
+function formatQuickJsError(name: string, message: string, stack: string | undefined): string {
+  const header = message ? `${name}: ${message}` : name;
+  if (!stack || stack.split(/\r?\n/, 1)[0] === header) {
+    return header;
+  }
+  return `${header}\n${stack}`;
 }
 
 function errorMessage(error: unknown): string {
   if (error instanceof JSException) {
-    return error.stack || error.message || String(error);
+    return formatQuickJsError(error.name, error.message, error.stack);
   }
   if (error instanceof Error) {
     return error.message || String(error);
@@ -297,7 +303,7 @@ const CONTROLLER_SOURCE = String.raw`
       path,
       content,
       description: typeof file.description === "string" ? file.description : undefined,
-      bytes: content.length,
+      bytes: file.bytes,
     }));
   }
   const api = Object.freeze({
@@ -575,7 +581,15 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
     try {
-      throw new CodeModeGuestError(errorMessage(vm.dump(settled.error)));
+      // vm.dump rebuilds a host Error carrying the QuickJS name/message/stack;
+      // format it like the synchronous path so async rejections keep their cause
+      // and location instead of collapsing to the bare message.
+      const dumped = vm.dump(settled.error);
+      const text =
+        dumped instanceof Error
+          ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)
+          : errorMessage(dumped);
+      throw new CodeModeGuestError(text);
     } finally {
       settled.error.dispose();
     }

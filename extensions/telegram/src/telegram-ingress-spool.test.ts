@@ -10,13 +10,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import {
+  claimNextTelegramSpooledUpdate,
   claimTelegramSpooledUpdate,
-  deleteTelegramSpooledUpdate,
+  completeTelegramSpooledUpdate,
+  completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
+  refreshTelegramSpooledUpdateClaim,
   releaseTelegramSpooledUpdateClaim,
   TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS,
   writeTelegramSpooledUpdate,
@@ -53,7 +56,7 @@ describe("Telegram ingress spool", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("persists updates durably in update_id order and deletes handled entries", async () => {
+  it("persists updates durably in update_id order and tombstones handled entries", async () => {
     await withTempSpool(async (spoolDir) => {
       await writeTelegramSpooledUpdate({
         spoolDir,
@@ -75,8 +78,17 @@ describe("Telegram ingress spool", () => {
       if (!updates[0]) {
         throw new Error("Expected a spooled update");
       }
-      await deleteTelegramSpooledUpdate(updates[0]);
+      await completeTelegramSpooledUpdate(updates[0]);
 
+      expect(
+        (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
+      ).toEqual([11]);
+
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 10, message: { text: "refetched first" } },
+        now: 3,
+      });
       expect(
         (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
       ).toEqual([11]);
@@ -112,8 +124,169 @@ describe("Telegram ingress spool", () => {
       if (!claimed) {
         throw new Error("Expected a claimed update");
       }
-      await deleteTelegramSpooledUpdate(claimed);
+      await completeTelegramSpooledUpdate(claimed);
       expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]);
+
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 20, message: { text: "refetched handled update" } },
+      });
+      expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
+    });
+  });
+
+  it("does not tombstone a claim after its token loses ownership", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 21, message: { text: "claimed" } },
+      });
+      const pending = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!pending) {
+        throw new Error("Expected a spooled update");
+      }
+      const firstClaim = await claimTelegramSpooledUpdate(pending);
+      if (!firstClaim) {
+        throw new Error("Expected the first claim");
+      }
+      await releaseTelegramSpooledUpdateClaim(firstClaim);
+      const retryPending = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!retryPending) {
+        throw new Error("Expected the released update");
+      }
+      const secondClaim = await claimTelegramSpooledUpdate(retryPending);
+      if (!secondClaim) {
+        throw new Error("Expected the replacement claim");
+      }
+
+      await expect(completeTelegramSpooledUpdateWithRetry({ update: firstClaim })).rejects.toThrow(
+        "lost claim ownership",
+      );
+      expect(
+        (await listTelegramSpooledUpdateClaims({ spoolDir })).map((claim) => ({
+          updateId: claim.updateId,
+          claimToken: claim.claim?.claimToken,
+        })),
+      ).toEqual([
+        {
+          updateId: 21,
+          claimToken: secondClaim.claim?.claimToken,
+        },
+      ]);
+    });
+  });
+
+  it("claims next update through the native ingress queue in update id order", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 101, message: { chat: { id: 1 }, message_id: 1, text: "second" } },
+        now: 1,
+      });
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 100, message: { chat: { id: 1 }, message_id: 2, text: "first" } },
+        now: 2,
+      });
+
+      const claimed = await claimNextTelegramSpooledUpdate({ spoolDir });
+
+      expect(claimed?.updateId).toBe(100);
+      expect(await listTelegramSpooledUpdates({ spoolDir })).toHaveLength(1);
+      expect(
+        (await listTelegramSpooledUpdateClaims({ spoolDir })).map((claim) => claim.updateId),
+      ).toEqual([100]);
+    });
+  });
+
+  it("derives lane keys while claiming legacy rows without stored lane keys", async () => {
+    await withTempSpool(async (spoolDir) => {
+      const stateDir = path.dirname(path.dirname(spoolDir));
+      const queue = createChannelIngressQueue<{
+        version: 1;
+        updateId: number;
+        receivedAt: number;
+        update: unknown;
+      }>({
+        channelId: "telegram",
+        accountId: "test",
+        stateDir,
+      });
+      await queue.enqueue(
+        "0000000000000042",
+        {
+          version: 1,
+          updateId: 42,
+          receivedAt: 1,
+          update: {
+            update_id: 42,
+            message: {
+              chat: { id: 100, type: "supergroup", is_forum: true },
+              is_topic_message: true,
+              message_id: 1,
+              message_thread_id: 10,
+              text: "blocked topic",
+            },
+          },
+        },
+        { receivedAt: 1 },
+      );
+      await queue.enqueue(
+        "0000000000000043",
+        {
+          version: 1,
+          updateId: 43,
+          receivedAt: 2,
+          update: {
+            update_id: 43,
+            message: {
+              chat: { id: 100, type: "supergroup", is_forum: true },
+              is_topic_message: true,
+              message_id: 2,
+              message_thread_id: 11,
+              text: "open topic",
+            },
+          },
+        },
+        { receivedAt: 2 },
+      );
+
+      const claimed = await claimNextTelegramSpooledUpdate({
+        spoolDir,
+        blockedLaneKeys: ["telegram:100:topic:10"],
+      });
+
+      expect(claimed?.updateId).toBe(43);
+      expect(claimed?.claim?.claimToken).toEqual(expect.any(String));
+      expect(
+        (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
+      ).toEqual([42]);
+    });
+  });
+
+  it("does not claim outside the provided candidate update ids", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 200, message: { chat: { id: 1 }, message_id: 1, text: "first" } },
+        now: 1,
+      });
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 201, message: { chat: { id: 2 }, message_id: 1, text: "later" } },
+        now: 2,
+      });
+
+      const claimed = await claimNextTelegramSpooledUpdate({
+        spoolDir,
+        blockedLaneKeys: ["telegram:1"],
+        candidateUpdateIds: [200],
+      });
+
+      expect(claimed).toBeNull();
+      expect(
+        (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
+      ).toEqual([200, 201]);
     });
   });
 
@@ -137,6 +310,32 @@ describe("Telegram ingress spool", () => {
       const updates = await listTelegramSpooledUpdates({ spoolDir });
       expect(updates.map((entry) => entry.updateId)).toEqual([30]);
       expect(updates[0]?.path.endsWith(".json")).toBe(true);
+    });
+  });
+
+  it("refreshes active claim timestamps through the Telegram spool queue", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 31, message: { text: "refresh me" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(update);
+      if (!claimed) {
+        throw new Error("Expected a claimed update");
+      }
+
+      await expect(refreshTelegramSpooledUpdateClaim(claimed, { refreshedAt: 123 })).resolves.toBe(
+        true,
+      );
+
+      const claims = await listTelegramSpooledUpdateClaims({ spoolDir });
+      expect(claims).toHaveLength(1);
+      expect(claims[0]?.updateId).toBe(31);
+      expect(claims[0]?.claim?.claimedAt).toBe(123);
     });
   });
 
@@ -190,7 +389,7 @@ describe("Telegram ingress spool", () => {
       if (!update) {
         throw new Error("Expected a spooled update");
       }
-      await deleteTelegramSpooledUpdate(update);
+      await completeTelegramSpooledUpdate(update);
 
       await expect(claimTelegramSpooledUpdate(update)).resolves.toBeNull();
       expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
@@ -276,7 +475,7 @@ describe("Telegram ingress spool", () => {
     ).toBe(false);
   });
 
-  it("treats fresh claims with reused pids and different owner ids as live-owned", () => {
+  it("does not treat fresh claims with the current pid and a different owner id as foreign", () => {
     const now = Date.now();
     expect(
       isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({
@@ -288,6 +487,25 @@ describe("Telegram ingress spool", () => {
         claim: {
           processId: "other-process",
           processPid: process.pid,
+          claimedAt: now,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("treats fresh claims with other live pids as live-owned", () => {
+    const now = Date.now();
+    const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({
+        updateId: 51,
+        path: path.join(os.tmpdir(), "51.json.processing"),
+        pendingPath: path.join(os.tmpdir(), "51.json"),
+        update: { update_id: 51 },
+        receivedAt: now,
+        claim: {
+          processId: "other-process",
+          processPid: liveOwnerPid,
           claimedAt: now,
         },
       }),

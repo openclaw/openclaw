@@ -261,6 +261,76 @@ describe("workboard gateway methods", () => {
     );
   });
 
+  it("requires admin scope for managed-worktree dispatch", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const run = vi.fn().mockResolvedValue({ runId: "run-card" });
+    const createWorktree = vi.fn().mockResolvedValue({
+      id: "managed-id",
+      path: "/state/worktrees/fingerprint/wb-card",
+      branch: "openclaw/wb-card",
+    });
+    const api = {
+      runtime: {
+        subagent: { run },
+        worktrees: {
+          create: createWorktree,
+          release: vi.fn(),
+          removeIfLossless: vi.fn(),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(createMemoryStore());
+    const denied = await store.create({
+      title: "Denied checkout",
+      status: "ready",
+      workspace: { kind: "worktree", path: "/repo-denied" },
+    });
+    registerWorkboardGatewayMethods({ api, store });
+    const handler = methods.get("workboard.cards.dispatch")?.handler;
+
+    const deniedRespond = vi.fn();
+    await handler?.({
+      client: { connect: { scopes: ["operator.write"] } },
+      respond: deniedRespond,
+    } as never);
+
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(deniedRespond.mock.calls[0]?.[1]).toMatchObject({
+      startFailures: [
+        expect.objectContaining({
+          cardId: denied.id,
+          error: "managed worktree dispatch requires operator.admin",
+        }),
+      ],
+    });
+    await expect(store.get(denied.id)).resolves.toMatchObject({ status: "ready" });
+    await store.update(denied.id, { status: "blocked" });
+
+    const allowed = await store.create({
+      title: "Allowed checkout",
+      status: "ready",
+      workspace: { kind: "worktree", path: "/repo-allowed" },
+    });
+    await handler?.({
+      client: { connect: { scopes: ["operator.admin"] } },
+      respond: vi.fn(),
+    } as never);
+
+    expect(createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ repoRoot: "/repo-allowed", ownerId: allowed.id }),
+    );
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {
     type RegisteredMethod = {
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];

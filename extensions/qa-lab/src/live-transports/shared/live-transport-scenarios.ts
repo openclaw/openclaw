@@ -13,15 +13,14 @@ export {
   findMissingLiveTransportStandardScenarios,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
-  type LiveTransportStandardScenarioId,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 
-export type LiveTransportCoverageMember = {
+type LiveTransportCoverageMember = {
   scenarioId?: string;
   standardId: LiveTransportStandardScenarioId;
 };
 
-export type LiveTransportCoverageLane = {
+type LiveTransportCoverageLane = {
   commandName: string;
   members: readonly LiveTransportCoverageMember[];
   transportId: string;
@@ -36,7 +35,7 @@ export type LiveTransportCoverageLaneSummary = {
   transportId: string;
 };
 
-export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[] = [
+const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[] = [
   {
     transportId: "discord",
     commandName: "discord",
@@ -54,8 +53,6 @@ export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[]
       { standardId: "allowlist-block", scenarioId: "slack-allowlist-block" },
       { standardId: "top-level-reply-shape", scenarioId: "slack-top-level-reply-shape" },
       { standardId: "restart-resume", scenarioId: "slack-restart-resume" },
-      { standardId: "thread-follow-up", scenarioId: "slack-thread-follow-up" },
-      { standardId: "thread-isolation", scenarioId: "slack-thread-isolation" },
     ],
   },
   {
@@ -109,4 +106,33 @@ export function buildLiveTransportCoverageLaneSummaries(
       };
     })
     .toSorted((left, right) => left.transportId.localeCompare(right.transportId));
+}
+
+export async function loadNonYamlScenarioRefs() {
+  const [discord, slack, telegram, whatsapp] = await Promise.all([
+    import("../discord/discord-live.runtime.js"),
+    import("../slack/slack-live.runtime.js"),
+    import("../telegram/telegram-live.runtime.js"),
+    import("../whatsapp/whatsapp-live.runtime.js"),
+  ]);
+  const refs = (sourcePath: string, scenarios: readonly { id: string }[]) =>
+    scenarios.map(({ id }) => ({ id, sourcePath }));
+  return [
+    ...refs(
+      "extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts",
+      discord.listDiscordQaScenarioCatalog(),
+    ),
+    ...refs(
+      "extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts",
+      slack.listSlackQaScenarioCatalog(),
+    ),
+    ...refs(
+      "extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts",
+      telegram.listTelegramQaScenarioCatalog(),
+    ),
+    ...refs(
+      "extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts",
+      whatsapp.listWhatsAppQaScenarioCatalog(),
+    ),
+  ].toSorted((left, right) => left.id.localeCompare(right.id));
 }

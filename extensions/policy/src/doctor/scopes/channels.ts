@@ -1,5 +1,6 @@
 // Policy doctor health-check factories for one policy scope.
 import type { HealthCheck } from "openclaw/plugin-sdk/health";
+import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
 import { CHECK_IDS } from "../metadata.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 
@@ -84,6 +85,9 @@ export function createPolicyIngressChecks(deps: PolicyDoctorCheckDeps): readonly
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyIngressOpenGroupsDenied);
     },
+    async repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyIngressOpenGroupsDenied);
+    },
   };
   const policyIngressGroupMentionRequiredCheck: HealthCheck = {
     id: CHECK_IDS.policyIngressGroupMentionRequired,
@@ -93,6 +97,13 @@ export function createPolicyIngressChecks(deps: PolicyDoctorCheckDeps): readonly
     async detect(ctx) {
       return findingsForCheck(
         await evaluatePolicy(ctx),
+        CHECK_IDS.policyIngressGroupMentionRequired,
+      );
+    },
+    async repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(
+        ctx,
+        findings,
         CHECK_IDS.policyIngressGroupMentionRequired,
       );
     },

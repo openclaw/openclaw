@@ -1,4 +1,5 @@
 // Googlechat plugin module implements auth behavior.
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -15,13 +16,16 @@ const CHAT_ISSUER = "chat@system.gserviceaccount.com";
 const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceaccount\.com$/;
 const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
+// Cert fetch shares the same deadline as outbound API calls. Without a timeout,
+// a stalled googleapis.com endpoint blocks webhook auth indefinitely, including
+// cold-start and every 10-minute cache refresh.
+const GOOGLECHAT_CERT_FETCH_TIMEOUT_MS = 30_000;
 
 async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
-  try {
-    return (await response.json()) as Record<string, string>;
-  } catch (cause) {
-    throw new Error("Google Chat cert fetch failed: malformed JSON response", { cause });
-  }
+  return readProviderJsonResponse<Record<string, string>>(
+    response,
+    "Google Chat cert fetch failed",
+  );
 }
 
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)
@@ -126,6 +130,7 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
   const { response, release } = await fetchWithSsrFGuard({
     url: CHAT_CERTS_URL,
     auditContext: "googlechat.auth.certs",
+    timeoutMs: GOOGLECHAT_CERT_FETCH_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {

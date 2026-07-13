@@ -20,6 +20,7 @@ type QaCoverageScenarioSummary = {
 };
 
 type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
+  channel?: string;
   coverageIds: string[];
   docsRefs: string[];
   codeRefs: string[];
@@ -65,6 +66,27 @@ type QaCoverageInventory = {
   liveTransportLanes: LiveTransportCoverageLaneSummary[];
   scorecardTaxonomy: QaScorecardTaxonomyReport;
 };
+
+function assertUniqueQaScenarioIds(
+  scenarios: readonly QaSeedScenarioWithSource[],
+  nonYamlScenarios: readonly { id: string; sourcePath: string }[],
+): void {
+  const sourcePathsById = new Map<string, string[]>();
+  for (const { id, sourcePath } of [...scenarios, ...nonYamlScenarios]) {
+    const sourcePaths = sourcePathsById.get(id) ?? [];
+    sourcePaths.push(sourcePath);
+    sourcePathsById.set(id, sourcePaths);
+  }
+  const duplicates = [...sourcePathsById.entries()]
+    .filter(([, sourcePaths]) => sourcePaths.length > 1)
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  if (duplicates.length > 0) {
+    const details = duplicates
+      .map(([id, sourcePaths]) => `${id} (${sourcePaths.join(", ")})`)
+      .join("; ");
+    throw new Error(`duplicate qa scenario id(s): ${details}`);
+  }
+}
 
 function scenarioTheme(sourcePath: string) {
   const parts = sourcePath.split("/");
@@ -142,6 +164,7 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     docsRefs: [...(scenario.docsRefs ?? [])],
     codeRefs: [...(scenario.codeRefs ?? [])],
     executionKind: scenario.execution.kind,
+    channel: scenario.execution.channel,
     ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
     runtimeParityTier: scenario.runtimeParityTier,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
@@ -204,7 +227,9 @@ function buildScenarioPackSummaries(
 
 export function buildQaCoverageInventory(
   scenarios: readonly QaSeedScenarioWithSource[],
+  params?: { nonYamlScenarios?: readonly { id: string; sourcePath: string }[] },
 ): QaCoverageInventory {
+  assertUniqueQaScenarioIds(scenarios, params?.nonYamlScenarios ?? []);
   const byCoverageId = new Map<string, QaCoverageIdSummary>();
   const primaryCoverageIds = new Set<string>();
   const secondaryCoverageIds = new Set<string>();
@@ -458,7 +483,26 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
 
 function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
   const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
-  return `pnpm openclaw qa suite ${scenarioArgs}`;
+  const requiredDrivers = [
+    ...new Set(
+      matches
+        .map((match) => match.requiredChannelDriver)
+        .filter((driver): driver is string => Boolean(driver)),
+    ),
+  ];
+  const driverArg =
+    requiredDrivers.length === 1 && requiredDrivers[0] !== "qa-channel"
+      ? ` --channel-driver ${requiredDrivers[0]}`
+      : "";
+  const channels = [
+    ...new Set(
+      matches
+        .map((match) => match.channel)
+        .filter((channel): channel is string => Boolean(channel)),
+    ),
+  ];
+  const channelArg = driverArg && channels.length === 1 ? ` --channel ${channels[0]}` : "";
+  return `pnpm openclaw qa suite${driverArg}${channelArg} ${scenarioArgs}`;
 }
 
 function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
@@ -493,7 +537,10 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
   ];
 
   if (commandGroups.length === 1) {
-    lines.push(`- Suite command: \`${formatSuiteCommand(commandGroups[0].matches)}\``);
+    const group = commandGroups[0];
+    if (group) {
+      lines.push(`- Suite command: \`${formatSuiteCommand(group.matches)}\``);
+    }
   } else if (commandGroups.length > 1) {
     lines.push("- Suite commands:");
     for (const group of commandGroups) {

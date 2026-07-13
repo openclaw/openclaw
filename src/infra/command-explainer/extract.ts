@@ -421,7 +421,7 @@ function hasUnescapedDynamicPattern(text: string): boolean {
 function decodeUnquotedShellTextWithOffsets(text: string): DecodedShellText {
   const decoded: DecodedShellText = { value: "", sourceOffsets: [0] };
   for (let index = 0; index < text.length; index += 1) {
-    const ch = text[index];
+    const ch = text.charAt(index);
     const next = text[index + 1];
     if (ch === "\\" && next !== undefined) {
       if (next === "\r" && text[index + 2] === "\n") {
@@ -453,7 +453,7 @@ function decodeDoubleQuotedTextWithOffsets(text: string): DecodedShellText {
   const body = hasQuotes ? text.slice(1, -1) : text;
   const decoded: DecodedShellText = { value: "", sourceOffsets: [bodyStart] };
   for (let index = 0; index < body.length; index += 1) {
-    const ch = body[index];
+    const ch = body.charAt(index);
     const next = body[index + 1];
     const sourceOffset = bodyStart + index;
     if (ch === "\\" && next !== undefined) {
@@ -503,7 +503,7 @@ function decodeAnsiCStringWithOffsets(text: string): DecodedShellText {
   const body = hasQuotes ? text.slice(2, -1) : text;
   const decoded: DecodedShellText = { value: "", sourceOffsets: [bodyStart] };
   for (let index = 0; index < body.length; index += 1) {
-    const ch = body[index];
+    const ch = body.charAt(index);
     const sourceOffset = bodyStart + index;
     if (ch !== "\\") {
       appendDecodedText(decoded, ch, sourceOffset + 1);
@@ -946,9 +946,8 @@ function shellWrapperPayloadForParsing(
   return { command: payload, spanBase };
 }
 
-type InlineEvalHit = InterpreterInlineEvalHit;
 function recordInlineEvalRisk(
-  inlineEval: InlineEvalHit,
+  inlineEval: InterpreterInlineEvalHit,
   text: string,
   span: SourceSpan,
   output: MutableExplanation,

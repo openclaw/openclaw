@@ -98,6 +98,14 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     ).toBe("abc-uuid");
   });
 
+  it("recognizes QMD-exported dot-form archived reset .md paths with timezone prefixes", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/abc-uuid.jsonl.reset.2026-06-25_2026-06-24T17-00-00.000Z.md",
+      ),
+    ).toBe("abc-uuid");
+  });
+
   it("recognizes QMD-exported dot-form archived deleted .md paths", () => {
     expect(
       extractTranscriptStemFromSessionsMemoryHit(
@@ -113,6 +121,17 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     expect(identity).toEqual({
       stem: "abc-uuid",
       liveStem: "abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z",
+      archived: true,
+    });
+  });
+
+  it("returns archived identity for QMD-exported dot-form reset .md paths with timezone prefixes", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/abc-uuid.jsonl.reset.2026-06-25_2026-06-24T17-00-00.000Z.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc-uuid",
+      liveStem: "abc-uuid.jsonl.reset.2026-06-25_2026-06-24T17-00-00.000Z",
       archived: true,
     });
   });
@@ -173,6 +192,14 @@ describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
   it("does not invent owner metadata for legacy basename-only paths", () => {
     expect(extractTranscriptIdentityFromSessionsMemoryHit("sessions/abc-uuid.jsonl")).toEqual({
       stem: "abc-uuid",
+      archived: false,
+    });
+  });
+
+  it("extracts owner metadata from agent-scoped live session paths", () => {
+    expect(extractTranscriptIdentityFromSessionsMemoryHit("sessions/main/abc-uuid.jsonl")).toEqual({
+      stem: "abc-uuid",
+      ownerAgentId: "main",
       archived: false,
     });
   });

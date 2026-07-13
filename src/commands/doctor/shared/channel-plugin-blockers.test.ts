@@ -1,8 +1,11 @@
 // Channel plugin blocker tests cover doctor diagnostics for blocked channel plugin setup.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import {
+  channelPluginBlockerHitToHealthFinding,
   collectConfiguredChannelPluginBlockerWarnings,
   isWarningBlockedByChannelPlugin,
   scanConfiguredChannelPluginBlockers,
@@ -62,6 +65,63 @@ describe("channel plugin blockers", () => {
     ]);
     expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
       '- channels.discord: channel is configured, but external plugin "discord" is installed without explicit trust. Add plugins.entries.discord.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
+    ]);
+    expect(
+      channelPluginBlockerHitToHealthFinding(expectDefined(hits[0], "hits[0] test invariant")),
+    ).toEqual({
+      checkId: "core/doctor/channel-plugin-blockers",
+      severity: "warning",
+      message:
+        'channels.discord: channel is configured, but external plugin "discord" is installed without explicit trust. Add plugins.entries.discord.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
+      path: "channels.discord",
+      target: "discord",
+      requirement: "missing explicit enablement",
+      fixHint: "Fix plugin enablement before relying on setup guidance for this channel.",
+    });
+  });
+
+  it("uses provided manifest records without loading the registry", () => {
+    const registrySpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        channels: {
+          discord: {
+            token: "configured",
+          },
+        },
+      },
+      {},
+      {},
+      {
+        manifestRecords: [
+          {
+            id: "discord",
+            origin: "global",
+            channels: ["discord"],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            enabledByDefault: false,
+            rootDir: "/plugins/discord",
+            source: "test",
+            manifestPath: "/plugins/discord/plugin.json",
+          },
+        ],
+      },
+    );
+
+    expect(registrySpy).not.toHaveBeenCalled();
+    expect(hits).toEqual([
+      {
+        channelId: "discord",
+        pluginId: "discord",
+        reason: "missing explicit enablement",
+      },
     ]);
   });
 

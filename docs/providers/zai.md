@@ -78,6 +78,22 @@ openclaw plugins install @openclaw/zai-provider
   </Tab>
 </Tabs>
 
+### Endpoints
+
+| Onboarding choice   | Base URL                                      | Default model |
+| ------------------- | --------------------------------------------- | ------------- |
+| `zai-global`        | `https://api.z.ai/api/paas/v4`                | `glm-5.1`     |
+| `zai-cn`            | `https://open.bigmodel.cn/api/paas/v4`        | `glm-5.1`     |
+| `zai-coding-global` | `https://api.z.ai/api/coding/paas/v4`         | `glm-5.2`     |
+| `zai-coding-cn`     | `https://open.bigmodel.cn/api/coding/paas/v4` | `glm-5.2`     |
+
+`zai-api-key` auto-detects one of these four by probing your key against each
+endpoint's chat-completions API, checking general endpoints (`zai-global`,
+then `zai-cn`) before Coding Plan endpoints (`zai-coding-global`, then
+`zai-coding-cn`), and stopping at the first endpoint that accepts a request.
+Use an explicit `--auth-choice` to force a Coding Plan endpoint if your key
+works on both.
+
 ## Config example
 
 <Tip>
@@ -133,18 +149,32 @@ The manifest-backed catalog currently includes:
 GLM models are available as `zai/<model>` (example: `zai/glm-5`).
 </Tip>
 
-<Tip>
-GLM-5.2 supports `off`, `low`, `high`, and `max` thinking levels. OpenClaw maps
-`low` and `high` to Z.AI high reasoning effort, and `max` to max effort.
-</Tip>
-
 <Note>
 Coding Plan setup defaults to `zai/glm-5.2`; general API setup keeps
-`zai/glm-5.1`. Endpoint auto-detection falls back to `glm-5.1` or `glm-4.7`
-when the selected plan does not expose GLM-5.2. GLM versions and availability
-can change; run `openclaw models list --all --provider zai` to see the catalog
-known to your installed version.
+`zai/glm-5.1`. On the Coding Plan endpoints, auto-detection falls back to
+`glm-5.1` and then `glm-4.7` when the key/plan does not expose GLM-5.2. GLM
+versions and availability can change; run `openclaw models list --all --provider zai`
+to see the catalog known to your installed version.
 </Note>
+
+## Thinking levels
+
+<Tabs>
+  <Tab title="GLM-5.2">
+    Full range: `off`, `low`, `high`, `max` (default `off`). OpenClaw maps
+    `low` and `high` to Z.AI's `high` reasoning effort, and `max` to Z.AI's
+    `max` effort, via `reasoning_effort` on the request payload.
+  </Tab>
+  <Tab title="Other GLM models">
+    Binary toggle only: `off` and `low` (shown as `on` in pickers), default
+    `off`. Setting thinking to `off` sends `thinking: { type: "disabled" }`;
+    any other level leaves the request payload untouched (Z.AI's own default
+    reasoning behavior applies).
+  </Tab>
+</Tabs>
+
+Setting thinking to `off` avoids responses that spend the output budget on
+`reasoning_content` before visible text.
 
 ## Advanced configuration
 
@@ -174,11 +204,7 @@ known to your installed version.
 
   </Accordion>
 
-  <Accordion title="Thinking and preserved thinking">
-    Z.AI thinking follows OpenClaw's `/think` controls. With thinking off,
-    OpenClaw sends `thinking: { type: "disabled" }` to avoid responses that
-    spend the output budget on `reasoning_content` before visible text.
-
+  <Accordion title="Preserved thinking">
     Preserved thinking is opt-in because Z.AI requires the full historical
     `reasoning_content` to be replayed, which increases prompt tokens. Enable it
     per model:
@@ -199,7 +225,8 @@ known to your installed version.
 
     When enabled and thinking is on, OpenClaw sends
     `thinking: { type: "enabled", clear_thinking: false }` and replays prior
-    `reasoning_content` for the same OpenAI-compatible transcript.
+    `reasoning_content` for the same OpenAI-compatible transcript. The snake_case
+    `preserve_thinking` param key works as an alias.
 
     Advanced users can still override the exact provider payload with
     `params.extra_body.thinking`.

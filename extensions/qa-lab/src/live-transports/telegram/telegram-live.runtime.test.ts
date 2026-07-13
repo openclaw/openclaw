@@ -1,4 +1,5 @@
 // Qa Lab tests cover telegram live plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -381,7 +382,7 @@ describe("telegram live qa runtime", () => {
     });
 
     expect(next.agents?.defaults?.skipBootstrap).toBe(true);
-    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime).toEqual({
       id: "openclaw",
     });
     expect(next.plugins?.allow).toContain("telegram");
@@ -622,9 +623,9 @@ describe("telegram live qa runtime", () => {
   });
 
   it("fails when any requested Telegram scenario id is unknown", () => {
-    expect(() => testing.findScenario(["telegram-help-command", "typo-scenario"])).toThrow(
-      "unknown Telegram QA scenario id(s): typo-scenario",
-    );
+    expect(() =>
+      testing.findScenario(["telegram-mentioned-message-reply", "typo-scenario"]),
+    ).toThrow("unknown Telegram QA scenario id(s): typo-scenario");
   });
 
   it("recognizes Telegram observation timeouts with retry details", () => {
@@ -646,113 +647,38 @@ describe("telegram live qa runtime", () => {
 
   it("includes mention gating in the Telegram live scenario catalog", () => {
     const scenarios = testing.findScenario([
-      "telegram-help-command",
-      "telegram-commands-command",
-      "telegram-tools-compact-command",
-      "telegram-whoami-command",
-      "telegram-status-command",
-      "telegram-repeated-command-authorization",
       "telegram-other-bot-command-gating",
-      "telegram-context-command",
-      "telegram-current-session-status-tool",
-      "telegram-tool-only-usage-footer",
       "telegram-mentioned-message-reply",
-      "telegram-reply-chain-exact-marker",
       "telegram-stream-final-single-message",
       "telegram-long-final-reuses-preview",
       "telegram-long-final-three-chunks",
       "telegram-mention-gating",
     ]);
     expect(scenarios.map((scenario) => scenario.id)).toEqual([
-      "telegram-help-command",
-      "telegram-commands-command",
-      "telegram-tools-compact-command",
-      "telegram-whoami-command",
-      "telegram-status-command",
-      "telegram-repeated-command-authorization",
       "telegram-other-bot-command-gating",
-      "telegram-context-command",
-      "telegram-current-session-status-tool",
-      "telegram-tool-only-usage-footer",
       "telegram-mentioned-message-reply",
-      "telegram-reply-chain-exact-marker",
       "telegram-stream-final-single-message",
       "telegram-long-final-reuses-preview",
       "telegram-long-final-three-chunks",
       "telegram-mention-gating",
     ]);
-    expect(
-      scenarios.find((scenario) => scenario.id === "telegram-status-command")?.buildRun("sut_bot")
-        .steps[0].input,
-    ).toBe("/status@sut_bot");
-    expect(
-      scenarios.find((scenario) => scenario.id === "telegram-status-command")?.buildRun("sut_bot")
-        .steps[0].expectedTextIncludes,
-    ).toEqual(["OpenClaw", "Model:", "Session:", "Activation:"]);
-    expect(
-      scenarios
-        .find((scenario) => scenario.id === "telegram-repeated-command-authorization")
-        ?.buildRun("sut_bot").steps,
-    ).toHaveLength(4);
-    const repeatedSteps = requireScenario(
-      scenarios,
-      "telegram-repeated-command-authorization",
-    ).buildRun("sut_bot").steps;
-    expect(repeatedSteps[0]?.driverGroupAuthorization).toBe("deny");
-    expect(repeatedSteps[0]?.input).toBe("/status@sut_bot");
-    expect(repeatedSteps[0]?.expectReply).toBe(false);
-    expect(repeatedSteps[1]?.driverGroupAuthorization).toBe("allow");
-    expect(repeatedSteps[1]?.input).toBe("/status@sut_bot");
-    expect(repeatedSteps[1]?.expectReply).toBe(true);
-    expect(repeatedSteps[2]?.input).toBe("/help@sut_bot");
-    expect(repeatedSteps[2]?.expectReply).toBe(true);
-    expect(repeatedSteps[3]?.input).toBe("/commands@sut_bot");
-    expect(repeatedSteps[3]?.expectReply).toBe(true);
-    expect(repeatedSteps[3]?.expectedTextIncludes).toEqual(["Commands (1/", "/session", "/stop"]);
-    const commandsStep = requireScenario(scenarios, "telegram-commands-command").buildRun("sut_bot")
-      .steps[0];
-    expect(commandsStep?.expectedTextIncludes).toEqual(["Commands (1/", "/session", "/stop"]);
     const otherBotStep = requireScenario(scenarios, "telegram-other-bot-command-gating").buildRun(
       "sut_bot",
     ).steps[0];
     expect(otherBotStep?.expectReply).toBe(false);
     expect(otherBotStep?.input).toBe("/status@OpenClawQaOtherBot");
-    const contextStep = requireScenario(scenarios, "telegram-context-command").buildRun("sut_bot")
-      .steps[0];
-    expect(contextStep?.matchText).toBe("/context list");
-    const statusToolStep = requireScenario(
+    const mentionedReplyRun = requireScenario(
       scenarios,
-      "telegram-current-session-status-tool",
-    ).buildRun("sut_bot").steps[0];
-    expect(statusToolStep?.expectedTextIncludes).toEqual([
-      "QA-TELEGRAM-CURRENT-SESSION-OK",
-      ":telegram:group:",
-    ]);
-    expect(statusToolStep?.replyToLatestSutMessage).toBe(true);
-    const usageFooterSteps = requireScenario(scenarios, "telegram-tool-only-usage-footer").buildRun(
-      "sut_bot",
-    ).steps;
-    expect(usageFooterSteps).toHaveLength(2);
-    expect(usageFooterSteps[0]?.input).toBe("/usage@sut_bot tokens");
-    expect(usageFooterSteps[0]?.expectedTextIncludes).toEqual(["Usage", "tokens"]);
-    expect(usageFooterSteps[1]?.expectedTextIncludes?.at(-1)).toBe("Usage:");
-    expect(usageFooterSteps[1]?.expectedSutMessageCount).toBe(2);
-    expect(usageFooterSteps[1]?.replyToLatestSutMessage).toBe(true);
+      "telegram-mentioned-message-reply",
+    ).buildRun("sut_bot");
     expect(
-      scenarios
-        .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
-        ?.buildRun("sut_bot").steps[0].replyToLatestSutMessage,
+      expectDefined(mentionedReplyRun.steps[0], "mentioned-message reply step")
+        .replyToLatestSutMessage,
     ).toBe(true);
     expect(
       scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply")
         ?.evidenceCoverageIds,
     ).toEqual(["channels.telegram.mention-gating"]);
-    const replyChainStep = requireScenario(scenarios, "telegram-reply-chain-exact-marker").buildRun(
-      "sut_bot",
-    ).steps[0];
-    expect(replyChainStep?.expectedJoinedSutTextIncludes).toEqual(["QA-TELEGRAM-REPLY-CHAIN-OK"]);
-    expect(replyChainStep?.expectedSutMessageCount).toBe(1);
-    expect(replyChainStep?.replyToLatestSutMessage).toBeUndefined();
     const streamSingleStep = requireScenario(
       scenarios,
       "telegram-stream-final-single-message",
@@ -787,14 +713,7 @@ describe("telegram live qa runtime", () => {
   it("keeps mock-scripted Telegram checks out of the default live-frontier set", () => {
     expect(testing.findScenario(undefined, "live-frontier").map((scenario) => scenario.id)).toEqual(
       [
-        "telegram-help-command",
-        "telegram-commands-command",
-        "telegram-tools-compact-command",
-        "telegram-whoami-command",
-        "telegram-status-command",
-        "telegram-repeated-command-authorization",
         "telegram-other-bot-command-gating",
-        "telegram-context-command",
         "telegram-mentioned-message-reply",
         "telegram-mention-gating",
       ],
@@ -803,45 +722,22 @@ describe("telegram live qa runtime", () => {
 
   it("adds deterministic model-scripted checks to the default mock-openai set", () => {
     expect(testing.findScenario(undefined, "mock-openai").map((scenario) => scenario.id)).toEqual([
-      "telegram-help-command",
-      "telegram-commands-command",
-      "telegram-tools-compact-command",
-      "telegram-whoami-command",
-      "telegram-status-command",
-      "telegram-repeated-command-authorization",
       "telegram-other-bot-command-gating",
-      "telegram-context-command",
       "telegram-mentioned-message-reply",
       "telegram-long-final-reuses-preview",
       "telegram-mention-gating",
     ]);
   });
 
-  it("lists default status and regression refs in the Telegram scenario catalog", () => {
+  it("lists remaining optional Telegram scenario metadata", () => {
     const catalog = testing.listTelegramQaScenarioCatalog("mock-openai");
-    const status = requireScenario(catalog, "telegram-status-command");
-    expect(status.defaultEnabled).toBe(true);
-    expect(status.regressionRefs).toEqual(["openclaw/openclaw#74698"]);
-    expect(requireScenario(catalog, "telegram-current-session-status-tool").defaultEnabled).toBe(
-      false,
-    );
-    const usageFooter = requireScenario(catalog, "telegram-tool-only-usage-footer");
-    expect(usageFooter.defaultEnabled).toBe(false);
-    expect(usageFooter.regressionRefs).toEqual(["openclaw/openclaw#87392"]);
     const streamSingle = requireScenario(catalog, "telegram-stream-final-single-message");
     expect(streamSingle.defaultEnabled).toBe(false);
     expect(streamSingle.regressionRefs).toEqual(["openclaw/openclaw#39905"]);
-    expect(requireScenario(catalog, "telegram-reply-chain-exact-marker").defaultEnabled).toBe(
-      false,
-    );
   });
 
   it("tracks Telegram live coverage against the shared transport contract", () => {
-    expect(testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS).toEqual([
-      "canary",
-      "help-command",
-      "mention-gating",
-    ]);
+    expect(testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS).toEqual(["canary", "mention-gating"]);
     expect(
       findMissingLiveTransportStandardScenarios({
         coveredStandardScenarioIds: testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS,
@@ -1235,6 +1131,33 @@ describe("telegram live qa runtime", () => {
     });
   });
 
+  it("rejects oversized Telegram API success bodies", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ok: true,
+              result: {
+                blob: "x".repeat(16 * 1024 * 1024),
+              },
+            }),
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+              },
+            },
+          ),
+      ),
+    );
+
+    await expect(testing.callTelegramApi("token", "getMe")).rejects.toThrow(
+      "qa-lab-telegram-live.getMe: JSON response exceeds 16777216 bytes",
+    );
+  });
+
   it("treats transient Telegram getUpdates network errors as recoverable", () => {
     expect(testing.isRecoverableTelegramQaPollError(new TypeError("fetch failed"))).toBe(true);
     expect(testing.isRecoverableTelegramQaPollError(new Error("socket hang up"))).toBe(true);
@@ -1290,8 +1213,8 @@ describe("telegram live qa runtime", () => {
       initialOffset: 7,
       timeoutMs: 5_000,
       observedMessages,
-      observationScenarioId: "telegram-whoami-command",
-      observationScenarioTitle: "Telegram whoami reply",
+      observationScenarioId: "telegram-mentioned-message-reply",
+      observationScenarioTitle: "Telegram mentioned message gets a reply",
       predicate: (message) =>
         testing.matchesTelegramScenarioReply({
           groupId: "-100123",
@@ -1307,7 +1230,7 @@ describe("telegram live qa runtime", () => {
     expect(observedMessages).toHaveLength(1);
     expect(observedMessages[0]?.matchedScenario).toBe(true);
     expect(observedMessages[0]?.messageId).toBe(99);
-    expect(observedMessages[0]?.scenarioId).toBe("telegram-whoami-command");
+    expect(observedMessages[0]?.scenarioId).toBe("telegram-mentioned-message-reply");
   });
 
   it("prints Telegram scenario RTT in the Markdown report", () => {
@@ -1445,5 +1368,11 @@ describe("telegram live qa runtime", () => {
 
     expect(message).toContain("Phase: unknown");
     expect(message).toContain("boom");
+  });
+
+  it("keeps bounded telegram QA progress details on UTF-16 boundaries", () => {
+    const prefix = "a".repeat(236);
+    expect(testing.formatTelegramQaProgressDetails(`${prefix}😀after`)).toBe(`${prefix}...`);
+    expect(testing.formatTelegramQaProgressDetails("a".repeat(241))).toBe(`${"a".repeat(237)}...`);
   });
 });

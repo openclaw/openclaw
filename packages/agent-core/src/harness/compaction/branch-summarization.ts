@@ -32,8 +32,6 @@ export interface BranchSummaryDetails {
   modifiedFiles: string[];
 }
 
-export type { FileOperations } from "./utils.js";
-
 /** Prepared branch content for summarization. */
 export interface BranchPreparation {
   /** Messages selected for the branch summary. */
@@ -69,7 +67,7 @@ export interface CollectBranchPathEntriesResult<TEntry extends BranchPathEntry> 
 }
 
 /** Options for generating a branch summary. */
-export interface GenerateBranchSummaryOptions {
+interface GenerateBranchSummaryOptions {
   /** Model used for summarization. */
   model: Model;
   /** API key forwarded to the provider. */
@@ -97,9 +95,9 @@ export function collectEntriesForBranchSummaryFromBranches<TEntry extends Branch
 ): CollectBranchPathEntriesResult<TEntry> {
   const oldPath = new Set(oldBranch.map((entry) => entry.id));
   let commonAncestorId: string | null = null;
-  for (let i = targetBranch.length - 1; i >= 0; i--) {
-    if (oldPath.has(targetBranch[i].id)) {
-      commonAncestorId = targetBranch[i].id;
+  for (const targetEntry of targetBranch.toReversed()) {
+    if (oldPath.has(targetEntry.id)) {
+      commonAncestorId = targetEntry.id;
       break;
     }
   }
@@ -186,8 +184,7 @@ export function prepareBranchEntries(
       }
     }
   }
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
+  for (const entry of entries.toReversed()) {
     const message = getMessageFromEntry(entry);
     if (!message) {
       continue;

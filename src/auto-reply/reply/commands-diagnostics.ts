@@ -20,6 +20,7 @@ import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolveCommandExecApprovalRoute,
   resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
@@ -115,14 +116,7 @@ async function handleDiagnosticsCommandWithDeps(
   }
 
   if (params.isGroup) {
-    const targets = await deps.resolvePrivateDiagnosticsTargets(params);
-    if (targets.length === 0) {
-      return {
-        shouldContinue: false,
-        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-      };
-    }
-    const privateTarget = targets[0];
+    const privateTarget = (await deps.resolvePrivateDiagnosticsTargets(params))[0];
     if (!privateTarget) {
       return {
         shouldContinue: false,
@@ -139,17 +133,7 @@ async function handleDiagnosticsCommandWithDeps(
         reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_ACK },
       };
     }
-    const delivered = await deps.deliverPrivateDiagnosticsReply({
-      commandParams: params,
-      targets: [privateTarget],
-      reply: privateReply,
-    });
-    return {
-      shouldContinue: false,
-      reply: {
-        text: delivered ? DIAGNOSTICS_PRIVATE_ROUTE_ACK : DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
-      },
-    };
+    return await deliverGroupDiagnosticsReplyPrivately(deps, params, privateReply, privateTarget);
   }
 
   const reply = await buildDiagnosticsReply(deps, params, args);
@@ -182,16 +166,10 @@ async function deliverGroupDiagnosticsReplyPrivately(
   deps: DiagnosticsCommandDeps,
   params: HandleCommandsParams,
   reply: ReplyPayload,
+  privateTarget?: PrivateCommandRouteTarget,
 ) {
-  const targets = await deps.resolvePrivateDiagnosticsTargets(params);
-  if (targets.length === 0) {
-    return {
-      shouldContinue: false,
-      reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-    };
-  }
-  const privateTarget = targets[0];
-  if (!privateTarget) {
+  const target = privateTarget ?? (await deps.resolvePrivateDiagnosticsTargets(params))[0];
+  if (!target) {
     return {
       shouldContinue: false,
       reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
@@ -199,7 +177,7 @@ async function deliverGroupDiagnosticsReplyPrivately(
   }
   const delivered = await deps.deliverPrivateDiagnosticsReply({
     commandParams: params,
-    targets: [privateTarget],
+    targets: [target],
     reply,
   });
   return {
@@ -297,7 +275,6 @@ async function requestGatewayDiagnosticsExportApproval(
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
-  const messageThreadId = readCommandMessageThreadId(params);
   const command = buildGatewayDiagnosticsExportJsonCommand();
   try {
     const execTool = deps.createExecTool({
@@ -316,16 +293,10 @@ async function requestGatewayDiagnosticsExportApproval(
       sessionKey: params.sessionKey,
       mainKey: params.cfg.session?.mainKey,
       sessionScope: params.cfg.session?.scope,
-      messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
-      currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
-      currentThreadTs: options.privateApprovalTarget
-        ? options.privateApprovalTarget.threadId == null
-          ? undefined
-          : String(options.privateApprovalTarget.threadId)
-        : messageThreadId,
-      accountId: options.privateApprovalTarget
-        ? (options.privateApprovalTarget.accountId ?? undefined)
-        : (params.ctx.AccountId ?? undefined),
+      ...resolveCommandExecApprovalRoute({
+        commandParams: params,
+        privateApprovalTarget: options.privateApprovalTarget,
+      }),
       notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
@@ -626,7 +597,7 @@ function rewriteInteractive(interactive: InteractiveReply): InteractiveReply {
           ...block,
           options: block.options.map((option) => ({
             ...option,
-            ...(option.action ? { action: rewritePresentationAction(option.action) } : {}),
+            ...(option.action ? { action: rewriteSelectPresentationAction(option.action) } : {}),
             ...(option.value ? { value: rewriteCodexDiagnosticsCommandPrefix(option.value) } : {}),
           })),
         };
@@ -643,10 +614,27 @@ function rewritePresentationAction(action: MessagePresentationAction): MessagePr
       command: rewriteCodexDiagnosticsCommandPrefix(action.command),
     };
   }
-  return {
-    type: "callback",
-    value: rewriteCodexDiagnosticsCommandPrefix(action.value),
-  };
+  if (action.type === "callback") {
+    return {
+      type: "callback",
+      value: rewriteCodexDiagnosticsCommandPrefix(action.value),
+    };
+  }
+  return action;
+}
+
+function rewriteSelectPresentationAction(
+  action: Extract<MessagePresentationAction, { type: "command" | "callback" }>,
+): Extract<MessagePresentationAction, { type: "command" | "callback" }> {
+  return action.type === "command"
+    ? {
+        type: "command",
+        command: rewriteCodexDiagnosticsCommandPrefix(action.command),
+      }
+    : {
+        type: "callback",
+        value: rewriteCodexDiagnosticsCommandPrefix(action.value),
+      };
 }
 
 function rewriteCodexDiagnosticsCommandPrefix(value: string): string {

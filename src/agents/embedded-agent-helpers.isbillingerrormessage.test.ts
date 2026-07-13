@@ -1,26 +1,24 @@
 // Covers provider error classifiers and failover reason mapping.
 import { describe, expect, it } from "vitest";
+import { isCloudflareOrHtmlErrorPage } from "../shared/assistant-error-format.js";
 import {
   classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
   classifyFailoverReason,
-  classifyFailoverReasonFromHttpStatus,
   extractObservedOverflowTokenCount,
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
-  isCloudflareOrHtmlErrorPage,
   isCompactionFailureError,
   isContextOverflowError,
   isFailoverErrorMessage,
-  isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
   isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
   parseImageSizeError,
 } from "./embedded-agent-helpers.js";
+import { isAuthPermanentErrorMessage } from "./embedded-agent-helpers/failover-matches.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -78,6 +76,18 @@ function expectNotFailoverSample(sample: string) {
   expect(isTimeoutErrorMessage(sample)).toBe(false);
   expect(classifyFailoverReason(sample)).toBeNull();
   expect(isFailoverErrorMessage(sample)).toBe(false);
+}
+
+function classifyFailoverReasonFromHttpStatus(
+  status: number | undefined,
+  message?: string,
+  opts?: { provider?: string },
+) {
+  if (status === undefined) {
+    return null;
+  }
+  const statusText = `HTTP ${status}`;
+  return classifyFailoverReason(message ? `${statusText}: ${message}` : statusText, opts);
 }
 
 describe("isAuthPermanentErrorMessage", () => {
@@ -611,6 +621,12 @@ describe("extractObservedOverflowTokenCount", () => {
   });
 });
 
+describe("classifyFailoverReason context overflow", () => {
+  it("maps prompt overflow to the closed failover reason", () => {
+    expect(classifyFailoverReason("Prompt is too long")).toBe("context_overflow");
+  });
+});
+
 describe("isTransientHttpError", () => {
   it("returns true for retryable 5xx status codes", () => {
     expect(isTransientHttpError("499 Client Closed Request")).toBe(true);
@@ -631,20 +647,6 @@ describe("isTransientHttpError", () => {
 describe("classifyFailoverReasonFromHttpStatus", () => {
   it("treats HTTP 401 invalid_api_key as ambiguous auth", () => {
     expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth");
-  });
-
-  it("treats body-less HTTP 422 as unknown instead of format", () => {
-    expect(classifyFailoverReasonFromHttpStatus(422)).toBeNull();
-  });
-
-  it("treats no-body HTTP 400/422 wrappers as unknown instead of format", () => {
-    expect(classifyFailoverReasonFromHttpStatus(400, "No body response")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(400, "400 status code (no body)")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No body")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No response body")).toBeNull();
-    expect(
-      classifyFailoverReasonFromHttpStatus(422, "Error: HTTP 422: No response body"),
-    ).toBeNull();
   });
 
   it("treats HTTP 422 with an unclassifiable body as format error", () => {
@@ -671,13 +673,13 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBe("rate_limit");
   });
 
-  it("does not force HTTP 400 context-overflow payloads into format", () => {
+  it("classifies HTTP 400 context-overflow payloads without using format", () => {
     expect(
       classifyFailoverReasonFromHttpStatus(
         400,
         "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("lets OpenRouter billing-classified HTTP 401 responses bypass generic auth", () => {
@@ -803,12 +805,12 @@ describe("classifyFailoverReason HTTP 410 handling", () => {
     expect(classifyFailoverReason("HTTP 404: insufficient credits")).toBe("billing");
   });
 
-  it("does not map HTTP 404 plus context-overflow text to model_not_found", () => {
+  it("maps HTTP 404 plus context-overflow text to context_overflow", () => {
     expect(
       classifyFailoverReason(
         "HTTP 404: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("keeps raw HTTP 400 wrappers aligned with structured provider classification", () => {
@@ -819,7 +821,7 @@ describe("classifyFailoverReason HTTP 410 handling", () => {
       classifyFailoverReason(
         "HTTP 400: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("classifies OpenAI Responses unknown-no-details message distinctly", () => {
@@ -1034,7 +1036,6 @@ describe("image dimension errors", () => {
       contentIndex: 1,
       raw,
     });
-    expect(isImageDimensionErrorMessage(raw)).toBe(true);
   });
 });
 

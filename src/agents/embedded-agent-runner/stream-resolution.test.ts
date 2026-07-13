@@ -1,11 +1,12 @@
+import { getApiProvider } from "@openclaw/ai/internal/runtime";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 // Stream resolution tests cover how embedded runs choose provider, boundary,
 // native Codex, or custom stream functions and pass auth/cache/signal options.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getApiProvider } from "../../llm/api-registry.js";
 import { streamSimple } from "../../llm/stream.js";
+import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import * as providerTransportStream from "../provider-transport-stream.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
 import {
   testing,
   describeEmbeddedAgentStreamStrategy,
@@ -124,6 +125,39 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
 });
 
 describe("resolveEmbeddedAgentStreamFn", () => {
+  it("preserves sentinels for registered provider streams", async () => {
+    const secret = "plugin-stream-secret";
+    const sentinel = mintSecretSentinel(secret, { label: "model-auth:plugin" });
+    const providerStreamFn = vi.fn(async (model, _context, options) => ({ model, options }));
+    const model = {
+      api: "plugin-api",
+      provider: "plugin",
+      id: "plugin-model",
+      headers: { Authorization: `Bearer ${sentinel}` },
+    } as never;
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn: providerStreamFn as never,
+      sessionId: "session-1",
+      model,
+      resolvedApiKey: sentinel,
+    });
+
+    const result = await expectStreamResultRecord(
+      streamFn(model, {} as never, {
+        headers: { "X-Managed": `Bearer ${sentinel}` },
+      }),
+      "plugin stream result",
+    );
+    expect(requireRecord(result.model, "plugin model").headers).toEqual({
+      Authorization: `Bearer ${sentinel}`,
+    });
+    expect(requireRecord(result.options, "plugin options").apiKey).toBe(sentinel);
+    expect(requireRecord(result.options, "plugin options").headers).toEqual({
+      "X-Managed": `Bearer ${sentinel}`,
+    });
+  });
+
   it("prefers the resolved run api key over a later authStorage lookup", async () => {
     const authStorage = {
       getApiKey: vi.fn(async () => "storage-key"),

@@ -101,7 +101,9 @@ describe("qa scenario catalog", () => {
     ).toBe(true);
     expect(
       pack.scenarios
-        .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
+        .filter(
+          (scenario) => !scenario.coverage?.primary.length && !scenario.coverage?.secondary?.length,
+        )
         .map((scenario) => scenario.id),
     ).toStrictEqual([]);
     expect(
@@ -194,13 +196,27 @@ describe("qa scenario catalog", () => {
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "kitchen-sink-live-openai",
+      "matrix-post-restart-room-continue",
+      "matrix-restart-resume",
+      "slack-restart-resume",
       "subagent-stale-child-links",
+      "telegram-repeated-command-authorization",
+      "whatsapp-restart-resume",
     ]);
     expect(
       scenarios
         .filter((scenario) => scenario.execution.suiteIsolation !== "isolated")
         .map((scenario) => scenario.id),
     ).toEqual([]);
+  });
+
+  it("uses only graceful gateway restart for Matrix replay dedupe", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("matrix-restart-replay-dedupe"));
+
+    expect(flowContainsCall(scenario.execution.flow, "env.gateway.restart")).toBe(true);
+    expect(flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation")).toBe(
+      false,
+    );
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
@@ -214,12 +230,16 @@ describe("qa scenario catalog", () => {
   it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
     const uxMatrix = readQaScenarioById("ux-matrix-evidence-dashboard");
+    const otelSmoke = readQaScenarioById("qa-otel-smoke");
 
     expect(scenario.execution.kind).toBe("playwright");
     if (scenario.execution.kind !== "playwright") {
       throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
-    expect(scenario.execution.path).toBe("ui/src/ui/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.testNamePattern).toBe(
+      "sends a chat turn through the GUI and renders the final Gateway event",
+    );
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
     expect(uxMatrix.execution.kind).toBe("script");
@@ -230,21 +250,54 @@ describe("qa scenario catalog", () => {
     expect(uxMatrix.execution.args).toStrictEqual(["--artifact-base", "${outputDir}"]);
     expect(uxMatrix.execution.config).toBeUndefined();
     expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
+    expect(otelSmoke.execution.kind).toBe("script");
+    if (otelSmoke.execution.kind !== "script") {
+      throw new Error(`expected script scenario, got ${otelSmoke.execution.kind}`);
+    }
+    expect(otelSmoke.execution.args).toStrictEqual([
+      "--output-dir",
+      "${outputDir}",
+      "--logs-exporter",
+      "both",
+    ]);
+    expect(otelSmoke.coverage?.secondary).not.toContain("harness.qa-lab");
   });
 
-  it("loads folded HTTP API script scenarios with primary taxonomy coverage", () => {
-    expect(readQaScenarioById("openai-compatible-chat-tools").coverage?.primary).toStrictEqual([
+  it("loads helper-backed HTTP API scenarios as supporting taxonomy coverage", () => {
+    expect(readQaScenarioById("openai-compatible-chat-tools").coverage?.secondary).toStrictEqual([
       "gateway.openai-compatible-apis",
+      "runtime.hosted-tool-use",
     ]);
-    expect(readQaScenarioById("openai-web-search-minimal").coverage?.primary).toStrictEqual([
-      "runtime.reasoning-and-cache-controls",
-    ]);
-    expect(
-      readQaScenarioById("openai-web-search-native-assertions").coverage?.primary,
-    ).toStrictEqual(["web-search.openai-native-web-search", "plugins.web-search-and-fetch"]);
-    expect(readQaScenarioById("openwebui-openai-compatible").coverage?.primary).toStrictEqual([
-      "gateway.openai-compatible-apis",
-    ]);
+    expect(readQaScenarioById("openai-web-search-minimal").coverage?.secondary).toEqual(
+      expect.arrayContaining([
+        "runtime.reasoning-and-cache-controls",
+        "web-search.openai-native-web-search",
+        "plugins.web-search-and-fetch",
+      ]),
+    );
+    expect(readQaScenarioById("openwebui-openai-compatible").coverage?.secondary).toEqual(
+      expect.arrayContaining(["gateway.openai-compatible-apis", "runtime.hosted-provider-turns"]),
+    );
+  });
+
+  it("routes Docker runtime scenarios through the shared lane adapter", () => {
+    const scenarioLanes = [
+      ["openai-compatible-chat-tools", "openai-chat-tools"],
+      ["openai-web-search-minimal", "openai-web-search-minimal"],
+      ["openwebui-openai-compatible", "openwebui"],
+      ["plugin-lifecycle-probe", "plugin-lifecycle-matrix"],
+      ["packaged-bundled-plugin-install-uninstall", "bundled-plugin-install-uninstall"],
+    ] as const;
+
+    for (const [scenarioId, lane] of scenarioLanes) {
+      const execution = readQaScenarioById(scenarioId).execution;
+      expect(execution.kind).toBe("script");
+      if (execution.kind !== "script") {
+        throw new Error(`expected script scenario, got ${execution.kind}`);
+      }
+      expect(execution.path).toBe("test/e2e/qa-lab/runtime/docker-e2e-lane.ts");
+      expect(execution.args).toStrictEqual(["--lane", lane]);
+    }
   });
 
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
@@ -260,10 +313,42 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
   });
 
+  it("marks only non-assistant runtime parity fixtures as usage not applicable", () => {
+    const notApplicable = readQaScenarioPack()
+      .scenarios.filter((scenario) => scenario.runtimeParityUsage?.expectation === "not-applicable")
+      .map((scenario) => scenario.id)
+      .toSorted();
+
+    expect(notApplicable).toStrictEqual(
+      [
+        "auth-profile-codex-mixed-profiles",
+        "auth-profile-doctor-migration-safety",
+        "codex-plugin-cold-install",
+        "codex-plugin-install-race",
+        "codex-plugin-pinned-new",
+        "codex-plugin-pinned-old",
+        "plugin-manifest-contract-health",
+      ].toSorted(),
+    );
+    for (const scenarioId of notApplicable) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBeDefined();
+      expect(scenario.runtimeParityUsage).toMatchObject({
+        expectation: "not-applicable",
+      });
+      if (scenario.runtimeParityUsage?.expectation === "not-applicable") {
+        expect(scenario.runtimeParityUsage.reason).toContain("no assistant turn runs");
+      }
+    }
+    expect(readQaScenarioById("runtime-tool-fs-read").runtimeParityUsage).toBeUndefined();
+    expect(readQaScenarioById("plugin-hook-health-sentinel").runtimeParityUsage).toBeUndefined();
+  });
+
   it("loads runtime tool fixture metadata for standard and optional lanes", () => {
     const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
     const messageTool = readQaScenarioById("runtime-tool-message-tool");
     const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
+    const webFetch = readQaScenarioById("runtime-tool-web-fetch");
     const webSearch = readQaScenarioById("runtime-tool-web-search");
     const imageGenerate = readQaScenarioById("runtime-tool-image-generate");
 
@@ -296,6 +381,16 @@ describe("qa scenario catalog", () => {
         required: true,
       },
     });
+    const webFetchConfig = readQaScenarioExecutionConfig(webFetch.id);
+    expect(webFetchConfig?.happyPrompt).toContain("Call web_fetch exactly once");
+    expect(webFetchConfig?.happyPrompt).toContain("call it directly without tool_search");
+    expect(webFetchConfig?.happyPrompt).toContain("Otherwise use tool_search to locate it first");
+    expect(webFetchConfig?.happyPrompt).toContain(
+      "A tool_search result alone does not complete the task",
+    );
+    expect(webFetchConfig?.happyPrompt).toContain("https://example.com/");
+    expect(webFetchConfig?.happyPrompt).toContain("maxChars 500");
+    expect(webFetchConfig?.happyPrompt).toContain("tool search qa check target=web_fetch");
     expect(webSearch.plugins).toEqual(["qa-lab"]);
     expect(webSearch.gatewayConfigPatch?.tools).toEqual({
       web: {
@@ -344,6 +439,7 @@ describe("qa scenario catalog", () => {
       "webchat-direct-reply-routing",
       "long-context-progress-watchdog",
       "gateway-restart-inflight-run",
+      "gateway-restart-multi-live",
       "streaming-final-integrity",
     ];
 
@@ -359,18 +455,36 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
       "qa/scenarios/runtime/long-context-progress-watchdog.yaml",
     );
+    const gatewayRestartFlow = readQaScenarioById("gateway-restart-inflight-run").execution.flow;
+    const gatewayRestartContract = JSON.stringify(gatewayRestartFlow);
     expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("EmbeddedAttemptSessionTakeoverError");
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("AbortError");
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("This operation was aborted");
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("liveTurnTimeoutMs(env, 180000)");
+      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").gatewayConfigPatch),
+    ).toContain('"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]');
+    expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
+    expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
+    expect(gatewayRestartContract).toContain('"taskTracking":false');
+    expect(gatewayRestartContract).toContain('"restartGatewayWithConfigPatch"');
+    expect(gatewayRestartContract).toContain("interruptedMatches.length === 1");
+    expect(gatewayRestartContract).toContain("restartNotices.length === 0");
+    expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
+    expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
+    expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
+    const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
+    const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
+    expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
+      '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
+    );
+    expect(liveMultiRestartContract).toContain("assistantToolCallCounts.exec");
+    expect(liveMultiRestartContract).toContain("checkpoint");
+    expect(liveMultiRestartContract).toContain("restarts=3");
+    expect(liveMultiRestartContract).toContain("dmScope: 'per-channel-peer'");
+    expect(liveMultiRestartContract).toContain("dispatching restart-safe recovery");
+    expect(readQaScenarioExecutionConfig("gateway-restart-multi-live")).toMatchObject({
+      requiredProviderMode: "live-frontier",
+      requiredProvider: "openai",
+      requiredModel: "gpt-5.4",
+    });
     const longContextFlow = JSON.stringify(
       readQaScenarioById("long-context-progress-watchdog").execution.flow,
     );
@@ -488,9 +602,9 @@ describe("qa scenario catalog", () => {
     );
   });
 
-  it("includes the GPT-5.5 thinking visibility switch scenario", () => {
-    const scenario = readQaScenarioById("gpt55-thinking-visibility-switch");
-    const config = readQaScenarioExecutionConfig("gpt55-thinking-visibility-switch") as
+  it("includes the GPT-5.6 Luna thinking visibility switch scenario", () => {
+    const scenario = readQaScenarioById("luna-thinking-visibility-switch");
+    const config = readQaScenarioExecutionConfig("luna-thinking-visibility-switch") as
       | {
           requiredProvider?: string;
           requiredModel?: string;
@@ -500,9 +614,9 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt55-thinking-visibility-switch.yaml");
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/luna-thinking-visibility-switch.yaml");
     expect(config?.requiredProvider).toBe("openai");
-    expect(config?.requiredModel).toBe("gpt-5.5");
+    expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.offDirective).toBe("/think off");
     expect(config?.maxDirective).toBe("/think medium");
     expect(config?.reasoningDirective).toBe("/reasoning on");
@@ -533,10 +647,10 @@ describe("qa scenario catalog", () => {
       },
     });
     expect(config?.requiredProvider).toBe("openai");
-    expect(config?.requiredModel).toBe("gpt-5.5");
+    expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
-      "confirms live OpenAI GPT-5.5 web search auto mode",
+      "confirms live OpenAI GPT-5.6 Luna web search auto mode",
       "searches official OpenAI News through the live model",
     ]);
   });
@@ -600,14 +714,22 @@ describe("qa scenario catalog", () => {
 
   it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {
     const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
-      | { requiredProviderMode?: string }
+      | { requiredChannelDriver?: string; requiredProviderMode?: string }
       | undefined;
+    const retryFailureConfig = readQaScenarioExecutionConfig(
+      "message-tool-stranded-final-retry-failure",
+    ) as { requiredProviderMode?: string } | undefined;
     const stranded = readQaScenarioById("message-tool-stranded-final-reply");
+    const retryFailure = readQaScenarioById("message-tool-stranded-final-retry-failure");
     const heartbeat = readQaScenarioById("commitments-heartbeat-target-none");
     const heartbeatFlow = JSON.stringify(heartbeat.execution.flow);
 
     expect(strandedConfig?.requiredProviderMode).toBe("mock-openai");
+    expect(retryFailureConfig?.requiredProviderMode).toBe("mock-openai");
     expect(JSON.stringify(stranded.execution.flow)).toContain(
+      "this seeded scenario is mock-openai only",
+    );
+    expect(JSON.stringify(retryFailure.execution.flow)).toContain(
       "this seeded scenario is mock-openai only",
     );
     expect(heartbeatFlow).toContain("sessionKey");
@@ -722,7 +844,6 @@ describe("qa scenario catalog", () => {
       "group-message-tool-unavailable-fallback",
       "qa-channel-reconnect-dedupe",
       "reaction-edit-delete",
-      "thread-follow-up",
       "image-generation-roundtrip",
       "image-understanding-attachment",
       "native-image-generation",
@@ -746,6 +867,70 @@ describe("qa scenario catalog", () => {
         | undefined;
       expect(config?.requiredChannelDriver, scenarioId).toBe("qa-channel");
     }
+  });
+
+  it("routes canonical thread relation flows through Crabline Matrix", () => {
+    for (const scenarioId of ["thread-follow-up", "thread-isolation"]) {
+      const scenario = readQaScenarioById(scenarioId);
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+
+      expect(scenario.execution.channel, scenarioId).toBe("matrix");
+      expect(config?.requiredChannelDriver, scenarioId).toBeUndefined();
+    }
+  });
+
+  it("keeps Matrix subagent thread spawn explicitly selectable", () => {
+    const scenario = readQaScenarioById("subagent-thread-spawn");
+    const config = readQaScenarioExecutionConfig("subagent-thread-spawn") as
+      | { requiredChannelDriver?: string }
+      | undefined;
+
+    expect(scenario.execution.channel).toBe("matrix");
+    expect(config?.requiredChannelDriver).toBe("live");
+  });
+
+  it("routes native command session targeting through Crabline Telegram", () => {
+    const scenario = readQaScenarioById("native-command-session-target");
+    const config = readQaScenarioExecutionConfig("native-command-session-target") as
+      | {
+          requiredChannelDriver?: string;
+          requiredProviderMode?: string;
+        }
+      | undefined;
+
+    expect(scenario.execution.channel).toBe("telegram");
+    expect(config?.requiredChannelDriver).toBeUndefined();
+    expect(config?.requiredProviderMode).toBe("mock-openai");
+  });
+
+  it("marks channel-owned scenarios that require the live driver", () => {
+    const liveScenarioIds = [
+      "slack-restart-resume",
+      "whatsapp-restart-resume",
+      "whatsapp-access-control-dm-disabled",
+      "whatsapp-access-control-dm-open",
+      "whatsapp-access-control-group-disabled",
+      "whatsapp-access-control-group-open",
+      "whatsapp-pairing-block",
+      "matrix-allowlist-hot-reload",
+    ];
+
+    for (const scenarioId of liveScenarioIds) {
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+      expect(config?.requiredChannelDriver, scenarioId).toBe("live");
+    }
+  });
+
+  it("isolates scenarios that own asynchronous transport state", () => {
+    const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+    const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
+
+    expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
+    expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
   it("adds a dreaming shadow trial report scenario", () => {
@@ -774,6 +959,15 @@ describe("qa scenario catalog", () => {
     expect(flow).toContain("plannedToolName === 'write'");
     expect(flow).toContain("readIndices[1] < firstWrite");
     expect(flow).toContain("String(memoryAfter) === config.seededMemory");
+  });
+
+  it("enables Telegram previews for channel streaming evidence", () => {
+    const scenario = readQaScenarioById("channel-message-flows");
+
+    expect(scenario.coverage?.primary).toContain("channels.streaming");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      channels: { telegram: { streaming: { mode: "partial" } } },
+    });
   });
 
   it("rejects malformed string matcher lists before running a flow", () => {

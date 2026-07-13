@@ -22,6 +22,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import {
@@ -69,7 +70,7 @@ const TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 30_000;
 const TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV =
   "OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS";
 
-export type CodexMigrationTargetAppServerPreparation = {
+type CodexMigrationTargetAppServerPreparation = {
   dispose: () => Promise<void>;
 };
 
@@ -364,9 +365,7 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   );
 }
 
-export function targetCodexMarketplaceDiscoveryTimeoutMs(
-  env: NodeJS.ProcessEnv = process.env,
-): number {
+function targetCodexMarketplaceDiscoveryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const configured = parseStrictNonNegativeInteger(
     env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
   );
@@ -383,12 +382,6 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
     item.status === "warning" &&
     item.details?.warningReason === CODEX_PLUGIN_LOAD_WARNING
   );
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {

@@ -2,10 +2,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, resolveTrajectoryPointerFilePath } from "./paths.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
@@ -186,6 +192,8 @@ function writeToolCallSessionFile(sessionFile: string): void {
 }
 
 afterAll(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
@@ -227,6 +235,126 @@ describe("exportTrajectoryBundle", () => {
     }
   });
 
+  it("exports SQLite-backed transcript rows without a session JSONL file", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    const outputDir = path.join(tmpDir, "bundle");
+    const sessionId = "session-1";
+    const sessionKey = "agent:main:session-1";
+    await replaceTranscriptEvents(
+      {
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath,
+      },
+      [
+        {
+          type: "session",
+          version: 3,
+          id: sessionId,
+          timestamp: "2026-04-01T05:46:39.000Z",
+          cwd: tmpDir,
+        },
+        {
+          type: "message",
+          id: "entry-user",
+          parentId: null,
+          timestamp: "2026-04-01T05:46:40.000Z",
+          message: userMessage("hello from sqlite"),
+        },
+        {
+          type: "message",
+          id: "entry-assistant",
+          parentId: "entry-user",
+          timestamp: "2026-04-01T05:46:41.000Z",
+          message: assistantMessage([{ type: "text", text: "done from sqlite" }]),
+        },
+      ],
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId,
+        storePath,
+      }),
+      sessionId,
+      sessionKey,
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.header?.id).toBe(sessionId);
+    expect(bundle.manifest.transcriptEventCount).toBe(2);
+    expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+    expect(fs.existsSync(path.join(tmpDir, "session-1.jsonl"))).toBe(false);
+  });
+
+  it("exports SQLite-backed runtime rows without a runtime JSONL sidecar", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    const outputDir = path.join(tmpDir, "bundle");
+    const sessionId = "session-1";
+    const sessionKey = "agent:main:session-1";
+    await replaceTranscriptEvents(
+      {
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath,
+      },
+      [
+        {
+          type: "session",
+          version: 3,
+          id: sessionId,
+          timestamp: "2026-04-01T05:46:39.000Z",
+          cwd: tmpDir,
+        },
+        {
+          type: "message",
+          id: "entry-user",
+          parentId: null,
+          timestamp: "2026-04-01T05:46:40.000Z",
+          message: userMessage("hello from sqlite"),
+        },
+      ],
+    );
+    appendSqliteTrajectoryRuntimeEvents({ sessionId, storePath }, [
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: sessionId,
+        source: "runtime",
+        type: "sqlite-runtime",
+        ts: "2026-04-01T05:46:41.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId,
+        sessionKey,
+      },
+    ]);
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId,
+        storePath,
+      }),
+      sessionId,
+      sessionKey,
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.runtimeFile).toBeUndefined();
+    expect(bundle.manifest.runtimeEventCount).toBe(1);
+    expect(bundle.manifest.sourceFiles.runtime).toBeUndefined();
+    expect(eventTypes(bundle.events)).toContain("sqlite-runtime");
+    expect(fs.existsSync(path.join(tmpDir, "trajectory", "session-1.jsonl"))).toBe(false);
+  });
+
   it("does not synthesize prompt files from export-time fallbacks", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
@@ -246,6 +374,57 @@ describe("exportTrajectoryBundle", () => {
     expect(fs.existsSync(path.join(outputDir, "prompts.json"))).toBe(false);
     expect(fs.existsSync(path.join(outputDir, "system-prompt.txt"))).toBe(false);
     expect(fs.existsSync(path.join(outputDir, "tools.json"))).toBe(false);
+  });
+
+  it("exports usage from truncated model completion runtime events", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    const usage = {
+      input: 384_954,
+      output: 5_624,
+      cacheRead: 333_824,
+      reasoningTokens: 2_038,
+      total: 724_402,
+    };
+    const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
+    writeSimpleSessionFile(sessionFile);
+    const runtimeEvent: TrajectoryEvent = {
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: "session-1",
+      source: "runtime",
+      type: "model.completed",
+      ts: "2026-04-22T08:00:02.000Z",
+      seq: 1,
+      sourceSeq: 1,
+      sessionId: "session-1",
+      data: {
+        truncated: true,
+        originalBytes: 300_000,
+        limitBytes: 256 * 1024,
+        reason: "trajectory-event-size-limit",
+        usage,
+        promptCache,
+        droppedFields: ["messagesSnapshot"],
+      },
+    };
+    fs.writeFileSync(runtimeFile, `${JSON.stringify(runtimeEvent)}\n`, "utf8");
+
+    await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    const artifacts = JSON.parse(
+      fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8"),
+    ) as { usage?: unknown; promptCache?: unknown };
+    expect(artifacts.usage).toEqual(usage);
+    expect(artifacts.promptCache).toEqual(promptCache);
   });
 
   it("preserves numeric transcript timestamps", async () => {
@@ -311,7 +490,8 @@ describe("exportTrajectoryBundle", () => {
           id: "call_1",
           name: "read",
           arguments: {
-            [rawSecrets[5]]: "secret-looking tool argument key",
+            [expectDefined(rawSecrets[5], "rawSecrets[5] test invariant")]:
+              "secret-looking tool argument key",
             command: `curl -H 'Authorization: Bearer ${rawSecrets[1]}'`,
           },
         },
@@ -1466,5 +1646,40 @@ describe("exportTrajectoryBundle", () => {
     expect(systemPrompt).toContain("$WORKSPACE_DIR/instructions.md");
     expect(tools).toContain("$WORKSPACE_DIR/docs");
     expect(`${prompts}\n${artifacts}\n${systemPrompt}\n${tools}`).not.toContain(tmpDir);
+  });
+
+  it("exports the transcript for a legacy v1 session without entry timestamps", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    const header = {
+      type: "session",
+      version: 1,
+      id: "session-1",
+      cwd: tmpDir,
+    };
+    const userEntry = {
+      type: "message",
+      message: userMessage("hello"),
+    };
+    const assistantEntry = {
+      type: "message",
+      message: assistantMessage([{ type: "text", text: "done" }]),
+    };
+    fs.writeFileSync(
+      sessionFile,
+      `${[header, userEntry, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.manifest.transcriptEventCount).toBe(2);
+    expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
   });
 });

@@ -1,5 +1,6 @@
 // Persists short-lived gateway restart handoff metadata.
 import { randomUUID } from "node:crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -108,7 +109,7 @@ function normalizePid(pid: number | undefined): number | null {
 
 function normalizeText(value: unknown, maxLength: number): string | undefined {
   const text = typeof value === "string" ? value.trim() : "";
-  return text ? text.slice(0, maxLength) : undefined;
+  return text ? truncateUtf16Safe(text, maxLength) : undefined;
 }
 
 function normalizeCreatedAt(value: number | undefined): number {
@@ -211,11 +212,11 @@ function normalizeGatewayRestartHandoffRow(row: {
   restart_kind: string;
   supervisor_mode: string;
 }): GatewayRestartHandoff | null {
+  const intentId = normalizeText(row.intent_id, MAX_INTENT_ID_LENGTH);
   if (
     row.kind !== GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND ||
     row.version !== 1 ||
-    typeof row.intent_id !== "string" ||
-    row.intent_id.trim().length === 0 ||
+    !intentId ||
     typeof row.pid !== "number" ||
     !Number.isSafeInteger(row.pid) ||
     row.pid <= 0 ||
@@ -242,7 +243,7 @@ function normalizeGatewayRestartHandoffRow(row: {
   return {
     kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
     version: 1,
-    intentId: row.intent_id.trim().slice(0, MAX_INTENT_ID_LENGTH),
+    intentId,
     pid: row.pid,
     ...(processInstanceId ? { processInstanceId } : {}),
     createdAt: Math.floor(row.created_at),

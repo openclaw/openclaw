@@ -192,6 +192,109 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
+  it("adds the OpenClaw session key to the managed OpenClaw tools MCP bridge", () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+
+    const readScopedMcpEnv = (sessionKey: string) => {
+      const delegate = (
+        runtime as unknown as {
+          resolveOpenClawToolsDelegateForSession(sessionKey: string): unknown;
+        }
+      ).resolveOpenClawToolsDelegateForSession(sessionKey) as {
+        options: {
+          mcpServers?: Array<{
+            env?: Array<{ name: string; value: string }>;
+            name: string;
+          }>;
+        };
+      };
+      return delegate.options.mcpServers?.find((server) => server.name === "openclaw-tools")?.env;
+    };
+
+    expect(readScopedMcpEnv("agent:worker:main")).toContainEqual({
+      name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
+      value: "agent:worker:main",
+    });
+    expect(readScopedMcpEnv("agent:research:main")).toContainEqual({
+      name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
+      value: "agent:research:main",
+    });
+  });
+
+  it("keeps managed OpenClaw tools MCP delegates reachable for fresh sessions", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const exposedRuntime = runtime as unknown as {
+      openclawToolsSessionDelegates: Map<string, unknown>;
+      resolveOpenClawToolsDelegateForSession(sessionKey: string): unknown;
+    };
+
+    const firstDelegate =
+      exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:worker:main");
+    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:worker:main")).toBe(true);
+
+    await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
+
+    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:worker:main")).toBe(true);
+    expect(exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:worker:main")).toBe(
+      firstDelegate,
+    );
+  });
+
+  it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const defaultProbe = vi.spyOn(delegate, "probeAvailability").mockResolvedValue(undefined);
+    const safeProbe = vi
+      .spyOn(bridgeSafeDelegate, "probeAvailability")
+      .mockResolvedValue(undefined);
+
+    await runtime.probeAvailability();
+
+    expect(safeProbe).toHaveBeenCalledTimes(1);
+    expect(defaultProbe).not.toHaveBeenCalled();
+  });
+
   it("normalizes OpenClaw Codex model ids for ACP startup", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
@@ -308,7 +411,21 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensureInput).not.toHaveProperty("thinking");
   });
 
-  it("adds Codex wrapper stderr tail to generic session initialization failures", async () => {
+  it.each([
+    {
+      name: "adds the redacted Codex wrapper stderr tail to session initialization failures",
+      stderr:
+        "noise\nUnhandled error during session/new: deployment missing token=[REDACTED] sk-testsecret1234567890\n",
+      expectedFragment: "deployment missing",
+      forbiddenFragment: "sk-testsecret1234567890",
+    },
+    {
+      name: "keeps the 6,000-unit Codex wrapper stderr tail UTF-16 safe",
+      stderr: `🚀${"a".repeat(5_999)}`,
+      expectedFragment: `Internal error: ${"a".repeat(5_999)}`,
+      forbiddenFragment: "\ude80",
+    },
+  ])("$name", async ({ stderr, expectedFragment, forbiddenFragment }) => {
     const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
     const leaseStore = makeLeaseStore();
     const wrapperCommand = `node "${path.join(wrapperRoot, "codex-acp-wrapper.mjs")}"`;
@@ -329,7 +446,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       const leaseId = String(Array.from(leaseStore.leases.values())[0]?.leaseId);
       await fs.writeFile(
         path.join(wrapperRoot, `codex-acp-wrapper.stderr.${leaseId}.log`),
-        "noise\nUnhandled error during session/new: deployment missing token=[REDACTED] sk-testsecret1234567890\n",
+        stderr,
         "utf8",
       );
       throw new Error("Internal error");
@@ -353,14 +470,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(outcome.error).toMatchObject({
       name: "AcpRuntimeError",
       code: "ACP_SESSION_INIT_FAILED",
-      message: expect.stringContaining("deployment missing"),
+      message: expect.stringContaining(expectedFragment),
     });
     const error = outcome.error;
     expect(error).toBeInstanceOf(AcpRuntimeError);
     if (!(error instanceof AcpRuntimeError)) {
       throw new Error("expected AcpRuntimeError");
     }
-    expect(error.message).not.toContain("sk-testsecret1234567890");
+    expect(error.message).not.toContain(forbiddenFragment);
   });
 
   it("adds Codex wrapper stderr tail to generic first-turn failures", async () => {
@@ -1161,6 +1278,46 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
     expect(baseStore["load"]).toHaveBeenCalledOnce();
+  });
+
+  it("releases managed OpenClaw tools MCP delegates after close", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const exposedRuntime = runtime as unknown as {
+      openclawToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
+      resolveOpenClawToolsDelegateForSession(sessionKey: string): {
+        close: AcpRuntime["close"];
+      };
+    };
+    const scopedDelegate =
+      exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:codex:main");
+    const close = vi.spyOn(scopedDelegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:main",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:main",
+      },
+      reason: "closed",
+    });
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:codex:main")).toBe(false);
   });
 
   it("cleans up OpenClaw-owned ACPX process trees after close", async () => {
@@ -2054,7 +2211,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
     const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
       mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-      probeAgent: "openclaw",
+      probeAgent: "  OpenClaw  ",
       agentRegistry: {
         resolve: (agentName: string) =>
           agentName === "openclaw" ? DOCUMENTED_OPENCLAW_BRIDGE_COMMAND : agentName,

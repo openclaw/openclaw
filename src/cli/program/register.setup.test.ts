@@ -52,8 +52,16 @@ describe("registerSetupCommand", () => {
     setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
-  it("runs setup command by default", async () => {
+  it("runs setup wizard command by default", async () => {
     await runCli(["setup", "--workspace", "/tmp/ws"]);
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("runs baseline setup command when --baseline is set", async () => {
+    await runCli(["setup", "--baseline", "--workspace", "/tmp/ws"]);
 
     expect(setupCommandMock).toHaveBeenCalledWith(lastSetupOptions(), runtime);
     expect(lastSetupOptions()?.workspace).toBe("/tmp/ws");
@@ -79,6 +87,106 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
+  it("forwards scripted onboarding controls", async () => {
+    await runCli([
+      "setup",
+      "--non-interactive",
+      "--accept-risk",
+      "--flow",
+      "advanced",
+      "--gateway-port",
+      "18789",
+      "--install-daemon",
+      "--skip-daemon",
+      "--skip-health",
+      "--skip-ui",
+      "--skip-channels",
+      "--skip-search",
+      "--skip-skills",
+      "--skip-bootstrap",
+      "--node-manager",
+      "pnpm",
+      "--json",
+    ]);
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(lastWizardOptions()).toMatchObject({
+      nonInteractive: true,
+      acceptRisk: true,
+      flow: "advanced",
+      gatewayPort: 18789,
+      installDaemon: false,
+      skipHealth: true,
+      skipUi: true,
+      skipChannels: true,
+      skipSearch: true,
+      skipSkills: true,
+      skipBootstrap: true,
+      nodeManager: "pnpm",
+      json: true,
+    });
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards onboard auth flags through the setup alias", async () => {
+    await runCli([
+      "setup",
+      "--non-interactive",
+      "--accept-risk",
+      "--auth-choice",
+      "token",
+      "--token-provider",
+      "openai",
+      "--token",
+      "test-token",
+      "--token-profile-id",
+      "openai:manual",
+      "--token-expires-in",
+      "1d",
+      "--secret-input-mode",
+      "ref",
+      "--openai-api-key",
+      "test-openai-api-key",
+      "--cloudflare-ai-gateway-account-id",
+      "account-id",
+      "--cloudflare-ai-gateway-gateway-id",
+      "gateway-id",
+      "--custom-base-url",
+      "https://example.test/v1",
+      "--custom-api-key",
+      "test-custom-api-key",
+      "--custom-model-id",
+      "custom-model",
+      "--custom-provider-id",
+      "custom-provider",
+      "--custom-compatibility",
+      "anthropic",
+      "--custom-text-input",
+    ]);
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(lastWizardOptions()).toMatchObject({
+      nonInteractive: true,
+      acceptRisk: true,
+      authChoice: "token",
+      tokenProvider: "openai",
+      token: "test-token",
+      tokenProfileId: "openai:manual",
+      tokenExpiresIn: "1d",
+      secretInputMode: "ref",
+      openaiApiKey: "test-openai-api-key",
+      cloudflareAiGatewayAccountId: "account-id",
+      cloudflareAiGatewayGatewayId: "gateway-id",
+      customBaseUrl: "https://example.test/v1",
+      customApiKey: "test-custom-api-key",
+      customModelId: "custom-model",
+      customProviderId: "custom-provider",
+      customCompatibility: "anthropic",
+      customImageInput: false,
+    });
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
   it("runs setup wizard command for migration import flags", async () => {
     await runCli([
       "setup",
@@ -97,7 +205,7 @@ describe("registerSetupCommand", () => {
   });
 
   it("reports setup errors through runtime", async () => {
-    setupCommandMock.mockRejectedValueOnce(new Error("setup failed"));
+    setupWizardCommandMock.mockRejectedValueOnce(new Error("setup failed"));
 
     await runCli(["setup"]);
 

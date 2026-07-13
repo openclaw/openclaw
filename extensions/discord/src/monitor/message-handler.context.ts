@@ -335,10 +335,15 @@ export async function buildDiscordMessageProcessContext(params: {
       tag: sender.tag,
       roles: memberRoleIds,
       displayLabel: senderLabel,
+      // PluralKit proxies post under a bot author but represent a human member,
+      // whose identity already replaced the sender fields here; only mark
+      // genuine (non-PluralKit) bot authors as bots.
+      isBot: author.bot && !sender.isPluralKit ? true : undefined,
     },
     conversation: {
       kind: isDirectMessage ? "direct" : "channel",
       id: messageChannelId,
+      nativeChannelId: messageChannelId,
       label: fromLabel,
       spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
       parentId: threadChannel ? threadParentId : undefined,
@@ -424,6 +429,7 @@ export async function buildDiscordMessageProcessContext(params: {
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
       GroupSubject: groupSubject,
       GroupChannel: groupChannel,
+      ...(isGuildMessage ? { GroupRequireMention: ctx.groupRequireMention } : {}),
       UntrustedStructuredContext: untrustedContext,
       OwnerAllowFrom: ownerAllowFrom,
     },

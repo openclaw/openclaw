@@ -184,6 +184,17 @@ function resolveManifestProviderAuthEnvVarCandidates(
   return resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliases);
 }
 
+function resolveManifestProviderUsageAuthEnvVarNames(
+  params?: ProviderEnvVarLookupParams,
+): string[] {
+  const snapshot = resolveProviderMetadataSnapshot(params);
+  return uniqueStrings(
+    snapshot.plugins
+      .filter((plugin) => shouldUsePluginProviderEnvVars(plugin, params))
+      .flatMap((plugin) => Object.values(plugin.providerUsageAuthEnvVars ?? {}).flat()),
+  );
+}
+
 function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
   params: ProviderEnvVarLookupParams | undefined,
   snapshot: PluginMetadataSnapshot,
@@ -334,7 +345,7 @@ export function resolveProviderAuthLookupMaps(
 }
 
 /** Resolves env vars used by setup, default SecretRefs, and broad secret scrubbing. */
-export function resolveProviderEnvVars(
+function resolveProviderEnvVars(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
   return {
@@ -437,12 +448,16 @@ export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupPa
   return uniqueStrings([
     ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flat(),
     ...Object.values(resolveProviderEnvVars(params)).flat(),
+    ...resolveManifestProviderUsageAuthEnvVarNames(params),
   ]);
 }
 
 /** Lists env vars that may contain provider secrets for broad scrubbing. */
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flat());
+  return uniqueStrings([
+    ...Object.values(resolveProviderEnvVars(params)).flat(),
+    ...resolveManifestProviderUsageAuthEnvVarNames(params),
+  ]);
 }
 
 /** Returns a copy of an env object with denied keys removed case-insensitively. */
@@ -468,4 +483,3 @@ export function omitEnvKeysCaseInsensitive(
   }
   return env;
 }
-export { testing as __testing };

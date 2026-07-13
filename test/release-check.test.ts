@@ -45,8 +45,9 @@ import {
 } from "../src/infra/package-dist-inventory.ts";
 import { withEnv } from "../src/test-utils/env.js";
 
-function makeItem(shortVersion: string, sparkleVersion: string): string {
-  return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
+function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
+  const channelElement = channel ? `<sparkle:channel>${channel}</sparkle:channel>` : "";
+  return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version>${channelElement}</item>`;
 }
 
 function makePackResult(filename: string, unpackedSize: number) {
@@ -82,8 +83,22 @@ describe("collectAppcastSparkleVersionErrors", () => {
     expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 
+  it("accepts canonical beta lane builds", () => {
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.2", "2606000502", "beta")}</channel></rss>`;
+
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
+  });
+
+  it("rejects beta builds on the default channel", () => {
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.2", "2606000502")}</channel></rss>`;
+
+    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([
+      "appcast item '2026.6.5-beta.2' must set sparkle:channel to 'beta'.",
+    ]);
+  });
+
   it("rejects appcast entries with invalid prerelease lanes", () => {
-    const xml = `<rss><channel>${makeItem("2026.6.5-beta.0", "2606000500")}</channel></rss>`;
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.0", "2606000500", "beta")}</channel></rss>`;
 
     expect(collectAppcastSparkleVersionErrors(xml)).toEqual([
       "appcast item '2026.6.5-beta.0' has invalid sparkle:shortVersionString '2026.6.5-beta.0'.",
@@ -525,6 +540,21 @@ describe("collectForbiddenPackPaths", () => {
     ).toEqual([...LOCAL_BUILD_METADATA_DIST_PATHS]);
   });
 
+  it("blocks Docker-selected external plugin trees from the core npm pack", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "dist/extensions/clickclack/index.js",
+        "dist/extensions/slack/setup-entry.js",
+        "dist/extensions/msteams/openclaw.plugin.json",
+      ]),
+    ).toEqual([
+      "dist/extensions/clickclack/index.js",
+      "dist/extensions/msteams/openclaw.plugin.json",
+      "dist/extensions/slack/setup-entry.js",
+    ]);
+  });
+
   it("keeps local build metadata excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
     for (const entry of LOCAL_BUILD_METADATA_DIST_PATHS) {
@@ -678,6 +708,7 @@ describe("collectMissingPackPaths", () => {
       "scripts/postinstall-bundled-plugins.mjs",
       "dist/agents/compaction-planning.worker.js",
       "dist/agents/model-provider-auth.worker.js",
+      "dist/audit/audit-event-writer.worker.js",
       "dist/task-registry-control.runtime.js",
       "dist/telegram-ingress-worker.runtime.js",
       bundledDistPluginFile("telegram", "runtime-api.js"),
@@ -712,6 +743,7 @@ describe("collectMissingPackPaths", () => {
         "dist/plugin-sdk/root-alias.cjs",
         "dist/agents/compaction-planning.worker.js",
         "dist/agents/model-provider-auth.worker.js",
+        "dist/audit/audit-event-writer.worker.js",
         "dist/task-registry-control.runtime.js",
         "dist/telegram-ingress-worker.runtime.js",
         "dist/build-info.json",
@@ -727,6 +759,18 @@ describe("collectMissingPackPaths", () => {
       const packageRoot = join(root, "openclaw");
       const distDir = join(packageRoot, "dist");
       mkdirSync(distDir, { recursive: true });
+      for (const relativePath of [
+        "facade-activation-check.runtime.js",
+        "extensions/image-generation-core/runtime-api.js",
+        "extensions/media-understanding-core/runtime-api.js",
+      ]) {
+        const filePath = join(distDir, relativePath);
+        mkdirSync(dirname(filePath), { recursive: true });
+        writeFileSync(filePath, "export {};\n");
+      }
+      for (const pluginId of ["image-generation-core", "media-understanding-core"]) {
+        writeFileSync(join(distDir, "extensions", pluginId, "package.json"), "{}\n");
+      }
       writeFileSync(
         join(packageRoot, "package.json"),
         `${JSON.stringify({ name: "openclaw", version: "2026.5.14-beta.3", dependencies: {} })}\n`,
@@ -821,6 +865,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       createPackedPluginSdkTypescriptSmokeProject({
         consumerDir,
         packageSpec: `file:${packageRoot}`,
+        aiPackageSpec: "file:/tmp/openclaw-ai.tgz",
       });
 
       const packageJson = JSON.parse(readFileSync(join(consumerDir, "package.json"), "utf8")) as {
@@ -836,6 +881,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       );
 
       expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
+      expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
       expect(source).toBe(fixtureSource);
       expect(source).toContain('"openclaw/plugin-sdk"');
@@ -883,6 +929,11 @@ describe("resolvePackedTarballPath", () => {
   it("resolves one local npm pack tarball filename inside the pack destination", () => {
     expect(
       resolvePackedTarballPath("/tmp/openclaw-pack", [{ filename: "openclaw-2026.6.17.tgz" }]),
+    ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
+    expect(
+      resolvePackedTarballPath("/tmp/openclaw-pack", [
+        { filename: "/tmp/openclaw-pack/openclaw-2026.6.17.tgz" },
+      ]),
     ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
   });
 

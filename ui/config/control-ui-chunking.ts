@@ -1,9 +1,9 @@
 // Control UI config module wires control ui chunking behavior.
-export function normalizeModuleId(id: string): string {
+function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
 }
 
-export function moduleIdIncludesPackage(id: string, packageName: string): boolean {
+function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   const normalized = normalizeModuleId(id);
   return (
     normalized.includes(`/node_modules/${packageName}/`) ||

@@ -275,6 +275,67 @@ describe("telegram doctor", () => {
     ]);
   });
 
+  it("removes retired group history context mode keys", () => {
+    expect(
+      telegramDoctor.legacyConfigRules?.some((rule) =>
+        rule.match?.(
+          {
+            includeGroupHistoryContext: "mention-only",
+          },
+          {},
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      telegramDoctor.legacyConfigRules?.some((rule) =>
+        rule.match?.(
+          {
+            work: { includeGroupHistoryContext: "none" },
+          },
+          {},
+        ),
+      ),
+    ).toBe(true);
+
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            includeGroupHistoryContext: "none",
+            historyLimit: 12,
+            accounts: {
+              work: {
+                includeGroupHistoryContext: "none",
+                historyLimit: 4,
+              },
+              ops: {
+                includeGroupHistoryContext: "recent",
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const telegram = result.config.channels?.telegram;
+    expect(Object.hasOwn(telegram ?? {}, "includeGroupHistoryContext")).toBe(false);
+    expect(telegram?.historyLimit).toBe(0);
+    expect(Object.hasOwn(telegram?.accounts?.work ?? {}, "includeGroupHistoryContext")).toBe(false);
+    expect(telegram?.accounts?.work?.historyLimit).toBe(0);
+    expect(Object.hasOwn(telegram?.accounts?.ops ?? {}, "includeGroupHistoryContext")).toBe(false);
+    expect(telegram?.accounts?.ops?.historyLimit).toBe(12);
+    expect(result.changes).toEqual([
+      "Removed channels.telegram.includeGroupHistoryContext and set historyLimit to 0; Telegram group history is always on for groups and bounded by historyLimit.",
+      "Removed channels.telegram.accounts.work.includeGroupHistoryContext and set historyLimit to 0; Telegram group history is always on for groups and bounded by historyLimit.",
+      "Removed channels.telegram.accounts.ops.includeGroupHistoryContext and set historyLimit to 12; Telegram group history is always on for groups and bounded by historyLimit.",
+    ]);
+  });
+
   it("finds invalid allowFrom entries across scopes", () => {
     const hits = scanTelegramInvalidAllowFromEntries({
       channels: {

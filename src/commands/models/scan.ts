@@ -1,5 +1,6 @@
 /** OpenRouter free-model scanner and fallback updater for model commands. */
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
+import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import {
   stylePromptHint,
   stylePromptMessage,
@@ -15,7 +16,6 @@ import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "../../infra/parse-finite-number.js";
-import { getEnvApiKey } from "../../llm/env-api-keys.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { pad, truncate } from "./list.format.js";
 import { loadModelsConfig } from "./load-config.js";

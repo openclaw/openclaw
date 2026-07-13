@@ -636,6 +636,11 @@ export type ChannelApprovalAdapter = {
     channelLabel: string;
     accountId?: string;
   }) => string | null | undefined;
+  describePluginApprovalSetup?: (params: {
+    channel: string;
+    channelLabel: string;
+    accountId?: string;
+  }) => string | null | undefined;
 };
 
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
@@ -767,6 +772,7 @@ export type ChannelConfiguredBindingProvider = {
 
 export type ChannelConversationBindingSupport = {
   supportsCurrentConversationBinding?: boolean;
+  isCurrentConversationBindingSupported?: (params: { accountId: string }) => boolean;
   /**
    * Preferred placement when a command is started from a top-level conversation
    * without an existing native thread id.

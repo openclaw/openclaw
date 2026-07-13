@@ -1,25 +1,26 @@
 // Provider stream shared helpers implement reusable stream wrappers and payload policies.
-import { randomUUID } from "node:crypto";
+import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import {
-  extractStandalonePlainTextToolCallText,
+  createPromotedPlainTextToolCallBlock,
+  createPromotedPlainTextToolCallEvents,
   normalizePlainTextToolCallStreamEvents,
-  promoteStandalonePlainTextToolCallMessage,
-  scrubOverCapPlainTextToolCallMessage,
+  projectScrubbedPlainTextToolCallMessage,
+  projectStandalonePlainTextToolCallMessage,
+  type PlainTextToolCallMessageProjection,
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallMessageNormalization,
 } from "../../packages/tool-call-repair/src/index.js";
 import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
-import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-export { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
-export { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
-export { notifyLlmRequestActivity, onLlmRequestActivity } from "../shared/llm-request-activity.js";
+export { applyAnthropicRefusal } from "@openclaw/ai/internal/anthropic";
+export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
+export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 
 type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
 
@@ -59,27 +60,10 @@ function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> 
   return new Set(names);
 }
 
-function createSyntheticToolCallId(): string {
-  return `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-}
-
-function createPlainTextToolCallBlock(parsed: {
-  arguments: Record<string, unknown>;
-  name: string;
-}): Record<string, unknown> {
-  return {
-    type: "toolCall",
-    id: createSyntheticToolCallId(),
-    name: parsed.name,
-    arguments: parsed.arguments,
-    partialArgs: JSON.stringify(parsed.arguments),
-  };
-}
-
 function promotePlainTextToolCalls(
   message: unknown,
   toolNames: Set<string>,
-): Record<string, unknown> | undefined {
+): PlainTextToolCallMessageProjection | undefined {
   const messageRecord = toRecord(message);
   if (
     Array.isArray(messageRecord?.content) &&
@@ -87,37 +71,10 @@ function promotePlainTextToolCalls(
   ) {
     return undefined;
   }
-  return promoteStandalonePlainTextToolCallMessage({
+  return projectStandalonePlainTextToolCallMessage({
     allowedToolNames: toolNames,
-    createToolCallBlock: (block, name) => createPlainTextToolCallBlock({ ...block, name }),
+    createToolCallBlock: createPromotedPlainTextToolCallBlock,
     isRetainableNonTextBlock: () => true,
-    message,
-  });
-}
-
-function emitPromotedToolCallEvents(
-  stream: { push(event: unknown): void },
-  message: Record<string, unknown>,
-): void {
-  const content = Array.isArray(message.content) ? message.content : [];
-  content.forEach((block, contentIndex) => {
-    const record = toRecord(block);
-    if (record?.type !== "toolCall") {
-      return;
-    }
-    stream.push({ type: "toolcall_start", contentIndex, partial: message });
-    stream.push({
-      type: "toolcall_delta",
-      contentIndex,
-      delta: typeof record.partialArgs === "string" ? record.partialArgs : "{}",
-      partial: message,
-    });
-  });
-}
-
-function extractPlainTextToolCallCandidate(message: unknown): string | undefined {
-  return extractStandalonePlainTextToolCallText({
-    allowOtherNonTextBlocks: true,
     message,
   });
 }
@@ -138,19 +95,36 @@ function createProviderToolNameMatcher(toolNames: Set<string>): PlainTextToolCal
 
 function normalizeProviderDoneMessage(
   message: unknown,
+  allowPromotion: boolean,
   toolNames: Set<string>,
   matcher: PlainTextToolCallNameMatcher,
+  preserveEmptyTextBlocks = false,
 ): PlainTextToolCallMessageNormalization {
-  const scrubbedMessage = scrubOverCapPlainTextToolCallMessage({
-    candidateText: extractPlainTextToolCallCandidate(message),
-    matcher,
-    message,
-  });
+  const scrubbedMessage = scrubProviderTerminalMessage(message, matcher, preserveEmptyTextBlocks);
   if (scrubbedMessage) {
-    return { kind: "scrubbed", message: scrubbedMessage };
+    return { kind: "scrubbed", ...scrubbedMessage };
+  }
+  // Token-limit and error terminals can leave complete-looking tool syntax.
+  // Only normal completion or explicit tool use may promote it into an executable call.
+  if (!allowPromotion) {
+    return undefined;
   }
   const promotedMessage = promotePlainTextToolCalls(message, toolNames);
-  return promotedMessage ? { kind: "promoted", message: promotedMessage } : undefined;
+  return promotedMessage ? { kind: "promoted", ...promotedMessage } : undefined;
+}
+
+function scrubProviderTerminalMessage(
+  message: unknown,
+  matcher: PlainTextToolCallNameMatcher,
+  preserveEmptyTextBlocks = false,
+  forceKnownCandidates = false,
+): PlainTextToolCallMessageProjection | undefined {
+  return projectScrubbedPlainTextToolCallMessage({
+    forceKnownCandidates,
+    matcher,
+    message,
+    preserveEmptyTextBlocks,
+  });
 }
 
 function wrapPlainTextToolCallStream(
@@ -178,14 +152,16 @@ function wrapPlainTextToolCallStream(
       const normalizedEvents = normalizePlainTextToolCallStreamEvents(
         source as AsyncIterable<unknown>,
         {
-          createPromotedToolCallEvents: (message) => {
-            const events: unknown[] = [];
-            emitPromotedToolCallEvents({ push: (event: unknown) => events.push(event) }, message);
-            return events;
-          },
+          createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
           matcher,
-          normalizeDoneMessage: ({ message }) =>
-            normalizeProviderDoneMessage(message, toolNames, matcher),
+          normalizeTerminalMessage: ({ allowPromotion, message, preserveEmptyTextBlocks }) =>
+            normalizeProviderDoneMessage(
+              message,
+              allowPromotion,
+              toolNames,
+              matcher,
+              preserveEmptyTextBlocks,
+            ),
           stopAfterDone: true,
         },
       );

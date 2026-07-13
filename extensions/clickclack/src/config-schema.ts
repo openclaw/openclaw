@@ -22,6 +22,7 @@ const ClickClackAccountConfigSchema = z
     defaultTo: z.string().optional(),
     allowFrom: z.array(z.string()).optional(),
     reconnectMs: z.number().int().min(100).max(60_000).optional(),
+    agentActivity: z.boolean().optional(),
   })
   .strict();
 

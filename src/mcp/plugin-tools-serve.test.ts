@@ -1,4 +1,7 @@
 // Plugin MCP serve tests cover serving plugin tools over MCP.
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type HookContext,
@@ -9,7 +12,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
@@ -178,6 +181,82 @@ describe("plugin tools MCP server", () => {
     expect(executeCall[2]).toBeUndefined();
     expect(executeCall[3]).toBeUndefined();
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
+  });
+
+  it("serializes source-shaped image tool content with pinned MCP image blocks", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [
+        { type: "text", text: "browser screenshot" },
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: "iVBORw0KGgo=",
+          },
+        },
+      ],
+    });
+    const tool = {
+      name: "browser_screenshot",
+      description: "Capture a browser screenshot",
+      parameters: { type: "object", properties: {} },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "browser_screenshot",
+      arguments: {},
+    });
+
+    expect(result.content).toEqual([
+      { type: "text", text: "browser screenshot" },
+      { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+    ]);
+    expect(() => CallToolResultSchema.parse(result)).not.toThrow();
+  });
+
+  it("delivers source-shaped images through a real MCP client", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [
+        { type: "text", text: "browser screenshot" },
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: "iVBORw0KGgo=",
+          },
+        },
+      ],
+    });
+    const tool = {
+      name: "browser_screenshot",
+      description: "Capture a browser screenshot",
+      parameters: { type: "object", properties: {} },
+      execute,
+    } as unknown as AnyAgentTool;
+    const { createToolsMcpServer } =
+      await vi.importActual<typeof import("./tools-stdio-server.js")>("./tools-stdio-server.js");
+    const server = createToolsMcpServer({ name: "plugin-tools-image-test", tools: [tool] });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "plugin-tools-image-test-client", version: "0.0.0" },
+      { capabilities: {} },
+    );
+
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const result = await client.callTool({ name: "browser_screenshot", arguments: {} });
+      expect(result.content).toEqual([
+        { type: "text", text: "browser screenshot" },
+        { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 
   it("serializes plugin tool results that do not use the MCP content envelope", async () => {

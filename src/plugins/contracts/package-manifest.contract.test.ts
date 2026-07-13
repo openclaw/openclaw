@@ -27,7 +27,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "amazon-bedrock-mantle" },
   {
     pluginId: "diffs",
-    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme"],
+    pluginLocalRuntimeDeps: ["@pierre/diffs"],
   },
   { pluginId: "file-transfer" },
   {

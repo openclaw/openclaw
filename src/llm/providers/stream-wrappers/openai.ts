@@ -1,3 +1,8 @@
+import {
+  resolveOpenAIReasoningEffortForModel,
+  supportsOpenAIReasoningEffort,
+} from "@openclaw/ai/internal/openai";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
   normalizeFastMode,
@@ -13,7 +18,6 @@ import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
 } from "../../../agents/openai-completions-string-content.js";
-import { resolveOpenAIReasoningEffortForModel } from "../../../agents/openai-reasoning-effort.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -264,10 +268,6 @@ function shouldStripOpenAICompletionMessageKeys(model: {
   return model.api === "openai-completions" && compat?.strictMessageKeys === true;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function hasResponsesWebSearchTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) {
     return false;
@@ -292,7 +292,20 @@ function resolveOpenAIThinkingPayloadEffort(params: {
   payloadObj: Record<string, unknown>;
   thinkingLevel: ThinkLevel;
 }) {
-  const mapped = mapThinkingLevelToReasoningEffort(params.thinkingLevel);
+  const provider = normalizeOptionalLowercaseString(params.model.provider);
+  const defaultEffort = mapThinkingLevelToReasoningEffort(params.thinkingLevel);
+  const usesNativeMax = provider === "openai" && supportsOpenAIReasoningEffort(params.model, "max");
+  // Native max-capable models have family-specific lower bounds. Compatible
+  // providers keep literal minimal and max/xhigh until their owners opt in.
+  const needsModelAwareEffort =
+    provider === "openai" &&
+    (params.thinkingLevel === "max" || (params.thinkingLevel === "minimal" && usesNativeMax));
+  const mapped = needsModelAwareEffort
+    ? (resolveOpenAIReasoningEffortForModel({
+        model: params.model,
+        effort: params.thinkingLevel,
+      }) ?? defaultEffort)
+    : defaultEffort;
   if (mapped !== "minimal" || !hasResponsesWebSearchTool(params.payloadObj.tools)) {
     return mapped;
   }

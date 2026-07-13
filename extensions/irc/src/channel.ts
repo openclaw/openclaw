@@ -15,6 +15,7 @@ import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
 } from "openclaw/plugin-sdk/directory-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -40,6 +41,7 @@ import {
   looksLikeIrcTargetId,
   normalizeIrcAllowEntry,
   normalizeIrcMessagingTarget,
+  resolveIrcOutboundSessionRoute,
 } from "./normalize.js";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
@@ -62,14 +64,7 @@ const meta = {
   markdownCapable: true,
 };
 
-type IrcChannelRuntimeModule = typeof import("./channel-runtime.js");
-
-let ircChannelRuntimePromise: Promise<IrcChannelRuntimeModule> | undefined;
-
-async function loadIrcChannelRuntime(): Promise<IrcChannelRuntimeModule> {
-  ircChannelRuntimePromise ??= import("./channel-runtime.js");
-  return await ircChannelRuntimePromise;
-}
+const loadIrcChannelRuntime = createLazyRuntimeModule(() => import("./channel-runtime.js"));
 
 function normalizePairingTarget(raw: string): string {
   const normalized = normalizeIrcAllowEntry(raw);
@@ -237,6 +232,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
     messaging: {
       targetPrefixes: ["irc"],
       normalizeTarget: normalizeIrcMessagingTarget,
+      resolveOutboundSessionRoute: (params) => resolveIrcOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: looksLikeIrcTargetId,
         hint: "<#channel|nick>",

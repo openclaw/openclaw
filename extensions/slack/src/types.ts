@@ -11,6 +11,7 @@ export type SlackFile = {
 
 export type SlackAttachment = {
   fallback?: string;
+  title?: string;
   text?: string;
   pretext?: string;
   author_name?: string;
@@ -26,6 +27,8 @@ export type SlackAttachment = {
   image_height?: number;
   thumb_url?: string;
   files?: SlackFile[];
+  fields?: Array<{ title?: string; value?: string }>;
+  blocks?: unknown[];
   message_blocks?: unknown[];
 };
 

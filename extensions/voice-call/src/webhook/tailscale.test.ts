@@ -68,6 +68,16 @@ function createErrorProc() {
   return proc;
 }
 
+function createPendingProc() {
+  const proc = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  proc.stdout = new EventEmitter();
+  proc.kill = vi.fn();
+  return proc;
+}
+
 describe("voice-call tailscale helpers", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -116,6 +126,17 @@ describe("voice-call tailscale helpers", () => {
     spawnMock.mockReturnValueOnce(createErrorProc());
 
     await expect(getTailscaleSelfInfo()).resolves.toBeNull();
+  });
+
+  it("treats a tailscale stdout stream error as unavailable and stops the child", async () => {
+    const proc = createPendingProc();
+    spawnMock.mockReturnValueOnce(proc);
+
+    const result = getTailscaleSelfInfo();
+    proc.stdout.emit("error", new Error("EPIPE"));
+
+    await expect(result).resolves.toBeNull();
+    expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
   it("tracks tailscale stdout without retaining over-limit output", () => {

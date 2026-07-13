@@ -8,6 +8,7 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -25,12 +26,7 @@ import {
 } from "../policy-state.js";
 import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
 
-let fsPromisesModulePromise: Promise<typeof import("node:fs/promises")> | null = null;
-
-const loadFsPromisesModule = async () => {
-  fsPromisesModulePromise ??= import("node:fs/promises");
-  return await fsPromisesModulePromise;
-};
+const loadFsPromisesModule = createLazyRuntimeModule(() => import("node:fs/promises"));
 
 import { createPolicyDoctorChecks } from "./checks.js";
 import {
@@ -59,14 +55,10 @@ import {
 export {
   POLICY_CHECK_IDS,
   POLICY_RULE_METADATA,
-  SANDBOX_CONTAINER_POLICY_RULES,
-  type PolicyEmptyListSemantics,
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
-  type PolicyStrictnessKind,
 } from "./metadata.js";
 export { isPolicyValueAtLeastAsStrict } from "./strictness.js";
-export type { PolicyEvaluation } from "./types.js";
 
 const POLICY_RULES: readonly PolicyRuleMetadata[] = POLICY_RULE_METADATA;
 
@@ -96,6 +88,7 @@ const SUPPORTED_GATEWAY_POLICY_SECTIONS = [
   "controlUi",
   "exposure",
   "http",
+  "nodes",
   "remote",
 ] as const;
 const SUPPORTED_GATEWAY_HTTP_ENDPOINTS = ["chatCompletions", "responses"] as const;
@@ -122,7 +115,7 @@ const SUPPORTED_SANDBOX_MODES = ["off", "non-main", "all"] as const;
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
 
-export type PolicyDoctorRegistrationHost = {
+type PolicyDoctorRegistrationHost = {
   readonly registerHealthCheck: (check: HealthCheck) => void;
 };
 
@@ -1883,7 +1876,7 @@ function gatewayPolicyShapeFinding(
     );
   }
 
-  for (const section of ["exposure", "auth", "controlUi", "remote", "http"] as const) {
+  for (const section of ["exposure", "auth", "controlUi", "remote", "http", "nodes"] as const) {
     if (value[section] !== undefined && !isRecord(value[section])) {
       return policyShapeFinding(
         params.policyPath,
@@ -1908,12 +1901,14 @@ function gatewayPolicyShapeFinding(
   const controlUi = isRecord(value.controlUi) ? value.controlUi : {};
   const remote = isRecord(value.remote) ? value.remote : {};
   const http = isRecord(value.http) ? value.http : {};
+  const nodes = isRecord(value.nodes) ? value.nodes : {};
   for (const [section, sectionValue, allowedKeys] of [
     ["exposure", exposure, ["allowNonLoopbackBind", "allowTailscaleFunnel"]],
     ["auth", auth, ["requireAuth", "requireExplicitRateLimit"]],
     ["controlUi", controlUi, ["allowInsecure"]],
     ["remote", remote, ["allow"]],
     ["http", http, ["denyEndpoints", "requireUrlAllowlists"]],
+    ["nodes", nodes, ["denyCommands"]],
   ] as const) {
     const unsupportedKey = unsupportedPolicyKey(sectionValue, allowedKeys);
     if (unsupportedKey !== undefined) {
@@ -1984,6 +1979,28 @@ function gatewayPolicyShapeFinding(
         `oc://${params.policyDocName}/gateway/http/denyEndpoints/#${invalidIndex}`,
         `${params.policyPath} gateway.http.denyEndpoints[${invalidIndex}] must be a supported endpoint id.`,
         `Use supported endpoint ids: ${SUPPORTED_GATEWAY_HTTP_ENDPOINTS.join(", ")}.`,
+      );
+    }
+  }
+  const denyCommands = nodes.denyCommands;
+  if (denyCommands !== undefined && !Array.isArray(denyCommands)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/gateway/nodes/denyCommands`,
+      `${params.policyPath} gateway.nodes.denyCommands must be an array.`,
+      'Use an array of node command ids such as ["system.run"] or remove gateway.nodes.denyCommands.',
+    );
+  }
+  if (Array.isArray(denyCommands)) {
+    const invalidIndex = denyCommands.findIndex(
+      (entry) => typeof entry !== "string" || entry.trim() === "",
+    );
+    if (invalidIndex >= 0) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/gateway/nodes/denyCommands/#${invalidIndex}`,
+        `${params.policyPath} gateway.nodes.denyCommands[${invalidIndex}] must be a non-empty node command id.`,
+        "Use non-empty node command ids.",
       );
     }
   }
@@ -4495,7 +4512,9 @@ function policyHasGatewayRules(policy: unknown): boolean {
     (isRecord(gateway.controlUi) && gateway.controlUi.allowInsecure !== undefined) ||
     (isRecord(gateway.remote) && gateway.remote.allow !== undefined) ||
     (isRecord(gateway.http) &&
-      (gateway.http.denyEndpoints !== undefined || gateway.http.requireUrlAllowlists !== undefined))
+      (gateway.http.denyEndpoints !== undefined ||
+        gateway.http.requireUrlAllowlists !== undefined)) ||
+    (isRecord(gateway.nodes) && gateway.nodes.denyCommands !== undefined)
   );
 }
 
@@ -4783,11 +4802,12 @@ function scopedPolicyFields(
 }
 
 function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
-  const scopedRoot = path[0] === "agents" ? overlay.agents : overlay[path[0]];
-  if (path[0] === "agents") {
-    return getPolicyPath(scopedRoot, path.slice(1));
+  const [root, ...remainingPath] = path;
+  if (!root) {
+    return undefined;
   }
-  return getPolicyPath(scopedRoot, path.slice(1));
+  const scopedRoot = root === "agents" ? overlay.agents : overlay[root];
+  return getPolicyPath(scopedRoot, remainingPath);
 }
 
 function getPolicyPath(value: unknown, path: readonly string[]): unknown {

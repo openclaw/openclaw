@@ -19,6 +19,8 @@ type AgentPayloadLike = {
   attachments?: unknown;
   isError?: unknown;
   isReasoning?: unknown;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: unknown;
 };
 
 type AgentDeliveryEvidence = {
@@ -28,6 +30,7 @@ type AgentDeliveryEvidence = {
     errorMessage?: unknown;
   };
   didSendViaMessagingTool?: unknown;
+  didSendDeterministicApprovalPrompt?: unknown;
   messagingToolSentTexts?: unknown;
   messagingToolSentMediaUrls?: unknown;
   messagingToolSentTargets?: unknown;
@@ -40,6 +43,62 @@ type AgentDeliveryEvidence = {
   };
 };
 
+type SourceReplyDeliveryEvidence = {
+  didDeliverSourceReplyViaMessageTool?: unknown;
+  messagingToolSourceReplyPayloads?: unknown;
+};
+
+type ExplicitFinalSourceReplyEvidence = {
+  messagingToolSentTargets?: unknown;
+  messagingToolSourceReplyPayloads?: unknown;
+};
+
+function collectSourceReplyFinalMarkers(value: unknown): boolean[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const marker = (entry as { sourceReplyFinal?: unknown }).sourceReplyFinal;
+    return typeof marker === "boolean" ? [marker] : [];
+  });
+}
+
+/** Resolve explicit progress/final evidence, or undefined for legacy runtimes. */
+export function resolveExplicitFinalSourceReplyDeliveryEvidence(
+  result: ExplicitFinalSourceReplyEvidence,
+): boolean | undefined {
+  const markers = [
+    ...collectSourceReplyFinalMarkers(result.messagingToolSentTargets),
+    ...collectSourceReplyFinalMarkers(result.messagingToolSourceReplyPayloads),
+  ];
+  return markers.length > 0 ? markers.some(Boolean) : undefined;
+}
+
+/** Preserve legacy completion semantics unless the runtime emitted progress/final markers. */
+export function hasCompletedSourceReplyDeliveryEvidence(
+  result: SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
+): boolean {
+  return (
+    resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
+    hasCommittedSourceReplyDeliveryEvidence(result)
+  );
+}
+
+/** Returns whether delivery evidence completes the current interactive turn. */
+export function hasCompletedTerminalDeliveryEvidence(
+  result: AgentDeliveryEvidence & SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
+): boolean {
+  const explicitFinal = resolveExplicitFinalSourceReplyDeliveryEvidence(result);
+  return (
+    hasCompletedSourceReplyDeliveryEvidence(result) ||
+    (explicitFinal === undefined && hasVisibleOutboundDeliveryEvidence(result)) ||
+    result.didSendDeterministicApprovalPrompt === true
+  );
+}
+
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -50,6 +109,21 @@ function hasNonEmptyArray(value: unknown): boolean {
 
 function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
+}
+
+function hasVisibleMessagingToolTarget(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const target = value as { text?: unknown; mediaUrls?: unknown; hasRichContent?: unknown };
+  if ("text" in target || "mediaUrls" in target || "hasRichContent" in target) {
+    return (
+      hasNonEmptyString(target.text) ||
+      hasNonEmptyStringArray(target.mediaUrls) ||
+      target.hasRichContent === true
+    );
+  }
+  return true;
 }
 
 function hasVisibleAttachmentReference(value: unknown): boolean {
@@ -80,7 +154,19 @@ function collectStringValues(value: unknown, output: Set<string>) {
   }
 }
 
-function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set<string>) {
+function collectMediaUrlsFromRecord(
+  record: Record<string, unknown>,
+  output: Set<string>,
+  // Payloads arrive as in-process `unknown` objects, so a malformed
+  // self-referential `attachments` chain would recurse until the stack
+  // overflows. Track visited records to bound the descent, matching
+  // redactStringsDeep in embedded-agent-subscribe.tools.ts.
+  seen = new WeakSet<object>(),
+) {
+  if (seen.has(record)) {
+    return;
+  }
+  seen.add(record);
   collectStringValues(record.mediaUrl, output);
   collectStringValues(record.mediaUrls, output);
   collectStringValues(record.path, output);
@@ -90,7 +176,7 @@ function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set
   if (Array.isArray(attachments)) {
     for (const attachment of attachments) {
       if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
-        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output);
+        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output, seen);
       }
     }
   }
@@ -210,6 +296,53 @@ export function hasCommittedMessagingToolDeliveryEvidence(
     hasNonEmptyStringArray(result.messagingToolSentTexts) ||
     hasNonEmptyStringArray(result.messagingToolSentMediaUrls) ||
     hasNonEmptyArray(result.messagingToolSentTargets)
+  );
+}
+
+/** Returns whether messaging-tool metadata proves a user-visible committed delivery. */
+export function hasVisibleCommittedMessagingToolDeliveryEvidence(
+  result: Pick<
+    AgentDeliveryEvidence,
+    "messagingToolSentTexts" | "messagingToolSentMediaUrls" | "messagingToolSentTargets"
+  >,
+): boolean {
+  return (
+    hasNonEmptyStringArray(result.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(result.messagingToolSentMediaUrls) ||
+    (Array.isArray(result.messagingToolSentTargets) &&
+      result.messagingToolSentTargets.some(hasVisibleMessagingToolTarget))
+  );
+}
+
+function hasGranularMessagingToolDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    result.messagingToolSentTexts !== undefined ||
+    result.messagingToolSentMediaUrls !== undefined ||
+    result.messagingToolSentTargets !== undefined
+  );
+}
+
+/** Returns whether a source reply was visibly delivered through the message tool. */
+export function hasCommittedSourceReplyDeliveryEvidence(
+  result: SourceReplyDeliveryEvidence,
+): boolean {
+  return (
+    result.didDeliverSourceReplyViaMessageTool === true ||
+    hasVisibleAgentPayload({ payloads: result.messagingToolSourceReplyPayloads })
+  );
+}
+
+/** Returns whether outbound metadata proves a visible message, spawn, or cron side effect. */
+export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
+    // The coarse flag is the only evidence available for older callers. Once detailed
+    // metadata exists, it owns visibility so blank sends cannot suppress recovery.
+    (result.didSendViaMessagingTool === true &&
+      !hasGranularMessagingToolDeliveryEvidence(result)) ||
+    (Array.isArray(result.acceptedSessionSpawns) &&
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasPositiveNumber(result.successfulCronAdds)
   );
 }
 

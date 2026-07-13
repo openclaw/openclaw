@@ -2,6 +2,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
@@ -9,11 +11,14 @@ import {
   isSameMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import pLimit from "p-limit";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -52,6 +57,8 @@ const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_RECALL_MAX_ENTRIES = 512;
+// One recall batch can inspect every retained entry; cap filesystem pressure.
+const SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY = 32;
 const SHORT_TERM_RECALL_MAX_SNIPPET_CHARS = 800;
 export const SHORT_TERM_STORE_RELATIVE_PATH = path.join(
   "memory",
@@ -74,12 +81,21 @@ const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
+const RAW_SESSION_METADATA_RE =
+  /\bSession Key\b.{0,260}\bSession ID\b|\bSession ID\b.{0,260}\bSession Key\b/i;
+const RAW_CONVERSATION_SUMMARY_RE = /^(?:[-*+]\s*)?Conversation Summary:/i;
+const RAW_TRANSCRIPT_TURN_RE = /^(?:[-*+]\s*)?(?:user|assistant):\s/i;
+const MEMORY_FLUSH_PROMPT_RE =
+  /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
+// Optional signals=N accepts both legacy annotations and the current format.
+const PROMOTION_SCORE_METADATA_RE =
+  /\[\s*score=\d+(?:\.\d+)?\s+(?:signals=\d+\s+)?recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
-const inProcessShortTermLocks = new Map<string, Promise<void>>();
+const inProcessShortTermLocks = new KeyedAsyncQueue();
 
 type PromotionWeights = {
   frequency: number;
@@ -120,7 +136,7 @@ export type ShortTermRecallEntry = {
   promotedAt?: string;
 };
 
-export type ShortTermRecallStore = {
+type ShortTermRecallStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermRecallEntry>;
@@ -135,7 +151,7 @@ type ShortTermPhaseSignalEntry = {
   lastRemConsideredAt?: string;
 };
 
-export type ShortTermPhaseSignalStore = {
+type ShortTermPhaseSignalStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermPhaseSignalEntry>;
@@ -169,7 +185,7 @@ export type PromotionCandidate = {
   recallCount: number;
   dailyCount?: number;
   groundedCount?: number;
-  signalCount?: number;
+  signalCount: number;
   avgScore: number;
   maxScore: number;
   uniqueQueries: number;
@@ -349,7 +365,7 @@ function truncateShortTermSnippet(snippet: string): string {
   if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
     return snippet;
   }
-  return snippet.slice(0, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
+  return truncateUtf16Safe(snippet, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
 }
 
 function enforceShortTermRecallSnippetCap(store: ShortTermRecallStore): void {
@@ -402,14 +418,22 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
-function isContaminatedDreamingSnippet(raw: string): boolean {
+function isContaminatedDreamingSnippet(
+  raw: string,
+  opts: { allowTranscriptTurnSnippet?: boolean } = {},
+): boolean {
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
-    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet)
+    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
+    RAW_SESSION_METADATA_RE.test(snippet) ||
+    RAW_CONVERSATION_SUMMARY_RE.test(snippet) ||
+    (!opts.allowTranscriptTurnSnippet && RAW_TRANSCRIPT_TURN_RE.test(snippet)) ||
+    MEMORY_FLUSH_PROMPT_RE.test(snippet) ||
+    PROMOTION_SCORE_METADATA_RE.test(snippet)
   ) {
     return true;
   }
@@ -543,7 +567,9 @@ function calculateConsolidationComponent(recallDays: string[]): number {
   if (parsed.length <= 1) {
     return 0.2;
   }
-  const spanDays = Math.max(0, (parsed.at(-1)! - parsed[0]) / DAY_MS);
+  const first = expectDefined(parsed.at(0), "multiple parsed recall days");
+  const last = expectDefined(parsed.at(-1), "multiple parsed recall days");
+  const spanDays = Math.max(0, (last - first) / DAY_MS);
   const spacing = clampScore(Math.log1p(parsed.length - 1) / Math.log1p(4));
   const span = clampScore(spanDays / 7);
   return clampScore(0.55 * spacing + 0.45 * span);
@@ -598,7 +624,12 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
           ? entry.claimHash.trim()
           : undefined;
       const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
-      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet)) {
+      if (
+        fullSnippet &&
+        isContaminatedDreamingSnippet(fullSnippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entryPath),
+        })
+      ) {
         continue;
       }
       const snippet = truncateShortTermSnippet(fullSnippet);
@@ -834,30 +865,8 @@ function isProcessLikelyAlive(pid: number): boolean {
   }
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
-  const previous = inProcessShortTermLocks.get(lockPath) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.catch(() => undefined).then(() => current);
-  inProcessShortTermLocks.set(lockPath, queued);
-
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    releaseCurrent();
-    if (inProcessShortTermLocks.get(lockPath) === queued) {
-      inProcessShortTermLocks.delete(lockPath);
-    }
-  }
+  return await inProcessShortTermLocks.enqueue(lockPath, task);
 }
 
 async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
@@ -1068,6 +1077,10 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   return SHORT_TERM_BASENAME_RE.test(normalized);
 }
 
+function isShortTermSessionCorpusPath(filePath: string): boolean {
+  return SHORT_TERM_SESSION_CORPUS_RE.test(normalizeMemoryPath(filePath));
+}
+
 function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
   const normalized = normalizeMemoryPath(rawPath);
   const workspaceNormalized = normalizeMemoryPath(workspaceDir);
@@ -1157,7 +1170,7 @@ function trimDreamingStatsEntries(
   for (const entry of entries) {
     let insertAt = selected.length;
     for (let index = 0; index < selected.length; index += 1) {
-      if (compare(entry, selected[index]) < 0) {
+      if (compare(entry, expectDefined(selected[index], "selected dreaming stats index")) < 0) {
         insertAt = index;
         break;
       }
@@ -1323,12 +1336,13 @@ export async function filterLiveShortTermRecallEntries(params: {
     return [];
   }
   const sourceFileChecks = new Map<string, Promise<boolean>>();
+  const sourceFileLimit = pLimit(SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY);
   const checkSourceFile = (sourcePath: string): Promise<boolean> => {
     const existing = sourceFileChecks.get(sourcePath);
     if (existing) {
       return existing;
     }
-    const check = shortTermRecallSourceIsFile(sourcePath);
+    const check = sourceFileLimit(() => shortTermRecallSourceIsFile(sourcePath));
     sourceFileChecks.set(sourcePath, check);
     return check;
   };
@@ -1420,7 +1434,12 @@ export async function recordShortTermRecalls(params: {
       const normalizedPath = normalizeMemoryPath(result.path);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
-      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
+      if (
+        !rawSnippet ||
+        isContaminatedDreamingSnippet(rawSnippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(normalizedPath),
+        })
+      ) {
         continue;
       }
       const claimHash = buildClaimHash(rawSnippet);
@@ -1457,6 +1476,14 @@ export async function recordShortTermRecalls(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
 
+      const unchangedRepeatedSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === snippet;
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
+
       store.entries[key] = {
         key,
         path: normalizedPath,
@@ -1470,7 +1497,7 @@ export async function recordShortTermRecalls(params: {
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt: nowIso,
+        lastRecalledAt,
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
@@ -1606,6 +1633,14 @@ export async function recordGroundedShortTermCandidates(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
 
+      const unchangedRepeatedSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === item.snippet;
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
+
       store.entries[key] = {
         key,
         path: item.path,
@@ -1619,7 +1654,7 @@ export async function recordGroundedShortTermCandidates(params: {
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt: nowIso,
+        lastRecalledAt,
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
@@ -1767,6 +1802,32 @@ export async function readLightStagedKeys(params: {
   return keys;
 }
 
+export async function filterFreshLightDreamingEntries(params: {
+  workspaceDir: string;
+  entries: readonly ShortTermRecallEntry[];
+  nowMs?: number;
+}): Promise<ShortTermRecallEntry[]> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir || params.entries.length === 0) {
+    return [];
+  }
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  const phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
+  return params.entries.filter((entry) => {
+    const phaseSignal = phaseSignals.entries[entry.key];
+    if (!phaseSignal || phaseSignal.lightHits <= 0) {
+      return true;
+    }
+    const lastLightMs = parseStoreTimestampMs(phaseSignal.lastLightAt);
+    if (!Number.isFinite(lastLightMs)) {
+      return true;
+    }
+    const lastRecalledAtMs = parseStoreTimestampMs(entry.lastRecalledAt);
+    return Number.isFinite(lastRecalledAtMs) && lastRecalledAtMs > lastLightMs;
+  });
+}
+
 export async function rankShortTermPromotionCandidates(
   options: RankShortTermPromotionOptions,
 ): Promise<PromotionCandidate[]> {
@@ -1804,7 +1865,11 @@ export async function rankShortTermPromotionCandidates(
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
-    if (isContaminatedDreamingSnippet(entry.snippet)) {
+    if (
+      isContaminatedDreamingSnippet(entry.snippet, {
+        allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
+      })
+    ) {
       continue;
     }
     if (!includePromoted && entry.promotedAt) {
@@ -2054,7 +2119,7 @@ function extractTargetHeadingBodySnippet(
     return null;
   }
   const normalizedBody = normalizeSnippet(bodySnippet);
-  for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0; ) {
+  for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0;) {
     const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
     if (targetBody && normalizedBody.startsWith(targetBody)) {
       return targetBody;
@@ -2217,15 +2282,21 @@ function lineRangeOverlapsDreamingFence(
   let insideFence = false;
   for (let i = 0; i < safeEnd; i += 1) {
     const line = lines[i] ?? "";
-    if (DREAMING_FENCE_START_RE.test(line)) {
-      insideFence = true;
-      continue;
-    }
-    if (DREAMING_FENCE_END_RE.test(line)) {
-      insideFence = false;
-      continue;
-    }
     const oneIndexed = i + 1;
+    const isStart = DREAMING_FENCE_START_RE.test(line);
+    const isEnd = DREAMING_FENCE_END_RE.test(line);
+    if (isStart || isEnd) {
+      // The marker line itself is managed-block content. A relocated range
+      // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
+      // build its snippet from raw lines that contain that marker text and
+      // leak it into MEMORY.md alongside any adjacent fenced content captured
+      // by the same window. (#80613)
+      if (oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+        return true;
+      }
+      insideFence = isStart;
+      continue;
+    }
     if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
       return true;
     }
@@ -2282,7 +2353,7 @@ function buildPromotionSection(
 
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
-    const metadata = `[score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
+    const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
     // Cap only the visible MEMORY.md text. The recall store keeps the full
     // rehydrated snippet so ranking, provenance, and dream narratives remain
@@ -2310,7 +2381,7 @@ function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
   if (limit === 0 || snippet.length <= limit) {
     return snippet;
   }
-  const hardLimit = snippet.slice(0, limit);
+  const hardLimit = truncateUtf16Safe(snippet, limit);
   const sentenceBoundary = Math.max(
     hardLimit.lastIndexOf(". "),
     hardLimit.lastIndexOf("! "),
@@ -2389,16 +2460,7 @@ export async function applyShortTermPromotions(
         if (candidate.score < minScore) {
           return false;
         }
-        const candidateSignalCount = Math.max(
-          0,
-          candidate.signalCount ??
-            totalSignalCountForEntry({
-              recallCount: candidate.recallCount,
-              dailyCount: candidate.dailyCount,
-              groundedCount: candidate.groundedCount,
-            }),
-        );
-        if (candidateSignalCount < minRecallCount) {
+        if (candidate.signalCount < minRecallCount) {
           return false;
         }
         if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
@@ -2808,55 +2870,43 @@ export async function removeGroundedShortTermCandidates(params: {
   return { removed, storePath };
 }
 
+async function writeRawShortTermStoreForTest(
+  workspaceDir: string,
+  raw: unknown,
+  namespace: string,
+  metaKey: "recall" | "phase",
+): Promise<void> {
+  const record = asRecord(raw);
+  const entries = asRecord(record?.entries);
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace,
+      workspaceDir,
+      entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
+    }),
+    writeMemoryCoreWorkspaceEntry({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+      key: metaKey,
+      value: {
+        updatedAt:
+          typeof record?.updatedAt === "string" && record.updatedAt.trim()
+            ? record.updatedAt
+            : new Date().toISOString(),
+      },
+    }),
+  ]);
+}
+
 export const testing = {
   parseLockOwnerPid,
   isProcessLikelyAlive,
   readRecallStore: readStore,
   readPhaseSignalStore,
-  writeRawRecallStore: async (workspaceDir: string, raw: unknown) => {
-    const record = asRecord(raw);
-    const entries = asRecord(record?.entries);
-    await Promise.all([
-      writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_RECALL_NAMESPACE,
-        workspaceDir,
-        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-      }),
-      writeMemoryCoreWorkspaceEntry({
-        namespace: SHORT_TERM_META_NAMESPACE,
-        workspaceDir,
-        key: "recall",
-        value: {
-          updatedAt:
-            typeof record?.updatedAt === "string" && record.updatedAt.trim()
-              ? record.updatedAt
-              : new Date().toISOString(),
-        },
-      }),
-    ]);
-  },
-  writeRawPhaseSignalStore: async (workspaceDir: string, raw: unknown) => {
-    const record = asRecord(raw);
-    const entries = asRecord(record?.entries);
-    await Promise.all([
-      writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-        workspaceDir,
-        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-      }),
-      writeMemoryCoreWorkspaceEntry({
-        namespace: SHORT_TERM_META_NAMESPACE,
-        workspaceDir,
-        key: "phase",
-        value: {
-          updatedAt:
-            typeof record?.updatedAt === "string" && record.updatedAt.trim()
-              ? record.updatedAt
-              : new Date().toISOString(),
-        },
-      }),
-    ]);
-  },
+  writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
+    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_RECALL_NAMESPACE, "recall"),
+  writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
+    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "phase"),
   writeShortTermLock: async (workspaceDir: string, entry: ShortTermLockEntry) => {
     await openMemoryCoreStateStore<ShortTermLockEntry>({
       namespace: SHORT_TERM_LOCK_NAMESPACE,
@@ -2872,6 +2922,7 @@ export const testing = {
   deriveConceptTags,
   calculateConsolidationComponent,
   calculatePhaseSignalBoost,
+  compareShortTermRecallRetention,
   buildClaimHash,
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,
@@ -2879,4 +2930,3 @@ export const testing = {
   SHORT_TERM_RECALL_MAX_ENTRIES,
   SHORT_TERM_RECALL_MAX_SNIPPET_CHARS,
 };
-export { testing as __testing };

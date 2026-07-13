@@ -321,11 +321,6 @@ function extractSharedSecret(req: IncomingMessage): string {
   return Array.isArray(sharedHeader) ? (sharedHeader[0] ?? "").trim() : (sharedHeader ?? "").trim();
 }
 
-function timingSafeEquals(left: string, right: string): boolean {
-  // Reuse the shared helper so webhook auth semantics stay aligned across plugins.
-  return safeEqualSecret(left, right);
-}
-
 function formatZodError(error: z.ZodError): string {
   const firstIssue = error.issues[0];
   if (!firstIssue) {
@@ -775,7 +770,7 @@ export function createTaskFlowWebhookRequestHandler(params: {
               return false;
             }
             const resolvedSecret = await resolveTargetSecret(candidate);
-            return Boolean(resolvedSecret && timingSafeEquals(resolvedSecret, presentedSecret));
+            return Boolean(resolvedSecret && safeEqualSecret(resolvedSecret, presentedSecret));
           },
         });
         if (!target) {

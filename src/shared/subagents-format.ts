@@ -1,4 +1,5 @@
 // Subagent formatting helpers expose compact durations and status text.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 
 /** Formats token counts using compact k/m suffixes for subagent summaries. */
@@ -26,10 +27,16 @@ export function formatTokenShort(value?: number) {
 
 /** Truncates a single-line display string without preserving trailing whitespace. */
 export function truncateLine(value: string, maxLength: number) {
-  if (value.length <= maxLength) {
-    return value;
+  const limit = Math.max(0, Math.floor(maxLength));
+  const trimmed = value.trimEnd();
+  if (trimmed.length <= limit) {
+    return trimmed;
   }
-  return `${value.slice(0, maxLength).trimEnd()}...`;
+  const marker = "...";
+  if (limit <= marker.length) {
+    return marker.slice(0, limit);
+  }
+  return `${truncateUtf16Safe(trimmed, limit - marker.length).trimEnd()}${marker}`;
 }
 
 type TokenUsageLike = {

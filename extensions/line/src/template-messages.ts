@@ -65,6 +65,13 @@ function truncateTemplateText(text: string, limit: number): string {
   return result;
 }
 
+function truncateOptionalTemplateText(
+  value: string | undefined,
+  limit: number,
+): string | undefined {
+  return value === undefined ? undefined : truncateTemplateText(value, limit);
+}
+
 function formatProductCarouselText(description: string, price?: string): string {
   if (!price) {
     return description;
@@ -86,13 +93,13 @@ export function createConfirmTemplate(
 ): TemplateMessage {
   const template: ConfirmTemplate = {
     type: "confirm",
-    text: text.slice(0, 240), // LINE limit
+    text: truncateTemplateText(text, 240), // LINE limit
     actions: [confirmAction, cancelAction],
   };
 
   return {
     type: "template",
-    altText: altText?.slice(0, 400) ?? text.slice(0, 400),
+    altText: truncateOptionalTemplateText(altText, 400) ?? truncateTemplateText(text, 400),
     template,
   };
 }
@@ -101,7 +108,7 @@ export function createConfirmTemplate(
  * Create a button template with title, text, and action buttons
  */
 export function createButtonTemplate(
-  title: string,
+  title: string | undefined,
   text: string,
   actions: Action[],
   options?: {
@@ -113,14 +120,15 @@ export function createButtonTemplate(
     altText?: string;
   },
 ): TemplateMessage {
+  const normalizedTitle = title || undefined;
   const textLimit = resolveTemplateTextLimit({
-    title,
+    title: normalizedTitle,
     thumbnailImageUrl: options?.thumbnailImageUrl,
     textOnlyLimit: 160,
   });
   const template: ButtonsTemplate = {
     type: "buttons",
-    title: title.slice(0, 40), // LINE limit
+    ...(normalizedTitle ? { title: truncateTemplateText(normalizedTitle, 40) } : {}), // LINE limit
     text: truncateTemplateText(text, textLimit),
     actions: actions.slice(0, 4), // LINE limit: max 4 actions
     thumbnailImageUrl: options?.thumbnailImageUrl,
@@ -132,7 +140,9 @@ export function createButtonTemplate(
 
   return {
     type: "template",
-    altText: options?.altText?.slice(0, 400) ?? `${title}: ${text}`.slice(0, 400),
+    altText:
+      truncateOptionalTemplateText(options?.altText, 400) ??
+      truncateTemplateText(normalizedTitle ? `${normalizedTitle}: ${text}` : text, 400),
     template,
   };
 }
@@ -157,7 +167,7 @@ export function createTemplateCarousel(
 
   return {
     type: "template",
-    altText: options?.altText?.slice(0, 400) ?? "View carousel",
+    altText: truncateOptionalTemplateText(options?.altText, 400) ?? "View carousel",
     template,
   };
 }
@@ -179,7 +189,7 @@ export function createCarouselColumn(params: {
   // the buttons template already applies above.
   const textLimit = resolveTemplateTextLimit({ ...params, textOnlyLimit: 120 });
   return {
-    title: params.title?.slice(0, 40),
+    title: truncateOptionalTemplateText(params.title, 40),
     text: truncateTemplateText(params.text, textLimit),
     actions: params.actions.slice(0, 3), // LINE limit: max 3 actions per column
     thumbnailImageUrl: params.thumbnailImageUrl,
@@ -202,7 +212,7 @@ export function createImageCarousel(
 
   return {
     type: "template",
-    altText: altText?.slice(0, 400) ?? "View images",
+    altText: truncateOptionalTemplateText(altText, 400) ?? "View images",
     template,
   };
 }

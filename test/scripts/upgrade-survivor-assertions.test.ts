@@ -15,79 +15,88 @@ function writeJson(path: string, value: unknown): void {
 function writeMigratedSessionState(stateDir: string): void {
   const agentSessionsDir = join(stateDir, "agents", "main", "sessions");
   const agentDbDir = join(stateDir, "agents", "main", "agent");
-  const mainSessionFile = join(agentSessionsDir, "upgrade-main-session.jsonl");
-  const directSessionFile = join(agentSessionsDir, "upgrade-direct-session.jsonl");
-  const groupSessionFile = join(agentSessionsDir, "upgrade-group-session.jsonl");
   mkdirSync(agentSessionsDir, { recursive: true });
   mkdirSync(agentDbDir, { recursive: true });
-  writeFileSync(mainSessionFile, '{"type":"main"}\n');
-  writeFileSync(directSessionFile, '{"type":"direct"}\n');
-  writeFileSync(groupSessionFile, '{"type":"group"}\n');
-  writeJson(join(agentSessionsDir, "sessions.json"), {
-    "agent:main:main": {
-      sessionFile: mainSessionFile,
-      sessionId: "upgrade-main-session",
-      skillsSnapshot: {
-        prompt: "legacy prompt survives as metadata",
-      },
-    },
-    "agent:main:+15551234567": {
-      sessionFile: directSessionFile,
-      sessionId: "upgrade-direct-session",
-    },
-    "agent:main:slack:channel:cupgrade": {
-      sessionFile: groupSessionFile,
-      sessionId: "upgrade-group-session",
-    },
-  });
 
   const db = new DatabaseSync(join(agentDbDir, "openclaw-agent.sqlite"));
   try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS cache_entries (
-        scope TEXT NOT NULL,
-        key TEXT NOT NULL,
-        value_json TEXT,
-        blob BLOB,
-        expires_at INTEGER,
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        session_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_routes (
+        session_key TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
-        PRIMARY KEY (scope, key)
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE TABLE session_entries (
+        session_key TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE TABLE transcript_events (
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, seq),
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
       );
     `);
-    const insert = db.prepare(`
-      INSERT INTO cache_entries (scope, key, value_json, updated_at)
+    const insertSession = db.prepare(`
+      INSERT INTO sessions (session_id, session_key, created_at, updated_at)
       VALUES (?, ?, ?, ?)
     `);
-    insert.run(
-      "session_entries",
-      "agent:main:main",
-      JSON.stringify({
-        sessionFile: mainSessionFile,
-        sessionId: "upgrade-main-session",
-        skillsSnapshot: {
-          prompt: "legacy prompt survives as metadata",
+    const insertRoute = db.prepare(`
+      INSERT INTO session_routes (session_key, session_id, updated_at)
+      VALUES (?, ?, ?)
+    `);
+    const insertEntry = db.prepare(`
+      INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    const insertTranscript = db.prepare(`
+      INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    const migratedSessions = [
+      {
+        entry: {
+          skillsSnapshot: {
+            prompt: "legacy prompt survives as metadata",
+          },
         },
-      }),
-      1710000000000,
-    );
-    insert.run(
-      "session_entries",
-      "agent:main:+15551234567",
-      JSON.stringify({
-        sessionFile: directSessionFile,
+        sessionId: "upgrade-main-session",
+        sessionKey: "agent:main:main",
+      },
+      {
+        entry: {},
         sessionId: "upgrade-direct-session",
-      }),
-      1710000000100,
-    );
-    insert.run(
-      "session_entries",
-      "agent:main:slack:channel:cupgrade",
-      JSON.stringify({
-        sessionFile: groupSessionFile,
+        sessionKey: "agent:main:+15551234567",
+      },
+      {
+        entry: {},
         sessionId: "upgrade-group-session",
-      }),
-      1710000000200,
-    );
+        sessionKey: "agent:main:slack:channel:cupgrade",
+      },
+    ];
+    for (const { entry, sessionId, sessionKey } of migratedSessions) {
+      insertSession.run(sessionId, sessionKey, 1710000000000, 1710000000000);
+      insertRoute.run(sessionKey, sessionId, 1710000000000);
+      insertEntry.run(sessionKey, sessionId, JSON.stringify(entry), 1710000000000);
+      insertTranscript.run(
+        sessionId,
+        1,
+        JSON.stringify({ type: "session", id: sessionId }),
+        1710000000000,
+      );
+    }
   } finally {
     db.close();
   }
@@ -146,6 +155,65 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
 }
 
 describe("upgrade survivor assertions", () => {
+  it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));
+    try {
+      const stateDir = join(root, "state");
+      const workspace = join(root, "workspace");
+      mkdirSync(stateDir, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
+
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "acpx-openclaw-tools-bridge",
+        },
+        stdio: "pipe",
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("asserts the ACPX OpenClaw tools bridge config survived", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-config-"));
+    try {
+      const configPath = join(root, "openclaw.json");
+      const coveragePath = join(root, "coverage.json");
+      writeJson(configPath, {
+        plugins: {
+          allow: ["acpx"],
+          entries: {
+            acpx: {
+              enabled: true,
+              config: {
+                openClawToolsMcpBridge: true,
+              },
+            },
+          },
+        },
+      });
+      writeJson(coveragePath, {
+        acceptedIntents: ["acpx-openclaw-tools-bridge"],
+        skippedIntents: [],
+      });
+
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-config"], {
+        env: {
+          ...process.env,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "acpx-openclaw-tools-bridge",
+        },
+        stdio: "pipe",
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("accepts official ClawHub npm-pack installs for configured external plugins", () => {
     expect(() => assertConfiguredPluginState()).not.toThrow();
   });

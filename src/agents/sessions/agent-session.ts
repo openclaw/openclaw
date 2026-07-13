@@ -15,14 +15,16 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   clampThinkingLevel,
+  cleanupSessionResources,
   getSupportedThinkingLevels,
+  isContextOverflow,
   modelsAreEqual,
-} from "../../llm/model-utils.js";
-import { resetApiProviders } from "../../llm/providers/register-builtins.js";
-import { cleanupSessionResources } from "../../llm/session-resources.js";
+  defaultApiRegistry,
+} from "@openclaw/ai/internal/runtime";
+import { resetApiProviders } from "@openclaw/ai/providers";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { streamSimple } from "../../llm/stream.js";
 import type {
   AssistantMessage,
@@ -31,7 +33,12 @@ import type {
   Model,
   TextContent,
 } from "../../llm/types.js";
-import { isContextOverflow } from "../../llm/utils/overflow.js";
+import { isRetryableAssistantError } from "../../llm/utils/retry.js";
+import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
+import type {
+  PersistedUserTurnMessage,
+  UserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.types.js";
 import type {
   Agent,
   AgentEvent,
@@ -47,6 +54,7 @@ import {
   collectEntriesForBranchSummaryFromBranches,
   compact,
   estimateContextTokens,
+  estimateTokens,
   generateBranchSummary,
   prepareCompaction,
   shouldCompact,
@@ -169,11 +177,15 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
   if (!match) {
     return null;
   }
+  const [, name, location, content, userMessage] = match;
+  if (name === undefined || location === undefined || content === undefined) {
+    return null;
+  }
   return {
-    name: match[1],
-    location: match[2],
-    content: match[3],
-    userMessage: match[4]?.trim() || undefined,
+    name,
+    location,
+    content,
+    userMessage: userMessage?.trim() || undefined,
   };
 }
 
@@ -326,6 +338,10 @@ type CompactionWorkOutcome =
 
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+
+function estimateMessagesFromContent(messages: AgentMessage[]): number {
+  return messages.reduce((total, message) => total + estimateTokens(message), 0);
+}
 
 // ============================================================================
 // AgentSession Class
@@ -670,8 +686,7 @@ export class AgentSession {
       return false;
     }
 
-    for (let i = event.messages.length - 1; i >= 0; i--) {
-      const message = event.messages[i];
+    for (const message of event.messages.toReversed()) {
       if (message.role === "assistant") {
         return this.isRetryableError(message);
       }
@@ -695,8 +710,7 @@ export class AgentSession {
   /** Find the last assistant message in agent state (including aborted ones) */
   private findLastAssistantMessage(): AssistantMessage | undefined {
     const messages = this.agent.state.messages;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
+    for (const msg of messages.toReversed()) {
       if (msg.role === "assistant") {
         return msg;
       }
@@ -1354,9 +1368,14 @@ export class AgentSession {
    * before the next LLM call.
    * Expands skill commands and prompt templates. Errors on extension commands.
    * @param images Optional image attachments to include with the message
+   * @param userTurnTranscriptRecorder Prepared channel fields for transcript-only persistence
    * @throws Error if text is an extension command
    */
-  async steer(text: string, images?: ImageContent[]): Promise<void> {
+  async steer(
+    text: string,
+    images?: ImageContent[],
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+  ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
@@ -1366,7 +1385,14 @@ export class AgentSession {
     let expandedText = this.expandSkillCommand(text);
     expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-    await this.queueSteer(expandedText, images);
+    const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+    await this.queueSteer(
+      expandedText,
+      images,
+      preparedMessage && userTurnTranscriptRecorder
+        ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
+        : undefined,
+    );
   }
 
   /**
@@ -1392,18 +1418,30 @@ export class AgentSession {
   /**
    * Internal: Queue a steering message (already expanded, no extension command check).
    */
-  private async queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+  private async queueSteer(
+    text: string,
+    images?: ImageContent[],
+    transcriptContext?: {
+      message: PersistedUserTurnMessage;
+      recorder: UserTurnTranscriptRecorder;
+    },
+  ): Promise<void> {
     this.steeringMessages.push(text);
     this.emitQueueUpdate();
     const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
     if (images) {
       content.push(...images);
     }
-    this.agent.steer({
+    const runtimeMessage = {
       role: "user",
       content,
       timestamp: Date.now(),
-    });
+    } satisfies PersistedUserTurnMessage;
+    this.agent.steer(
+      transcriptContext
+        ? attachRuntimeUserTurnTranscriptContext(runtimeMessage, transcriptContext)
+        : runtimeMessage,
+    );
   }
 
   /**
@@ -1561,12 +1599,10 @@ export class AgentSession {
     return this.sessionResourceLoader;
   }
 
-  /**
-   * Abort current operation and wait for agent to become idle.
-   */
-  async abort(): Promise<void> {
+  /** Abort the current run; yield callers pass a turnHandoff reason to skip interruption guidance. */
+  async abort(reason?: unknown): Promise<void> {
     this.abortRetry();
-    this.agent.abort();
+    this.agent.abort(reason);
     await this.agent.waitForIdle();
   }
 
@@ -1646,7 +1682,10 @@ export class AgentSession {
     const len = scopedModels.length;
     const nextIndex =
       direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
-    const next = scopedModels[nextIndex];
+    const next = scopedModels.at(nextIndex);
+    if (!next) {
+      throw new Error("Scoped model cycle produced an invalid index");
+    }
     const thinkingLevel = this.getThinkingLevelForModelSwitch(next.thinkingLevel);
 
     // Apply model
@@ -1682,7 +1721,10 @@ export class AgentSession {
     const len = availableModels.length;
     const nextIndex =
       direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
-    const nextModel = availableModels[nextIndex];
+    const nextModel = availableModels.at(nextIndex);
+    if (!nextModel) {
+      throw new Error("Available model cycle produced an invalid index");
+    }
 
     const thinkingLevel = this.getThinkingLevelForModelSwitch();
     this.agent.state.model = nextModel;
@@ -1742,7 +1784,10 @@ export class AgentSession {
     const levels = this.getAvailableThinkingLevels();
     const currentIndex = levels.indexOf(this.thinkingLevel);
     const nextIndex = (currentIndex + 1) % levels.length;
-    const nextLevel = levels[nextIndex];
+    const nextLevel = levels.at(nextIndex);
+    if (!nextLevel) {
+      return undefined;
+    }
 
     this.setThinkingLevel(nextLevel);
     return nextLevel;
@@ -2063,7 +2108,7 @@ export class AgentSession {
       // Remove the error message from agent state (it IS saved to session for history,
       // but we don't want it in context for the retry)
       const messages = this.agent.state.messages;
-      if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+      if (messages.at(-1)?.role === "assistant") {
         this.agent.state.messages = messages.slice(0, -1);
       }
       return await this.runAutoCompaction("overflow", true);
@@ -2082,15 +2127,21 @@ export class AgentSession {
       // Verify the usage source is post-compaction. Kept pre-compaction messages
       // have stale usage reflecting the old (larger) context and would falsely
       // trigger compaction right after one just finished.
-      const usageMsg = messages[estimate.lastUsageIndex];
+      const usageMsg = messages.at(estimate.lastUsageIndex);
       if (
         compactionEntry &&
-        usageMsg.role === "assistant" &&
+        usageMsg?.role === "assistant" &&
         usageMsg.timestamp <= new Date(compactionEntry.timestamp).getTime()
       ) {
         return false;
       }
       contextTokens = estimate.tokens;
+    } else if (assistantMessage.usage.contextUsage?.state === "unavailable") {
+      const estimatedContextTokens = this.getContextUsage()?.tokens;
+      if (estimatedContextTokens == null) {
+        return false;
+      }
+      contextTokens = estimatedContextTokens;
     } else {
       contextTokens = calculateContextTokens(assistantMessage.usage);
     }
@@ -2571,7 +2622,7 @@ export class AgentSession {
       reason: "reload",
     });
     await this.settingsManager.reload();
-    resetApiProviders();
+    resetApiProviders(defaultApiRegistry);
     await this.sessionResourceLoader.reload();
     this.buildRuntime({
       activeToolNames: this.getActiveToolNames(),
@@ -2609,11 +2660,7 @@ export class AgentSession {
       return false;
     }
 
-    const err = message.errorMessage;
-    // Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors (including connection lost), WebSocket transport closes/errors, fetch failed, premature stream endings, HTTP/2 closed before response, terminated, retry delay exceeded
-    return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
-      err,
-    );
+    return isRetryableAssistantError(message);
   }
 
   /**
@@ -2646,7 +2693,7 @@ export class AgentSession {
 
     // Remove error message from agent state (keep in session for history)
     const messages = this.agent.state.messages;
-    if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+    if (messages.at(-1)?.role === "assistant") {
       this.agent.state.messages = messages.slice(0, -1);
     }
 
@@ -3137,35 +3184,42 @@ export class AgentSession {
     // If no such assistant exists, context token count is unknown until the next LLM response.
     const branchEntries = this.sessionManager.getBranch();
     const latestCompaction = getLatestCompactionEntry(branchEntries);
+    let estimateFromContent = false;
 
     if (latestCompaction) {
       // Check if there's a valid assistant usage after the compaction boundary
       const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
       let hasPostCompactionUsage = false;
-      for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
-        const entry = branchEntries[i];
+      for (const entry of branchEntries.slice(compactionIndex + 1).toReversed()) {
         if (entry.type === "message" && entry.message.role === "assistant") {
           const assistant = entry.message;
           if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
+            if (assistant.usage.contextUsage?.state === "unavailable") {
+              estimateFromContent = true;
+              continue;
+            }
             const contextTokens = calculateContextTokens(assistant.usage);
             if (contextTokens > 0) {
               hasPostCompactionUsage = true;
+              estimateFromContent = false;
             }
             break;
           }
         }
       }
 
-      if (!hasPostCompactionUsage) {
+      if (!hasPostCompactionUsage && !estimateFromContent) {
         return { tokens: null, contextWindow, percent: null };
       }
     }
 
-    const estimate = estimateContextTokens(this.messages);
-    const percent = (estimate.tokens / contextWindow) * 100;
+    const tokens = estimateFromContent
+      ? estimateMessagesFromContent(this.messages)
+      : estimateContextTokens(this.messages).tokens;
+    const percent = (tokens / contextWindow) * 100;
 
     return {
-      tokens: estimate.tokens,
+      tokens,
       contextWindow,
       percent,
     };

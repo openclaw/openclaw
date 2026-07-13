@@ -48,14 +48,14 @@ export type AcpxProcessCleanupDeps = {
 };
 
 /** Result from cleaning up a single ACPX process tree. */
-export type AcpxProcessCleanupResult = {
+type AcpxProcessCleanupResult = {
   inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?: "missing-root" | "not-openclaw-owned" | "unverified-root";
 };
 
 /** Result from startup orphan reaping. */
-export type AcpxStartupReapResult = {
+type AcpxStartupReapResult = {
   inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?: "unsupported-platform" | "process-list-unavailable";
@@ -198,20 +198,23 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
   const processes: AcpxProcessInfo[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     const match = /^\s*(?<pid>\d+)\s+(?<ppid>\d+)\s+(?<command>.+?)\s*$/.exec(line);
-    if (!match?.groups) {
+    const pid = match?.groups?.pid;
+    const ppid = match?.groups?.ppid;
+    const command = match?.groups?.command;
+    if (!pid || !ppid || !command) {
       continue;
     }
     processes.push({
-      pid: Number.parseInt(match.groups.pid, 10),
-      ppid: Number.parseInt(match.groups.ppid, 10),
-      command: match.groups.command,
+      pid: Number.parseInt(pid, 10),
+      ppid: Number.parseInt(ppid, 10),
+      command,
     });
   }
   return processes;
 }
 
 /** List host processes in the compact shape needed by ACPX cleanup. */
-export async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
+async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   if (process.platform === "win32") {
     return [];
   }

@@ -1,3 +1,4 @@
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 /**
  * Runtime SDK subpath for lazy reply dispatch and inbound-context helpers.
  */
@@ -16,15 +17,10 @@ export type {
 } from "../auto-reply/reply/provider-dispatcher.types.js";
 export type { ReplyPayload } from "./reply-payload.js";
 
-let providerDispatcherRuntimeModulePromise: Promise<
-  typeof import("../auto-reply/reply/provider-dispatcher.runtime.js")
-> | null = null;
-
-const loadProviderDispatcherRuntimeModule = async () => {
-  providerDispatcherRuntimeModulePromise ??=
-    import("../auto-reply/reply/provider-dispatcher.runtime.js");
-  return await providerDispatcherRuntimeModulePromise;
-};
+const loadProviderDispatcherRuntimeModule = createLazyPromise(
+  () => import("../auto-reply/reply/provider-dispatcher.runtime.js"),
+  { cacheRejections: true },
+);
 
 /** Dispatches a reply with buffered block support after lazy-loading the runtime dispatcher. */
 export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher =

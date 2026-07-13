@@ -13,6 +13,7 @@ import {
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   normalizeNullableString,
@@ -233,7 +234,7 @@ export type MatrixRecoveryKeyVerificationResult = MatrixOwnDeviceVerificationSta
   error?: string;
 };
 
-export type MatrixOwnCrossSigningPublicationStatus = {
+type MatrixOwnCrossSigningPublicationStatus = {
   userId: string | null;
   masterKeyPublished: boolean;
   selfSigningKeyPublished: boolean;
@@ -281,7 +282,7 @@ export type MatrixOwnDeviceInfo = {
   current: boolean;
 };
 
-export type MatrixRoomKeyBackupResetOptions = {
+type MatrixRoomKeyBackupResetOptions = {
   rotateRecoveryKey?: boolean;
 };
 
@@ -294,15 +295,13 @@ export type MatrixOwnDeviceDeleteResult = {
 type MatrixCryptoRuntime = typeof import("./sdk/crypto-runtime.js");
 
 let loadedMatrixCryptoRuntime: MatrixCryptoRuntime | null = null;
-let matrixCryptoRuntimePromise: Promise<MatrixCryptoRuntime> | null = null;
 
-async function loadMatrixCryptoRuntime(): Promise<MatrixCryptoRuntime> {
-  matrixCryptoRuntimePromise ??= import("./sdk/crypto-runtime.js").then((runtime) => {
+const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
+  import("./sdk/crypto-runtime.js").then((runtime) => {
     loadedMatrixCryptoRuntime = runtime;
     return runtime;
-  });
-  return await matrixCryptoRuntimePromise;
-}
+  }),
+);
 
 const normalizeOptionalString = normalizeNullableString;
 
@@ -529,7 +528,7 @@ export class MatrixClient {
         recoveryKeyStore: this.recoveryKeyStore,
         getRoomStateEvent: (roomId, eventType, stateKey = "") =>
           this.getRoomStateEvent(roomId, eventType, stateKey),
-        downloadContent: (mxcUrl) => this.downloadContent(mxcUrl),
+        downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
       });
     }
     if (!this.verificationSummaryListenerBound) {
@@ -903,8 +902,12 @@ export class MatrixClient {
   }
 
   async getAccountData(eventType: string): Promise<Record<string, unknown> | undefined> {
-    const event = this.client.getAccountData(eventType as never);
-    return (event?.getContent() as Record<string, unknown> | undefined) ?? undefined;
+    return (
+      ((await this.client.getAccountDataFromServer(eventType as never)) as Record<
+        string,
+        unknown
+      > | null) ?? undefined
+    );
   }
 
   async setAccountData(eventType: string, content: Record<string, unknown>): Promise<void> {
