@@ -941,4 +941,69 @@ describe("channel-health-monitor", () => {
       monitor.stop();
     });
   });
+
+  it("resets completion-pass flag when pruning reopens hourly budget", async () => {
+    const account = disconnectedAccount(Date.now() - 300_000);
+    let callCount = 0;
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          callCount++;
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 100,
+      cooldownCycles: 0,
+      maxRestartsPerHour: 2,
+    });
+
+    // Phase 1: exhaust the hourly budget (2 slots + 1 completion pass = 3 calls)
+    await vi.advanceTimersByTimeAsync(350);
+    expect(callCount).toBe(3);
+
+    // Phase 2: more checks should all be blocked by cap
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(callCount).toBe(3);
+
+    // Phase 3: advance time to just before the 1-hour prune point.
+    // First restart record at ~100ms, current total = 850ms.
+    // Advance by 3,599,150 → total = 3,600,000 (both records still < 1 hour).
+    await vi.advanceTimersByTimeAsync(3_599_150);
+
+    // The cap is still active — no new calls during the advance.
+    expect(callCount).toBe(3);
+
+    // Phase 4: advance by 100ms → total = 3,600,100.
+    // Record at 100ms is now >1 hour old, pruned. completionPassAllowed reset.
+    await vi.advanceTimersByTimeAsync(100);
+    // With fix: callCount = 4 (first post-rollover budget slot).
+    // Without fix: callCount stays 3 (completionPassAllowed still true, blocked).
+    expect(callCount).toBe(4);
+
+    // Advance by 100ms → total = 3,600,200. Record at 200ms also pruned.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(callCount).toBe(5); // second budget slot consumed
+
+    // Phase 5: advance by 100ms → total = 3,600,300. Cap hit in new window.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(callCount).toBe(6); // completion pass for the new window
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(callCount).toBe(6); // blocked again
+
+    monitor.stop();
+  });
 });

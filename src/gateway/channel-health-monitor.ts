@@ -104,8 +104,18 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
 
-  function pruneOldRestarts(record: RestartRecord, now: number) {
+  function pruneOldRestarts(record: RestartRecord, now: number, maxRestarts: number) {
+    const before = record.restartsThisHour.length;
     record.restartsThisHour = record.restartsThisHour.filter((r) => now - r.at < ONE_HOUR_MS);
+    // If pruning old entries reopens budget capacity, reset the completion-pass
+    // flag so the next pending restart can retry within the fresh window.
+    if (
+      record.completionPassAllowed &&
+      before >= maxRestarts &&
+      record.restartsThisHour.length < maxRestarts
+    ) {
+      record.completionPassAllowed = false;
+    }
   }
 
   async function runCheckWork() {
@@ -185,7 +195,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
 
-          pruneOldRestarts(record, now);
+          pruneOldRestarts(record, now, maxRestartsPerHour);
           // Pending restarts count toward the per-hour budget to prevent
           // infinite restart loops when a channel is permanently stuck pending.
           // But a pending recovery that consumed the last slot gets one
