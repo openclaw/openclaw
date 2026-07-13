@@ -699,8 +699,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await pathInput.press("Enter");
       expect(
         (await gateway.getRequests("fs.listDir")).filter(
-          (request) =>
-            (request.params as { nodeId?: string } | undefined)?.nodeId === "old-node",
+          (request) => (request.params as { nodeId?: string } | undefined)?.nodeId === "old-node",
         ),
       ).toHaveLength(0);
       await page.getByRole("button", { name: "Use this folder" }).click();
