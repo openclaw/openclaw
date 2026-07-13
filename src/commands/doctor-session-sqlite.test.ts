@@ -1648,6 +1648,52 @@ describe("runDoctorSessionSqlite", () => {
     ).toEqual([]);
   });
 
+  it("accepts an unstarted legacy session without a transcript sidecar", async () => {
+    const store = createLegacyStore({
+      entryOverrides: {
+        compactionCount: 0,
+        lastInteractionAt: 1000,
+        sessionStartedAt: 1000,
+        systemSent: false,
+        updatedAt: 1000,
+      },
+    });
+    fs.rmSync(store.transcriptPath);
+
+    const dryRun = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "dry-run",
+      store: store.storePath,
+    });
+    expect(dryRun.totals).toMatchObject({
+      issues: 0,
+      validatedEntries: 1,
+      validatedTranscriptEvents: 0,
+    });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      importedEntries: 1,
+      importedTranscriptEvents: 0,
+      issues: 0,
+      sqliteEntries: 1,
+    });
+    expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
+    expect(
+      loadSqliteTranscriptEventsSync({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      }),
+    ).toEqual([]);
+  });
+
   it("keeps a shared legacy store intact when importing only one agent", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
     try {

@@ -429,6 +429,17 @@ function resolveLegacyTranscriptPath(
   return entry.sessionFile?.trim() ? defaultPath : undefined;
 }
 
+function isUnstartedLegacySession(entry: SessionEntry): boolean {
+  const startedAt = entry.sessionStartedAt;
+  return (
+    entry.systemSent === false &&
+    typeof startedAt === "number" &&
+    entry.updatedAt === startedAt &&
+    (entry.lastInteractionAt === undefined || entry.lastInteractionAt === startedAt) &&
+    (entry.compactionCount === undefined || entry.compactionCount === 0)
+  );
+}
+
 function countLegacyTranscript(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
@@ -508,7 +519,7 @@ async function importLegacySessionRecord(
     entry: record.entry,
     sessionKey: record.sessionKey,
     storePath: target.storePath,
-    ...(record.transcriptPath && result.status === "ok"
+    ...(record.transcriptPath && result.status === "ok" && result.hasTranscript
       ? { readTranscriptEvents: createTranscriptEventReader(record.transcriptPath) }
       : {}),
     ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
@@ -899,10 +910,20 @@ function countAlreadyMigratedTranscriptEventsForValidate(
 function countTranscriptEvents(
   record: LegacySessionRecord,
 ):
-  | { status: "ok"; events: number }
+  | { status: "ok"; events: number; hasTranscript: boolean }
   | { status: "missing" }
   | { status: "malformed"; message: string } {
-  return countTranscriptEventsForPath(record.transcriptPath);
+  const result = countTranscriptEventsForPath(record.transcriptPath);
+  // File-backed resets historically published the fresh session entry before
+  // the first append created its transcript. That reset-shaped entry is a
+  // valid empty session, not evidence that transcript events were lost.
+  if (result.status === "missing" && isUnstartedLegacySession(record.entry)) {
+    return { status: "ok", events: 0, hasTranscript: false };
+  }
+  if (result.status === "ok") {
+    return { ...result, hasTranscript: true };
+  }
+  return result;
 }
 
 function readLegacyTranscriptMtimeMs(record: LegacySessionRecord): number | undefined {

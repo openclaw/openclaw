@@ -254,6 +254,7 @@ Docs: https://docs.openclaw.ai
 - **Reply pre-delivery recovery:** bound each pre-delivery callback with an owner-overridable deadline, release serialized reply lanes after hung plugin work, and preserve durable final-delivery retry state only when transport never started. (#104256) Thanks @NianJiuZst.
 - **Signal native quote replies:** preserve the active inbound message as a native quote across agent, explicit, durable, and chunked sends while keeping reply-mode policy inside the Signal plugin. (#105347) Thanks @jesse-merhi.
 - **Media-store remote downloads:** bound response-header waits and stalled bodies, close abandoned redirect and error responses, and remove partial temp files so hung sources cannot pin callers. (#104624) Thanks @hugenshen.
+- **Session SQLite migration:** accept reset-shaped unstarted legacy sessions whose lazy transcript was never created as valid empty sessions, avoiding false missing-transcript warnings and failure reports while preserving warnings for sessions with activity.
 
 ## 2026.7.1
 
