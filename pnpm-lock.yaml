@@ -2002,11 +2002,11 @@ importers:
 
   packages/normalization-core: {}
 
-  packages/retry: {}
-
   packages/plugin-package-contract: {}
 
   packages/plugin-sdk: {}
+
+  packages/retry: {}
 
   packages/sdk:
     dependencies:
