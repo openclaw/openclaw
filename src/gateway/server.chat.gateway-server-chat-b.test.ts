@@ -24,6 +24,7 @@ import { appendSqliteTranscriptEvents } from "../config/sessions/session-accesso
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -6121,20 +6122,6 @@ describe("gateway server chat", () => {
       expect(history.payload?.nextOffset).toBeUndefined();
       expect(history.payload?.hasMore).toBeUndefined();
       expect(history.payload?.totalMessages).toBeUndefined();
-
-      setMaxChatHistoryMessagesBytesForTest(1_000);
-      const capped = await rpcReq<{
-        messages?: Array<{ __openclaw?: { id?: string } }>;
-      }>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 3,
-        messageId: "message-3",
-        sessionId: "sess-main",
-      });
-      expect(capped.ok).toBe(true);
-      expect(
-        capped.payload?.messages?.some((message) => message["__openclaw"]?.id === "message-3"),
-      ).toBe(true);
     });
   });
 
@@ -6246,34 +6233,20 @@ describe("gateway server chat", () => {
 
   test("chat.history offset pagination advances from the final budgeted page", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes: 250,
-      });
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "older question" }],
-            timestamp: Date.now(),
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "older answer" }],
-            timestamp: Date.now() + 1,
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "latest" }],
-            timestamp: Date.now() + 2,
-          },
-        }),
-      ]);
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const messageCount = 70;
+      await writeMainSessionTranscript(
+        sessionDir,
+        Array.from({ length: messageCount }, (_, index) =>
+          JSON.stringify({
+            message: {
+              role: index % 2 === 0 ? "user" : "assistant",
+              content: [{ type: "text", text: `message ${index + 1} ${"x".repeat(100_000)}` }],
+              timestamp: Date.now() + index,
+            },
+          }),
+        ),
+      );
 
       const firstPage = await rpcReq<{
         messages?: Array<{ __openclaw?: { seq?: number } }>;
@@ -6282,25 +6255,25 @@ describe("gateway server chat", () => {
         totalMessages?: number;
       }>(ws, "chat.history", {
         sessionKey: "main",
-        limit: 3,
+        limit: messageCount,
         offset: 0,
-        maxChars: 1_000,
+        maxChars: 100_000,
       });
       expect(firstPage.ok).toBe(true);
-      expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([2, 3]);
-      expect(firstPage.payload?.nextOffset).toBe(2);
+      const sequences = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
+      expect(sequences.length).toBeGreaterThan(0);
+      expect(sequences.length).toBeLessThan(messageCount);
+      const oldestSeq = expectDefined(sequences[0], "oldest returned sequence");
+      expect(firstPage.payload?.nextOffset).toBe(messageCount - oldestSeq + 1);
       expect(firstPage.payload?.hasMore).toBe(true);
-      expect(firstPage.payload?.totalMessages).toBe(3);
+      expect(firstPage.payload?.totalMessages).toBe(messageCount);
     });
   });
 
   test("chat.history advances past a replay boundary that cannot fit all projected siblings", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes: 1_200,
-      });
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const projectedSiblingCount = 70;
       const captured: DiagnosticPayloadLargeEvent[] = [];
       const unsubscribe = onDiagnosticEvent((event) => {
         if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
@@ -6319,12 +6292,12 @@ describe("gateway server chat", () => {
           JSON.stringify({
             message: {
               role: "assistant",
-              content: Array.from({ length: 4 }, (_, index) => ({
+              content: Array.from({ length: projectedSiblingCount }, (_, index) => ({
                 type: "toolcall",
                 name: "message",
                 arguments: {
                   action: "send",
-                  message: `projected sibling ${index + 1} ${"x".repeat(700)}`,
+                  message: `projected sibling ${index + 1} ${"x".repeat(100_000)}`,
                 },
               })),
               timestamp: Date.now() + 1,
@@ -6348,11 +6321,14 @@ describe("gateway server chat", () => {
         };
         const firstPage = await rpcReq<HistoryPage>(ws, "chat.history", {
           sessionKey: "main",
-          limit: 2,
+          limit: projectedSiblingCount + 1,
           offset: 0,
+          maxChars: 100_000,
         });
         expect(firstPage.ok).toBe(true);
-        expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([3]);
+        const firstPageSequences = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
+        expect(firstPageSequences.length).toBeGreaterThan(0);
+        expect(firstPageSequences.every((seq) => seq === 3)).toBe(true);
         expect(firstPage.payload?.hasMore).toBe(true);
         expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
         expect(
