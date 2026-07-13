@@ -232,6 +232,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.invoke", scope: "operator.write" },
   { name: "node.pending.pull", scope: "node" },
   { name: "node.pending.ack", scope: "node" },
+  { name: "node.invoke.progress", scope: "node" },
   { name: "node.invoke.result", scope: "node" },
   { name: "node.event", scope: "node" },
   { name: "cron.get", scope: "operator.read" },
