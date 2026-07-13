@@ -169,6 +169,21 @@ describe("runCommandWithTimeout", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "uses the requested kill signal when a command times out",
+    async () => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "setInterval(() => {}, 1_000)"],
+        { timeoutMs: 20, killSignal: "SIGKILL" },
+      );
+
+      expect(result).toMatchObject({
+        signal: "SIGKILL",
+        termination: "timeout",
+      });
+    },
+  );
+
   it.runIf(process.platform === "win32")(
     "rejects unresolved commands before Execa can fall through to ambient ComSpec",
     async () => {

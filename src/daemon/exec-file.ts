@@ -7,12 +7,19 @@ type ExecResult = { stdout: string; stderr: string; code: number };
 export async function execFileUtf8(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; windowsHide?: boolean } = {},
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    timeout?: number;
+    killSignal?: NodeJS.Signals | number;
+    windowsHide?: boolean;
+  } = {},
 ): Promise<ExecResult> {
   try {
     const result = await runCommandWithTimeout([command, ...args], {
       baseEnv: options.env,
       cwd: options.cwd,
+      killSignal: options.killSignal,
       maxOutputBytes: 1024 * 1024,
       timeoutMs: options.timeout,
     });

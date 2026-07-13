@@ -61,6 +61,8 @@ export type CommandOptions = {
   maxPreservedOutputLines?: number;
   preserveOutputLine?: PreserveOutputLine;
   killProcessTree?: boolean;
+  /** Signal used when terminating the direct child; tree termination owns its own grace policy. */
+  killSignal?: NodeJS.Signals | number;
 };
 
 export async function runCommandWithTimeout(
@@ -69,8 +71,17 @@ export async function runCommandWithTimeout(
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, baseEnv, env, noOutputTimeoutMs, signal, killProcessTree } =
-    options;
+  const {
+    timeoutMs,
+    cwd,
+    input,
+    baseEnv,
+    env,
+    noOutputTimeoutMs,
+    signal,
+    killProcessTree,
+    killSignal,
+  } = options;
   const resolvedTimeoutMs =
     typeof timeoutMs === "number" ? resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
   const hasInput = input !== undefined;
@@ -136,6 +147,7 @@ export async function runCommandWithTimeout(
     baseEnv,
     env,
     forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+    killSignal,
     ...(hasInput ? { input } : {}),
     reject: false,
     stdio,
