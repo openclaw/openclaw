@@ -33395,7 +33395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 330,
+      "line": 359,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Website",
       "surface": "apple",
@@ -33403,7 +33403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 364,
+      "line": 393,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Details",
       "surface": "apple",
@@ -33411,7 +33411,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 390,
+      "line": 419,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Needs setup",
       "surface": "apple",
@@ -33419,7 +33419,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 405,
+      "line": 434,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Managed",
       "surface": "apple",
@@ -33427,7 +33427,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 407,
+      "line": 436,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Workspace",
       "surface": "apple",
@@ -33435,7 +33435,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 409,
+      "line": 438,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Extra",
       "surface": "apple",
@@ -33443,7 +33443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 411,
+      "line": 440,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Plugin",
       "surface": "apple",
@@ -33451,7 +33451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 472,
+      "line": 507,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Missing binaries: \\(self.missingBins.joined(separator: \", \"))",
       "surface": "apple",
@@ -33459,7 +33459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 477,
+      "line": 512,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Needs any binary: \\(self.missingAnyBins.joined(separator: \", \"))",
       "surface": "apple",
@@ -33467,7 +33467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 482,
+      "line": 517,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Missing env: \\(self.missingEnv.joined(separator: \", \"))",
       "surface": "apple",
@@ -33475,7 +33475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 487,
+      "line": 522,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Requires config: \\(self.missingConfig.joined(separator: \", \"))",
       "surface": "apple",
@@ -33483,7 +33483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 492,
+      "line": 527,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Requires OS: \\(self.missingOS.joined(separator: \", \"))",
       "surface": "apple",
@@ -33491,7 +33491,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 519,
+      "line": 554,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Set \\(envKey)",
       "surface": "apple",
@@ -33499,7 +33499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 535,
+      "line": 570,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Install on Gateway",
       "surface": "apple",
@@ -33507,7 +33507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 548,
+      "line": 583,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Install on This Mac",
       "surface": "apple",
@@ -33515,7 +33515,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 553,
+      "line": 588,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Switches to Local mode to install on this Mac.",
       "surface": "apple",
@@ -33523,7 +33523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 661,
+      "line": 693,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Get your key →",
       "surface": "apple",
@@ -33531,7 +33531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 666,
+      "line": 698,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Saved to openclaw.json under skills.entries.\\(self.editor.skillKey)",
       "surface": "apple",
@@ -33539,7 +33539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 670,
+      "line": 702,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -33547,7 +33547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 672,
+      "line": 704,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Save",
       "surface": "apple",
@@ -33555,7 +33555,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 700,
+      "line": 732,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Set API Key",
       "surface": "apple",
@@ -33563,7 +33563,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 700,
+      "line": 732,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Set Environment Variable",
       "surface": "apple",
@@ -33571,7 +33571,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 775,
+      "line": 807,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Skill disabled",
       "surface": "apple",
@@ -33579,7 +33579,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 775,
+      "line": 807,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Skill enabled",
       "surface": "apple",
@@ -33587,7 +33587,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 853,
+      "line": 885,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Bundled",
       "surface": "apple",
