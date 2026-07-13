@@ -89,6 +89,18 @@ it("falls back to the uppercase agent initial", async () => {
   }
 });
 
+it("preserves complete grapheme clusters in emoji avatar fallback", async () => {
+  const element = await createAgentSelect({
+    agents: [{ id: "family", name: "👨‍👩‍👧‍👦Family" }],
+  });
+
+  try {
+    expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("👨‍👩‍👧‍👦");
+  } finally {
+    element.remove();
+  }
+});
+
 it("fetches local avatars with the bearer credential when token auth is active", async () => {
   const createObjectURL = vi.fn(() => "blob:agent-avatar");
   const revokeObjectURL = vi.fn();

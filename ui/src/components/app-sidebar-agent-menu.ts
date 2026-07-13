@@ -7,6 +7,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { deriveAvatarInitial } from "../lib/avatar.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -123,7 +124,7 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const label = normalizeAgentLabel(agent);
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
-  const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
+  const initial = resolveAgentTextAvatar(agent) ?? (deriveAvatarInitial(label || agent.id) || "?");
   return html`
     <wa-dropdown-item
       class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
