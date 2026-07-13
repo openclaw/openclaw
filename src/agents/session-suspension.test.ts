@@ -300,21 +300,19 @@ describe("session suspension", () => {
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
   });
 
-  it("restores the pre-cleanup suspension when multiple writes race cleanup", async () => {
+  it("restores the pre-cleanup absence when multiple writes race cleanup", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const { clearSessionSuspensionTimers } = await import("./session-suspension.js");
-    const previousQuotaSuspension = {
-      schemaVersion: 1,
-      suspendedAt: 500,
-      reason: "circuit_open",
-      failedProvider: "openai",
-      failedModel: "gpt-5.5",
-      laneId: CommandLane.Main,
-      expectedResumeBy: 2_000,
-      state: "suspended",
-    };
-    let storeEntry = { quotaSuspension: previousQuotaSuspension };
+    let storeEntry: {
+      quotaSuspension?: {
+        suspendedAt: number;
+        reason: string;
+        failedProvider: string;
+        failedModel: string;
+        laneId?: string;
+      };
+    } = {};
     let initialWrites = 0;
     let releaseInitialWrites!: () => void;
     const initialWritesReleased = new Promise<void>((resolve) => {
@@ -322,8 +320,9 @@ describe("session suspension", () => {
     });
     sessionAccessorMocks.patchSessionEntry.mockImplementation(async (_scope, update) => {
       const patch = update(storeEntry) as typeof storeEntry | null;
-      if (patch?.quotaSuspension !== undefined) {
-        storeEntry = { quotaSuspension: patch.quotaSuspension };
+      if (patch && "quotaSuspension" in patch) {
+        storeEntry =
+          patch.quotaSuspension === undefined ? {} : { quotaSuspension: patch.quotaSuspension };
       }
       if (initialWrites < 2) {
         initialWrites += 1;
@@ -342,8 +341,22 @@ describe("session suspension", () => {
     releaseInitialWrites();
     await Promise.all([first, second]);
 
-    expect(storeEntry.quotaSuspension).toEqual(previousQuotaSuspension);
+    expect(storeEntry.quotaSuspension).toBeUndefined();
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+  });
+
+  it("still throttles the lane when persistence fails while gateway is active", async () => {
+    vi.useFakeTimers();
+    sessionAccessorMocks.patchSessionEntry.mockRejectedValueOnce(new Error("disk busy"));
+
+    await suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Main, 0);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenLastCalledWith(
+      CommandLane.Main,
+      4,
+    );
   });
 
   it("defers session suspension only for the outer fallback candidate run", async () => {

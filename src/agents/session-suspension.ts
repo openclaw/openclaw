@@ -45,6 +45,7 @@ type SessionSuspensionRuntimeState = {
     {
       generation: number;
       previousQuotaSuspension: QuotaSuspension | undefined;
+      previousSnapshotCaptured: boolean;
       activeCount: number;
     }
   >;
@@ -69,6 +70,7 @@ function getSessionSuspensionState(): SessionSuspensionRuntimeState {
         {
           generation: number;
           previousQuotaSuspension: QuotaSuspension | undefined;
+          previousSnapshotCaptured: boolean;
           activeCount: number;
         }
       >(),
@@ -85,6 +87,7 @@ function getSessionSuspensionState(): SessionSuspensionRuntimeState {
       {
         generation: number;
         previousQuotaSuspension: QuotaSuspension | undefined;
+        previousSnapshotCaptured: boolean;
         activeCount: number;
       }
     >();
@@ -276,26 +279,43 @@ export async function suspendSession(params: SessionSuspensionParams) {
       : {
           generation: suspensionGeneration,
           previousQuotaSuspension: undefined as QuotaSuspension | undefined,
+          previousSnapshotCaptured: false,
           activeCount: 0,
         };
   pendingWrite.activeCount += 1;
   state.pendingSuspensionWrites.set(pendingWriteKey, pendingWrite);
   const releasePendingWrite = () => {
     pendingWrite.activeCount -= 1;
-    if (pendingWrite.activeCount <= 0) {
+    if (
+      pendingWrite.activeCount <= 0 &&
+      getSessionSuspensionState().pendingSuspensionWrites.get(pendingWriteKey) === pendingWrite
+    ) {
       getSessionSuspensionState().pendingSuspensionWrites.delete(pendingWriteKey);
     }
   };
+  const throttleLane = () => {
+    if (!params.laneId) {
+      return;
+    }
+    setCommandLaneConcurrency(params.laneId, 0);
+    scheduleLaneAutoResume(
+      params.laneId,
+      ttlMs,
+      resolveLaneResumeConcurrency(params.cfg, params.laneId),
+    );
+  };
+  let persistedSuspension = false;
 
   try {
-    await patchSessionEntry(
+    const patchedEntry = await patchSessionEntry(
       { storePath, sessionKey },
       (entry) => {
         if (getSessionSuspensionState().cleanupGeneration !== suspensionGeneration) {
           return null;
         }
-        if (pendingWrite.previousQuotaSuspension === undefined) {
+        if (!pendingWrite.previousSnapshotCaptured) {
           pendingWrite.previousQuotaSuspension = entry.quotaSuspension;
+          pendingWrite.previousSnapshotCaptured = true;
         }
         return {
           quotaSuspension: {
@@ -313,13 +333,20 @@ export async function suspendSession(params: SessionSuspensionParams) {
       },
       { skipMaintenance: true, takeCacheOwnership: true },
     );
+    persistedSuspension = patchedEntry !== null;
   } catch (err) {
-    log.warn("failed to persist quota suspension; not throttling lane", {
+    log.warn("failed to persist quota suspension; applying transient lane throttle", {
       sessionId: params.sessionId,
       laneId: params.laneId,
       error: err instanceof Error ? err.message : String(err),
     });
     releasePendingWrite();
+    if (
+      !getSessionSuspensionState().cleanupActive &&
+      suspensionGeneration === getSessionSuspensionState().cleanupGeneration
+    ) {
+      throttleLane();
+    }
     return;
   }
 
@@ -352,13 +379,8 @@ export async function suspendSession(params: SessionSuspensionParams) {
     return;
   }
 
-  if (params.laneId) {
-    setCommandLaneConcurrency(params.laneId, 0);
-    scheduleLaneAutoResume(
-      params.laneId,
-      ttlMs,
-      resolveLaneResumeConcurrency(params.cfg, params.laneId),
-    );
+  if (persistedSuspension) {
+    throttleLane();
   }
   releasePendingWrite();
 }
