@@ -2,15 +2,15 @@ import { html, type TemplateResult } from "lit";
 import type { WorkspaceWidget } from "../types.ts";
 import { isRecord, widgetProps, type BuiltinWidgetContext } from "./types.ts";
 
-export type ActionFormField = {
+type ActionFormField = {
   name: string;
   label: string;
   type: "text" | "number" | "select";
   options?: string[];
   maxLength?: number;
 };
-export type ActionFormModel = { template: string; fields: ActionFormField[]; buttonLabel: string };
-export const ACTION_FORM_DEFAULT_MAX_LENGTH = 200;
+type ActionFormModel = { template: string; fields: ActionFormField[]; buttonLabel: string };
+const ACTION_FORM_DEFAULT_MAX_LENGTH = 200;
 const SLOT_PATTERN = /\{([A-Za-z0-9_]+)\}/g;
 
 function mapField(value: unknown): ActionFormField | null {
@@ -40,7 +40,7 @@ function mapField(value: unknown): ActionFormField | null {
   };
 }
 
-export function mapActionForm(widget: WorkspaceWidget): ActionFormModel {
+function mapActionForm(widget: WorkspaceWidget): ActionFormModel {
   const props = widgetProps(widget);
   return {
     template: typeof props.template === "string" ? props.template : "",
@@ -51,7 +51,7 @@ export function mapActionForm(widget: WorkspaceWidget): ActionFormModel {
   };
 }
 
-export function coerceFieldValue(field: ActionFormField, raw: string): string {
+function coerceFieldValue(field: ActionFormField, raw: string): string {
   const cap = field.maxLength ?? ACTION_FORM_DEFAULT_MAX_LENGTH;
   if (field.type === "number") {
     const value = raw.trim();
@@ -63,10 +63,7 @@ export function coerceFieldValue(field: ActionFormField, raw: string): string {
   return raw.slice(0, cap);
 }
 
-export function buildActionFormPrompt(
-  model: ActionFormModel,
-  values: Record<string, string>,
-): string {
+function buildActionFormPrompt(model: ActionFormModel, values: Record<string, string>): string {
   const fields = new Map(model.fields.map((field) => [field.name, field]));
   return model.template.replace(SLOT_PATTERN, (match, name: string) => {
     const field = fields.get(name);

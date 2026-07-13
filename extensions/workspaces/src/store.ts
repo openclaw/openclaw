@@ -42,7 +42,7 @@ const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const BUSY_TIMEOUT_MS = 5000;
 
-export function sweepExpiredEphemeral(doc: WorkspaceDoc, nowMs: number): WorkspaceDoc | null {
+function sweepExpiredEphemeral(doc: WorkspaceDoc, nowMs: number): WorkspaceDoc | null {
   let removed = false;
   const tabs = doc.tabs.map((tab) => {
     const widgets = tab.widgets.filter((widget) => {
