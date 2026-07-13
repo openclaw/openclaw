@@ -1,4 +1,3 @@
-// Slack plugin module implements send behavior.
 import { createHash, createHmac } from "node:crypto";
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
@@ -115,17 +114,11 @@ type SlackSendOpts = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   client?: WebClient;
-  /** Monitor-private proof that `client` belongs to the validated Enterprise event turn. */
   enterpriseEventScope?: SlackEnterpriseEventScope;
-  /** Monitor-private delivery limits already resolved for the active listener. */
   textLimit?: number;
-  /** Slack-private marker for text that is already safe mrkdwn and must not be parsed again. */
   textIsSlackMrkdwn?: boolean;
-  /** Slack-private literal fallback text; disables mrkdwn parsing. */
   textIsSlackPlainText?: boolean;
-  /** Producer-owned placement of authored text after final block compilation. */
   authoredTextPlacement?: SlackAuthoredTextPlacement;
-  /** Slack-private authored text outside blocks; enables ordered plain accessibility text. */
   nativeDataFallbackBaseText?: string;
   mediaMaxBytes?: number;
   threadTs?: string;
@@ -133,11 +126,8 @@ type SlackSendOpts = {
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
-  /** Opaque durable intent id used to reconcile ambiguous platform outcomes. */
   deliveryQueueId?: string;
-  /** Refresh durable timing after the per-target queue and before Slack API work. */
   onPlatformSendDispatch?: () => Promise<void>;
-  /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
   progressChrome?: true;
 };
@@ -502,11 +492,6 @@ async function resolveChannelId(
   recipient: SlackRecipient,
   params: { accountId?: string; token: string },
 ): Promise<{ channelId: string; isDm?: boolean; cacheHit?: boolean }> {
-  // Bare Slack user IDs are classified as user recipients by target parsing.
-  // chat.postMessage tolerates user IDs directly, but
-  // files.uploadV2 → completeUploadExternal validates channel_id against
-  // ^[CGDZ][A-Z0-9]{8,}$ and rejects user IDs. Resolve them via
-  // conversations.open only for paths that require the concrete DM channel ID.
   if (!isSlackUserRecipient(recipient)) {
     return { channelId: recipient.id };
   }
@@ -550,8 +535,6 @@ function createSlackDeliveryMetadataId(queueId?: string): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  // Slack metadata is visible to workspace apps and members. Keep the durable
-  // store key inside OpenClaw while retaining a stable provider-side marker.
   return createHash("sha256").update(normalized).digest("base64url");
 }
 
@@ -816,8 +799,6 @@ async function scanSlackConversationForDelivery(params: {
       if (response.has_more === true) {
         break;
       }
-      // Marker absence cannot prove that Slack never committed the request: a
-      // delayed, deleted, or visibility-filtered message would make replay duplicate it.
       return {
         reconciliation: {
           status: "unresolved",
@@ -895,8 +876,6 @@ export async function reconcileSlackUnknownSend(
   const oldest = formatSlackTimestampFromMs(
     searchStartedAt - SLACK_RECONCILE_LOOKBACK_MS - SLACK_RECONCILE_CLOCK_SKEW_MS,
   );
-  // Slack message timestamps use provider time. Bound the scan near the local
-  // attempt while leaving a generous skew budget between the two clocks.
   const latest = formatSlackTimestampFromMs(searchStartedAt + SLACK_RECONCILE_CLOCK_SKEW_MS);
 
   try {
@@ -1075,8 +1054,6 @@ async function sendMessageSlackQueuedInner(params: {
         unfurlLinks: account.config.unfurlLinks,
         unfurlMedia: account.config.unfurlMedia,
       };
-  // Durable signatures bind the concrete provider channel, so user-targeted
-  // sends must resolve U... to the resulting D... conversation first.
   const directUserPostChannelId = opts.deliveryQueueId
     ? undefined
     : resolveDirectUserPostChannelId({
@@ -1178,8 +1155,6 @@ async function sendMessageSlackQueuedInner(params: {
   }
   if (blocks) {
     if (pendingBlockFallback) {
-      // A truncated top-level fallback makes block content inaccessible to screen readers.
-      // Deliver controls plus complete text instead of attempting the native blocks.
       logVerbose("slack send: native data accessibility exceeds hard limit, using text fallback");
     } else {
       const accessibilityText = hasNativeData
@@ -1368,8 +1343,6 @@ async function sendMessageSlackQueuedInner(params: {
     const carriesPrimaryMessageOptions =
       partIndex === 0 && !opts.mediaUrl && sentMessageIds.length === 0;
     const baseMetadata = carriesPrimaryMessageOptions ? opts.metadata : undefined;
-    // Every post carries its index/count so reconciliation proves the complete
-    // logical text send and never mistakes a partial chunk fanout for success.
     const metadata = opts.mediaUrl
       ? baseMetadata
       : withSlackDeliveryMetadata(baseMetadata, {

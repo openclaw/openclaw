@@ -1,4 +1,3 @@
-// Slack plugin module implements dispatch behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
@@ -908,7 +907,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         deferMessageSentHooks: true,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
       });
-      if (!result || result.suppressed) {
+      if (result?.suppressed) {
         return false;
       }
       markSlackStreamFallbackDelivered(session);
@@ -985,7 +984,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ...messageSentDeliveryHookContext,
       ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
     });
-    if (!result || result.suppressed) {
+    if (result?.suppressed) {
       return undefined;
     }
     observedReplyDelivery = true;
@@ -2074,9 +2073,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     await draftStream?.discardPending();
   }
 
-  // -----------------------------------------------------------------------
-  // Finalize the stream if one was started
-  // -----------------------------------------------------------------------
   let streamFallbackDelivered = false;
   const finalStream = streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
@@ -2180,9 +2176,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  // Record thread participation only when we actually delivered a reply and
-  // know the thread ts that was used (set by deliverNormally, streaming start,
-  // or draft stream). Falls back to statusThreadTs for edge cases.
   const participationThreadTs = usedReplyThreadTs ?? statusThreadTs;
   if (anyReplyDelivered && participationThreadTs) {
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
