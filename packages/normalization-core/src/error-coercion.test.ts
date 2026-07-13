@@ -18,8 +18,12 @@ describe("formatErrorMessage", () => {
     expect(format({ status: 500, code: "EPIPE" })).toBe("status=500 code=EPIPE");
     expect(format({ status: 404 })).toBe("status=404 code=unknown");
     expect(format({ code: "ENOENT" })).toBe("status=unknown code=ENOENT");
+    expect(format({ code: 42, why: "boom" })).toBe('{"code":42,"why":"boom"}');
     expect(format(new Error("request failed", { cause: { status: 429 } }))).toBe(
       "request failed | status=429 code=unknown",
+    );
+    expect(format(new Error("request failed", { cause: { code: 42, why: "boom" } }))).toBe(
+      'request failed | {"code":42,"why":"boom"}',
     );
   });
 

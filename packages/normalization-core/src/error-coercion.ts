@@ -14,6 +14,13 @@ function formatStatusAndCode(value: unknown): string | undefined {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     return undefined;
   }
+  try {
+    if (Object.keys(value).some((key) => key !== "status" && key !== "code")) {
+      return undefined;
+    }
+  } catch {
+    // Proxy enumeration can fail; retain the safe status/code fallback below.
+  }
   const statusValue = readProperty(value, "status");
   const codeValue = readProperty(value, "code");
   if (statusValue === undefined && codeValue === undefined) {
@@ -87,7 +94,7 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
         appendCauseMessage(cause);
         break;
       } else {
-        appendCauseMessage(formatStatusAndCode(cause));
+        appendCauseMessage(formatStatusAndCode(cause) ?? stringifyUnknown(cause));
         break;
       }
     }
