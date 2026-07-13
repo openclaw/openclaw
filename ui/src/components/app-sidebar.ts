@@ -1411,7 +1411,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     return { activeId, agent, agents };
   }
 
-  /** Newest visible session for an agent; the footer chip resumes here. */
+  /** Newest visible session for an agent; the chip menu's agent switch resumes here. */
   private latestAgentSessionRow(agentId: string): SessionsListResult["sessions"][number] | null {
     const normalized = normalizeAgentId(agentId);
     const rows =
@@ -2981,7 +2981,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               .menuOpen=${this.agentMenuPosition !== null}
               .menuUnread=${chipMenuUnread}
               .newSessionDisabled=${!this.connected}
-              .onOpenConversation=${() => this.openAgentConversation(chipAgentId)}
               .onNewSession=${() => this.onOpenNewSession?.(chipAgentId)}
               .onToggleMenu=${(trigger: HTMLElement) => this.toggleAgentMenu(trigger)}
             ></openclaw-sidebar-agent-chip>
