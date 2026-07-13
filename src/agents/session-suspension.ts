@@ -255,9 +255,10 @@ export function getCleanupSuspendedLaneIdsForGatewayPublication(): Set<string> {
 
 export async function suspendSession(params: SessionSuspensionParams) {
   const state = getSessionSuspensionState();
+  const queuedGeneration = state.cleanupGeneration;
   const run = state.suspensionWriteChain
     .catch(() => undefined)
-    .then(() => suspendSessionQueued(params));
+    .then(() => suspendSessionQueued(params, queuedGeneration));
   // Suspension persistence is per-process and rare; serialize it so cleanup
   // rollback has one winner and cannot erase another in-flight suspension.
   state.suspensionWriteChain = run.then(
@@ -267,7 +268,7 @@ export async function suspendSession(params: SessionSuspensionParams) {
   await run;
 }
 
-async function suspendSessionQueued(params: SessionSuspensionParams) {
+async function suspendSessionQueued(params: SessionSuspensionParams, queuedGeneration: number) {
   if (!params.cfg) {
     return;
   }
@@ -286,7 +287,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams) {
   const now = Date.now();
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
   const state = getSessionSuspensionState();
-  if (state.cleanupActive) {
+  if (state.cleanupActive || state.cleanupGeneration !== queuedGeneration) {
     return;
   }
   const suspensionGeneration = state.cleanupGeneration;
@@ -370,7 +371,10 @@ async function suspendSessionQueued(params: SessionSuspensionParams) {
   }
 
   const postPatchState = getSessionSuspensionState();
-  if (postPatchState.cleanupActive || suspensionGeneration !== postPatchState.cleanupGeneration) {
+  if (
+    persistedSuspension &&
+    (postPatchState.cleanupActive || suspensionGeneration !== postPatchState.cleanupGeneration)
+  ) {
     try {
       await patchSessionEntry(
         { storePath, sessionKey },
