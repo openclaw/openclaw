@@ -447,6 +447,7 @@ function buildNormalizationCoreDistEntries(): Record<string, string> {
     "error-coercion": "packages/normalization-core/src/error-coercion.ts",
     "number-coercion": "packages/normalization-core/src/number-coercion.ts",
     "record-coerce": "packages/normalization-core/src/record-coerce.ts",
+    result: "packages/normalization-core/src/result.ts",
     "string-coerce": "packages/normalization-core/src/string-coerce.ts",
     "string-normalization": "packages/normalization-core/src/string-normalization.ts",
     "utf16-slice": "packages/normalization-core/src/utf16-slice.ts",
