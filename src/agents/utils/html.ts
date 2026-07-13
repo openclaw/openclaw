@@ -30,8 +30,8 @@ export function decodeHtmlEntities(html: string): string {
           : decodedEntity;
       }
 
-      const digits = hex ?? decimal;
-      const codePoint = Number.parseInt(digits ?? "", hex === undefined ? 10 : 16);
+      const codePoint =
+        hex === undefined ? Number.parseInt(decimal ?? "", 10) : Number.parseInt(hex, 16);
       return isUnicodeScalar(codePoint) ? String.fromCodePoint(codePoint) : entity;
     },
   );
