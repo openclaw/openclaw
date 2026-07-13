@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Gateway in-process restarts:** clear stale SIGUSR1 restart state and resume prepared host suspensions before rebuilding runtime admission, preventing restart cooldowns or paused scheduling from leaking into the next lifecycle.
+- **ClickClack durable media delivery:** route media replies through required delivery, reuse owner-scoped upload and message nonces across retries, repair persisted attachment state without rereading source media, fail closed when an older ClickClack server cannot prove an unknown send, and use the selected provider and model's runtime output budget instead of a channel-level token cap. Thanks @jjjhenriksen and @shakkernerd.
 - **Deepgram realtime custom endpoints:** validate Voice Call streaming base URLs with secret-safe errors, preserve explicit `ws://` and `wss://` endpoints, and map HTTP schemes to their matching WebSocket transport for dedicated and self-hosted deployments. (#105334) Thanks @dwc1997.
 - **macOS remote node readiness:** take the main-session key from the node hello snapshot instead of opening an operator connection during node admission, preventing remote tunnel recovery from leaving Computer Use and node exec stuck in lifecycle transition.
 - **Claude CLI context budgets:** honor Anthropic model and per-agent `contextTokens` limits by passing the effective limit to Claude Code's native auto-compactor and persisting the same prepared budget in OpenClaw session state. Fixes #80933. (#93198) Thanks @mushuiyu886.

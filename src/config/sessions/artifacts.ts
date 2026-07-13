@@ -72,7 +72,7 @@ export function isSessionStoreTempArtifactName(fileName: string, storeBasename: 
 }
 
 /** Parses a compaction checkpoint transcript filename into session/checkpoint ids. */
-export function parseCompactionCheckpointTranscriptFileName(fileName: string): {
+function parseCompactionCheckpointTranscriptFileName(fileName: string): {
   sessionId: string;
   checkpointId: string;
 } | null {
@@ -88,12 +88,12 @@ export function isCompactionCheckpointTranscriptFileName(fileName: string): bool
 }
 
 /** Returns true for trajectory runtime jsonl artifacts. */
-export function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
+function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory.jsonl");
 }
 
 /** Returns true for trajectory pointer artifacts. */
-export function isTrajectoryPointerArtifactName(fileName: string): boolean {
+function isTrajectoryPointerArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory-path.json");
 }
 

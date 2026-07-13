@@ -6,11 +6,12 @@ import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
   registerAgentRunContext,
-  resetAgentRunContextForTest,
+  resetAgentEventsForTest,
 } from "../infra/agent-events.js";
 import {
-  hasPendingHeartbeatWake,
-  resetHeartbeatWakeStateForTests,
+  requestHeartbeat,
+  setHeartbeatWakeHandler,
+  type HeartbeatWakeRequest,
 } from "../infra/heartbeat-wake.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
@@ -465,9 +466,43 @@ function configureInMemoryTaskStoresForLinkValidationTests() {
   configureInMemoryTaskStoresForTests();
 }
 
+const HEARTBEAT_FLUSH_REASON = "task-registry-test-flush";
+let heartbeatWakeRequests: HeartbeatWakeRequest[] = [];
+let clearHeartbeatWakeHandler: (() => void) | undefined;
+
+async function flushHeartbeatWakeRequests(): Promise<void> {
+  requestHeartbeat({
+    source: "other",
+    intent: "immediate",
+    reason: HEARTBEAT_FLUSH_REASON,
+    coalesceMs: 0,
+  });
+  await vi.waitFor(() => {
+    expect(heartbeatWakeRequests.some((request) => request.reason === HEARTBEAT_FLUSH_REASON)).toBe(
+      true,
+    );
+  });
+}
+
+function expectHeartbeatWake(
+  source: "background-task" | "background-task-blocked",
+  sessionKey: string,
+) {
+  expect(heartbeatWakeRequests).toContainEqual(
+    expect.objectContaining({ source, reason: source, sessionKey }),
+  );
+}
+
 describe("task-registry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetGatewayWorkAdmission();
+    heartbeatWakeRequests = [];
+    clearHeartbeatWakeHandler = setHeartbeatWakeHandler(async (request) => {
+      heartbeatWakeRequests.push(request);
+      return { status: "ran", durationMs: 0 };
+    });
+    await flushHeartbeatWakeRequests();
+    heartbeatWakeRequests = [];
     setTaskRegistryDeliveryRuntimeForTests({
       sendMessage: hoisted.sendMessageMock,
     });
@@ -480,12 +515,14 @@ describe("task-registry", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
+    await flushHeartbeatWakeRequests();
+    clearHeartbeatWakeHandler?.();
+    clearHeartbeatWakeHandler = undefined;
     resetSystemEventsForTest();
-    resetHeartbeatWakeStateForTests();
-    resetAgentRunContextForTest();
+    resetAgentEventsForTest({ preserveListeners: true });
     resetCronActiveJobs();
     resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
@@ -2026,7 +2063,8 @@ describe("task-registry", () => {
       expect(peekSystemEvents(ownerKey)).toEqual([
         expect.stringContaining("Background task ready for review: ACP background task"),
       ]);
-      expect(hasPendingHeartbeatWake()).toBe(true);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task", ownerKey);
     });
   });
 
@@ -2109,7 +2147,8 @@ describe("task-registry", () => {
         "Background task blocked: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
         "Task needs follow-up: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
       ]);
-      expect(hasPendingHeartbeatWake()).toBe(true);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task-blocked", "agent:main:main");
     });
   });
 
@@ -2178,8 +2217,9 @@ describe("task-registry", () => {
         "Background task blocked: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
         "Task needs follow-up: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
       ]);
-      expect(hasPendingHeartbeatWake()).toBe(true);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task-blocked", "agent:main:main");
     });
   });
 
@@ -2270,7 +2310,8 @@ describe("task-registry", () => {
       expect(peekSystemEvents("agent:main:main")).toEqual([
         "Task needs follow-up: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
       ]);
-      expect(hasPendingHeartbeatWake()).toBe(true);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task-blocked", "agent:main:main");
     });
   });
 
@@ -2308,7 +2349,11 @@ describe("task-registry", () => {
         );
       });
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(hasPendingHeartbeatWake()).toBe(true);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task", "agent:main:main");
+      expect(heartbeatWakeRequests).not.toContainEqual(
+        expect.objectContaining({ source: "background-task-blocked" }),
+      );
     });
   });
 

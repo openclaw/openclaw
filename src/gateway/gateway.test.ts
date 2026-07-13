@@ -15,7 +15,7 @@ import { resetConfigOverrides, setConfigOverride } from "../config/runtime-overr
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
@@ -173,7 +173,7 @@ function resetGatewayTestState(): void {
   clearRuntimeConfigSnapshot();
   clearConfigCache();
   clearSessionStoreCacheForTest();
-  resetAgentRunContextForTest();
+  resetAgentEventsForTest({ preserveListeners: true });
   clearGatewaySubagentRuntime();
 }
 

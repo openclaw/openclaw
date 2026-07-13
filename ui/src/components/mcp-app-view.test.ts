@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import {
-  buildMcpAppHostCapabilities,
-  McpAppView,
-  resolveMcpAppSandboxUrl,
-} from "./mcp-app-view.ts";
+import { buildMcpAppHostCapabilities, resolveMcpAppSandboxUrl } from "./mcp-app-security.ts";
+import { McpAppView } from "./mcp-app-view.ts";
 
 const MCP_APP_VIEW_ELEMENT_NAME = `test-mcp-app-view-${crypto.randomUUID()}`;
 

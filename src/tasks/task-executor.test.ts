@@ -1,7 +1,6 @@
 // Covers task executor runtime selection, lifecycle updates, and error paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -104,11 +103,9 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
   await withStateDirEnv("openclaw-task-executor-", async ({ stateDir }) => {
     resetDetachedTaskLifecycleRuntimeForTests();
     resetSystemEventsForTest();
-    resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryControlRuntimeForTests();
-    resetAgentRunContextForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     setTaskRegistryDeliveryRuntimeForTests({
@@ -125,11 +122,9 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
       await run(stateDir);
     } finally {
       resetSystemEventsForTest();
-      resetHeartbeatWakeStateForTests();
       resetAgentEventsForTest();
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryControlRuntimeForTests();
-      resetAgentRunContextForTest();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
     }
@@ -216,11 +211,9 @@ describe("task-executor", () => {
   afterEach(() => {
     ORIGINAL_ENV.restore();
     resetSystemEventsForTest();
-    resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryControlRuntimeForTests();
-    resetAgentRunContextForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();

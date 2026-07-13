@@ -38,7 +38,6 @@ import {
 } from "../../../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import { copyPluginToolMeta } from "../../../plugins/tools.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import {
   createTrajectoryRuntimeRecorder,
@@ -55,22 +54,10 @@ import {
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
-import {
-  copyBeforeToolCallHookMarker,
-  recordStructuredReplayTrustForToolCall,
-} from "../../agent-tools.before-tool-call.js";
-import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
+import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { createCacheTrace } from "../../cache-trace.js";
-import { copyChannelAgentToolMeta } from "../../channel-tools.js";
-import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
-import {
-  applyCodeModeCatalog,
-  CODE_MODE_EXEC_TOOL_NAME,
-  CODE_MODE_WAIT_TOOL_NAME,
-  createCodeModeTools,
-} from "../../code-mode.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
@@ -80,15 +67,10 @@ import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import {
-  filterLocalModelLeanTools,
-  shouldCatalogToolForLocalModelLean,
-} from "../../local-model-lean.js";
-import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
-import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   invalidateSessionFileRepairCache,
@@ -103,23 +85,13 @@ import {
   ackPendingAgentSteeringItems,
   releasePendingAgentSteeringItems,
 } from "../../subagent-registry.js";
-import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
-import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
-import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
-  applyToolSchemaDirectoryCatalog,
-  applyToolSearchCatalog,
   clearToolSearchCatalog,
-  estimateToolSchemaDirectoryToolNames,
   projectToolSearchTargetTranscriptMessages,
   resolveToolSearchCatalogTool,
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
-import { copyToolTerminalPresentation } from "../../tool-terminal-presentation.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -189,8 +161,8 @@ import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-transport.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
-import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
+import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
 import {
   cloneHookMessages,
@@ -244,7 +216,6 @@ import {
   cleanupEmbeddedAttemptResources,
 } from "./attempt.subscription-cleanup.js";
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
-import { buildToolSearchRunPlan } from "./attempt.tool-search-run-plan.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import {
   resolveRunTimeoutDuringCompaction,
@@ -533,11 +504,7 @@ export async function runEmbeddedAttempt(
       codeModeControlsEnabledForRun,
       computerContextEpoch,
       localModelLeanEnabled,
-      localModelLeanPreserveToolNames,
       replaySafetyOptions,
-      runtimeCapabilityProfile,
-      toolSearchConfig,
-      toolSearchControlsEnabledForRun,
       toolSearchRuntimeConfig,
       toolSearchTargetTranscriptProjections,
       toolsEnabled,
@@ -587,206 +554,36 @@ export async function runEmbeddedAttempt(
     bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
     bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
     const { clientTools, tools, uncompactedEffectiveTools } = preparedBundleTools;
-    let effectiveTools = uncompactedEffectiveTools;
-    const catalogToolHookContext = {
-      agentId: sessionAgentId,
-      config: params.config,
-      cwd: effectiveCwd,
-      sessionKey: sandboxSessionKey,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-      channelId: params.currentChannelId,
-      trace: runTrace,
-      loopDetection: resolveToolLoopDetectionConfig({
-        cfg: params.config,
-        agentId: sessionAgentId,
-      }),
-      onToolOutcome: params.onToolOutcome,
-      allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
-    };
-    const codeModeTools = codeModeControlsEnabledForRun
-      ? createCodeModeTools({
-          config: params.config,
-          runtimeConfig: params.config,
-          agentId: sessionAgentId,
-          sessionKey: sandboxSessionKey,
-          sessionId: params.sessionId,
-          runId: params.runId,
-          catalogRef: toolSearchCatalogRef,
-          abortSignal: runAbortController.signal,
-          forceRestartSafeTools: params.forceRestartSafeTools,
-          executeTool: (toolParams) => {
-            if (!toolSearchCatalogExecutor) {
-              throw new Error("Code Mode catalog executor is unavailable for this run.");
-            }
-            return toolSearchCatalogExecutor(toolParams);
-          },
-        })
-      : [];
-    const directoryRequiredToolNames =
-      params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only"
-        ? ["message"]
-        : [];
-    const directoryHydratedToolNames =
-      toolSearchControlsEnabledForRun && toolSearchConfig.mode === "directory"
-        ? (() => {
-            try {
-              return estimateToolSchemaDirectoryToolNames({
-                tools: effectiveTools,
-                query: params.prompt,
-                maxTools: 4,
-                requiredToolNames: directoryRequiredToolNames,
-              });
-            } catch (err) {
-              log.warn(
-                `tool-search: directory schema estimation failed; continuing with deferred schemas only (${String(err)})`,
-              );
-              return directoryRequiredToolNames;
-            }
-          })()
-        : [];
-    const toolSearch = codeModeControlsEnabledForRun
-      ? applyCodeModeCatalog({
-          tools: [...codeModeTools, ...effectiveTools],
-          config: params.config,
-          sessionId: params.sessionId,
-          sessionKey: sandboxSessionKey,
-          agentId: sessionAgentId,
-          runId: params.runId,
-          catalogRef: toolSearchCatalogRef,
-          toolHookContext: catalogToolHookContext,
-        })
-      : toolSearchConfig.mode === "directory"
-        ? applyToolSchemaDirectoryCatalog({
-            tools: effectiveTools,
-            config: toolSearchRuntimeConfig,
-            sessionId: params.sessionId,
-            sessionKey: sandboxSessionKey,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-            toolHookContext: catalogToolHookContext,
-            hydrateToolNames: directoryHydratedToolNames,
-          })
-        : applyToolSearchCatalog({
-            tools: effectiveTools,
-            config: toolSearchRuntimeConfig,
-            sessionId: params.sessionId,
-            sessionKey: sandboxSessionKey,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-            toolHookContext: catalogToolHookContext,
-            shouldCatalogTool:
-              localModelLeanEnabled && toolSearchConfig.mode === "tools"
-                ? shouldCatalogToolForLocalModelLean
-                : undefined,
-          });
-    const projectedToolSearchTools = filterLocalModelLeanTools({
-      tools: toolSearch.tools,
-      config: params.config,
-      agentId: sessionAgentId,
-      preserveToolNames: localModelLeanPreserveToolNames,
+    const preparedToolCatalog = prepareEmbeddedAttemptToolCatalog({
+      attempt: params,
+      preparedToolBase,
+      bundleTools: { clientTools, uncompactedEffectiveTools },
+      effectiveCwd,
+      effectiveWorkspace,
+      sessionAgentId,
+      sandboxSessionKey,
+      runTrace,
+      abortSignal: runAbortController.signal,
+      executeCodeModeTool: (toolParams) => {
+        if (!toolSearchCatalogExecutor) {
+          throw new Error("Code Mode catalog executor is unavailable for this run.");
+        }
+        return toolSearchCatalogExecutor(toolParams);
+      },
+      getProviderRuntimeHandle,
+      markStage: (name) => prepStages.mark(name),
     });
-    const toolSearchSchemaProjection = filterRuntimeCompatibleTools(projectedToolSearchTools);
-    logRuntimeToolSchemaQuarantine({
-      diagnostics: toolSearchSchemaProjection.diagnostics,
-      tools: projectedToolSearchTools,
-      runId: params.runId,
-      agentId: sessionAgentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-    });
-    effectiveTools = [...toolSearchSchemaProjection.tools];
-    effectiveTools = effectiveTools.map((tool) => {
-      const originalExecute = tool.execute;
-      const wrappedTool = {
-        ...tool,
-        execute: (async (...args: Parameters<typeof originalExecute>) => {
-          // Heartbeat every 60s during execution so the 120s idle watchdog
-          // never expires for long-running tools (web_fetch, exec, etc.).
-          const interval = setInterval(() => notifyToolActivity(params.runId), 60_000);
-          interval.unref?.();
-          try {
-            notifyToolActivity(params.runId);
-            const result = await originalExecute(...args);
-            return result;
-          } finally {
-            clearInterval(interval);
-            notifyToolActivity(params.runId);
-          }
-        }) as typeof originalExecute,
-      };
-      // Preserve plugin/channel/before-tool-call/terminal metadata that lives
-      // in WeakMaps keyed by tool object identity. The spread above copies own
-      // enumerable properties but loses these associations.
-      copyPluginToolMeta(tool, wrappedTool);
-      copyChannelAgentToolMeta(tool as never, wrappedTool as never);
-      copyBeforeToolCallHookMarker(tool, wrappedTool);
-      copyToolTerminalPresentation(tool, wrappedTool as never);
-      copyCodeModeControlToolIdentity(tool as never, wrappedTool as never);
-      return wrappedTool;
-    });
-    if (toolSearch.compacted && !toolSearch.catalogReused) {
-      prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
-      log.info(
-        codeModeControlsEnabledForRun
-          ? `code-mode: cataloged ${toolSearch.catalogToolCount} tools behind exec/wait`
-          : toolSearchConfig.mode === "directory"
-            ? `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact directory surface`
-            : `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
-      );
-    }
-    const deferredDirectoryToolsCallable =
-      toolSearchControlsEnabledForRun &&
-      toolSearchConfig.mode === "directory" &&
-      toolSearch.catalogRegistered;
-    prepStages.mark("bundle-tools");
-    const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
-      capabilityProfile: runtimeCapabilityProfile,
-      toolsAllow: params.toolsAllow,
-    });
-    const toolSearchRunPlan = buildToolSearchRunPlan({
-      visibleTools: effectiveTools,
-      uncompactedTools: uncompactedEffectiveTools,
-      clientTools,
-      clientToolsCataloged:
-        toolSearch.catalogRegistered &&
-        (codeModeControlsEnabledForRun || toolSearchConfig.mode !== "directory"),
-      catalogToolCount: toolSearch.catalogToolCount,
-      controlsEnabled: toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun,
-      deferredToolsCallable: deferredDirectoryToolsCallable,
-      controlNames: codeModeControlsEnabledForRun
-        ? [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME]
-        : toolSearchConfig.mode === "directory"
-          ? [TOOL_SEARCH_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
-          : undefined,
-      explicitAllowlistSources: explicitToolAllowlistSources,
-    });
+    const {
+      catalogToolHookContext,
+      deferredDirectoryToolsCallable,
+      effectiveTools,
+      emptyExplicitToolAllowlistError,
+      toolSearch,
+      toolSearchRunPlan,
+    } = preparedToolCatalog;
     const replayAllowedToolNames = toolSearchRunPlan.replayAllowedToolNames;
     const liveAllowedToolNames = toolSearchRunPlan.liveAllowedToolNames;
     const capabilityToolNames = toolSearchRunPlan.capabilityToolNames;
-    const emptyExplicitToolAllowlistError = params.forceRestartSafeTools
-      ? null
-      : buildEmptyExplicitToolAllowlistError({
-          sources: explicitToolAllowlistSources,
-          callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
-          toolsEnabled,
-          disableTools: params.disableTools,
-        });
-    logAgentRuntimeToolDiagnostics({
-      runtimePlan: params.runtimePlan,
-      tools: effectiveTools,
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: effectiveWorkspace,
-      env: process.env,
-      modelId: params.modelId,
-      modelApi: params.model.api,
-      model: params.model,
-      runtimeHandle: getProviderRuntimeHandle(),
-    });
 
     const preparedSystemPrompt = await prepareEmbeddedAttemptSystemPrompt({
       activeContextEngine,

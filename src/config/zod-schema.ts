@@ -41,7 +41,7 @@ import {
 // built dist renders every issue as the bare "Invalid input" fallback. Register
 // the locale explicitly where the config schemas live; zod stores it on
 // globalThis, so one call covers every zod parse in the process.
-export function installZodDefaultLocale(): void {
+function installZodDefaultLocale(): void {
   z.config(z.locales.en());
 }
 installZodDefaultLocale();
@@ -378,7 +378,7 @@ const TalkSchema = z
     }
   });
 
-export const McpServerSchema = z
+const McpServerSchema = z
   .object({
     enabled: z.boolean().optional(),
     command: z.string().optional(),

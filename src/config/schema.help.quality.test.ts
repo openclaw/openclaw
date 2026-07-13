@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { MEDIA_AUDIO_FIELD_KEYS } from "./media-audio-field-metadata.js";
+import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 
@@ -516,7 +516,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.links.models",
   "tools.links.scope",
   "tools.links.timeoutSeconds",
-  ...MEDIA_AUDIO_FIELD_KEYS,
+  ...Object.keys(MEDIA_AUDIO_FIELD_HELP),
   "tools.media.concurrency",
   "tools.media.image.attachments",
   "tools.media.image.enabled",
