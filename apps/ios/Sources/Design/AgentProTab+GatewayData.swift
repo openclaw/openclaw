@@ -192,10 +192,20 @@ extension AgentProTab {
     }
 
     func requestAllCronJobs() async -> CronJobsListLite? {
+        for _ in 0..<3 {
+            if let snapshot = await self.requestCronJobsSnapshot() {
+                return snapshot
+            }
+        }
+        return nil
+    }
+
+    private func requestCronJobsSnapshot() async -> CronJobsListLite? {
         let pageLimit = 100
         let jobLimit = 20000
         var jobs: [CronJob] = []
         var seenJobIDs: Set<String> = []
+        var expectedIdentity: CronJobsSnapshotIdentity?
         var offset = 0
         for _ in 0..<pageLimit {
             guard let paramsJSON = try? Self.automationParams([
@@ -211,6 +221,13 @@ extension AgentProTab {
                 paramsJSON: paramsJSON,
                 timeoutSeconds: 12)
             else { return nil }
+            guard let identity = cronJobsSnapshotIdentity(page: page, maximumCount: jobLimit) else { return nil }
+            if let expectedIdentity, identity != expectedIdentity {
+                // Offset pages are separately locked by the Gateway. Restart instead of
+                // combining pages when a concurrent mutation changes the snapshot.
+                return nil
+            }
+            expectedIdentity = identity
             let pageJobIDs = Set(page.jobs.map(\.id))
             guard pageJobIDs.count == page.jobs.count,
                   seenJobIDs.isDisjoint(with: pageJobIDs)
@@ -218,11 +235,13 @@ extension AgentProTab {
             seenJobIDs.formUnion(pageJobIDs)
             jobs.append(contentsOf: page.jobs)
             guard jobs.count <= jobLimit else { return nil }
-            if let total = page.total {
-                guard total >= jobs.count, total <= jobLimit else { return nil }
+            if let total = identity.total {
+                guard total >= jobs.count else { return nil }
                 if jobs.count == total {
+                    guard !page.hasMore else { return nil }
                     return CronJobsListLite(
                         jobs: jobs,
+                        snapshotRevision: identity.revision,
                         total: total,
                         hasMore: false,
                         nextOffset: nil)
@@ -231,7 +250,8 @@ extension AgentProTab {
             guard page.hasMore else {
                 return CronJobsListLite(
                     jobs: jobs,
-                    total: page.total,
+                    snapshotRevision: identity.revision,
+                    total: nil,
                     hasMore: false,
                     nextOffset: nil)
             }

@@ -291,19 +291,28 @@ struct CronStatusLite: Decodable {
 
 struct CronJobsListLite: Decodable {
     let jobs: [CronJob]
+    let snapshotRevision: String?
     let total: Int?
     let hasMore: Bool
     let nextOffset: Int?
 
     private enum CodingKeys: String, CodingKey {
         case jobs
+        case snapshotRevision
         case total
         case hasMore
         case nextOffset
     }
 
-    init(jobs: [CronJob], total: Int?, hasMore: Bool, nextOffset: Int?) {
+    init(
+        jobs: [CronJob],
+        snapshotRevision: String? = nil,
+        total: Int?,
+        hasMore: Bool,
+        nextOffset: Int?)
+    {
         self.jobs = jobs
+        self.snapshotRevision = snapshotRevision
         self.total = total
         self.hasMore = hasMore
         self.nextOffset = nextOffset
@@ -312,10 +321,24 @@ struct CronJobsListLite: Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.jobs = try container.decode([CronJob].self, forKey: .jobs)
+        self.snapshotRevision = try container.decodeIfPresent(String.self, forKey: .snapshotRevision)
         self.total = try container.decodeIfPresent(Int.self, forKey: .total)
         self.hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
         self.nextOffset = try container.decodeIfPresent(Int.self, forKey: .nextOffset)
     }
+}
+
+struct CronJobsSnapshotIdentity: Equatable {
+    let total: Int?
+    let revision: String?
+}
+
+func cronJobsSnapshotIdentity(page: CronJobsListLite, maximumCount: Int) -> CronJobsSnapshotIdentity? {
+    guard page.total.map({ (0...maximumCount).contains($0) }) ?? true else { return nil }
+    let revision = page.snapshotRevision?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return CronJobsSnapshotIdentity(
+        total: page.total,
+        revision: revision?.isEmpty == false ? revision : nil)
 }
 
 func nextCronJobsListOffset(page: CronJobsListLite, currentOffset: Int) -> Int? {

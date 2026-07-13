@@ -107,8 +107,38 @@ struct AgentAutomationModelsTests {
         let page = try JSONDecoder().decode(
             CronJobsListLite.self,
             from: Data(#"{"jobs":[],"total":0}"#.utf8))
+        #expect(page.snapshotRevision == nil)
         #expect(!page.hasMore)
         #expect(page.nextOffset == nil)
+    }
+
+    @Test func `automation pagination pins total and snapshot revision`() throws {
+        let first = try JSONDecoder().decode(
+            CronJobsListLite.self,
+            from: Data(#"{"jobs":[],"snapshotRevision":" rev-1 ","total":201,"hasMore":true,"nextOffset":200}"#.utf8))
+        let changedRevision = CronJobsListLite(
+            jobs: [],
+            snapshotRevision: "rev-2",
+            total: 201,
+            hasMore: false,
+            nextOffset: nil)
+        let changedTotal = CronJobsListLite(
+            jobs: [],
+            snapshotRevision: "rev-1",
+            total: 200,
+            hasMore: false,
+            nextOffset: nil)
+
+        let identity = try #require(cronJobsSnapshotIdentity(page: first, maximumCount: 20000))
+        #expect(identity == CronJobsSnapshotIdentity(total: 201, revision: "rev-1"))
+        #expect(cronJobsSnapshotIdentity(page: changedRevision, maximumCount: 20000) != identity)
+        #expect(cronJobsSnapshotIdentity(page: changedTotal, maximumCount: 20000) != identity)
+
+        let legacyTerminal = try JSONDecoder().decode(
+            CronJobsListLite.self,
+            from: Data(#"{"jobs":[]}"#.utf8))
+        #expect(cronJobsSnapshotIdentity(page: legacyTerminal, maximumCount: 20000) ==
+            CronJobsSnapshotIdentity(total: nil, revision: nil))
     }
 
     @Test func `automation editor selection preserves tapped snapshot`() {
