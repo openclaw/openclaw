@@ -146,6 +146,12 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
           timeoutMs: req.timeoutMs,
           fetchFn,
           maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "audio" }),
+          requestPolicy: {
+            allowPrivateNetwork,
+            dispatcherPolicy,
+            headers,
+            headerOrigin: new URL(baseUrl).origin,
+          },
         });
         return {
           audioBuffer: audio.buffer,
