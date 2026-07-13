@@ -574,6 +574,102 @@ class ChatControllerModelSelectionTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun sessionsRefreshRetriesWhenThinkingPatchOverlapsResponse() =
+    runTest {
+      val firstListStarted = CompletableDeferred<Unit>()
+      val releaseFirstList = CompletableDeferred<Unit>()
+      val thinkingPatchStarted = CompletableDeferred<Unit>()
+      val releaseThinkingPatch = CompletableDeferred<Unit>()
+      var listRequests = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.list" -> {
+                listRequests += 1
+                if (listRequests == 1) {
+                  firstListStarted.complete(Unit)
+                  releaseFirstList.await()
+                }
+                """{"sessions":[{"key":"main","thinkingLevel":"high"}]}"""
+              }
+              "sessions.patch" -> {
+                thinkingPatchStarted.complete(Unit)
+                releaseThinkingPatch.await()
+                error("rejected")
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      firstListStarted.await()
+      controller.setThinkingLevel("max")
+      thinkingPatchStarted.await()
+
+      releaseFirstList.complete(Unit)
+      yield()
+      assertEquals("max", controller.thinkingLevel.value)
+      assertEquals(1, listRequests)
+
+      releaseThinkingPatch.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(2, listRequests)
+      assertEquals("high", controller.thinkingLevel.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun sessionsRefreshDoesNotWaitForSettingsOnPreviousGateway() =
+    runTest {
+      val oldPatchStarted = CompletableDeferred<Unit>()
+      val releaseOldPatch = CompletableDeferred<Unit>()
+      val newListFinished = CompletableDeferred<Unit>()
+      var gatewayScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          cacheScope = { gatewayScope },
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.list" -> {
+                newListFinished.complete(Unit)
+                """{"sessions":[{"key":"main","thinkingLevel":"high"}]}"""
+              }
+              else -> "{}"
+            }
+          },
+          requestGatewayForGateway = { gatewayId, method, _ ->
+            if (gatewayId == "gateway-a" && method == "sessions.patch") {
+              oldPatchStarted.complete(Unit)
+              releaseOldPatch.await()
+            }
+            "{}"
+          },
+        )
+
+      controller.setThinkingLevel("max")
+      oldPatchStarted.await()
+
+      gatewayScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      controller.refreshSessions()
+      yield()
+
+      assertTrue(newListFinished.isCompleted)
+      assertEquals("high", controller.thinkingLevel.value)
+
+      releaseOldPatch.complete(Unit)
+      advanceUntilIdle()
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun twoFailedQueuedThinkingPatchesWithoutSessionRowRestoreConfirmedLevel() =
     runTest {
       val firstPatchStarted = CompletableDeferred<Unit>()

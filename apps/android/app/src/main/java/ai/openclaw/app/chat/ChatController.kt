@@ -121,7 +121,16 @@ class ChatController internal constructor(
     val sessionKey: String,
   )
 
+  private data class QueuedSessionSettingsMutation(
+    val settingsKey: SessionSettingsKey,
+    val requestLease: GatewaySession.RequestLease?,
+    val pending: CompletableDeferred<Boolean>,
+    val previous: CompletableDeferred<Boolean>?,
+  )
+
   private val pendingSettingsMutations = ConcurrentHashMap<SessionSettingsKey, CompletableDeferred<Boolean>>()
+  private val settingsMutationRevisions = mutableMapOf<ChatCacheScope?, Long>()
+  private val activeSessionRefreshesByScope = mutableMapOf<ChatCacheScope?, Int>()
 
   private data class ThinkingIntent(
     val requestId: Long,
@@ -811,6 +820,7 @@ class ChatController internal constructor(
         ?.let(::normalizeThinking)
         ?: _thinkingLevel.value
     val settingsKey = sessionSettingsKey(key)
+    val queuedMutation = enqueueSessionSettingsMutation(settingsKey)
     latestAcceptedThinkingStates.putIfAbsent(
       settingsKey,
       AcceptedThinkingState(
@@ -830,6 +840,7 @@ class ChatController internal constructor(
         fallbackRollbackLevel = rollbackLevel,
         settingsKey = settingsKey,
         intent = intent,
+        queuedMutation = queuedMutation,
       )
     }
   }
@@ -893,8 +904,9 @@ class ChatController internal constructor(
     fallbackRollbackLevel: String,
     settingsKey: SessionSettingsKey,
     intent: ThinkingIntent,
+    queuedMutation: QueuedSessionSettingsMutation,
   ): Boolean =
-    runSessionSettingsMutation(settingsKey) { requestLease ->
+    runSessionSettingsMutation(queuedMutation) { requestLease ->
       val rollbackEntry = _sessions.value.firstOrNull { it.key == sessionKey }
       val rollbackState =
         latestAcceptedThinkingStates[settingsKey]
@@ -953,34 +965,76 @@ class ChatController internal constructor(
   private suspend fun runSessionSettingsMutation(
     settingsKey: SessionSettingsKey,
     operation: suspend (GatewaySession.RequestLease?) -> Boolean,
-  ): Boolean {
+  ): Boolean = runSessionSettingsMutation(enqueueSessionSettingsMutation(settingsKey), operation)
+
+  private fun enqueueSessionSettingsMutation(settingsKey: SessionSettingsKey): QueuedSessionSettingsMutation {
     // Capture the physical socket before waiting. A reconnect may retire this
     // lease, but queued work can never resolve the replacement connection.
     val requestLease = captureSettingsRequestLease(settingsKey.gatewayScope)
     val pending = CompletableDeferred<Boolean>()
-    val previous = pendingSettingsMutations.put(settingsKey, pending)
+    return synchronized(gatewayScopeApplyLock) {
+      val previous = pendingSettingsMutations.put(settingsKey, pending)
+      incrementSettingsMutationRevision(settingsKey.gatewayScope)
+      QueuedSessionSettingsMutation(
+        settingsKey = settingsKey,
+        requestLease = requestLease,
+        pending = pending,
+        previous = previous,
+      )
+    }
+  }
+
+  private suspend fun runSessionSettingsMutation(
+    queuedMutation: QueuedSessionSettingsMutation,
+    operation: suspend (GatewaySession.RequestLease?) -> Boolean,
+  ): Boolean {
+    val settingsKey = queuedMutation.settingsKey
+    val pending = queuedMutation.pending
+    var succeeded = false
     return try {
-      previous?.await()
+      queuedMutation.previous?.await()
       // A queued mutation captured a concrete gateway generation. Never let it
       // fall through to the replacement connection after waiting its turn.
-      val succeeded =
+      succeeded =
         if (settingsKey == sessionSettingsKey(settingsKey.sessionKey)) {
-          operation(requestLease)
+          operation(queuedMutation.requestLease)
         } else {
           false
         }
-      pending.complete(succeeded)
       succeeded
-    } catch (err: CancellationException) {
-      pending.complete(false)
-      throw err
     } finally {
-      if (pendingSettingsMutations.remove(settingsKey, pending)) {
-        // These baselines bridge adjacent operations in one lane only. After
-        // drain, refreshed session metadata is authoritative rollback state.
-        latestAcceptedThinkingStates.remove(settingsKey)
-        latestThinkingIntents.remove(settingsKey)
+      synchronized(gatewayScopeApplyLock) {
+        incrementSettingsMutationRevision(settingsKey.gatewayScope)
+        if (pendingSettingsMutations.remove(settingsKey, pending)) {
+          // These baselines bridge adjacent operations in one lane only. After
+          // drain, refreshed session metadata is authoritative rollback state.
+          latestAcceptedThinkingStates.remove(settingsKey)
+          latestThinkingIntents.remove(settingsKey)
+        }
+        pruneSettingsMutationRevision(settingsKey.gatewayScope)
       }
+      // Publish only after registry cleanup so a resumed scope waiter cannot
+      // repeatedly observe this completed mutation before finally removes it.
+      pending.complete(succeeded)
+    }
+  }
+
+  private fun incrementSettingsMutationRevision(gatewayScope: ChatCacheScope?) {
+    settingsMutationRevisions[gatewayScope] = (settingsMutationRevisions[gatewayScope] ?: 0L) + 1L
+  }
+
+  private fun settingsMutationRevision(gatewayScope: ChatCacheScope?): Long = settingsMutationRevisions[gatewayScope] ?: 0L
+
+  private fun hasPendingSessionSettings(gatewayScope: ChatCacheScope?): Boolean = pendingSettingsMutations.keys.any { it.gatewayScope == gatewayScope }
+
+  private fun pruneSettingsMutationRevision(gatewayScope: ChatCacheScope?) {
+    // A drained revision only matters while an in-flight list request can
+    // compare it. Retired connection generations must not accumulate forever.
+    if (
+      !hasPendingSessionSettings(gatewayScope) &&
+      activeSessionRefreshesByScope[gatewayScope] == null
+    ) {
+      settingsMutationRevisions.remove(gatewayScope)
     }
   }
 
@@ -992,6 +1046,20 @@ class ChatController internal constructor(
       val next = pendingSettingsMutations[settingsKey]
       if (next == null || next === pending) return true
       pending = next
+    }
+  }
+
+  private suspend fun waitForPendingSessionSettings(gatewayScope: ChatCacheScope?) {
+    while (true) {
+      val pending =
+        synchronized(gatewayScopeApplyLock) {
+          pendingSettingsMutations
+            .filterKeys { it.gatewayScope == gatewayScope }
+            .values
+            .toList()
+        }
+      if (pending.isEmpty()) return
+      pending.forEach { it.await() }
     }
   }
 
@@ -1859,46 +1927,91 @@ class ChatController internal constructor(
     limit: Int?,
     archived: Boolean = false,
   ) {
+    val requestCacheScope = currentCacheScope()
+    val requestSequence = sessionsRequestSequence.incrementAndGet()
+    synchronized(gatewayScopeApplyLock) {
+      activeSessionRefreshesByScope[requestCacheScope] =
+        (activeSessionRefreshesByScope[requestCacheScope] ?: 0) + 1
+    }
     try {
-      val requestCacheScope = currentCacheScope()
-      val requestSequence = sessionsRequestSequence.incrementAndGet()
-      val params =
-        buildJsonObject {
-          put("includeGlobal", JsonPrimitive(true))
-          put("includeUnknown", JsonPrimitive(false))
-          if (limit != null && limit > 0) put("limit", JsonPrimitive(limit))
-          if (archived) put("archived", JsonPrimitive(true))
+      while (true) {
+        // A sessions list is one authoritative snapshot. Do not let it straddle
+        // any per-session settings transaction and restore stale picker state.
+        waitForPendingSessionSettings(requestCacheScope)
+        val settingsRevision =
+          synchronized(gatewayScopeApplyLock) {
+            settingsMutationRevision(requestCacheScope)
+          }
+        val params =
+          buildJsonObject {
+            put("includeGlobal", JsonPrimitive(true))
+            put("includeUnknown", JsonPrimitive(false))
+            if (limit != null && limit > 0) put("limit", JsonPrimitive(limit))
+            if (archived) put("archived", JsonPrimitive(true))
+          }
+        val res = requestGateway("sessions.list", params.toString())
+        val result = parseSessions(res)
+        val settingsChanged =
+          synchronized(gatewayScopeApplyLock) {
+            settingsRevision != settingsMutationRevision(requestCacheScope) ||
+              hasPendingSessionSettings(requestCacheScope)
+          }
+        if (settingsChanged) continue
+        val retainedSessionKey =
+          synchronized(gatewayScopeApplyLock) {
+            if (requestCacheScope != currentCacheScope()) return
+            if (requestSequence != sessionsRequestSequence.get()) return
+            if (
+              settingsRevision != settingsMutationRevision(requestCacheScope) ||
+              hasPendingSessionSettings(requestCacheScope)
+            ) {
+              null
+            } else {
+              _sessions.value = result.sessions
+              result.sessions
+                .firstOrNull { it.key == _sessionKey.value }
+                ?.let(::applyThinkingMetadata)
+              sessionsListArchived = archived
+              val activeSessionKey = _sessionKey.value
+              val activeOutsideLocalWindow =
+                result.sessions
+                  .drop(MAX_CACHED_SESSIONS)
+                  .any { session -> session.key == activeSessionKey }
+              activeSessionKey.takeIf { result.isTruncated || activeOutsideLocalWindow }
+            }
+          }
+        if (
+          synchronized(gatewayScopeApplyLock) {
+            settingsRevision != settingsMutationRevision(requestCacheScope) ||
+              hasPendingSessionSettings(requestCacheScope)
+          }
+        ) {
+          continue
         }
-      val res = requestGateway("sessions.list", params.toString())
-      val result = parseSessions(res)
-      val retainedSessionKey =
-        synchronized(gatewayScopeApplyLock) {
-          if (requestCacheScope != currentCacheScope()) return
-          if (requestSequence != sessionsRequestSequence.get()) return
-          _sessions.value = result.sessions
-          result.sessions
-            .firstOrNull { it.key == _sessionKey.value }
-            ?.let(::applyThinkingMetadata)
-          sessionsListArchived = archived
-          val activeSessionKey = _sessionKey.value
-          val activeOutsideLocalWindow =
-            result.sessions
-              .drop(MAX_CACHED_SESSIONS)
-              .any { session -> session.key == activeSessionKey }
-          activeSessionKey.takeIf { result.isTruncated || activeOutsideLocalWindow }
+        unreadPatchSessionKey?.let { trackedKey ->
+          acknowledgeUnreadIfNeeded(
+            key = trackedKey,
+            entry = result.sessions.firstOrNull { it.key == trackedKey },
+            requireActive = true,
+          )
         }
-      unreadPatchSessionKey?.let { trackedKey ->
-        acknowledgeUnreadIfNeeded(
-          key = trackedKey,
-          entry = result.sessions.firstOrNull { it.key == trackedKey },
-          requireActive = true,
-        )
-      }
-      if (!archived) {
-        persistSessions(requestCacheScope, result.sessions, retainedSessionKey)
+        if (!archived) {
+          persistSessions(requestCacheScope, result.sessions, retainedSessionKey)
+        }
+        return
       }
     } catch (_: Throwable) {
       // best-effort
+    } finally {
+      synchronized(gatewayScopeApplyLock) {
+        val remaining = (activeSessionRefreshesByScope[requestCacheScope] ?: 1) - 1
+        if (remaining > 0) {
+          activeSessionRefreshesByScope[requestCacheScope] = remaining
+        } else {
+          activeSessionRefreshesByScope.remove(requestCacheScope)
+          pruneSettingsMutationRevision(requestCacheScope)
+        }
+      }
     }
   }
 

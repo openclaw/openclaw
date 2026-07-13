@@ -236,14 +236,17 @@ extension OpenClawChatViewModel {
         let resolved = self.resolvedThinkingLevelOptions(for: currentSession)
         var options = resolved.options
         let target = currentModelPatchTarget()
+        let preferredLevel = self.prefersExplicitThinkingLevel
+            ? self.preferredThinkingLevel
+            : Self.normalizedThinkingLevel(currentSession?.thinkingLevel) ?? self.preferredThinkingLevel
         let preferred: String? = if resolved.isGatewayMetadata {
             Self.normalizedThinkingLevel(
-                preferredThinkingLevel,
+                preferredLevel,
                 options: options,
                 fallback: currentSession?.thinkingLevel)
         } else {
             self.thinkingLevelWithoutGatewayMetadata(
-                preferredThinkingLevel,
+                preferredLevel,
                 target: target,
                 session: currentSession)
         }
