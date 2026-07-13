@@ -700,7 +700,7 @@ async function execSystemctl(
     env: env ? resolveSystemctlProcessEnv(env) : process.env,
     // A wedged systemd socket can leave `systemctl` blocked forever; the timeout
     // kills the child so status reads fail soft instead of hanging the command.
-    ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
+    ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs } : {}),
   });
 }
 
