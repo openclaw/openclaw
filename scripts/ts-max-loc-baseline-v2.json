@@ -1193,7 +1193,6 @@
   "ui/src/lib/nodes/index.ts": 900,
   "ui/src/lib/sessions/index.ts": 1457,
   "ui/src/lib/skills/index.ts": 757,
-  "ui/src/lib/workboard/index.ts": 4121,
   "ui/src/lib/workspace/index.ts": 779,
   "ui/src/pages/agents/agents-page.ts": 964,
   "ui/src/pages/agents/memory/dreaming.ts": 1280,
