@@ -149,7 +149,7 @@ function formatHookMissingSummary(hook: HookStatusEntry): string {
 
 function exitHooksCliWithError(err: unknown): never {
   defaultRuntime.error(`${theme.error("Error:")} ${formatErrorMessage(err)}`);
-  process.exit(1);
+  defaultRuntime.exit(1);
 }
 
 function writeHooksOutput(value: string, json: boolean | undefined): void {

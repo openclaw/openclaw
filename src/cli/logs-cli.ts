@@ -10,6 +10,7 @@ import {
 import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
+import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { createSafeStreamWriter } from "../../packages/terminal-core/src/stream-writer.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -682,6 +683,7 @@ export function registerLogsCli(program: Command) {
           emitJsonLine,
           errorLine,
         );
+        restoreTerminalState("logs follow error", { resumeStdinIfPaused: false });
         process.exit(1);
         return;
       }
