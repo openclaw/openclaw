@@ -289,6 +289,9 @@ async function requestCodexAppServerUsageLazy(options: {
   startOptions?: CodexAppServerStartOptions;
 }): Promise<{ rateLimits: unknown; accountEmail?: string }> {
   const { withCodexAppServerJsonClient } = await import("./src/app-server/request.js");
+  // Bound the whole usage read (client acquisition + both requests) so the
+  // best-effort identity read can be capped against the time actually left.
+  const deadline = Date.now() + options.timeoutMs;
   // One session serves both reads so the identity is guaranteed to belong to
   // the same account the rate limits describe.
   return await withCodexAppServerJsonClient(
@@ -306,28 +309,36 @@ async function requestCodexAppServerUsageLazy(options: {
       // Identity is best-effort: rate limits stay useful without it, and a slow
       // or hung account read must never turn a successful window fetch into a
       // usage-snapshot timeout.
-      const accountEmail = await readCodexAccountEmailBestEffort(request, options.timeoutMs);
+      const accountEmail = await readCodexAccountEmailBestEffort(request, deadline);
       return { rateLimits, ...(accountEmail ? { accountEmail } : {}) };
     },
   );
 }
 
-// Cap the best-effort identity read so it stays well inside the shared usage
-// deadline; a fraction of the total budget keeps it below the outer timeout
-// even when the rate-limit read was near-instant.
+// Cap the best-effort identity read, and always leave a margin before the
+// shared usage deadline so this read cannot convert a successful rate-limit
+// fetch into an outer timeout.
 const CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS = 4_000;
+const CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS = 250;
 
 async function readCodexAccountEmailBestEffort(
-  request: (params: { method: string }) => Promise<unknown>,
-  usageTimeoutMs: number,
+  request: (params: { method: string; requestParams?: unknown }) => Promise<unknown>,
+  deadline: number,
 ): Promise<string | undefined> {
-  const boundMs = Math.max(
-    1,
-    Math.min(CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS, Math.floor(usageTimeoutMs / 3)),
+  const boundMs = Math.min(
+    CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS,
+    deadline - Date.now() - CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS,
   );
+  // No usable budget left after the rate-limit read: keep the windows and skip
+  // identity rather than risk tripping the outer timeout.
+  if (boundMs <= 0) {
+    return undefined;
+  }
+  // account/read requires an (empty) params object per the app-server protocol
+  // (GetAccountParams; refreshToken defaults false when omitted).
   // Resolves, never rejects: a failing account read yields undefined so the
   // caller still returns the rate-limit windows.
-  const read = request({ method: "account/read" }).then(
+  const read = request({ method: "account/read", requestParams: {} }).then(
     (account) => extractCodexAccountEmail(account),
     () => undefined,
   );

@@ -662,7 +662,7 @@ describe("codex provider", () => {
         expect.any(Function),
       );
       expect(scopedRequest).toHaveBeenCalledWith({ method: "account/rateLimits/read" });
-      expect(scopedRequest).toHaveBeenCalledWith({ method: "account/read" });
+      expect(scopedRequest).toHaveBeenCalledWith({ method: "account/read", requestParams: {} });
     } finally {
       vi.doUnmock("./src/app-server/request.js");
     }
@@ -729,7 +729,7 @@ describe("codex provider", () => {
         provider.fetchUsageSnapshot?.({
           provider: "openai",
           token: appServerMarkerToken(),
-          timeoutMs: 30,
+          timeoutMs: 300,
           config: {},
           env: {},
           fetchFn: fetch,
