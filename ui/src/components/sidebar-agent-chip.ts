@@ -30,7 +30,7 @@ class SidebarAgentChip extends OpenClawLightDomContentsElement {
           class="sidebar-agent-chip__main ${this.menuOpen ? "sidebar-agent-chip__main--open" : ""}"
           aria-haspopup="menu"
           aria-expanded=${String(this.menuOpen)}
-          aria-label=${t("agentChip.menuLabel")}
+          aria-label="${this.agentName} · ${t("agentChip.menuLabel")}"
           @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
         >
           <span class="sidebar-agent-chip__avatar">
