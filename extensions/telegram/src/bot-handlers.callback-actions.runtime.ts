@@ -9,12 +9,32 @@ export type TelegramCallbackButton = {
   style?: "danger" | "success" | "primary";
 };
 
+export interface TelegramCallbackMessageActions {
+  editCallbackMessage: (
+    text: string,
+    editParams?: Parameters<RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]>[3],
+  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]>;
+  clearCallbackButtons: () => ReturnType<
+    RegisterTelegramHandlerParams["bot"]["api"]["editMessageReplyMarkup"]
+  >;
+  editCallbackButtons: (
+    buttons: TelegramCallbackButton[][],
+  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["editMessageReplyMarkup"]>;
+  deleteCallbackMessage: () => ReturnType<
+    RegisterTelegramHandlerParams["bot"]["api"]["deleteMessage"]
+  >;
+  replyToCallbackChat: (
+    text: string,
+    replyParams?: Parameters<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>[2],
+  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>;
+}
+
 export function createTelegramCallbackMessageActions(params: {
   bot: RegisterTelegramHandlerParams["bot"];
   callbackMessage: Message;
   isGroup: boolean;
   isForum: boolean;
-}) {
+}): TelegramCallbackMessageActions {
   const { bot, callbackMessage, isGroup, isForum } = params;
   const callbackBusinessParams =
     callbackMessage.business_connection_id !== undefined
@@ -26,32 +46,36 @@ export function createTelegramCallbackMessageActions(params: {
   const editCallbackMessage = async (
     text: string,
     editParams?: Parameters<typeof bot.api.editMessageText>[3],
-  ) =>
-    await bot.api.editMessageText(
+  ) => {
+    return await bot.api.editMessageText(
       callbackMessage.chat.id,
       callbackMessage.message_id,
       text,
       editParams ? withCallbackBusinessParams(editParams) : callbackBusinessParams,
     );
+  };
 
-  const clearCallbackButtons = async () =>
-    await bot.api.editMessageReplyMarkup(
+  const clearCallbackButtons = async () => {
+    return await bot.api.editMessageReplyMarkup(
       callbackMessage.chat.id,
       callbackMessage.message_id,
       withCallbackBusinessParams({ reply_markup: { inline_keyboard: [] } }),
     );
+  };
 
-  const editCallbackButtons = async (buttons: TelegramCallbackButton[][]) =>
-    await bot.api.editMessageReplyMarkup(
+  const editCallbackButtons = async (buttons: TelegramCallbackButton[][]) => {
+    return await bot.api.editMessageReplyMarkup(
       callbackMessage.chat.id,
       callbackMessage.message_id,
       withCallbackBusinessParams({
         reply_markup: buildInlineKeyboard(buttons) ?? { inline_keyboard: [] },
       }),
     );
+  };
 
-  const deleteCallbackMessage = async () =>
-    await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
+  const deleteCallbackMessage = async () => {
+    return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
+  };
 
   const replyToCallbackChat = async (
     text: string,
@@ -86,7 +110,3 @@ export function createTelegramCallbackMessageActions(params: {
     replyToCallbackChat,
   };
 }
-
-export type TelegramCallbackMessageActions = ReturnType<
-  typeof createTelegramCallbackMessageActions
->;
