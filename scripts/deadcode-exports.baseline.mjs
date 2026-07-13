@@ -2068,7 +2068,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/logging/diagnostic-session-context.ts: readLastAssistantFromSessionFile",
   "src/logging/redact-internal.ts: withFullContextToolPayloadRedaction",
   "src/logging/secret-redaction-registry.ts: resetSecretRedactionRegistryForTest",
-  "src/logging/timestamps.ts: isValidTimeZone",
   "src/mcp/channel-bridge.ts: shouldRetryInitialMcpGatewayConnect",
   "src/mcp/channel-server.ts: createOpenClawChannelMcpServer",
   "src/mcp/channel-server.ts: OpenClawChannelBridge",
