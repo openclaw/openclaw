@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveModelRuntimePolicy } from "openclaw/plugin-sdk/model-session-runtime";
 import type {
@@ -29,6 +29,10 @@ import {
   CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
 } from "./cli-constants.js";
+import {
+  currentClaudeSessionCatalogConfig,
+  listBoundClaudeSessions,
+} from "./session-catalog-runtime.js";
 
 const CLAUDE_SESSIONS_CAPABILITY = "claude-sessions";
 const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
@@ -1207,40 +1211,6 @@ function adoptedSessionKey(threadId: string): string {
   return `${CLAUDE_ADOPTED_SESSION_KEY_PREFIX}${createHash("sha256").update(threadId).digest("hex")}`;
 }
 
-function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
-}
-
-function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
-  const config = currentConfig(api);
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const agentIds = [
-    defaultAgentId,
-    ...listAgentIds(config).filter((agentId) => agentId !== defaultAgentId),
-  ];
-  const adopted = new Map<string, string>();
-  for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
-    api.runtime.agent.session.listSessionEntries({ agentId }),
-  )) {
-    const binding = entry.cliSessionBindings?.[CLAUDE_CLI_BACKEND_ID];
-    if (binding?.sessionId) {
-      adopted.set(binding.sessionId, sessionKey);
-      continue;
-    }
-    const marker = entry.pluginExtensions?.anthropic?.sessionCatalog;
-    if (
-      entry.pluginOwnerId !== api.id ||
-      entry.modelSelectionLocked !== true ||
-      !isRecord(marker) ||
-      typeof marker.sourceThreadId !== "string"
-    ) {
-      continue;
-    }
-    adopted.set(marker.sourceThreadId, sessionKey);
-  }
-  return adopted;
-}
-
 async function readBoundedClaudeHistory(threadId: string): Promise<ClaudeTranscriptItem[]> {
   const items: ClaudeTranscriptItem[] = [];
   let cursor: string | undefined;
@@ -1359,7 +1329,7 @@ async function continueClaudeSession(
     if (!source?.isFile()) {
       throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
     }
-    const config = currentConfig(api);
+    const config = currentClaudeSessionCatalogConfig(api);
     const model = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
     const marker = { sourceThreadId: threadId };
     try {
@@ -1476,7 +1446,7 @@ function toGenericClaudeHost(
 }
 
 export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
-  const config = currentConfig(api);
+  const config = currentClaudeSessionCatalogConfig(api);
   const defaultAgentId = resolveDefaultAgentId(config);
   const createSession =
     resolveModelRuntimePolicy({

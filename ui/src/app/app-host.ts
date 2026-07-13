@@ -51,10 +51,7 @@ import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, loadSettings } from "./settings.ts";
 
-type ShellRouteState = {
-  routeId?: RouteId;
-  location?: RouteLocation;
-};
+type ShellRouteState = { routeId?: RouteId; location?: RouteLocation };
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;

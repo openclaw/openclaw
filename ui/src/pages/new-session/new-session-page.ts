@@ -20,7 +20,9 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import { newSessionRouteKey, type NewSessionRouteData } from "./location.ts";
+import { folderDisplayName, isAbsolutePath } from "./path.ts";
+import { renderNewSessionRuntimeTarget } from "./runtime-target.ts";
 
 type DraftBranches = {
   repoRoot: string;
@@ -41,19 +43,9 @@ type BrowserTarget = { nodeId: string; label: string };
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Last path segment for the folder trigger label; handles both separators.
-    Falls back to the raw path so filesystem roots ("/", "C:\") stay visible. */
-function folderDisplayName(path: string): string {
-  return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
-}
-
 /** Focusable rows for the menu keyboard contract (menu items + browser rows). */
 const MENU_ITEM_SELECTOR =
   ".session-menu__item:not(:disabled), .new-session-page__browser-entry:not(:disabled)";
-
-function isAbsolutePath(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
-}
 
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
@@ -204,11 +196,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   override updated() {
     const agentsReady = this.agents().length > 0;
-    const openKey = JSON.stringify([
-      this.data?.agentId ?? "",
-      this.data?.model ?? "",
-      this.data?.catalogLabel ?? "",
-    ]);
+    const openKey = newSessionRouteKey(this.data);
     if (this.openedFor !== openKey) {
       this.openedFor = openKey;
       this.agentsHydrated = agentsReady;
@@ -1057,17 +1045,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const agents = this.agents();
     return html`
       <div class="new-session-page__triggers">
-        ${this.data?.catalogLabel
-          ? html`<span
-              class="new-session-page__trigger new-session-page__runtime"
-              title=${this.data.model ?? ""}
-            >
-              <span class="new-session-page__target-icon" aria-hidden="true"
-                >${icons.terminal}</span
-              >
-              <span>${this.data.catalogLabel}</span>
-            </span>`
-          : nothing}
+        ${renderNewSessionRuntimeTarget(this.data)}
         ${agents.length > 1 ? this.renderAgentSelect(agents) : nothing} ${this.renderFolderSelect()}
         ${this.renderWhereSelect()}
       </div>

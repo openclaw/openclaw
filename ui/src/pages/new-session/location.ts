@@ -6,6 +6,10 @@ export type NewSessionRouteData = {
 
 export type NewSessionTarget = { model: string; label: string };
 
+export function newSessionRouteKey(data: NewSessionRouteData | undefined): string {
+  return JSON.stringify([data?.agentId ?? "", data?.model ?? "", data?.catalogLabel ?? ""]);
+}
+
 export function newSessionSearch(agentId: string, target?: NewSessionTarget): string {
   const params = new URLSearchParams();
   if (agentId) {
