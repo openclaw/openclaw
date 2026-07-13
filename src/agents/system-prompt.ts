@@ -1,3 +1,6 @@
+/**
+ * Renders OpenClaw runtime, workspace, tooling, memory, delegation, and policy prompts.
+ */
 import { createHmac, createHash } from "node:crypto";
 import {
   normalizePromptCapabilityIds,
