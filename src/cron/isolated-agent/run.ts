@@ -678,6 +678,9 @@ async function prepareCronRunContext(params: {
     nowMs: now,
     forceNew: usesDetachedRunSession,
   });
+  if (hookExternalContentSource) {
+    cronSession.sessionEntry.hookExternalContentSource = hookExternalContentSource;
+  }
   const reservedKey = isAgentHarnessSessionKey(agentSessionKey);
   if (cronSession.initialSessionEntry?.modelSelectionLocked === true) {
     throw new Error(

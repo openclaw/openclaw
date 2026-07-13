@@ -343,7 +343,7 @@ async function runEmbeddedAgentInternal(
 ): Promise<EmbeddedAgentRunResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
-    ? { remaining: 1 }
+    ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
     : undefined;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -2177,8 +2177,10 @@ async function runEmbeddedAgentInternal(
             modelRun: params.modelRun,
             disableTrajectory: params.disableTrajectory,
             skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
+            skillWorkshopProposalEnv: params.skillWorkshopProposalEnv,
             skillWorkshopOrigin: params.skillWorkshopOrigin,
             skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+            skillWorkshopProposalReviewCompletion: params.skillWorkshopProposalReviewCompletion,
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,

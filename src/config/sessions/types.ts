@@ -9,6 +9,7 @@ import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { HookExternalContentSource } from "../../security/external-content.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -294,6 +295,8 @@ export type SessionEntry = SessionRestartRecoveryState & {
   inheritedToolAllow?: string[];
   /** Plugin id that owns this session through a trusted runtime creation seam. */
   pluginOwnerId?: string;
+  /** External hook source that has contributed content to this transcript. */
+  hookExternalContentSource?: HookExternalContentSource;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /** Interrupted run generations whose late lifecycle events must be ignored. */
