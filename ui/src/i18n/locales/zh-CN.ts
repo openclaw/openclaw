@@ -494,6 +494,7 @@ export const zh_CN: TranslationMap = {
     start: "启动会话",
     starting: "正在启动…",
     createFailed: "无法创建会话。",
+    createOutcomeUnknown: "此会话启动期间 Gateway 发生了变化。再次启动此任务前，请检查最近的会话。",
     catalogUnavailable: "此会话目标不可用。",
   },
   sessionsView: {

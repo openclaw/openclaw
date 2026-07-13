@@ -1074,6 +1074,11 @@
       "translated": "Impossible de mettre à jour le modèle."
     },
     {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "Impossible de mettre à jour le niveau de réflexion."
+    },
+    {
       "id": "native.android.956a394937480f8a",
       "source": "Chat failed before the run started; try again.",
       "translated": "La discussion a échoué avant le début de l’exécution ; réessayez."

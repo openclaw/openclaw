@@ -509,6 +509,8 @@ export const de: TranslationMap = {
     start: "Sitzung starten",
     starting: "Wird gestartet…",
     createFailed: "Die Sitzung konnte nicht erstellt werden.",
+    createOutcomeUnknown:
+      "Das Gateway wurde geändert, während diese Sitzung gestartet wurde. Prüfen Sie die letzten Sitzungen, bevor Sie diese Aufgabe erneut starten.",
     catalogUnavailable: "Dieses Sitzungsziel ist nicht verfügbar.",
   },
   sessionsView: {

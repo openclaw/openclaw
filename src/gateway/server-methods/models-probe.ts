@@ -121,10 +121,8 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       // Probe under the requested provider so model selection, catalog rows, and
       // a models.providers.<id> override resolve against the surface the client
-      // asked about. Auth-alias split surfaces (e.g. a coding-plan-only
-      // credential stored under a canonical provider) are a known gap tracked
-      // as follow-up; canonicalizing here instead would probe the wrong
-      // endpoint for override providers.
+      // asked about. The probe planner resolves credentials separately through
+      // the provider's auth alias, matching normal agent runtime planning.
       const summary = await runAuthProbes({
         cfg,
         providers: [provider],

@@ -1699,7 +1699,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 716,
+      "line": 763,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Wait for the current response to finish before starting a new chat.",
       "surface": "android",
@@ -1707,7 +1707,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 813,
+      "line": 894,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not update model.",
       "surface": "android",
@@ -1715,7 +1715,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 1092,
+      "line": 958,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
+      "source": "Could not update thinking level.",
+      "surface": "android",
+      "id": "native.android.e4ab8aaa795ba79f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 1337,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed before the run started; try again.",
       "surface": "android",
@@ -1723,7 +1731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1850,
+      "line": 2140,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not stage an attachment for sending.",
       "surface": "android",
@@ -1731,7 +1739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1870,
+      "line": 2160,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not queue message for later delivery.",
       "surface": "android",
@@ -1739,7 +1747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1880,
+      "line": 2170,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "surface": "android",
@@ -1747,7 +1755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1884,
+      "line": 2174,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Attachments are too large to queue for one message; remove some and try again.",
       "surface": "android",
@@ -1755,7 +1763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1888,
+      "line": 2178,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline attachment storage is full; delete queued items first.",
       "surface": "android",
@@ -1763,7 +1771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1892,
+      "line": 2182,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Gateway health not OK; cannot send",
       "surface": "android",
@@ -1771,7 +1779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2518,
+      "line": 2813,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed",
       "surface": "android",
@@ -1779,7 +1787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2621,
+      "line": 2916,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Event stream interrupted; try refreshing.",
       "surface": "android",
@@ -1787,7 +1795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2701,
+      "line": 2996,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out waiting for a reply; try again or refresh.",
       "surface": "android",
@@ -1795,7 +1803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2893,
+      "line": 3188,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out confirming the sent message; refresh to check delivery.",
       "surface": "android",
@@ -1811,7 +1819,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1352,
+      "line": 1396,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -1819,7 +1827,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1352,
+      "line": 1396,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Reconnecting…",
       "surface": "android",
@@ -34187,7 +34195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1179,
+      "line": 1203,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before switching chats.",
       "surface": "apple",
@@ -34195,7 +34203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1235,
+      "line": 1259,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "surface": "apple",

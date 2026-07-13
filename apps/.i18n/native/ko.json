@@ -1074,6 +1074,11 @@
       "translated": "모델을 업데이트할 수 없습니다."
     },
     {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "사고 수준을 업데이트할 수 없습니다."
+    },
+    {
       "id": "native.android.956a394937480f8a",
       "source": "Chat failed before the run started; try again.",
       "translated": "실행이 시작되기 전에 채팅에 실패했습니다. 다시 시도하세요."
