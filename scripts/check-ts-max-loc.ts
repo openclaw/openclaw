@@ -176,6 +176,19 @@ export function findVersionedBaselineViolations(params: {
   );
 }
 
+export function filterPreexistingBaseDriftViolations(params: {
+  baseline: LocBaseline;
+  baseBaseline: LocBaseline;
+  changedPaths: ReadonlySet<string>;
+  violations: LocRatchetViolation[];
+}): LocRatchetViolation[] {
+  return params.violations.filter(
+    (violation) =>
+      params.changedPaths.has(violation.filePath) ||
+      params.baseline[violation.filePath] !== params.baseBaseline[violation.filePath],
+  );
+}
+
 async function readBaseline(filePath: string): Promise<LocBaseline> {
   return parseBaseline(await readFile(filePath, "utf8"), filePath);
 }
@@ -250,10 +263,7 @@ function readFileAtRef(baseRef: string, filePath: string): string | undefined {
   }
 }
 
-function readBaseLinesForChangedBaselinePaths(
-  baseRef: string,
-  baseline: LocBaseline,
-): ReadonlyMap<string, number | undefined> {
+function readChangedPaths(baseRef: string): ReadonlySet<string> {
   const changedPaths = new Set(
     splitNullDelimitedPaths(
       execFileSync("git", ["diff", "--name-only", "-z", baseRef, "--"], {
@@ -268,7 +278,14 @@ function readBaseLinesForChangedBaselinePaths(
   )) {
     changedPaths.add(filePath);
   }
+  return changedPaths;
+}
 
+function readBaseLinesForChangedBaselinePaths(
+  baseRef: string,
+  baseline: LocBaseline,
+  changedPaths: ReadonlySet<string>,
+): ReadonlyMap<string, number | undefined> {
   const baseLinesByChangedPath = new Map<string, number | undefined>();
   for (const filePath of Object.keys(baseline)) {
     if (!changedPaths.has(filePath)) {
@@ -323,6 +340,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     const baseBaseline = readBaselineAtRef(comparisonBaseRef, baselinePath);
     const updatedBaseline = buildBaseline(results, maxLines);
+    const changedPaths = readChangedPaths(comparisonBaseRef);
     // A missing baseline at a valid base ref is the one-time initialization path.
     const violations = baseBaseline
       ? findVersionedBaselineViolations({
@@ -331,6 +349,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           baseLinesByChangedPath: readBaseLinesForChangedBaselinePaths(
             comparisonBaseRef,
             updatedBaseline,
+            changedPaths,
           ),
         })
       : [];
@@ -346,15 +365,28 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   const baseline = await readBaseline(baselinePath);
   const comparisonBaseRef = resolveComparisonBaseRef(baselinePath, baseRef);
   const baseBaseline = readBaselineAtRef(comparisonBaseRef, baselinePath);
+  const changedPaths = comparisonBaseRef ? readChangedPaths(comparisonBaseRef) : new Set<string>();
+  const currentViolations = findLocRatchetViolations({ baseline, maxLines, results });
   const violations = [
     ...(baseBaseline && comparisonBaseRef
       ? findVersionedBaselineViolations({
           baseline,
           baseBaseline,
-          baseLinesByChangedPath: readBaseLinesForChangedBaselinePaths(comparisonBaseRef, baseline),
+          baseLinesByChangedPath: readBaseLinesForChangedBaselinePaths(
+            comparisonBaseRef,
+            baseline,
+            changedPaths,
+          ),
         })
       : []),
-    ...findLocRatchetViolations({ baseline, maxLines, results }),
+    ...(baseBaseline
+      ? filterPreexistingBaseDriftViolations({
+          baseline,
+          baseBaseline,
+          changedPaths,
+          violations: currentViolations,
+        })
+      : currentViolations),
   ];
   reportViolations(violations);
   return violations.length === 0 ? 0 : 1;

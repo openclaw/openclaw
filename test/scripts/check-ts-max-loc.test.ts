@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   countPhysicalLines,
+  filterPreexistingBaseDriftViolations,
   findLocRatchetViolations,
   findVersionedBaselineViolations,
   isProductionTypeScriptFile,
@@ -147,6 +148,58 @@ describe("scripts/check-ts-max-loc", () => {
       { filePath: "src/grew.ts", lines: 701, baselineLines: 700, reason: "grew" },
       { filePath: "src/readded.ts", lines: 650, baselineLines: 0, reason: "grew" },
       { filePath: "src/new.ts", lines: 501, reason: "baseline-missing" },
+    ]);
+  });
+
+  it("ignores only drift already present on the comparison base", () => {
+    const violations = filterPreexistingBaseDriftViolations({
+      baseBaseline: {
+        "src/changed.ts": 700,
+        "src/preexisting-growth.ts": 700,
+        "src/preexisting-shrink.ts": 700,
+        "src/removed-entry.ts": 700,
+      },
+      baseline: {
+        "src/changed.ts": 700,
+        "src/preexisting-growth.ts": 700,
+        "src/preexisting-shrink.ts": 700,
+        "src/tampered.ts": 900,
+      },
+      changedPaths: new Set(["src/changed.ts"]),
+      violations: [
+        { filePath: "src/changed.ts", lines: 701, baselineLines: 700, reason: "grew" },
+        {
+          filePath: "src/preexisting-growth.ts",
+          lines: 710,
+          baselineLines: 700,
+          reason: "grew",
+        },
+        {
+          filePath: "src/preexisting-shrink.ts",
+          lines: 690,
+          baselineLines: 700,
+          reason: "baseline-stale",
+        },
+        { filePath: "src/preexisting-new.ts", lines: 510, reason: "baseline-missing" },
+        { filePath: "src/removed-entry.ts", lines: 700, reason: "baseline-missing" },
+        {
+          filePath: "src/tampered.ts",
+          lines: 700,
+          baselineLines: 900,
+          reason: "baseline-stale",
+        },
+      ],
+    });
+
+    expect(violations).toEqual([
+      { filePath: "src/changed.ts", lines: 701, baselineLines: 700, reason: "grew" },
+      { filePath: "src/removed-entry.ts", lines: 700, reason: "baseline-missing" },
+      {
+        filePath: "src/tampered.ts",
+        lines: 700,
+        baselineLines: 900,
+        reason: "baseline-stale",
+      },
     ]);
   });
 });
