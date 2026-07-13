@@ -1991,12 +1991,12 @@ importers:
       '@openclaw/gateway-protocol':
         specifier: workspace:*
         version: link:../gateway-protocol
+      '@openclaw/net-policy':
+        specifier: workspace:*
+        version: link:../net-policy
       '@openclaw/retry':
         specifier: workspace:*
         version: link:../retry
-      ipaddr.js:
-        specifier: 2.4.0
-        version: 2.4.0
       ws:
         specifier: 8.21.0
         version: 8.21.0
@@ -2097,6 +2097,9 @@ importers:
 
   ui:
     dependencies:
+      '@openclaw/gateway-client':
+        specifier: workspace:*
+        version: link:../packages/gateway-client
       '@codemirror/commands':
         specifier: 6.10.4
         version: 6.10.4
