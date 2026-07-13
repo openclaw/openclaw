@@ -115,6 +115,9 @@ importers:
       dotenv:
         specifier: 17.4.2
         version: 17.4.2
+      entities:
+        specifier: 8.0.0
+        version: 8.0.0
       express:
         specifier: 5.2.1
         version: 5.2.1

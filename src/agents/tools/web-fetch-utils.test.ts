@@ -32,7 +32,9 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
   });
 
   it("still decodes BMP named and numeric entities", () => {
-    expect(htmlToMarkdown(`<p>caf&#233; &amp; tea &lt;b&gt;</p>`).text).toBe("café & tea <b>");
+    expect(
+      htmlToMarkdown(`<p>caf&#233; &amp; tea &lt;b&gt; &mdash; &copy; &hellip; a&nbsp;b</p>`).text,
+    ).toBe("café & tea <b> — © … a b");
   });
 
   it("preserves the prior contract: uppercase named entities decode, malformed numeric stays literal", () => {
