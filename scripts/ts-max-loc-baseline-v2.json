@@ -45,7 +45,7 @@
   "extensions/codex/src/app-server/computer-use.ts": 1264,
   "extensions/codex/src/app-server/config.ts": 2492,
   "extensions/codex/src/app-server/context-engine-projection.ts": 514,
-  "extensions/codex/src/app-server/dynamic-tool-build.ts": 1000,
+  "extensions/codex/src/app-server/dynamic-tool-build.ts": 989,
   "extensions/codex/src/app-server/dynamic-tool-execution.ts": 583,
   "extensions/codex/src/app-server/dynamic-tools.ts": 1550,
   "extensions/codex/src/app-server/elicitation-bridge.ts": 993,
