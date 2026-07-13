@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Approval renderer helpers convert approval request data into channel-safe display text.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
@@ -14,6 +13,7 @@ import {
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
+import { normalizeApprovalSlug } from "../shared/approval-slug.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
@@ -124,7 +124,7 @@ export function buildPluginApprovalPendingReplyPayload(
   return buildApprovalPendingReplyPayload({
     approvalKind: "plugin",
     approvalId: params.request.id,
-    approvalSlug: params.approvalSlug ?? truncateUtf16Safe(params.request.id, 8),
+    approvalSlug: params.approvalSlug ?? normalizeApprovalSlug(params.request.id),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
     allowedDecisions:
       params.allowedDecisions ??
@@ -140,7 +140,7 @@ export function buildTypedPluginApprovalPendingReplyPayload(
   return buildTypedApprovalPendingReplyPayload({
     approvalKind: "plugin",
     approvalId: params.request.id,
-    approvalSlug: params.approvalSlug ?? truncateUtf16Safe(params.request.id, 8),
+    approvalSlug: params.approvalSlug ?? normalizeApprovalSlug(params.request.id),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
     allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
       allowedDecisions: params.allowedDecisions ?? params.request.request.allowedDecisions,
@@ -162,7 +162,7 @@ export function buildPluginApprovalResolvedReplyPayload(params: {
 }): ReplyPayload {
   return buildApprovalResolvedReplyPayload({
     approvalId: params.resolved.id,
-    approvalSlug: params.approvalSlug ?? truncateUtf16Safe(params.resolved.id, 8),
+    approvalSlug: params.approvalSlug ?? normalizeApprovalSlug(params.resolved.id),
     text: params.text ?? buildPluginApprovalResolvedMessage(params.resolved),
     channelData: params.channelData,
   });

@@ -19,6 +19,7 @@ import {
   buildTypedPluginApprovalPendingReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import { normalizeApprovalSlug } from "../shared/approval-slug.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // Forwards exec approval requests between runtime sessions and approval handlers.
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
@@ -435,7 +436,7 @@ function buildExecPendingPayload(params: {
       buildTypedApprovalPendingReplyPayload({
         approvalKind: "exec",
         approvalId: params.request.id,
-        approvalSlug: params.request.id.slice(0, 8),
+        approvalSlug: normalizeApprovalSlug(params.request.id),
         text: buildExecApprovalRequestMessage(params.request, params.nowMs),
         agentId: params.request.request.agentId ?? null,
         allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
@@ -456,7 +457,7 @@ function buildExecResolvedPayload(params: {
     buildFallback: () =>
       buildApprovalResolvedReplyPayload({
         approvalId: params.resolved.id,
-        approvalSlug: params.resolved.id.slice(0, 8),
+        approvalSlug: normalizeApprovalSlug(params.resolved.id),
         text: buildResolvedMessage(params.resolved),
       }),
   });

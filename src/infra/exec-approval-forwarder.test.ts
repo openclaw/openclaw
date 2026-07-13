@@ -625,6 +625,25 @@ describe("exec approval forwarder", () => {
     expect(execApproval.sessionKey).toBe("agent:main:main");
   });
 
+  it("does not split surrogate pairs in forwarded approval slugs", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    const surrogateBoundaryId = "1234567😀890";
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        id: surrogateBoundaryId,
+      }),
+    ).resolves.toBe(true);
+
+    const payload = requireFirstPayload(deliver);
+    const execApproval = requireRecord(payload.channelData?.execApproval, "exec approval metadata");
+    expect(execApproval.approvalId).toBe(surrogateBoundaryId);
+    expect(execApproval.approvalSlug).toBe("1234567");
+    expect(() => encodeURIComponent(String(execApproval.approvalSlug))).not.toThrow();
+  });
+
   it("formats single-line commands as inline code", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });

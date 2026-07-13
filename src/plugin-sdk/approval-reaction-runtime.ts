@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
@@ -10,6 +9,7 @@ import {
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import { normalizeApprovalSlug } from "../shared/approval-slug.js";
 /**
  * @deprecated Compatibility subpath for shipped approval reaction helpers.
  * New plugin code should use the focused approval runtime/reply subpaths.
@@ -397,7 +397,7 @@ function buildMetadataPayload(params: {
     buildApprovalPendingReplyPayload({
       approvalKind: params.view.approvalKind,
       approvalId: params.view.approvalId,
-      approvalSlug: truncateUtf16Safe(params.view.approvalId, 8),
+      approvalSlug: normalizeApprovalSlug(params.view.approvalId),
       text: params.text,
       agentId: params.view.agentId ?? null,
       allowedDecisions: params.allowedDecisions,
@@ -470,7 +470,7 @@ export function buildApprovalReactionPendingContent(params: {
       : withoutPresentation(
           buildExecApprovalPendingReplyPayload({
             approvalId: params.request.id,
-            approvalSlug: truncateUtf16Safe(params.request.id, 8),
+            approvalSlug: normalizeApprovalSlug(params.request.id),
             approvalCommandId: params.request.id,
             warningText: params.view.warningText ?? undefined,
             ask: params.view.ask ?? null,
