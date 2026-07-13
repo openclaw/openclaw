@@ -198,6 +198,13 @@ export type GetReplyOptions = {
    * the channel falls back to raw tool progress.
    */
   onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
+  /** Channel-owned final and queued-turn boundaries for the current narrator. */
+  onProgressNarratorLifecycle?: (lifecycle: {
+    beginTurn: () => void;
+    stopTurn: () => void;
+  }) => void;
+  /** False while utility-model narration has no visible progress draft. */
+  isProgressDraftVisible?: () => boolean;
   /**
    * Omit exec/bash command text from narration model input, mirroring the
    * channel's `streaming.progress.commandText: "status"` display policy so
@@ -206,6 +213,8 @@ export type GetReplyOptions = {
   narrationHideCommandText?: boolean;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
+  /** Bridge typed preambles to a channel-owned progress headline without commentary. */
+  progressPreambleEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
   reasoningPayloadsEnabled?: boolean;
   /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
