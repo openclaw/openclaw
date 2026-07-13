@@ -12,6 +12,7 @@ import { loadJsonFile } from "../../infra/json-file.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   hasOAuthIdentity,
@@ -20,7 +21,7 @@ import {
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-shared.js";
-import { resolveLegacyAuthStorePath } from "./paths.js";
+import { resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
 import { readPersistedAuthProfileStoreRaw } from "./sqlite.js";
 import {
   coerceAuthProfileState,
@@ -801,6 +802,46 @@ export function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
       provider,
       ...creds,
     };
+    mutated = true;
+  }
+  return mutated;
+}
+
+/**
+ * Imports a legacy per-agent auth-profiles.json store into missing profiles.
+ *
+ * The runtime store moved to SQLite, but installs upgraded from versions that
+ * persisted credentials in auth-profiles.json only run the JSON->SQLite import
+ * via `openclaw doctor --fix`. Without this lazy merge the upgraded SQLite store
+ * starts empty, so every provider that references an auth profile fails with
+ * "401 invalid api key" until the operator re-runs doctor. Mirrors
+ * `mergeOAuthFileIntoStore`, which already back-fills the legacy oauth.json.
+ *
+ * Only profiles whose credential resolves to usable material are imported. An
+ * OAuth profile that carries just an `oauthRef` sidecar reference (no inline
+ * access/refresh token) classifies as `unresolved_ref`; doctor deliberately
+ * leaves those in JSON until the sidecar token material exists, so the lazy
+ * import skips them rather than persisting an unusable profile into SQLite.
+ */
+export function mergeLegacyJsonProfilesIntoStore(
+  store: AuthProfileStore,
+  agentDir?: string,
+): boolean {
+  const legacyStore = coercePersistedAuthProfileStore(loadJsonFile(resolveAuthStorePath(agentDir)));
+  if (!legacyStore) {
+    return false;
+  }
+  let mutated = false;
+  for (const [profileId, credential] of Object.entries(legacyStore.profiles)) {
+    if (store.profiles[profileId]) {
+      continue;
+    }
+    // Skip unresolved OAuth sidecar refs that doctor leaves in JSON until token
+    // material exists; importing them would persist an unusable profile.
+    if (evaluateStoredCredentialEligibility({ credential }).reasonCode === "unresolved_ref") {
+      continue;
+    }
+    store.profiles[profileId] = credential;
     mutated = true;
   }
   return mutated;

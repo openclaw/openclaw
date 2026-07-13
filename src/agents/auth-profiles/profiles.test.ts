@@ -16,6 +16,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { withEnvAsync } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { testing as externalAuthTesting } from "./external-auth.js";
+import { resolveAuthStorePath } from "./paths.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearLastGoodProfileWithLock,
@@ -118,6 +119,110 @@ function expectOAuthCredentialFields(
   }
   return credential;
 }
+
+describe("legacy auth-profiles.json lazy migration", () => {
+  it("loads and persists legacy JSON profiles when the SQLite store is empty", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-profile-legacy-json-",
+      async ({ agentDir }) => {
+        fs.mkdirSync(agentDir, { recursive: true });
+        // Simulate an install upgraded from a version that only persisted
+        // credentials in auth-profiles.json (SQLite store still empty).
+        fs.writeFileSync(
+          resolveAuthStorePath(agentDir),
+          JSON.stringify({
+            version: 1,
+            profiles: {
+              "litellm:manual": {
+                type: "api_key",
+                provider: "litellm",
+                key: "legacy-secret-key",
+              },
+            },
+          }),
+        );
+
+        // Empty SQLite store before load.
+        expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+
+        // Runtime load should surface the legacy profile...
+        const runtime = loadAuthProfileStoreForRuntime(agentDir);
+        expect(runtime.profiles["litellm:manual"]).toMatchObject({
+          type: "api_key",
+          provider: "litellm",
+          key: "legacy-secret-key",
+        });
+
+        // ...and persist it to SQLite so it survives without the JSON file.
+        const persisted = loadPersistedAuthProfileStore(agentDir);
+        expect(persisted?.profiles["litellm:manual"]).toMatchObject({
+          type: "api_key",
+          provider: "litellm",
+          key: "legacy-secret-key",
+        });
+      },
+      { clearOAuthDir: true },
+    );
+  });
+
+  it("imports resolvable credentials but skips oauthRef-only profiles", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-profile-legacy-json-oauthref-",
+      async ({ agentDir }) => {
+        fs.mkdirSync(agentDir, { recursive: true });
+        // Legacy JSON carrying a resolvable api_key profile alongside an
+        // unresolved OAuth sidecar ref (no inline access/refresh token), the
+        // shape doctor deliberately leaves in JSON until token material exists.
+        fs.writeFileSync(
+          resolveAuthStorePath(agentDir),
+          JSON.stringify({
+            version: 1,
+            profiles: {
+              "litellm:manual": {
+                type: "api_key",
+                provider: "litellm",
+                key: "legacy-secret-key",
+              },
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                oauthRef: {
+                  source: "openclaw-credentials",
+                  provider: "openai-codex",
+                  id: "0123456789abcdef0123456789abcdef",
+                },
+              },
+            },
+          }),
+        );
+
+        // Empty SQLite store before load.
+        expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+
+        // Runtime load surfaces only the resolvable api_key profile; the
+        // oauthRef-only entry is skipped.
+        const runtime = loadAuthProfileStoreForRuntime(agentDir);
+        expect(runtime.profiles["litellm:manual"]).toMatchObject({
+          type: "api_key",
+          provider: "litellm",
+          key: "legacy-secret-key",
+        });
+        expect(runtime.profiles["openai-codex:default"]).toBeUndefined();
+
+        // Only the api_key is persisted to SQLite; the oauthRef-only profile
+        // stays in JSON for doctor to repair once the sidecar token exists.
+        const persisted = loadPersistedAuthProfileStore(agentDir);
+        expect(persisted?.profiles["litellm:manual"]).toMatchObject({
+          type: "api_key",
+          provider: "litellm",
+          key: "legacy-secret-key",
+        });
+        expect(persisted?.profiles["openai-codex:default"]).toBeUndefined();
+      },
+      { clearOAuthDir: true },
+    );
+  });
+});
 
 describe("promoteAuthProfileInOrder", () => {
   it("refreshes inherited main selection state without advancing credential ownership", async () => {
