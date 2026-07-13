@@ -335,6 +335,46 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
+  it("rejects noncanonical array indices in local $ref paths", () => {
+    const normalized = normalizeToolParameterSchema({
+      type: "object",
+      properties: {
+        canonicalZero: { $ref: "#/$defs/Choice/anyOf/0" },
+        canonicalOne: { $ref: "#/$defs/Choice/anyOf/1" },
+        hexadecimal: { $ref: "#/$defs/Choice/anyOf/0x1" },
+        exponent: { $ref: "#/$defs/Choice/anyOf/1e0" },
+        leadingZero: { $ref: "#/$defs/Choice/anyOf/01" },
+        escapedObjectKey: { $ref: "#/$defs/Escaped/properties/a~1b" },
+      },
+      $defs: {
+        Choice: {
+          anyOf: [{ type: "string" }, { type: "number" }],
+        },
+        Escaped: {
+          type: "object",
+          properties: {
+            "a/b": { type: "boolean" },
+          },
+        },
+      },
+    }) as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(normalized.properties?.canonicalZero).toEqual({ type: "string" });
+    expect(normalized.properties?.canonicalOne).toEqual({ type: "number" });
+    expect(normalized.properties?.hexadecimal).toEqual({
+      $ref: "#/$defs/Choice/anyOf/0x1",
+    });
+    expect(normalized.properties?.exponent).toEqual({
+      $ref: "#/$defs/Choice/anyOf/1e0",
+    });
+    expect(normalized.properties?.leadingZero).toEqual({
+      $ref: "#/$defs/Choice/anyOf/01",
+    });
+    expect(normalized.properties?.escapedObjectKey).toEqual({ type: "boolean" });
+  });
+
   it("inlines local refs in tuple array items", () => {
     expect(
       normalizeToolParameterSchema({
