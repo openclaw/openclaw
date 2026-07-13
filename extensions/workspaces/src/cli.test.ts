@@ -114,6 +114,58 @@ describe("workspace CLI", () => {
     expect(() => parseWorkspaceBindingShorthand("value=command:date")).toThrow("binding source");
   });
 
+  it("lists and explicitly installs gallery widgets through separate scopes", async () => {
+    const program = createProgram();
+    gatewayRuntime.callGatewayFromCli
+      .mockResolvedValueOnce({ schemaVersion: 1, apps: [] })
+      .mockResolvedValueOnce({
+        name: "weather",
+        registry: { status: "pending", createdBy: "user" },
+        workspaceVersion: 2,
+      });
+
+    await captureStdout(async () => {
+      await program.parseAsync(
+        [
+          "workspaces",
+          "gallery",
+          "list",
+          "--registry-url",
+          "https://gallery.example/index.json",
+          "--json",
+        ],
+        { from: "user" },
+      );
+    });
+    await captureStdout(async () => {
+      await program.parseAsync(
+        [
+          "workspaces",
+          "gallery",
+          "install",
+          "--bundle-url",
+          "https://gallery.example/weather.json",
+        ],
+        { from: "user" },
+      );
+    });
+
+    expect(gatewayRuntime.callGatewayFromCli).toHaveBeenNthCalledWith(
+      1,
+      "workspaces.gallery.list",
+      expect.anything(),
+      { url: "https://gallery.example/index.json" },
+      { mode: "cli", scopes: ["operator.write", "operator.read"] },
+    );
+    expect(gatewayRuntime.callGatewayFromCli).toHaveBeenNthCalledWith(
+      2,
+      "workspaces.gallery.install",
+      expect.anything(),
+      { url: "https://gallery.example/weather.json" },
+      { mode: "cli", scopes: ["operator.approvals"] },
+    );
+  });
+
   it("round-trips tabs and widgets through the L1 gateway methods", async () => {
     await withTempStateDir(async (stateDir) => {
       const store = new WorkspaceStore({ stateDir });

@@ -12,7 +12,7 @@ export const WORKSPACE_GRID_COLUMNS = 12;
 export type WorkspaceCreatedBy = string;
 
 export type WorkspaceWidgetKind = string;
-export type WorkspaceTabLayout = "grid" | "full";
+type WorkspaceTabLayout = "grid" | "full";
 
 export type WorkspaceBindingSource = "rpc" | "file" | "static";
 

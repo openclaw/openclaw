@@ -30,7 +30,7 @@ export type WorkspaceWidget = {
   bindings?: Record<string, WorkspaceBinding>;
   props?: JsonValue;
 };
-export type WorkspaceTabLayout = "grid" | "full";
+type WorkspaceTabLayout = "grid" | "full";
 export type WorkspaceTab = {
   slug: string;
   title: string;

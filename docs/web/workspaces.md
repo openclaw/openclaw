@@ -83,6 +83,51 @@ An agent can author a real HTML widget with `workspace_widget_scaffold` (or you 
 Sending a prompt into chat from a widget additionally requires a manifest capability, a
 per-invocation confirmation quoting the exact text, and passes a rate limit.
 
+## Gallery installs
+
+Workspaces can browse operator-approved widget galleries. Gallery access is off by
+default. Enable only the exact HTTPS origins you trust in the plugin configuration:
+
+```json5
+{
+  plugins: {
+    entries: {
+      workspaces: {
+        enabled: true,
+        config: {
+          gallery: {
+            allowedOrigins: ["https://widgets.example.com"],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The gateway performs gallery requests server-side with the shared SSRF guard and pinned
+DNS. It sends no gateway token, cookies, authorization header, or other credentials.
+Requests have strict time and byte limits, accept JSON only, and reject redirects so an
+allowed URL cannot bounce the gateway to an unapproved origin. Registry entries, bundle URLs, manifests, file
+paths, file counts, and file sizes are validated before anything is written.
+
+Gallery trust has two deliberate approvals:
+
+1. `gallery install` approves downloading one bundle. The files are written under the
+   widget directory and the registry entry is created as **pending**. Fetching a registry
+   or installing a bundle never mounts or executes its code.
+2. After reviewing the installed files, `widget-approve` freezes their hashes and permits
+   that exact snapshot to render through the existing sandbox. Changing the files later
+   invalidates the approval.
+
+```sh
+openclaw workspaces gallery list \
+  --registry-url https://widgets.example.com/index.json --json
+openclaw workspaces gallery install \
+  --bundle-url https://widgets.example.com/weather.json
+openclaw workspaces widget-approve weather
+```
+
 ## CLI
 
 ```sh

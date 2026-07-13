@@ -2945,7 +2945,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "ui/src/components/workspace-widget-cell.ts: displayWidgetTitle",
   "ui/src/components/workspace-widget-cell.ts: renderBuiltinWidget",
   "ui/src/components/workspace-widget-cell.ts: renderCustomWidget",
-  "ui/src/components/workspace-widget-cell.ts: renderWidgetBody",
   "ui/src/components/workspace-widget-cell.ts: WorkspaceWidgetCellProps",
   "ui/src/lib/agents/index.ts: AgentsConfigCapability",
   "ui/src/lib/agents/index.ts: loadAgents",

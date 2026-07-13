@@ -10353,5 +10353,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Built-in widgets
   - H2: Provenance
   - H2: Custom widgets
+  - H2: Gallery installs
   - H2: CLI
   - H2: Storage

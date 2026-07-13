@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { parseWorkspaceGalleryConfig } from "./src/gallery.js";
 import { registerWorkspaceGatewayMethods } from "./src/gateway.js";
 import { createWidgetHttpRouteHandler, WIDGETS_ROUTE_PREFIX } from "./src/http-route.js";
 import { WorkspaceStore } from "./src/store.js";
@@ -9,9 +10,11 @@ export default definePluginEntry({
   id: "workspaces",
   name: "Workspaces",
   description: "Agent-composable Workspaces document and control-plane backend.",
+  configSchema: { parse: parseWorkspaceGalleryConfig },
   register(api) {
     const store = new WorkspaceStore();
-    registerWorkspaceGatewayMethods({ api, store });
+    const gallery = parseWorkspaceGalleryConfig(api.pluginConfig);
+    registerWorkspaceGatewayMethods({ api, store, gallery });
     api.registerCli(
       async ({ program }) => {
         const { registerWorkspaceCli } = await import("./src/cli.js");

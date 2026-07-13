@@ -3,6 +3,12 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { rememberWorkspaceBroadcast } from "./broadcast.js";
 import { resolveBinding, type ResolveBindingOptions } from "./data-read.js";
+import {
+  fetchWorkspaceGallery,
+  installWorkspaceGalleryWidget,
+  type WorkspaceGalleryConfig,
+  type WorkspaceGalleryFetch,
+} from "./gallery.js";
 import { snapshotApprovedWidget } from "./manifest.js";
 import { scaffoldWorkspaceWidget } from "./scaffold.js";
 import {
@@ -37,6 +43,7 @@ type WorkspaceGatewayMethodOptions = {
   api: OpenClawPluginApi;
   store?: WorkspaceStore;
   dataRead?: ResolveBindingOptions;
+  gallery?: WorkspaceGalleryConfig & { fetchGuard?: WorkspaceGalleryFetch };
 };
 
 function respondError(respond: GatewayRespond, error: unknown) {
@@ -713,6 +720,50 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
       }
     },
     { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.gallery.list",
+    async ({ params: rawParams, respond }) => {
+      try {
+        const params = readParams(rawParams, ["url"]);
+        const url = readRequiredString(params, "url", "url");
+        const gallery = options.gallery ?? { allowedOrigins: [] };
+        respond(true, await fetchWorkspaceGallery(url, gallery));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  // Downloading a gallery index is inert. Installing is a distinct human
+  // approval that writes reviewed bundle bytes as a pending custom widget; the
+  // existing widget.approve call remains the separate code-activation gate.
+  api.registerGatewayMethod(
+    "workspaces.gallery.install",
+    async (opts) => {
+      try {
+        const params = readParams(opts.params, ["url"]);
+        const url = readRequiredString(params, "url", "url");
+        const gallery = options.gallery ?? { allowedOrigins: [] };
+        const result = await installWorkspaceGalleryWidget(url, {
+          ...gallery,
+          actor: RPC_ACTOR,
+          stateDir: store.stateDir,
+          store,
+        });
+        const doc = store.read();
+        broadcastChange(opts.context.broadcast, { doc, actor: RPC_ACTOR });
+        opts.respond(true, {
+          ...result,
+          workspaceVersion: doc.workspaceVersion,
+        });
+      } catch (error) {
+        respondError(opts.respond, error);
+      }
+    },
+    { scope: APPROVE_SCOPE },
   );
 
   api.registerGatewayMethod(

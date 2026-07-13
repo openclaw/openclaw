@@ -123,14 +123,14 @@ async function callWorkspaceGateway(
   options: GatewayOptions,
   params?: unknown,
 ): Promise<unknown> {
-  // `workspaces.widget.approve` is the only approvals-scoped method here: approving
-  // agent-authored widget code is a separate decision from editing a layout, so the
-  // connection asks for that scope only when it is about to make it.
+  // Gallery installation and widget activation are separate approval decisions
+  // from editing a layout, so the connection asks for that scope only when it is
+  // about to make one of them.
   // Match `src/gateway/operator-approvals-client.ts`: ask for the approvals scope
   // alone. A paired device approves scope sets, so requesting a superset here is
   // rejected as "asking for more scopes than currently approved".
   const scopes =
-    method === "workspaces.widget.approve"
+    method === "workspaces.widget.approve" || method === "workspaces.gallery.install"
       ? (["operator.approvals"] as const)
       : (["operator.write", "operator.read"] as const);
   return await callGatewayFromCli(method, options, params, { mode: "cli", scopes: [...scopes] });
@@ -225,6 +225,39 @@ export function registerWorkspaceCli(options: RegisterWorkspaceCliOptions): void
   const tabs = workspace.command("tabs").description("Manage workspace tabs");
   const widgets = workspace.command("widgets").description("Manage workspace widgets");
   const layout = workspace.command("layout").description("Manage workspace layout documents");
+  const gallery = workspace.command("gallery").description("Browse and install trusted galleries");
+
+  addGatewayOptions(
+    gallery
+      .command("list")
+      .description("Fetch a configured gallery registry")
+      .requiredOption("--registry-url <url>", "Gallery registry URL")
+      .option("--json", "Print JSON", false),
+  ).action(async (commandOptions: GatewayOptions & { registryUrl: string }) => {
+    const result = await callWorkspaceGateway("workspaces.gallery.list", commandOptions, {
+      url: commandOptions.registryUrl,
+    });
+    writeJson(result);
+  });
+
+  addGatewayOptions(
+    gallery
+      .command("install")
+      .description("Approve downloading a gallery bundle as a pending widget")
+      .requiredOption("--bundle-url <url>", "Gallery widget bundle URL")
+      .option("--json", "Print JSON", false),
+  ).action(async (commandOptions: GatewayOptions & { bundleUrl: string }) => {
+    const result = await callWorkspaceGateway("workspaces.gallery.install", commandOptions, {
+      url: commandOptions.bundleUrl,
+    });
+    if (commandOptions.json) {
+      writeJson(result);
+      return;
+    }
+    const name = isRecord(result) && typeof result.name === "string" ? result.name : "widget";
+    writeLine(`${name} installed pending activation approval`);
+    writeLine(`review its files, then run: openclaw workspaces widget-approve ${name}`);
+  });
 
   addGatewayOptions(
     tabs.command("list").description("List workspace tabs").option("--json", "Print JSON", false),

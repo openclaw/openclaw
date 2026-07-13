@@ -68,6 +68,8 @@ describe("workspace gateway methods", () => {
       "workspaces.widget.remove",
       "workspaces.widget.setLayout",
       "workspaces.widget.scaffold",
+      "workspaces.gallery.list",
+      "workspaces.gallery.install",
       "workspaces.widget.approve",
       "workspaces.replace",
       "workspaces.undo",
@@ -76,14 +78,27 @@ describe("workspace gateway methods", () => {
     expect(methods.get("workspaces.get")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workspaces.widget.frame")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workspaces.data.read")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workspaces.gallery.list")?.opts).toEqual({ scope: "operator.read" });
     // Approving agent-authored code is an approvals decision: operator.write alone
     // must not be enough to mount an untrusted widget.
     expect(methods.get("workspaces.widget.approve")?.opts).toEqual({
       scope: "operator.approvals",
     });
-    const readOnly = new Set(["workspaces.get", "workspaces.widget.frame", "workspaces.data.read"]);
+    expect(methods.get("workspaces.gallery.install")?.opts).toEqual({
+      scope: "operator.approvals",
+    });
+    const readOnly = new Set([
+      "workspaces.get",
+      "workspaces.widget.frame",
+      "workspaces.data.read",
+      "workspaces.gallery.list",
+    ]);
     for (const [name, method] of methods) {
-      if (readOnly.has(name) || name === "workspaces.widget.approve") {
+      if (
+        readOnly.has(name) ||
+        name === "workspaces.widget.approve" ||
+        name === "workspaces.gallery.install"
+      ) {
         continue;
       }
       expect(method.opts).toEqual({ scope: "operator.write" });

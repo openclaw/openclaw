@@ -12,7 +12,24 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "gallery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowedOrigins": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^https://"
+            }
+          }
+        },
+        "required": ["allowedOrigins"]
+      }
+    }
   },
   "contracts": {
     "tools": [
