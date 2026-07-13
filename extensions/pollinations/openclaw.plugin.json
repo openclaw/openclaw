@@ -1,0 +1,62 @@
+{
+  "id": "pollinations",
+  "icon": "https://pollinations.ai/favicon.ico",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["pollinations"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "pollinations",
+      "hostSuffixes": ["gen.pollinations.ai", "enter.pollinations.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "pollinations": {
+        "family": "pollinations"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "pollinations",
+        "envVars": ["POLLINATIONS_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "pollinations",
+      "method": "byop",
+      "choiceId": "pollinations-byop",
+      "appGuidedAuth": "oauth",
+      "choiceLabel": "Pollinations Login",
+      "choiceHint": "Browser sign-in",
+      "groupId": "pollinations",
+      "groupLabel": "Pollinations",
+      "groupHint": "Login or API key"
+    },
+    {
+      "provider": "pollinations",
+      "method": "api-key",
+      "choiceId": "pollinations-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Pollinations API key",
+      "groupId": "pollinations",
+      "groupLabel": "Pollinations",
+      "groupHint": "Login or API key",
+      "optionKey": "pollinationsApiKey",
+      "cliFlag": "--pollinations-api-key",
+      "cliOption": "--pollinations-api-key <key>",
+      "cliDescription": "Pollinations API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
