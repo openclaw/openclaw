@@ -66,36 +66,6 @@ function isDownloadableLineMessageType(
   return LINE_DOWNLOADABLE_MESSAGE_TYPES.has(messageType);
 }
 
-// Tracks per-sender in-flight turns without blocking admission: rapid events
-// always reach processMessage so core queue policy (steer/followup/collect/
-// interrupt) decides; the flag only drives the delivery-side steering ack.
-// Ref-counted because steered follow-ups legitimately overlap the same key.
-export type LineUserInFlightTracker = {
-  isInFlight(key: string): boolean;
-  begin(key: string): void;
-  end(key: string): void;
-};
-
-export function createLineUserInFlightTracker(): LineUserInFlightTracker {
-  const counts = new Map<string, number>();
-  return {
-    isInFlight(key: string): boolean {
-      return (counts.get(key) ?? 0) > 0;
-    },
-    begin(key: string): void {
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    },
-    end(key: string): void {
-      const next = (counts.get(key) ?? 0) - 1;
-      if (next > 0) {
-        counts.set(key, next);
-      } else {
-        counts.delete(key);
-      }
-    },
-  };
-}
-
 interface LineHandlerContext {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -105,7 +75,6 @@ interface LineHandlerContext {
   replayCache?: LineWebhookReplayCache;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
-  userInFlightTracker?: LineUserInFlightTracker;
 }
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
@@ -452,24 +421,6 @@ function hasAnyLineMention(message: MessageEvent["message"]): boolean {
   return getLineMentionees(message).length > 0;
 }
 
-// LINE marks source userId optional: group/room postbacks and non-mobile group
-// senders can arrive senderless. Tracking those would collapse distinct users
-// onto one key and mis-attribute in-flight state, so they are not tracked.
-function buildLineInFlightKey(
-  accountId: string,
-  sourceInfo: { userId?: string; groupId?: string; roomId?: string; isGroup: boolean },
-): string | null {
-  const { userId } = sourceInfo;
-  if (!userId) {
-    return null;
-  }
-  if (sourceInfo.isGroup) {
-    const conversationId = sourceInfo.groupId ?? sourceInfo.roomId;
-    return conversationId ? `${accountId}|${conversationId}|${userId}` : null;
-  }
-  return `${accountId}|${userId}`;
-}
-
 function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
   if (event.type === "message") {
     const msg = event.message;
@@ -493,12 +444,13 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
+  const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
   if (isGroup && decision.activationAccess.shouldSkip) {
     const rawText = message.type === "text" ? message.text : "";
+    const sourceInfo = getLineSourceInfo(event.source);
     logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
-    const senderId = userId ?? "unknown";
+    const senderId = sourceInfo.userId ?? "unknown";
     if (historyKey && context.groupHistories) {
       createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
@@ -513,76 +465,56 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  const sourceInfo = { userId, groupId, roomId, isGroup };
-  const inFlightKey = buildLineInFlightKey(account.accountId, sourceInfo);
-  const tracker = context.userInFlightTracker;
-  // Rapid same-user events are always admitted so core queue policy decides
-  // steer/followup/collect/interrupt; the flag only marks steering-ack turns.
-  const inFlightAtAdmission = Boolean(inFlightKey && tracker?.isInFlight(inFlightKey));
-  if (inFlightKey) {
-    tracker?.begin(inFlightKey);
+  const allMedia: MediaRef[] = [];
+  let mediaUnavailable = false;
+
+  if (isDownloadableLineMessageType(message.type)) {
+    try {
+      const originalFilename =
+        message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+      const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes, {
+        originalFilename,
+      });
+      allMedia.push({
+        path: media.path,
+        contentType: media.contentType,
+      });
+    } catch (err) {
+      mediaUnavailable = true;
+      const errMsg = String(err);
+      if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
+        logVerbose(`line: media exceeds size limit for message ${message.id}`);
+      } else {
+        runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
+      }
+    }
   }
 
-  try {
-    const allMedia: MediaRef[] = [];
-    let mediaUnavailable = false;
+  const messageContext = await buildLineMessageContext({
+    event,
+    allMedia,
+    mediaUnavailable,
+    cfg,
+    account,
+    commandAuthorized: decision.commandAccess.authorized,
+    groupHistories: context.groupHistories,
+    historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+  });
 
-    if (isDownloadableLineMessageType(message.type)) {
-      try {
-        const originalFilename =
-          message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
-        const media = await downloadLineMedia(
-          message.id,
-          account.channelAccessToken,
-          mediaMaxBytes,
-          { originalFilename },
-        );
-        allMedia.push({
-          path: media.path,
-          contentType: media.contentType,
-        });
-      } catch (err) {
-        mediaUnavailable = true;
-        const errMsg = String(err);
-        if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
-          logVerbose(`line: media exceeds size limit for message ${message.id}`);
-        } else {
-          runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
-        }
-      }
-    }
+  if (!messageContext) {
+    logVerbose("line: skipping empty message");
+    return;
+  }
 
-    const messageContext = await buildLineMessageContext({
-      event,
-      allMedia,
-      mediaUnavailable,
-      cfg,
-      account,
-      commandAuthorized: decision.commandAccess.authorized,
-      groupHistories: context.groupHistories,
-      historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-      inFlightAtAdmission,
-    });
+  await processMessage(messageContext);
 
-    if (!messageContext) {
-      logVerbose("line: skipping empty message");
-      return;
-    }
-
-    await processMessage(messageContext);
-
-    if (isGroup && context.groupHistories) {
-      const historyKey = groupId ?? roomId;
-      if (historyKey && context.groupHistories.has(historyKey)) {
-        createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
-          historyKey,
-          limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-        });
-      }
-    }
-  } finally {
-    if (inFlightKey) {
-      tracker?.end(inFlightKey);
+  if (isGroup && context.groupHistories) {
+    const historyKey = groupId ?? roomId;
+    if (historyKey && context.groupHistories.has(historyKey)) {
+      createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
+        historyKey,
+        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+      });
     }
   }
 }
@@ -622,32 +554,17 @@ async function handlePostbackEvent(
     return;
   }
 
-  const sourceInfo = getLineSourceInfo(event.source);
-  const inFlightKey = buildLineInFlightKey(context.account.accountId, sourceInfo);
-  const tracker = context.userInFlightTracker;
-  const inFlightAtAdmission = Boolean(inFlightKey && tracker?.isInFlight(inFlightKey));
-  if (inFlightKey) {
-    tracker?.begin(inFlightKey);
+  const postbackContext = await buildLinePostbackContext({
+    event,
+    cfg: context.cfg,
+    account: context.account,
+    commandAuthorized: decision.commandAccess.authorized,
+  });
+  if (!postbackContext) {
+    return;
   }
 
-  try {
-    const postbackContext = await buildLinePostbackContext({
-      event,
-      cfg: context.cfg,
-      account: context.account,
-      commandAuthorized: decision.commandAccess.authorized,
-      inFlightAtAdmission,
-    });
-    if (!postbackContext) {
-      return;
-    }
-
-    await context.processMessage(postbackContext);
-  } finally {
-    if (inFlightKey) {
-      tracker?.end(inFlightKey);
-    }
-  }
+  await context.processMessage(postbackContext);
 }
 
 export async function handleLineWebhookEvents(

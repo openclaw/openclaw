@@ -180,7 +180,6 @@ vi.mock("./bot-message-context.js", () => ({
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineWebhookReplayCache;
-let createLineUserInFlightTracker: typeof import("./bot-handlers.js").createLineUserInFlightTracker;
 let LineRetryableWebhookError: typeof import("./bot-handlers.js").LineRetryableWebhookError;
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
@@ -321,12 +320,8 @@ async function startInflightReplayDuplicate(params: {
 
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
-    ({
-      handleLineWebhookEvents,
-      createLineWebhookReplayCache,
-      createLineUserInFlightTracker,
-      LineRetryableWebhookError,
-    } = await import("./bot-handlers.js"));
+    ({ handleLineWebhookEvents, createLineWebhookReplayCache, LineRetryableWebhookError } =
+      await import("./bot-handlers.js"));
   });
 
   afterAll(() => {
@@ -1204,7 +1199,7 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(2);
   });
 
-  it("admits rapid same-user messages and flags the second for steering ack", async () => {
+  it("admits rapid same-user messages concurrently instead of skipping them", async () => {
     let resolveFirst: (() => void) | undefined;
     const firstDone = new Promise<void>((resolve) => {
       resolveFirst = resolve;
@@ -1231,7 +1226,6 @@ describe("handleLineWebhookEvents", () => {
       processMessage,
       dmPolicy: "open",
     });
-    context.userInFlightTracker = createLineUserInFlightTracker();
 
     const firstRun = handleLineWebhookEvents([event1], context);
     await vi.waitFor(() => {
@@ -1244,109 +1238,13 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).toHaveBeenCalledTimes(2);
     expect(replyMessageLineMock).not.toHaveBeenCalled();
-    expect(buildLineMessageContextMock.mock.calls[0]?.[0]?.inFlightAtAdmission).toBe(false);
-    expect(buildLineMessageContextMock.mock.calls[1]?.[0]?.inFlightAtAdmission).toBe(true);
+    expect(pushMessageLineMock).not.toHaveBeenCalled();
 
     resolveFirst?.();
     await firstRun;
   });
 
-  it("clears in-flight state after processMessage completes", async () => {
-    const processMessage = vi.fn().mockResolvedValue(undefined);
-
-    const event1 = createTestMessageEvent({
-      message: { id: "m-seq-1", type: "text", text: "first", quoteToken: "q-seq-1" },
-      source: { type: "user", userId: "user-seq" },
-      webhookEventId: "evt-seq-1",
-    });
-    const event2 = createTestMessageEvent({
-      message: { id: "m-seq-2", type: "text", text: "second", quoteToken: "q-seq-2" },
-      source: { type: "user", userId: "user-seq" },
-      webhookEventId: "evt-seq-2",
-    });
-
-    const context = createLineWebhookTestContext({
-      processMessage,
-      dmPolicy: "open",
-    });
-    context.userInFlightTracker = createLineUserInFlightTracker();
-
-    await handleLineWebhookEvents([event1], context);
-    await handleLineWebhookEvents([event2], context);
-
-    expect(processMessage).toHaveBeenCalledTimes(2);
-    expect(buildLineMessageContextMock.mock.calls[1]?.[0]?.inFlightAtAdmission).toBe(false);
-  });
-
-  it("clears in-flight state when processMessage throws", async () => {
-    const processMessage = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("agent error"))
-      .mockResolvedValueOnce(undefined);
-
-    const event1 = createTestMessageEvent({
-      message: { id: "m-err-1", type: "text", text: "first", quoteToken: "q-err-1" },
-      source: { type: "user", userId: "user-err" },
-      webhookEventId: "evt-err-1",
-    });
-    const event2 = createTestMessageEvent({
-      message: { id: "m-err-2", type: "text", text: "second", quoteToken: "q-err-2" },
-      source: { type: "user", userId: "user-err" },
-      webhookEventId: "evt-err-2",
-    });
-
-    const context = createLineWebhookTestContext({
-      processMessage,
-      dmPolicy: "open",
-    });
-    context.userInFlightTracker = createLineUserInFlightTracker();
-
-    await expect(handleLineWebhookEvents([event1], context)).rejects.toThrow("agent error");
-    await handleLineWebhookEvents([event2], context);
-
-    expect(processMessage).toHaveBeenCalledTimes(2);
-    expect(buildLineMessageContextMock.mock.calls[1]?.[0]?.inFlightAtAdmission).toBe(false);
-  });
-
-  it("does not flag messages when userInFlightTracker is not configured", async () => {
-    let resolveFirst: (() => void) | undefined;
-    const firstDone = new Promise<void>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const processMessage = vi.fn(async () => {
-      await firstDone;
-    });
-
-    const event1 = createTestMessageEvent({
-      message: { id: "m-no-tracker-1", type: "text", text: "first", quoteToken: "q-nt-1" },
-      source: { type: "user", userId: "user-no-tracker" },
-      webhookEventId: "evt-no-tracker-1",
-    });
-    const event2 = createTestMessageEvent({
-      message: { id: "m-no-tracker-2", type: "text", text: "second", quoteToken: "q-nt-2" },
-      source: { type: "user", userId: "user-no-tracker" },
-      webhookEventId: "evt-no-tracker-2",
-    });
-
-    // No userInFlightTracker — both messages process concurrently, unflagged.
-    const context = createLineWebhookTestContext({
-      processMessage,
-      dmPolicy: "open",
-    });
-
-    const firstRun = handleLineWebhookEvents([event1], context);
-    await Promise.resolve();
-    const secondRun = handleLineWebhookEvents([event2], context);
-
-    resolveFirst?.();
-    await Promise.all([firstRun, secondRun]);
-
-    expect(processMessage).toHaveBeenCalledTimes(2);
-    expect(buildLineMessageContextMock.mock.calls[0]?.[0]?.inFlightAtAdmission).toBe(false);
-    expect(buildLineMessageContextMock.mock.calls[1]?.[0]?.inFlightAtAdmission).toBe(false);
-  });
-
-  it("tracks in-flight state per user in group conversations", async () => {
+  it("downloads media for rapid same-user messages instead of skipping them", async () => {
     let resolveFirst: (() => void) | undefined;
     const firstDone = new Promise<void>((resolve) => {
       resolveFirst = resolve;
@@ -1356,22 +1254,66 @@ describe("handleLineWebhookEvents", () => {
       .mockImplementationOnce(async () => {
         await firstDone;
       })
-      .mockResolvedValue(undefined);
+      .mockResolvedValueOnce(undefined);
+    downloadLineMediaMock.mockResolvedValueOnce({
+      path: "/tmp/line-media-rapid.jpg",
+      contentType: "image/jpeg",
+    });
 
-    const eventUserA = createTestMessageEvent({
-      message: { id: "m-group-a", type: "text", text: "from A", quoteToken: "q-ga" },
-      source: { type: "group", groupId: "group-shared", userId: "user-a" },
-      webhookEventId: "evt-group-a",
+    const textEvent = createTestMessageEvent({
+      message: { id: "m-media-1", type: "text", text: "first", quoteToken: "q-md-1" },
+      source: { type: "user", userId: "user-media" },
+      webhookEventId: "evt-media-1",
     });
-    const eventUserB = createTestMessageEvent({
-      message: { id: "m-group-b", type: "text", text: "from B", quoteToken: "q-gb" },
-      source: { type: "group", groupId: "group-shared", userId: "user-b" },
-      webhookEventId: "evt-group-b",
+    const imageEvent = createTestMessageEvent({
+      message: { id: "m-media-2", type: "image", quoteToken: "q-md-2" } as MessageEvent["message"],
+      source: { type: "user", userId: "user-media" },
+      webhookEventId: "evt-media-2",
     });
-    const eventUserA2 = createTestMessageEvent({
-      message: { id: "m-group-a2", type: "text", text: "A again", quoteToken: "q-ga2" },
-      source: { type: "group", groupId: "group-shared", userId: "user-a" },
-      webhookEventId: "evt-group-a2",
+
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+    });
+
+    const firstRun = handleLineWebhookEvents([textEvent], context);
+    await vi.waitFor(() => {
+      expect(processMessage).toHaveBeenCalledTimes(1);
+    });
+
+    await handleLineWebhookEvents([imageEvent], context);
+
+    expect(downloadLineMediaMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(replyMessageLineMock).not.toHaveBeenCalled();
+
+    resolveFirst?.();
+    await firstRun;
+  });
+
+  it("admits senderless group messages concurrently", async () => {
+    // LINE group/room events may omit source.userId (@line/bot-sdk marks it
+    // optional). They must flow through like any other admitted event.
+    let resolveFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const processMessage = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await firstDone;
+      })
+      .mockResolvedValueOnce(undefined);
+
+    const eventA = createTestMessageEvent({
+      message: { id: "m-senderless-a", type: "text", text: "first", quoteToken: "q-sl-a" },
+      source: { type: "group", groupId: "group-shared" },
+      webhookEventId: "evt-senderless-a",
+    });
+    const eventB = createTestMessageEvent({
+      message: { id: "m-senderless-b", type: "text", text: "second", quoteToken: "q-sl-b" },
+      source: { type: "group", groupId: "group-shared" },
+      webhookEventId: "evt-senderless-b",
     });
 
     const context = createLineWebhookTestContext({
@@ -1379,32 +1321,22 @@ describe("handleLineWebhookEvents", () => {
       groupPolicy: "open",
       requireMention: false,
     });
-    context.userInFlightTracker = createLineUserInFlightTracker();
 
-    // User A starts processing (blocks in processMessage)
-    const firstRun = handleLineWebhookEvents([eventUserA], context);
+    const firstRun = handleLineWebhookEvents([eventA], context);
     await vi.waitFor(() => {
       expect(processMessage).toHaveBeenCalledTimes(1);
     });
 
-    // User B in the same group is a different key: admitted, unflagged.
-    await handleLineWebhookEvents([eventUserB], context);
-    // User A's rapid follow-up shares A's key: admitted and flagged.
-    await handleLineWebhookEvents([eventUserA2], context);
+    await handleLineWebhookEvents([eventB], context);
 
-    expect(processMessage).toHaveBeenCalledTimes(3);
+    expect(processMessage).toHaveBeenCalledTimes(2);
     expect(replyMessageLineMock).not.toHaveBeenCalled();
-    expect(buildLineMessageContextMock.mock.calls[1]?.[0]?.inFlightAtAdmission).toBe(false);
-    expect(buildLineMessageContextMock.mock.calls[2]?.[0]?.inFlightAtAdmission).toBe(true);
 
     resolveFirst?.();
     await firstRun;
   });
 
-  it("admits and never flags senderless group postbacks", async () => {
-    // LINE group/room postbacks may omit source.userId (@line/bot-sdk marks it
-    // optional, message events only). Tracking them would collapse distinct
-    // users onto one key, so senderless events stay untracked and unflagged.
+  it("admits senderless group postbacks concurrently", async () => {
     let resolveFirst: (() => void) | undefined;
     const firstDone = new Promise<void>((resolve) => {
       resolveFirst = resolve;
@@ -1446,7 +1378,6 @@ describe("handleLineWebhookEvents", () => {
       groupPolicy: "open",
       requireMention: false,
     });
-    context.userInFlightTracker = createLineUserInFlightTracker();
 
     const firstRun = handleLineWebhookEvents([postbackA], context);
     await vi.waitFor(() => {
@@ -1457,157 +1388,6 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).toHaveBeenCalledTimes(2);
     expect(replyMessageLineMock).not.toHaveBeenCalled();
-    expect(buildLinePostbackContextMock.mock.calls[0]?.[0]?.inFlightAtAdmission).toBe(false);
-    expect(buildLinePostbackContextMock.mock.calls[1]?.[0]?.inFlightAtAdmission).toBe(false);
-
-    resolveFirst?.();
-    await firstRun;
-  });
-
-  it("flags rapid same-user postbacks while a run is in flight", async () => {
-    let resolveFirst: (() => void) | undefined;
-    const firstDone = new Promise<void>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const processMessage = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        await firstDone;
-      })
-      .mockResolvedValueOnce(undefined);
-    buildLinePostbackContextMock.mockResolvedValue({
-      ctxPayload: { From: "line:user-pb" },
-      route: { agentId: "default" },
-      isGroup: false,
-      accountId: "default",
-    });
-
-    const message = createTestMessageEvent({
-      message: { id: "m-pb-first", type: "text", text: "long task", quoteToken: "q-pb-1" },
-      source: { type: "user", userId: "user-pb" },
-      webhookEventId: "evt-pb-first",
-    });
-    const postback = {
-      type: "postback",
-      postback: { data: "action=confirm" },
-      timestamp: Date.now(),
-      source: { type: "user", userId: "user-pb" },
-      mode: "active",
-      replyToken: "reply-token-pb-rapid",
-      webhookEventId: "evt-pb-rapid",
-      deliveryContext: { isRedelivery: false },
-    } as PostbackEvent;
-
-    const context = createLineWebhookTestContext({
-      processMessage,
-      dmPolicy: "open",
-    });
-    context.userInFlightTracker = createLineUserInFlightTracker();
-
-    const firstRun = handleLineWebhookEvents([message], context);
-    await vi.waitFor(() => {
-      expect(processMessage).toHaveBeenCalledTimes(1);
-    });
-
-    await handleLineWebhookEvents([postback], context);
-
-    expect(processMessage).toHaveBeenCalledTimes(2);
-    expect(buildLinePostbackContextMock.mock.calls[0]?.[0]?.inFlightAtAdmission).toBe(true);
-
-    resolveFirst?.();
-    await firstRun;
-  });
-
-  it("downloads media for rapid same-user messages instead of skipping them", async () => {
-    let resolveFirst: (() => void) | undefined;
-    const firstDone = new Promise<void>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const processMessage = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        await firstDone;
-      })
-      .mockResolvedValueOnce(undefined);
-    downloadLineMediaMock.mockResolvedValueOnce({
-      path: "/tmp/line-media-rapid.jpg",
-      contentType: "image/jpeg",
-    });
-
-    const textEvent = createTestMessageEvent({
-      message: { id: "m-media-1", type: "text", text: "first", quoteToken: "q-md-1" },
-      source: { type: "user", userId: "user-media" },
-      webhookEventId: "evt-media-1",
-    });
-    const imageEvent = createTestMessageEvent({
-      message: { id: "m-media-2", type: "image", quoteToken: "q-md-2" } as MessageEvent["message"],
-      source: { type: "user", userId: "user-media" },
-      webhookEventId: "evt-media-2",
-    });
-
-    const context = createLineWebhookTestContext({
-      processMessage,
-      dmPolicy: "open",
-    });
-    context.userInFlightTracker = createLineUserInFlightTracker();
-
-    const firstRun = handleLineWebhookEvents([textEvent], context);
-    await vi.waitFor(() => {
-      expect(processMessage).toHaveBeenCalledTimes(1);
-    });
-
-    await handleLineWebhookEvents([imageEvent], context);
-
-    expect(downloadLineMediaMock).toHaveBeenCalledTimes(1);
-    expect(processMessage).toHaveBeenCalledTimes(2);
-    expect(replyMessageLineMock).not.toHaveBeenCalled();
-    expect(buildLineMessageContextMock.mock.calls[1]?.[0]?.inFlightAtAdmission).toBe(true);
-
-    resolveFirst?.();
-    await firstRun;
-  });
-
-  it("does not flag senderless group messages", async () => {
-    let resolveFirst: (() => void) | undefined;
-    const firstDone = new Promise<void>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const processMessage = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        await firstDone;
-      })
-      .mockResolvedValueOnce(undefined);
-
-    const eventA = createTestMessageEvent({
-      message: { id: "m-senderless-a", type: "text", text: "first", quoteToken: "q-sl-a" },
-      source: { type: "group", groupId: "group-shared" },
-      webhookEventId: "evt-senderless-a",
-    });
-    const eventB = createTestMessageEvent({
-      message: { id: "m-senderless-b", type: "text", text: "second", quoteToken: "q-sl-b" },
-      source: { type: "group", groupId: "group-shared" },
-      webhookEventId: "evt-senderless-b",
-    });
-
-    const context = createLineWebhookTestContext({
-      processMessage,
-      groupPolicy: "open",
-      requireMention: false,
-    });
-    context.userInFlightTracker = createLineUserInFlightTracker();
-
-    const firstRun = handleLineWebhookEvents([eventA], context);
-    await vi.waitFor(() => {
-      expect(processMessage).toHaveBeenCalledTimes(1);
-    });
-
-    await handleLineWebhookEvents([eventB], context);
-
-    expect(processMessage).toHaveBeenCalledTimes(2);
-    expect(replyMessageLineMock).not.toHaveBeenCalled();
-    expect(buildLineMessageContextMock.mock.calls[0]?.[0]?.inFlightAtAdmission).toBe(false);
-    expect(buildLineMessageContextMock.mock.calls[1]?.[0]?.inFlightAtAdmission).toBe(false);
 
     resolveFirst?.();
     await firstRun;
