@@ -1560,7 +1560,7 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
       zod:
-        specifier: ^4.3.6
+        specifier: 4.4.3
         version: 4.4.3
 
   extensions/runway:

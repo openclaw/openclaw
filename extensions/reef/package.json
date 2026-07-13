@@ -7,7 +7,7 @@
     "@noble/ciphers": "2.2.0",
     "@noble/curves": "2.2.0",
     "@noble/hashes": "2.2.0",
-    "zod": "^4.3.6"
+    "zod": "4.4.3"
   },
   "openclaw": {
     "extensions": ["./index.ts"],
