@@ -159,8 +159,8 @@ describe("dreaming artifact repair", () => {
     await fs.writeFile(
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-11.txt"),
       [
-        "[main/sessions/heartbeat-session.jsonl#L2] Heartbeat received. Main is active.",
-        "[main/sessions/heartbeat-session.jsonl#L1] [OpenClaw heartbeat poll]",
+        "[main/sessions/main/heartbeat-session.jsonl#L2] Heartbeat received. Main is active.",
+        "[main/sessions/main/heartbeat-session.jsonl#L1] [OpenClaw heartbeat poll]",
       ].join("\n"),
       "utf-8",
     );
@@ -406,8 +406,8 @@ describe("dreaming artifact repair", () => {
     await fs.writeFile(
       corpusPath,
       [
-        "[main/sessions/heartbeat-session.jsonl#L2] Heartbeat received. Main is active.",
-        "[main/sessions/heartbeat-session.jsonl#L3] normal content",
+        "[main/sessions/main/heartbeat-session.jsonl#L2] Heartbeat received. Main is active.",
+        "[main/sessions/main/heartbeat-session.jsonl#L3] normal content",
       ].join("\n"),
       "utf-8",
     );
@@ -530,8 +530,8 @@ describe("dreaming artifact repair", () => {
     await fs.writeFile(
       corpusPath,
       [
-        `[main/sessions/${sessionId}#L3] Heartbeat received. Main is active.`,
-        `[main/sessions/${sessionId}#L2] [OpenClaw heartbeat poll]`,
+        `[main/sessions/main/${sessionId}#L3] Heartbeat received. Main is active.`,
+        `[main/sessions/main/${sessionId}#L2] [OpenClaw heartbeat poll]`,
       ].join("\n"),
       "utf-8",
     );

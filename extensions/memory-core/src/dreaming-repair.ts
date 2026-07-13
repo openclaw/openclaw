@@ -9,7 +9,6 @@ import {
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
-  writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 
 type DreamingArtifactsAuditIssue = {
@@ -311,12 +310,14 @@ async function findHeartbeatContaminatedCorpusLines(
       // (e.g. "sessions/main/abc-123"). Try the filesystem first; if the
       // file doesn't exist or is empty, fall back to the SQLite transcript
       // store via the canonical loadTranscriptEventsSync reader.
-      const hasJsonlExtension = source.sessionPath.toLowerCase().endsWith(".jsonl");
+      const sessionFileName = path.basename(source.sessionPath);
+      const hasJsonlExtension = sessionFileName.toLowerCase().endsWith(".jsonl");
       const transcriptPath = path.join(
         workspaceRoot,
         "agents",
         source.agentId,
-        hasJsonlExtension ? source.sessionPath : `${source.sessionPath}.jsonl`,
+        "sessions",
+        hasJsonlExtension ? sessionFileName : `${sessionFileName}.jsonl`,
       );
       let transcriptLines = transcriptCache.get(transcriptPath);
       if (!transcriptLines) {
@@ -386,51 +387,6 @@ async function hasSelfIngestedSessionCorpusLines(workspaceDir: string): Promise<
     }
   }
   return false;
-}
-
-async function clearScopedSessionIngestionState(params: {
-  workspaceDir: string;
-  stateKeys: Set<string>;
-  scopeKeys: Set<string>;
-}): Promise<number> {
-  let removed = 0;
-  const filesEntries = await readMemoryCoreWorkspaceEntries({
-    namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-    workspaceDir: params.workspaceDir,
-  });
-  const nextFilesEntries = filesEntries.filter((entry) => !params.stateKeys.has(entry.key));
-  if (nextFilesEntries.length !== filesEntries.length) {
-    removed += filesEntries.length - nextFilesEntries.length;
-    await writeMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-      workspaceDir: params.workspaceDir,
-      entries: nextFilesEntries,
-    });
-  }
-
-  const seenEntries = await readMemoryCoreWorkspaceEntries({
-    namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-    workspaceDir: params.workspaceDir,
-  });
-  const nextSeenEntries = seenEntries.filter((entry) => {
-    const entryScope =
-      typeof entry.value === "object" && entry.value !== null
-        ? (entry.value as { scope?: unknown }).scope
-        : undefined;
-    if (typeof entryScope === "string" && params.scopeKeys.has(entryScope)) {
-      return false;
-    }
-    return !params.scopeKeys.has(entry.key);
-  });
-  if (nextSeenEntries.length !== seenEntries.length) {
-    removed += seenEntries.length - nextSeenEntries.length;
-    await writeMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-      workspaceDir: params.workspaceDir,
-      entries: nextSeenEntries,
-    });
-  }
-  return removed;
 }
 
 async function clearScopedLegacySessionIngestionJson(params: {
