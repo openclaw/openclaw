@@ -90,6 +90,7 @@ async function callPluginSessionActionThroughGatewayForTest(params: {
     } as GatewayClient,
     isWebchatConnect: () => false,
     context: {
+      authorization: { mode: "legacy" },
       logGateway: {
         warn() {},
       },

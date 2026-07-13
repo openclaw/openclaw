@@ -3,10 +3,12 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayBrowserClientOptions } from "../../api/gateway.ts";
+import { i18n } from "../../i18n/index.ts";
 import {
   buildTeamsInviteLink,
   consumeInviteCodeFromFragment,
   isTeamsPortalPath,
+  mountTeamsPortal,
   renderTeamsPortal,
   TeamsPortalStore,
   type TeamsPortalGateway,
@@ -47,6 +49,13 @@ function createGateway(response = tabResult()): TeamsPortalGateway & {
   };
 }
 
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  return input instanceof URL ? input.href : input.url;
+}
+
 function createStore(params: {
   session?: ReturnType<typeof authenticatedSession>;
   gateway?: ReturnType<typeof createGateway>;
@@ -55,7 +64,7 @@ function createStore(params: {
 }) {
   const gateway = params.gateway ?? createGateway();
   const defaultFetcher = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
+    const url = requestUrl(input);
     if (url.endsWith("/api/teams/session")) {
       return new Response(JSON.stringify(params.session ?? authenticatedSession()), {
         status: 200,
@@ -145,6 +154,39 @@ describe("Teams public route", () => {
   });
 });
 
+describe("mounted Teams portal", () => {
+  it("rerenders for locale changes and stops listening after teardown", async () => {
+    await i18n.setLocale("en");
+    i18n.registerTranslation("pt-BR", {
+      workspaces: { teams: { title: "Equipes" } },
+    } as never);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ authenticated: false }), { status: 200 }));
+    const host = document.createElement("div");
+    const dispose = mountTeamsPortal({
+      host,
+      route: "login",
+      location: { pathname: "/teams/login", search: "", hash: "" },
+      history: { replaceState: vi.fn() },
+    });
+
+    try {
+      await vi.waitFor(() => expect(host.textContent).toContain("Teams"));
+      await i18n.setLocale("pt-BR");
+      expect(host.textContent).toContain("Equipes");
+
+      dispose();
+      await i18n.setLocale("en");
+      expect(host.textContent).toBe("");
+    } finally {
+      dispose();
+      fetchMock.mockRestore();
+      await i18n.setLocale("en");
+    }
+  });
+});
+
 describe("Teams portal store", () => {
   it("connects as a member and requests only the exact shared tab", async () => {
     let options: GatewayBrowserClientOptions | undefined;
@@ -191,7 +233,7 @@ describe("Teams portal store", () => {
       stop: vi.fn(),
     };
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
+      const path = requestUrl(input);
       if (path.endsWith("/api/teams/session")) {
         return new Response(JSON.stringify(authenticatedSession()), { status: 200 });
       }
@@ -274,7 +316,7 @@ describe("Teams portal store", () => {
       stop: vi.fn(),
     };
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
+      const path = requestUrl(input);
       if (path.endsWith("/api/teams/session")) {
         return new Response(JSON.stringify(authenticatedSession()), { status: 200 });
       }
@@ -504,7 +546,7 @@ describe("Teams portal store", () => {
 
   it("lets an owner create a preset invite for the exact tab and revoke it", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
+      const path = requestUrl(input);
       if (path.endsWith("/api/teams/session")) {
         return new Response(JSON.stringify(authenticatedSession()), { status: 200 });
       }
@@ -593,7 +635,7 @@ describe("Teams portal store", () => {
       stop: vi.fn(),
     };
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
+      const path = requestUrl(input);
       if (path.endsWith("/api/teams/session")) {
         return new Response(JSON.stringify(authenticatedSession()), { status: 200 });
       }
@@ -682,7 +724,7 @@ describe("Teams portal store", () => {
       stop: vi.fn(),
     };
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
+      const path = requestUrl(input);
       if (path.endsWith("/api/teams/session")) {
         return new Response(JSON.stringify(authenticatedSession()), { status: 200 });
       }
@@ -720,7 +762,7 @@ describe("Teams portal store", () => {
 
   it("hides owner sharing controls after a generic owner API failure without losing tab access", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
+      const path = requestUrl(input);
       if (path.endsWith("/api/teams/session")) {
         return new Response(JSON.stringify(authenticatedSession()), { status: 200 });
       }
@@ -771,7 +813,7 @@ describe("Teams portal store", () => {
       host,
     );
 
-    expect(host.textContent).toContain("Write redeemed");
+    expect(host.textContent).toContain("Read + write redeemed");
     expect(host.textContent).not.toContain("Read active");
     expect(
       [...host.querySelectorAll("button")].some((button) => button.textContent === "Revoke"),
@@ -780,7 +822,7 @@ describe("Teams portal store", () => {
 
   it("clears the one-time invite link on logout and session expiry", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
+      const path = requestUrl(input);
       if (path.endsWith("/api/teams/session")) {
         return new Response(JSON.stringify(authenticatedSession()), { status: 200 });
       }
@@ -828,7 +870,7 @@ describe("Teams portal store", () => {
     let resolvePresets: ((response: Response) => void) | undefined;
     let resolveInvites: ((response: Response) => void) | undefined;
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
+      const path = requestUrl(input);
       if (path.endsWith("/api/teams/session")) {
         return new Response(JSON.stringify(authenticatedSession()), { status: 200 });
       }
