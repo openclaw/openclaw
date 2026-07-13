@@ -230,9 +230,6 @@ importers:
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1
-      '@openclaw/retry':
-        specifier: workspace:*
-        version: link:packages/retry
       '@shikijs/core':
         specifier: 4.3.0
         version: 4.3.0
