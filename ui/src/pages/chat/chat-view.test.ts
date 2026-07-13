@@ -3773,9 +3773,11 @@ describe("chat attachment picker", () => {
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
     expect(attachButton).toBeInstanceOf(HTMLElement);
-    attachButton!.closest("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: attachButton }, bubbles: true }),
-    );
+    attachButton!
+      .closest("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: attachButton }, bubbles: true }),
+      );
 
     expect(clickInput).toHaveBeenCalledTimes(1);
   });
@@ -3797,9 +3799,11 @@ describe("chat attachment picker", () => {
     expect(input.getAttribute("capture")).toBe("environment");
     expect(cameraButton).toBeInstanceOf(HTMLElement);
     expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
-    cameraButton!.closest("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: cameraButton }, bubbles: true }),
-    );
+    cameraButton!
+      .closest("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: cameraButton }, bubbles: true }),
+      );
     expect(clickInput).toHaveBeenCalledTimes(1);
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });

@@ -18,14 +18,10 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
-import {
-  EDITOR_IDS,
-  EDITOR_LABELS,
-  type EditorId,
-  editorOpenUrl,
-} from "../../../lib/editor-links.ts";
+import { type EditorId, editorOpenUrl } from "../../../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import "./session-diff-panel.ts";
+import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
 
@@ -359,52 +355,12 @@ function renderFileSidebarContent(
                             </openclaw-tooltip>
                           `
                         : nothing}
-                      <div class="sidebar-file-view__editor">
-                        <openclaw-tooltip
-                          .content=${absolutePath ? "Open in editor" : "Workspace root unknown"}
-                        >
-                          <wa-dropdown
-                            class="sidebar-file-view__editor-menu"
-                            placement="bottom-end"
-                            .open=${controls.editorMenuOpen}
-                            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                              const editor = event.detail.item.value;
-                              if (
-                                editor &&
-                                EDITOR_IDS.includes(editor as (typeof EDITOR_IDS)[number])
-                              ) {
-                                controls.onOpenEditor(editor as (typeof EDITOR_IDS)[number]);
-                              }
-                            }}
-                            @wa-show=${() => controls.onEditorMenuOpenChange(true)}
-                            @wa-hide=${() => controls.onEditorMenuOpenChange(false)}
-                          >
-                            <button
-                              slot="trigger"
-                              class="btn btn--sm sidebar-file-view__action"
-                              type="button"
-                              aria-label=${absolutePath
-                                ? "Open in editor"
-                                : "Workspace root unknown"}
-                              ?disabled=${!absolutePath}
-                            >
-                              ${icons.externalLink}
-                            </button>
-                            ${absolutePath
-                              ? EDITOR_IDS.map(
-                                  (editor) => html`
-                                    <wa-dropdown-item
-                                      class="sidebar-file-view__editor-item"
-                                      value=${editor}
-                                    >
-                                      ${EDITOR_LABELS[editor]}
-                                    </wa-dropdown-item>
-                                  `,
-                                )
-                              : nothing}
-                          </wa-dropdown>
-                        </openclaw-tooltip>
-                      </div>
+                      ${renderChatSidebarEditorMenu({
+                        absolutePath,
+                        open: controls.editorMenuOpen,
+                        onOpenChange: controls.onEditorMenuOpenChange,
+                        onOpenEditor: controls.onOpenEditor,
+                      })}
                       <openclaw-tooltip content="Copy file contents">
                         <button
                           class="btn btn--sm sidebar-file-view__action ${controls.copied

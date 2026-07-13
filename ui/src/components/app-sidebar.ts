@@ -2216,6 +2216,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 case "delete-group":
                   this.deleteSessionGroupFromMenu(menu.group);
                   break;
+                case undefined:
+                  break;
               }
             }}
             @keydown=${(event: KeyboardEvent) =>
@@ -2937,10 +2939,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       onEditPinnedItems: () => {
         // Hand the durable More row over as the pin editor's trigger so
         // Escape restores focus there once this menu is gone.
-        const position = this.moreMenuPosition;
-        const trigger = this.moreMenuTrigger;
-        if (position) {
-          this.openCustomizeMenu(position.x, position.y, trigger);
+        const customizePosition = this.moreMenuPosition;
+        const customizeTrigger = this.moreMenuTrigger;
+        if (customizePosition) {
+          this.openCustomizeMenu(customizePosition.x, customizePosition.y, customizeTrigger);
         }
       },
     });

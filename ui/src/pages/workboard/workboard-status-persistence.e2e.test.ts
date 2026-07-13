@@ -128,9 +128,9 @@ async function chooseWorkboardSelectOption(
 ): Promise<void> {
   const field = workboardField(scope, label);
   expect(await field.count()).toBe(1);
-  const optionValue = await field.locator("wa-option").evaluateAll((options, label) => {
+  const optionValue = await field.locator("wa-option").evaluateAll((options, optionText) => {
     const option = options.find(
-      (candidate) => (candidate as HTMLElement & { label?: string }).label === label,
+      (candidate) => (candidate as HTMLElement & { label?: string }).label === optionText,
     );
     return option?.getAttribute("value") ?? null;
   }, optionLabel);

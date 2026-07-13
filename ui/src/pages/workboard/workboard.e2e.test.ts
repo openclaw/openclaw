@@ -79,9 +79,9 @@ async function chooseWorkboardSelectOption(
 ): Promise<void> {
   const field = workboardField(scope, label);
   expect(await field.count()).toBe(1);
-  const optionValue = await field.locator("wa-option").evaluateAll((options, label) => {
+  const optionValue = await field.locator("wa-option").evaluateAll((options, optionText) => {
     const option = options.find(
-      (candidate) => (candidate as HTMLElement & { label?: string }).label === label,
+      (candidate) => (candidate as HTMLElement & { label?: string }).label === optionText,
     );
     return option?.getAttribute("value") ?? null;
   }, optionLabel);
@@ -371,8 +371,8 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writable.page.keyboard.press("Enter");
       await expect
         .poll(() =>
-          prioritySelect.evaluate((select) =>
-            String((select as HTMLElement & { value?: string }).value ?? ""),
+          prioritySelect.evaluate(
+            (select) => (select as HTMLElement & { value?: string }).value ?? "",
           ),
         )
         .toBe("urgent");
@@ -384,8 +384,8 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writable.page.keyboard.press("Enter");
       await expect
         .poll(() =>
-          prioritySelect.evaluate((select) =>
-            String((select as HTMLElement & { value?: string }).value ?? ""),
+          prioritySelect.evaluate(
+            (select) => (select as HTMLElement & { value?: string }).value ?? "",
           ),
         )
         .toBe("high");
@@ -396,8 +396,8 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writable.page.keyboard.press("Enter");
       await expect
         .poll(() =>
-          prioritySelect.evaluate((select) =>
-            String((select as HTMLElement & { value?: string }).value ?? ""),
+          prioritySelect.evaluate(
+            (select) => (select as HTMLElement & { value?: string }).value ?? "",
           ),
         )
         .toBe("all");

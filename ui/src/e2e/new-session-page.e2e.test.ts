@@ -101,7 +101,6 @@ async function deferTargetRepositorySelection(
   const requestsBeforeSwitch = (await gateway.getRequests("worktrees.branches")).length;
 
   await gateway.deferNext("worktrees.branches");
-  const folderSelect = page.locator(".new-session-page__select--folder");
   await page.locator("#new-session-folder-trigger").click();
   await page
     .locator(".new-session-page__browser-list")
@@ -279,9 +278,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await whereTrigger.click();
       const afterPointerHide = whereSelect.evaluate(
         (element) =>
-          new Promise<void>((resolve) =>
-            element.addEventListener("wa-after-hide", () => resolve(), { once: true }),
-          ),
+          new Promise<void>((resolve) => {
+            element.addEventListener("wa-after-hide", () => resolve(), { once: true });
+          }),
       );
       await page.locator("#new-session-folder-trigger").click();
       await afterPointerHide;

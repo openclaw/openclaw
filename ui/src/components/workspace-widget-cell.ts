@@ -316,6 +316,8 @@ export function renderWidgetCell(props: WorkspaceWidgetCellProps): TemplateResul
               case "remove":
                 callbacks.onRemove(widget);
                 break;
+              case undefined:
+                break;
             }
           }}
           @wa-show=${() => {

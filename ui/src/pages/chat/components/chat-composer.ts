@@ -2624,6 +2624,8 @@ export function renderChatComposer(props: ChatComposerProps) {
                 case "file":
                   clickComposerFileInput(menu);
                   break;
+                case undefined:
+                  break;
               }
             }}
           >

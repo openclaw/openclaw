@@ -37,7 +37,9 @@ describe("Web Awesome adapters", () => {
     );
 
     dropdown.setAttribute("aria-label", "Updated actions");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
       "Updated actions",
     );

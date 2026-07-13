@@ -397,7 +397,7 @@ class Tooltip extends OpenClawLitElement {
 
   override render() {
     return html`
-      <slot @slotchange=${this.attachTrigger}></slot>
+      <slot @slotchange=${() => this.attachTrigger()}></slot>
       <wa-tooltip id=${this.tooltipId} trigger="manual">${this.content}</wa-tooltip>
     `;
   }

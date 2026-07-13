@@ -1,4 +1,3 @@
-// Skill Workshop page owns its Control UI render glue.
 import { consume } from "@lit/context";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
@@ -10,7 +9,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
+import { renderPluginsHubTabs } from "../../components/plugins-hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveSessionKey, searchForSession } from "../../lib/sessions/index.ts";
@@ -19,6 +18,7 @@ import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts"
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
+import { selectPluginsHubTab } from "./plugins-hub-navigation.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
@@ -117,17 +117,6 @@ async function resolveRevisionSessionKey(
     throw new Error(context.sessions.state.error ?? "Could not prepare a Skill Workshop session.");
   }
   return sessionKey;
-}
-
-function selectPluginsHubTab(context: SkillWorkshopPageContext, tab: PluginsHubTab) {
-  if (tab === "workshop") {
-    return;
-  }
-  if (tab === "skills") {
-    context.navigate("skills");
-    return;
-  }
-  context.navigate("plugins", tab === "discover" ? { search: "?tab=discover" } : undefined);
 }
 
 function renderSkillWorkshopPage(

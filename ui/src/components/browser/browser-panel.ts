@@ -13,7 +13,6 @@ import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
-import "../web-awesome-tabs.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
@@ -46,12 +45,12 @@ import {
   type BrowserPageMetrics,
   type BrowserPanelTab,
 } from "./browser-client.ts";
+import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
 import { browserPanelStyles } from "./browser-panel.styles.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 // Inline icon set (self-contained; the Control UI blocks external asset loads).
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>`;
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
 const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 const BACK_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5" /></svg>`;
@@ -97,17 +96,6 @@ const FORWARDED_KEYS = new Set([
   "PageUp",
   "PageDown",
 ]);
-
-function tabLabel(tab: BrowserPanelTab): string {
-  if (tab.title.trim()) {
-    return tab.title.trim();
-  }
-  try {
-    return new URL(tab.url).host || t("browser.untitledTab");
-  } catch {
-    return tab.url || t("browser.untitledTab");
-  }
-}
 
 function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -991,62 +979,19 @@ class OpenClawBrowserPanel extends OpenClawLitElement {
   // --- render ---------------------------------------------------------------
 
   private renderTabStrip() {
-    return html`
-      <wa-tab-group
-        class="bp-tabs"
-        .active=${this.activeTargetId ?? ""}
-        activation="auto"
-        without-scroll-controls
-        @wa-tab-show=${(event: CustomEvent<{ name: string }>) =>
-          void this.selectTab(event.detail.name)}
-      >
-        ${this.tabs.map(
-          (tab) => html`
-            <wa-tab
-              id=${`browser-tab-${tab.id}`}
-              class="bp-tab"
-              panel=${tab.id}
-              aria-controls="browser-tab-panel"
-              title=${tab.url}
-              @auxclick=${(event: MouseEvent) => {
-                if (event.button === 1) {
-                  event.preventDefault();
-                  void this.closeTab(tab.id);
-                }
-              }}
-            >
-              <span class="bp-tab__label">${tabLabel(tab)}</span>
-            </wa-tab>
-            <button
-              slot="nav"
-              class="bp-tab__close"
-              type="button"
-              title=${t("browser.closeTab")}
-              aria-label=${`${t("browser.closeTab")}: ${tabLabel(tab)}`}
-              @click=${() => void this.closeTab(tab.id)}
-            >
-              ${CLOSE_GLYPH}
-            </button>
-          `,
-        )}
-        <button
-          slot="nav"
-          class="bp-new"
-          type="button"
-          title=${t("browser.newTab")}
-          aria-label=${t("browser.newTab")}
-          @click=${() => {
-            this.pendingNewTab = true;
-            this.urlDraft = "";
-            void this.updateComplete.then(() =>
-              this.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus(),
-            );
-          }}
-        >
-          ${PLUS_GLYPH}
-        </button>
-      </wa-tab-group>
-    `;
+    return renderBrowserPanelTabs({
+      tabs: this.tabs,
+      activeTargetId: this.activeTargetId,
+      onSelect: (targetId) => void this.selectTab(targetId),
+      onClose: (targetId) => void this.closeTab(targetId),
+      onNew: () => {
+        this.pendingNewTab = true;
+        this.urlDraft = "";
+        void this.updateComplete.then(() =>
+          this.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus(),
+        );
+      },
+    });
   }
 
   private renderHeaderActions() {

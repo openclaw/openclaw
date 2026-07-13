@@ -25,7 +25,6 @@ import {
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
 import "../../components/web-awesome-popover.ts";
-import "../../components/web-awesome-tabs.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure, resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import type {
@@ -38,6 +37,7 @@ import type { CronFormState } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
+import { renderSegmented } from "./segmented-control.ts";
 import { renderCronStats } from "./stats.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
@@ -303,75 +303,6 @@ function renderRequiredTitle(label: string) {
     ${label}
     <span class="cron-required-marker" aria-hidden="true">*</span>
     <span class="cron-required-sr">${t("cron.form.requiredSr")}</span>
-  `;
-}
-
-// Local variant of the shared settings control. Options retain stable test
-// hooks; route-backed view switchers use Web Awesome tabs.
-function renderSegmented<T extends string>(params: {
-  value: T;
-  options: ReadonlyArray<{ value: T; label: string; testId?: string }>;
-  ariaLabel?: string;
-  onChange: (value: T) => void;
-  /** Render as a tablist controlling `panelId`; option ids are `idPrefix` + value. */
-  tabs?: { idPrefix: string; panelId: string };
-}) {
-  const tabs = params.tabs;
-  if (tabs) {
-    return html`
-      <wa-tab-group
-        class="settings-segmented cron-tabs"
-        activation="manual"
-        .active=${params.value}
-        aria-label=${ifDefined(params.ariaLabel)}
-        @wa-tab-show=${(event: CustomEvent<{ name: T }>) => params.onChange(event.detail.name)}
-      >
-        ${params.options.map(
-          (option) => html`
-            <wa-tab
-              slot="nav"
-              id=${`${tabs.idPrefix}${option.value}`}
-              class="settings-segmented__btn cron-tab"
-              panel=${option.value}
-              .active=${option.value === params.value}
-              aria-controls=${tabs.panelId}
-              data-test-id=${ifDefined(option.testId)}
-            >
-              ${option.label}
-            </wa-tab>
-          `,
-        )}
-      </wa-tab-group>
-    `;
-  }
-  return html`
-    <wa-radio-group
-      class="settings-segmented"
-      size="s"
-      orientation="horizontal"
-      label=${ifDefined(params.ariaLabel)}
-      .value=${params.value}
-      @change=${(event: Event) => {
-        const value = (event.currentTarget as HTMLElement & { value?: string }).value;
-        if (value !== undefined) {
-          params.onChange(value as T);
-        }
-      }}
-    >
-      ${params.options.map(
-        (option) => html`
-          <wa-radio
-            class="settings-segmented__btn"
-            appearance="button"
-            value=${option.value}
-            .checked=${option.value === params.value}
-            data-test-id=${ifDefined(option.testId)}
-          >
-            ${option.label}
-          </wa-radio>
-        `,
-      )}
-    </wa-radio-group>
   `;
 }
 
@@ -829,6 +760,8 @@ function renderJobMenu(props: CronProps, job: CronJob) {
             break;
           case "remove":
             props.onRemove(job);
+            break;
+          case undefined:
             break;
         }
       }}

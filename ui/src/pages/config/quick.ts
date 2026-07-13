@@ -19,7 +19,6 @@ import {
   resolveLocalUserAvatarUrl,
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/web-awesome-select.ts";
 import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import {
   LOBSTER_PET_PALETTES,
@@ -39,11 +38,12 @@ import {
   renderSettingsValue,
   type SettingsSectionProps,
 } from "../../components/settings-ui.ts";
-import { SUPPORTED_LOCALES, t, type Locale } from "../../i18n/index.ts";
+import { t, type Locale } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { renderLanguageSelect } from "./language-select.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 
 // ── Types ──
@@ -376,30 +376,7 @@ function renderGeneralSection(props: QuickSettingsProps) {
   return renderSettingsSection({ title: t("nav.settingsGeneral") }, [
     renderSettingsRow({
       title: t("quickSettings.language"),
-      control: html`
-        <wa-select
-          class="settings-select"
-          value=${props.locale}
-          @change=${(event: Event) => {
-            props.onLocaleChange(
-              (event.currentTarget as HTMLElement & { value: string }).value as Locale,
-            );
-          }}
-        >
-          <span slot="label" class="settings-control__sr-label"
-            >${t("quickSettings.language")}</span
-          >
-          ${SUPPORTED_LOCALES.map((locale) => {
-            const key = locale.replace(/-([a-zA-Z])/g, (_, character) => character.toUpperCase());
-            const label = t(`languages.${key}`);
-            return html`
-              <wa-option value=${locale} .label=${label} .selected=${locale === props.locale}>
-                ${label}
-              </wa-option>
-            `;
-          })}
-        </wa-select>
-      `,
+      control: renderLanguageSelect(props.locale, props.onLocaleChange),
     }),
   ]);
 }

@@ -33,6 +33,7 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../lib/presenter.ts";
+import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
 
 function countWords(text: string) {
   const normalized = text.trim();
@@ -85,23 +86,6 @@ function formatWorkspaceRelativePath(filePath: string, workspace: string | null 
 function toDomId(value: string) {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   return normalized.replace(/^-+|-+$/g, "") || "preview";
-}
-
-function setPreviewExpandButtonState(button: Element | null | undefined, isFullscreen: boolean) {
-  if (!(button instanceof HTMLElement)) {
-    return;
-  }
-  const label = isFullscreen ? t("agents.files.collapsePreview") : t("agents.files.expandPreview");
-  button.classList.toggle("is-fullscreen", isFullscreen);
-  button.setAttribute("aria-pressed", String(isFullscreen));
-  button.setAttribute("aria-label", label);
-  button.setAttribute("title", label);
-}
-
-function resetAgentFilePreview(modal: HTMLElement) {
-  modal.querySelector(".md-preview-dialog__panel")?.classList.remove("fullscreen");
-  setPreviewExpandButtonState(modal.querySelector(".md-preview-expand-btn"), false);
-  modal.classList.remove("fullscreen");
 }
 
 function renderAgentContextSection(

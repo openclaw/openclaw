@@ -1,5 +1,4 @@
 // Control UI tests cover workboard behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";

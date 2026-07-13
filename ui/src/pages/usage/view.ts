@@ -549,16 +549,15 @@ export function renderUsage(props: UsageProps) {
                           "application/json",
                         );
                         break;
+                      case undefined:
+                        break;
                     }
                   }}
                 >
                   <button slot="trigger" type="button" class="btn btn--sm">
                     ${t("usage.export.label")} ▾
                   </button>
-                  <wa-dropdown-item
-                    value="sessions-csv"
-                    ?disabled=${filteredSessions.length === 0}
-                  >
+                  <wa-dropdown-item value="sessions-csv" ?disabled=${filteredSessions.length === 0}>
                     ${t("usage.export.sessionsCsv")}
                   </wa-dropdown-item>
                   <wa-dropdown-item value="daily-csv" ?disabled=${filteredDaily.length === 0}>
