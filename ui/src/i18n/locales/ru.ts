@@ -82,6 +82,7 @@ export const ru: TranslationMap = {
     relink: "Повторно привязать",
     waitForScan: "Ожидание сканирования",
     logout: "Выйти",
+    skipToMainContent: "Перейти к основному содержимому",
   },
   nativeLinkMenu: {
     label: "Действия со ссылкой",
@@ -125,6 +126,7 @@ export const ru: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, автор {author}",
   },
   channels: {
+    lastError: "Последняя ошибка",
     refreshingStaleSnapshot:
       "Статус канала обновляется в фоновом режиме; показан последний успешный снимок.",
     config: {
@@ -218,10 +220,11 @@ export const ru: TranslationMap = {
   lazyView: {
     loadingTitle: "Загрузка панели",
     errorTitle: "Не удалось загрузить панель",
-    errorSubtitle:
-      "Перезагрузите страницу, чтобы загрузить последнюю версию пакета Control UI, или повторите попытку, если сетевой запрос завершился ошибкой.",
+    genericSubtitle: "При загрузке этой панели произошла ошибка.",
+    staleTitle: "Доступна новая версия",
+    staleSubtitle:
+      "OpenClaw был обновлён в фоновом режиме. Перезагрузите страницу, чтобы получить последнюю версию панели.",
     retry: "Повторить",
-    unknownError: "Неизвестная ошибка загрузки модуля.",
   },
   nodes: {
     pairing: {
@@ -230,6 +233,16 @@ export const ru: TranslationMap = {
       title: "OpenClaw для мобильных устройств",
       subtitle: "Отсканируйте этот QR-код в мобильном приложении, чтобы подключить новый телефон.",
       generating: "Создаём безопасный код настройки…",
+      accessTitle: "Мобильный доступ",
+      fullAccess: "Полный доступ (рекомендуется)",
+      fullAccessHint:
+        "Узел и полный набор элементов управления Gateway, включая настройки и обновления.",
+      limitedAccess: "Ограниченный доступ",
+      limitedAccessHint: "Узел, чат и подтверждения без административных элементов управления.",
+      generateCode: "Создать код настройки",
+      transportLimitedTitle: "Ограничено для безопасности сети",
+      transportLimitedHint:
+        "Этот URL-адрес Gateway использует незашифрованный протокол ws://. Используйте wss:// или Tailscale Serve, затем создайте новый код для полного доступа.",
       failed: "Не удалось создать код настройки.",
       qrAlt: "QR-код сопряжения OpenClaw для мобильных устройств",
       qrUnavailable: "QR-код недоступен. Скопируйте код настройки.",
@@ -265,7 +278,8 @@ export const ru: TranslationMap = {
     },
     inventory: {
       title: "Устройства",
-      subtitle: "Одна строка на каждый сопряжённый клиент: статус, роли, токены.",
+      summaryConnected: "Подключено: {connected} из {total}",
+      summaryPending: "Ожидают одобрения: {count}",
       cleanupStale: "Очистить устаревшие: {count}",
       pendingApproval: "Ожидает подтверждения",
       paired: "Сопряжено",
@@ -373,24 +387,49 @@ export const ru: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Новое рабочее дерево",
-    owner: "Владелец",
     ownerManual: "Вручную",
     ownerSession: "Сеанс",
     ownerWorkboard: "Рабочая доска",
     title: "Управляемые рабочие деревья",
     subtitle: "Изолированные копии репозиториев, принадлежащие OpenClaw.",
     cleanNow: "Очистить сейчас",
+    cleanupTitle: "Очистка",
+    cleanupSubtitle:
+      "OpenClaw периодически удаляет старые рабочие деревья, чтобы освободить место на диске. Настройте интенсивность очистки.",
+    cleanupMaxCount: "Максимальное количество рабочих деревьев",
+    cleanupMaxCountHelp:
+      "Максимальное количество управляемых рабочих деревьев, сохраняемых во всех репозиториях. Более старые рабочие деревья сначала сохраняются в виде снимков, а затем удаляются. Установите значение 0, чтобы отключить ограничение по количеству.",
+    cleanupMaxSize: "Максимальный общий размер (ГБ)",
+    cleanupMaxSizeHelp:
+      "Максимальный общий размер в ГБ для всех управляемых рабочих деревьев. Установите значение 0, чтобы отключить ограничение по размеру.",
+    cleanupDecrease: "Уменьшить {label}",
+    cleanupIncrease: "Увеличить {label}",
+    cleanupSaveFailed: "Не удалось сохранить ограничения очистки.",
     name: "Имя",
     repo: "Репозиторий",
-    branch: "Ветка",
-    status: "Статус",
-    lastActive: "Последняя активность",
-    actions: "Действия",
     empty: "Нет управляемых рабочих деревьев.",
     restorable: "Доступно для восстановления",
     restore: "Восстановить",
     confirmDelete: "Создать снимок и удалить {name}?",
     confirmForceDelete: "Не удалось создать снимок: {error}\n\nУдалить без снимка?",
+  },
+  agentChip: {
+    menuLabel: "Меню агента",
+    agents: "Агенты",
+    working: "Выполняется…",
+    ready: "Готово к чату",
+    whatCanAgentDo: "Что умеет {name}?",
+    help: "Справка",
+    getHelp: "Получить помощь",
+    discord: "Сообщество Discord",
+    viewChangelog: "Посмотреть журнал изменений",
+    agentSettings: "Настройки агента",
+    filterAgents: "Найти агента…",
+    noAgentMatches: "Подходящие агенты не найдены",
+  },
+  agentScope: {
+    label: "Область действия агента",
+    allAgents: "Все агенты",
   },
   newSession: {
     title: "Новый сеанс",
@@ -420,6 +459,7 @@ export const ru: TranslationMap = {
     start: "Начать сессию",
     starting: "Запуск…",
     createFailed: "Не удалось создать сессию.",
+    catalogUnavailable: "Целевой объект этого сеанса недоступен.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -560,6 +600,7 @@ export const ru: TranslationMap = {
     groupBy: "Группировать по",
     groupByNone: "Нет",
     groupByCategory: "Пользовательские группы",
+    showCronSessions: "Показать сеансы cron",
     groupByChannel: "Канал",
     groupByKind: "Тип",
     groupByAgent: "Агент",
@@ -600,6 +641,8 @@ export const ru: TranslationMap = {
     setDefault: "Сделать по умолчанию",
     alreadyDefaultTitle: "Уже агент по умолчанию",
     setDefaultTitle: "Сделать агентом по умолчанию",
+    pinToSwitcher: "Закрепить в переключателе",
+    unpinFromSwitcher: "Открепить от переключателя",
     selectTitle: "Выберите агента",
     selectSubtitle: "Выберите агента, чтобы просмотреть его рабочую область и инструменты.",
     tabs: {
@@ -624,6 +667,19 @@ export const ru: TranslationMap = {
       default: "По умолчанию",
       configurationSubtitle: "Настройка рабочей области, удостоверения и модели.",
       schedulingSubtitle: "Рабочая область и целевые объекты расписания.",
+    },
+    identity: {
+      title: "Профиль",
+      subtitle: "Имя, эмодзи и аватар, отображаемые в чатах и на боковой панели.",
+      name: "Отображаемое имя",
+      namePlaceholder: "Имя агента",
+      emoji: "Эмодзи",
+      chooseImage: "Выбрать изображение…",
+      replaceImage: "Заменить изображение…",
+      imageUnusable:
+        "Это изображение нельзя использовать. Выберите файл изображения размером до 2 МБ.",
+      fileHint:
+        "Агенты могут настроить это самостоятельно, отредактировав файл IDENTITY.md в своей рабочей области.",
     },
     overview: {
       title: "Обзор",
@@ -772,6 +828,7 @@ export const ru: TranslationMap = {
     },
     manualRpcTitle: "Ручной RPC",
     manualRpcSubtitle: "Отправьте необработанный метод шлюза с параметрами JSON.",
+    callFailed: "Вызов завершился с ошибкой",
     method: "Метод",
     selectMethod: "Выберите метод…",
     paramsJson: "Параметры (JSON)",
@@ -1072,6 +1129,7 @@ export const ru: TranslationMap = {
     settingsView: "Просмотр настроек",
     simple: "Простой",
     advanced: "Расширенные",
+    content: "Содержимое настроек",
     themeImported: "Импортировано: {name}.",
     themeRemoved: "Пользовательская тема удалена.",
     channels: {
@@ -1199,6 +1257,10 @@ export const ru: TranslationMap = {
       inlineHintAfter:
         "чтобы добавить одну локальную тему tweakcn для браузера. В tweakcn используйте «Поделиться» и вставьте скопированную ссылку сюда.",
       textSize: "Размер текста",
+    },
+    chatPrefs: {
+      title: "Чат",
+      hint: "Локальные настройки чата для этого браузера.",
     },
     connection: {
       title: "Подключение",
@@ -1360,6 +1422,7 @@ export const ru: TranslationMap = {
     moreLiveTitle: "Ещё {count} активных инструментов доступно в группах ниже.",
     moreLive: "+{count} активных инструментов",
     quickPresets: "Быстрые пресеты",
+    catalogTitle: "Каталог инструментов",
     inherit: "Наследовать",
     profile: "Профиль",
     source: "Источник",
@@ -1425,6 +1488,8 @@ export const ru: TranslationMap = {
     platforms: "Платформы: {platforms}",
     installNamed: "Установить {name}",
     notFound: "Skill не найден.",
+    openDetails: "Открыть сведения о {name}",
+    enabledNamed: "{name} включено",
     invalidLink: "Недействительная ссылка ClawHub",
     overview: "Обзор",
     skillCard: "Карточка Skill",
@@ -1457,6 +1522,8 @@ export const ru: TranslationMap = {
     blockedAgentFilter: "заблокировано фильтром агента",
   },
   nav: {
+    back: "Назад",
+    forward: "Вперед",
     chat: "Чат",
     settings: "Настройки",
     settingsGeneral: "Общие",
@@ -1702,7 +1769,6 @@ export const ru: TranslationMap = {
     filterAll: "Все",
     filterIssues: "Проблемы",
     filterLabel: "Фильтр установленных плагинов",
-    pulseLabel: "{enabled} включено, {disabled} отключено, {issues} с проблемами",
     categoryChannels: "Каналы",
     categoryProviders: "Поставщики моделей",
     categoryMemory: "Память",
@@ -1733,8 +1799,6 @@ export const ru: TranslationMap = {
     cancel: "Отмена",
     removedRestart: "{name} удален. Для применения изменения требуется перезапуск Gateway.",
     verifiedSource: "Проверенный источник",
-    menuLabel: "Действия для {name}",
-    menuDetails: "Просмотреть сведения",
     enableAction: "Включить",
     disableAction: "Отключить",
     working: "Выполняется…",
@@ -1869,6 +1933,10 @@ export const ru: TranslationMap = {
       useCurrentChatAria: "Использовать текущий чат для запросов на доработку",
       useCurrentChatTooltip:
         "Отправлять запросы на доработку в текущую сессию чата вместо сессии мастерской предложения.",
+      selfLearning: "Самообучение",
+      selfLearningAria: "Включить или выключить предложения навыков на основе самообучения",
+      selfLearningTooltip:
+        "Собирает исправления и анализирует значимые завершённые задачи, формируя из них ожидающие рассмотрения предложения по навыкам. Использует дополнительные токены в фоновом режиме; черновики появляются на этой доске как ожидающие рассмотрения предложения.",
       view: "Вид мастерской",
       board: "Доска",
       today: "Сегодня",
@@ -1948,6 +2016,14 @@ export const ru: TranslationMap = {
       noProposalsTitle: "Пока нет предложений",
       noProposalsBody: "{agent} ещё не подготовил ни одного предложения навыков.",
       noProposalsFooter: "Новые предложения появятся здесь для проверки.",
+    },
+    selfLearning: {
+      pitchTitle: "Включить самообучение",
+      pitchBody:
+        "OpenClaw анализирует исправления и значимые завершённые запуски, а затем создаёт для этой доски черновики предложений по навыкам. При этом используются дополнительные токены в фоновом режиме, а черновики поступают как ожидающие рассмотрения предложения.",
+      enable: "Включить самообучение",
+      enabling: "Включение…",
+      updateError: "Не удалось обновить настройку самообучения.",
     },
     today: {
       emptyTitle: "Сегодня ничего не ожидает",
@@ -2437,6 +2513,7 @@ export const ru: TranslationMap = {
       uptime: "Время работы",
       tickInterval: "Интервал тика",
       lastChannelsRefresh: "Последнее обновление каналов",
+      lastError: "Последняя ошибка",
     },
     help: {
       title: "Как подключиться",
@@ -3089,24 +3166,16 @@ export const ru: TranslationMap = {
       rateLimited:
         "Достигнут лимит запросов к GitHub API. Статус pull request может быть устаревшим до сброса лимита.",
     },
-    refreshTitle: "Обновить данные чата",
-    settings: "Настройки чата",
     usageRemaining: "Оставшееся использование",
-    voiceSettings: "Голос",
-    thinkingToggle: "Показать или скрыть вывод размышлений/работы ассистента",
-    toolCallsToggle: "Показать или скрыть вызовы инструментов и их результаты",
-    commentaryToggle: "Сохранять комментарии после окончательного ответа",
-    commentaryLabel: "Комментарии",
-    autoScrollMode: "Режим автопрокрутки",
-    autoScrollAlways: "Всегда",
-    autoScrollNearBottom: "Рядом с нижним краем",
-    autoScrollOff: "Выкл.",
+    view: {
+      menu: "Вид",
+      reasoning: "Рассуждение",
+      toolCalls: "Вызовы инструментов",
+      commentary: "Сохранять комментарии",
+    },
     sendShortcut: "Сочетание клавиш для отправки",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Скрыть сеансы cron",
-    showCronSessions: "Показать сеансы cron",
-    showCronSessionsHidden: "Показать сеансы cron (скрыто: {count})",
     onboardingDisabled: "Отключено во время настройки",
     gatewayStatus: "Статус Gateway: {status}",
     commandPaletteTitle: "Поиск или переход к… (⌘K)",
@@ -3296,7 +3365,6 @@ export const ru: TranslationMap = {
       },
       takePhoto: "Сделать фото",
       dismissVoiceInputError: "Закрыть ошибку голосового ввода",
-      loadingMicrophones: "Загрузка микрофонов…",
       microphoneAccessFailed: "Не удалось получить доступ к входам микрофона.",
       microphoneBusy: "Входы микрофона заняты или недоступны для браузера.",
       microphoneFallback: "Микрофон {number}",
@@ -3315,19 +3383,6 @@ export const ru: TranslationMap = {
       stillListening: "Прослушивание продолжается",
       stopVoiceInput: "Остановить голосовой ввод",
       systemDefaultMicrophone: "Системный по умолчанию",
-      talkAdvancedSettingsRequiresAdmin: "Для расширенных настроек требуется доступ администратора",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Для расширенных настроек Talk требуется доступ operator.admin.",
-      talkDefault: "По умолчанию",
-      talkModel: "Модель",
-      talkModelAuto: "Авто",
-      talkMoreInSettings: "Больше в настройках",
-      talkSensitivity: "Чувствительность",
-      talkSensitivityHigh: "Высокая",
-      talkSensitivityLow: "Низкая",
-      talkSensitivityMedium: "Средняя",
-      talkVoice: "Голос",
-      voiceOptions: "Параметры голоса",
       voiceTranscript: "Расшифровка голоса",
     },
     selectors: {
@@ -3412,6 +3467,8 @@ export const ru: TranslationMap = {
       empty: "Для этого агента пока нет фоновых задач.",
       running: "Выполняются ({count})",
       finished: "Завершены ({count})",
+      statusRunningOne: "1 выполняющаяся задача",
+      statusRunningMany: "{count} выполняющихся задач",
       stopTask: "Остановить {title}",
       viewTranscript: "Просмотреть расшифровку",
       toolUseOne: "1 вызов инструмента",
@@ -3499,11 +3556,13 @@ export const ru: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Статус автоматизации",
       all: "Все",
       active: "Активно",
       paused: "Приостановлено",
     },
     list: {
+      viewLabel: "Представления автоматизации",
       searchPlaceholder: "Поиск запланированных задач",
       newTask: "Новая задача",
       filters: "Фильтры",
@@ -3570,12 +3629,12 @@ export const ru: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Планировщик",
       tasks: "Задачи",
       failing: "С ошибками",
       nextWake: "Следующее пробуждение",
     },
     detail: {
+      tabsLabel: "Сведения об автоматизации",
       newTitle: "Новая запланированная задача",
       newSubtitle: "Опишите, что должен делать OpenClaw, затем выберите время запуска.",
       back: "Все автоматизации",
@@ -3595,7 +3654,14 @@ export const ru: TranslationMap = {
       clone: "Клонировать",
       remove: "Удалить",
       more: "Другие действия",
-      history: "История",
+    },
+    runNotStarted: {
+      notDue: "Время запуска этой автоматизации ещё не наступило.",
+      alreadyRunning: "Эта автоматизация уже выполняется.",
+      recoveryPending: "Восстановление планировщика ещё не завершено.",
+      invalidSpec: "У этой автоматизации недопустимое расписание или содержимое.",
+      stopped: "Планировщик остановлен.",
+      unknown: "Не удалось запустить эту автоматизацию.",
     },
     jobs: {
       schedule: "Расписание",

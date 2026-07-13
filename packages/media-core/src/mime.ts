@@ -1,6 +1,7 @@
 // Media Core module implements mime behavior.
 import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
+import { extnameFromAnyPath } from "./file-name.js";
 import { createLazyImportLoader } from "./lazy-import.js";
 
 /** Maximum byte prefix passed to dependency MIME sniffers for bounded memory/CPU work. */
@@ -157,7 +158,7 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   } catch {
     // fall back to plain path parsing
   }
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = extnameFromAnyPath(filePath).toLowerCase();
   return ext || undefined;
 }
 

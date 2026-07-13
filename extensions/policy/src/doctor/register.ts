@@ -55,14 +55,10 @@ import {
 export {
   POLICY_CHECK_IDS,
   POLICY_RULE_METADATA,
-  SANDBOX_CONTAINER_POLICY_RULES,
-  type PolicyEmptyListSemantics,
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
-  type PolicyStrictnessKind,
 } from "./metadata.js";
 export { isPolicyValueAtLeastAsStrict } from "./strictness.js";
-export type { PolicyEvaluation } from "./types.js";
 
 const POLICY_RULES: readonly PolicyRuleMetadata[] = POLICY_RULE_METADATA;
 

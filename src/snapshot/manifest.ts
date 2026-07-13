@@ -173,7 +173,7 @@ export async function readSnapshotManifest(
   return parseSnapshotManifest(parsed, manifestPath, expectedSnapshotId);
 }
 
-export function parseSnapshotManifest(
+function parseSnapshotManifest(
   value: unknown,
   manifestPath: string,
   expectedSnapshotId: string,

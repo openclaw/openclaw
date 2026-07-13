@@ -1204,6 +1204,7 @@ type DeleteSessionEntryLifecycleParams = {
 async function deleteSessionEntryLifecycleInternal(
   params: DeleteSessionEntryLifecycleParams,
   allowLockedEntryRemoval: boolean,
+  expectedPluginOwnerId?: string,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   return await runExclusiveSessionStoreWrite(params.storePath, async () => {
     const store = loadMutableSessionStoreForWriter(params.storePath);
@@ -1247,6 +1248,36 @@ async function deleteSessionEntryLifecycleInternal(
         expectedEntryMismatch: true,
       };
     }
+    if (expectedPluginOwnerId) {
+      for (const sessionKey of params.target.storeKeys) {
+        const entry = store[sessionKey];
+        if (!entry) {
+          continue;
+        }
+        if (
+          isAgentHarnessSessionKey(sessionKey) ||
+          entry.agentHarnessId !== undefined ||
+          entry.modelSelectionLocked !== true ||
+          normalizeOptionalString(entry.pluginOwnerId) !== expectedPluginOwnerId
+        ) {
+          throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+        }
+      }
+    }
+    const allowedLockedEntryRemovals = allowLockedEntryRemoval
+      ? new Map(
+          params.target.storeKeys.flatMap((sessionKey) => {
+            const entry = store[sessionKey];
+            return entry?.modelSelectionLocked === true
+              ? [[sessionKey, cloneSessionEntry(entry)] as const]
+              : [];
+          }),
+        )
+      : undefined;
+    const removedEntries = params.target.storeKeys.flatMap((sessionKey) => {
+      const entry = store[sessionKey];
+      return entry ? [cloneSessionEntry(entry)] : [];
+    });
     pruneLifecycleLegacyStoreKeys({ store, target: params.target });
     const deletedSessionId = deletedEntry.sessionId;
     const deletedSessionFile = deletedEntry.sessionFile;
@@ -1257,23 +1288,38 @@ async function deleteSessionEntryLifecycleInternal(
       {
         requireWriteSuccess: params.requireWriteSuccess,
       },
-      allowLockedEntryRemoval && deletedEntry.modelSelectionLocked === true
-        ? {
-            allowedLockedEntryRemovals: new Map([
-              [params.target.canonicalKey, cloneSessionEntry(deletedEntry)],
-            ]),
-          }
+      allowedLockedEntryRemovals && allowedLockedEntryRemovals.size > 0
+        ? { allowedLockedEntryRemovals }
         : undefined,
     );
-    const archivedTranscripts = params.archiveTranscript
-      ? await archiveLifecycleSessionTranscripts({
-          sessionId: deletedSessionId,
-          storePath: params.storePath,
-          sessionFile: deletedSessionFile,
-          agentId: params.agentId,
+    const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
+    if (params.archiveTranscript) {
+      const { archiveSessionTranscriptPaths, resolveSessionTranscriptCandidates } =
+        await loadSessionArchiveRuntime();
+      const resolveCandidatePaths = (entry: SessionEntry): string[] =>
+        entry.sessionId
+          ? resolveSessionTranscriptCandidates(
+              entry.sessionId,
+              params.storePath,
+              entry.sessionFile,
+              params.agentId,
+            ).map(normalizePathForLifecycleComparison)
+          : [];
+      const referencedTranscriptPaths = new Set(
+        Object.values(store).flatMap(resolveCandidatePaths),
+      );
+      const removedTranscriptPaths = new Set(removedEntries.flatMap(resolveCandidatePaths));
+      // Aliases can share either an ID or a file independently. The resolved
+      // path set is the only safe deletion boundary across both relationships.
+      archivedTranscripts.push(
+        ...archiveSessionTranscriptPaths({
+          paths: Array.from(removedTranscriptPaths).filter(
+            (transcriptPath) => !referencedTranscriptPaths.has(transcriptPath),
+          ),
           reason: "deleted",
-        })
-      : [];
+        }),
+      );
+    }
     const result: DeleteSessionEntryLifecycleResult = {
       archivedTranscripts,
       deleted: true,
@@ -1327,14 +1373,10 @@ export async function rollbackPluginOwnedSessionEntryLifecycle(
     expectedPluginOwnerId: string;
   },
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  const hasExactTarget =
-    params.target.storeKeys.length === 1 &&
-    params.target.storeKeys[0] === params.target.canonicalKey;
   const expectedEntry = params.expectedEntry;
   const validPluginOwner = normalizeOptionalString(expectedEntry.pluginOwnerId);
   const expectedPluginOwner = normalizeOptionalString(params.expectedPluginOwnerId);
   if (
-    !hasExactTarget ||
     isAgentHarnessSessionKey(params.target.canonicalKey) ||
     expectedEntry.agentHarnessId !== undefined ||
     expectedEntry.modelSelectionLocked !== true ||
@@ -1343,7 +1385,7 @@ export async function rollbackPluginOwnedSessionEntryLifecycle(
   ) {
     throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
-  return await deleteSessionEntryLifecycleInternal(params, true);
+  return await deleteSessionEntryLifecycleInternal(params, true, expectedPluginOwner);
 }
 
 function shouldRemoveSessionEntry(
@@ -1877,34 +1919,6 @@ export async function updateSessionStoreEntry(params: {
       skipMaintenance: params.skipMaintenance,
       takeCacheOwnership: params.takeCacheOwnership ?? true,
       requireWriteSuccess: params.requireWriteSuccess,
-      returnDetached: params.takeCacheOwnership !== true,
-    });
-  });
-}
-
-export async function applySessionStoreEntryPatch(params: {
-  storePath: string;
-  sessionKey: string;
-  patch: Partial<SessionEntry>;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-}): Promise<SessionEntry | null> {
-  const { storePath, sessionKey, patch } = params;
-  return await runExclusiveSessionStoreWrite(storePath, async () => {
-    const store = loadMutableSessionStoreForWriter(storePath);
-    const resolved = resolveSessionStoreEntry({ store, sessionKey });
-    const existing = resolved.existing;
-    if (!existing) {
-      return null;
-    }
-    const next = mergeSessionEntry(existing, patch);
-    return await persistResolvedSessionEntry({
-      storePath,
-      store,
-      resolved,
-      next,
-      skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership ?? true,
       returnDetached: params.takeCacheOwnership !== true,
     });
   });

@@ -50,7 +50,7 @@ type LiveEventTarget = {
   sessionKey: string;
 };
 
-export type WorkerLiveSessionBinding = Readonly<{
+type WorkerLiveSessionBinding = Readonly<{
   environmentId: string;
   runEpoch: number;
   sessionId: string;
@@ -58,7 +58,7 @@ export type WorkerLiveSessionBinding = Readonly<{
 
 type BoundLiveSession = WorkerLiveSessionBinding & { target: LiveEventTarget };
 
-export type WorkerLiveCredentialRotation = Readonly<{
+type WorkerLiveCredentialRotation = Readonly<{
   credentialHash: string;
   environmentId: string;
   previousCredentialHash: string;
@@ -85,7 +85,7 @@ export type WorkerLiveEventApplicationResult =
 
 type WorkerLiveEventFailure = Extract<WorkerLiveEventApplicationResult, { ok: false }>;
 
-export type WorkerLiveEventReceiverOptions = {
+type WorkerLiveEventReceiverOptions = {
   getConfig: () => OpenClawConfig;
   maxActiveRuns?: number;
   maxPendingBytes?: number;
@@ -569,11 +569,19 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const existingContext = getAgentRunContext(runId);
-    if (existingContext?.lifecycleGeneration === lifecycleGeneration) {
-      return invalidEvent();
-    }
     // Turn placement owns wider visibility; otherwise scope to this session.
     const controlUiVisible = false;
+    const adoptExistingUnowned = existingContext !== undefined;
+    if (
+      existingContext &&
+      (existingContext.sessionId !== window.sessionId ||
+        existingContext.sessionKey !== window.target.sessionKey ||
+        existingContext.agentId !== window.target.agentId ||
+        existingContext.lifecycleGeneration !== lifecycleGeneration ||
+        existingContext.isControlUiVisible !== controlUiVisible)
+    ) {
+      return invalidEvent();
+    }
     const claimId = claimAgentRunContext(
       runId,
       {
@@ -585,6 +593,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         sessionKey: window.target.sessionKey,
       },
       {
+        adoptExistingUnowned,
         exclusive: true,
         onClearRequested: (clearedClaimId) => {
           if (window.activeRuns.get(runId)?.claimId === clearedClaimId) {

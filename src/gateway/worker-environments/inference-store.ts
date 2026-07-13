@@ -32,7 +32,7 @@ export type WorkerInferenceTurnInput = {
   requestHash: string;
 };
 
-export type WorkerInferenceTurnBeginResult =
+type WorkerInferenceTurnBeginResult =
   | { kind: "claimed" }
   | { kind: "recover" }
   | { kind: "replay"; outcome: WorkerInferenceTerminalOutcome }

@@ -27,12 +27,8 @@ import type { SpawnedToolContext } from "../spawned-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagent-attachments.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
-import {
-  SUBAGENT_SPAWN_CONTEXT_MODES,
-  SUBAGENT_ANNOUNCE_TARGETS,
-  SUBAGENT_SPAWN_MODES,
-  spawnSubagentDirect,
-} from "../subagent-spawn.js";
+import { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
+import { SUBAGENT_ANNOUNCE_TARGETS } from "../subagent-spawn.types.js";
 import { normalizeSubagentTaskName } from "../subagent-task-name.js";
 import {
   describeSessionsSpawnTool,

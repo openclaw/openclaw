@@ -162,6 +162,20 @@ const APPEARANCE_SETTINGS_BLOCKS = {
     ],
     aliases: "scale",
   },
+  chat: {
+    routeId: "appearance",
+    labelKey: "configView.chatPrefs.title",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.chat}`,
+    searchKeys: [
+      "chat.sendShortcut",
+      "chat.sendShortcutEnter",
+      "chat.sendShortcutModifierEnter",
+      "chat.composer.microphoneInput",
+      "chat.composer.systemDefaultMicrophone",
+    ],
+    aliases: "keyboard enter microphone voice audio input",
+  },
   connection: {
     routeId: "appearance",
     labelKey: "configView.connection.title",

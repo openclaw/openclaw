@@ -110,7 +110,7 @@ import type { OutboundChannel } from "./targets.js";
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
-export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
+export type { OutboundSendDeps } from "./send-deps.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
@@ -130,7 +130,7 @@ export type DurableFinalDeliveryRequirements = Partial<
   Record<DurableFinalDeliveryRequirement, boolean>
 >;
 
-export type OutboundDurableDeliverySupport =
+type OutboundDurableDeliverySupport =
   | { ok: true }
   | {
       ok: false;
@@ -870,7 +870,7 @@ function emitMessageDeliveryError(params: {
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text })) {
+    if (!hasReplyPayloadContent({ ...payload, text }, { extraContent: payload.location != null })) {
       return null;
     }
     if (text) {
@@ -2270,12 +2270,17 @@ async function deliverOutboundPayloadsCore(
         deliveryHandler.sendPayload &&
         ((effectivePayload.isError === true &&
           deliveryHandler.sendTextOnlyErrorPayloads === true) ||
-          hasReplyPayloadContent({
-            presentation: effectivePayload.presentation,
-            interactive: effectivePayload.interactive,
-            channelData: effectivePayload.channelData,
-            location: effectivePayload.location,
-          }) ||
+          hasReplyPayloadContent(
+            {
+              presentation: effectivePayload.presentation,
+              interactive: effectivePayload.interactive,
+              channelData: effectivePayload.channelData,
+              location: effectivePayload.location,
+            },
+            {
+              extraContent: effectivePayload.location != null,
+            },
+          ) ||
           effectivePayload.audioAsVoice === true ||
           effectivePayload.videoAsNote === true)
       ) {

@@ -46,6 +46,71 @@ function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
 }
 
+type PlacementConstraintProbe = {
+  sessionId: string;
+  state: string;
+  environmentId: string | null;
+  activeOwnerEpoch: number | null;
+  workerBundleHash: string | null;
+  recoveryError: string | null;
+  workspaceBaseManifestRef?: string;
+  remoteWorkspaceDir?: string;
+  lastTranscriptAckCursor?: number;
+  lastLiveEventAckCursor?: number;
+  turnClaimOwner?: "local" | "worker";
+  turnClaimOwnerEpoch?: number;
+};
+
+function insertPlacementConstraintProbe(
+  database: DatabaseSync,
+  input: PlacementConstraintProbe,
+): void {
+  const hasClaim = input.turnClaimOwner !== undefined;
+  database
+    .prepare(
+      `INSERT INTO worker_session_placements (
+        session_id,
+        agent_id,
+        session_key,
+        state,
+        environment_id,
+        active_owner_epoch,
+        workspace_base_manifest_ref,
+        remote_workspace_dir,
+        worker_bundle_hash,
+        last_transcript_ack_cursor,
+        last_live_event_ack_cursor,
+        recovery_error,
+        turn_claim_owner,
+        turn_claim_id,
+        turn_claim_run_id,
+        turn_claim_generation,
+        turn_claim_owner_epoch,
+        created_at_ms,
+        updated_at_ms,
+        state_changed_at_ms
+      ) VALUES (?, 'main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1)`,
+    )
+    .run(
+      input.sessionId,
+      `agent:main:${input.sessionId}`,
+      input.state,
+      input.environmentId,
+      input.activeOwnerEpoch,
+      input.workspaceBaseManifestRef ?? null,
+      input.remoteWorkspaceDir ?? null,
+      input.workerBundleHash,
+      input.lastTranscriptAckCursor ?? null,
+      input.lastLiveEventAckCursor ?? null,
+      input.recoveryError,
+      input.turnClaimOwner ?? null,
+      hasClaim ? `${input.sessionId}-claim` : null,
+      hasClaim ? `${input.sessionId}-run` : null,
+      hasClaim ? 0 : null,
+      input.turnClaimOwnerEpoch ?? null,
+    );
+}
+
 function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
   return {
     type,
@@ -654,6 +719,375 @@ describe("openclaw state database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
     );
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+  });
+
+  it("rejects a placement turn claim tuple without an owner", () => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expect(() =>
+      database.db
+        .prepare(
+          `INSERT INTO worker_session_placements (
+            session_id,
+            agent_id,
+            session_key,
+            state,
+            turn_claim_id,
+            turn_claim_run_id,
+            turn_claim_generation,
+            created_at_ms,
+            updated_at_ms,
+            state_changed_at_ms
+          ) VALUES (?, 'main', 'agent:main:placement-claim', 'local', ?, ?, 0, 1, 1, 1)`,
+        )
+        .run("session-placement-claim", "claim-without-owner", "run-without-owner"),
+    ).toThrow();
+  });
+
+  const validPlacementShapes = [
+    {
+      name: "local placement",
+      sessionId: "session-local-valid",
+      state: "local",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+    {
+      name: "requested placement",
+      sessionId: "session-requested-valid",
+      state: "requested",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+    {
+      name: "provisioning placement before environment allocation",
+      sessionId: "session-provisioning-pending-valid",
+      state: "provisioning",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+    {
+      name: "provisioning placement after environment allocation",
+      sessionId: "session-provisioning-allocated-valid",
+      state: "provisioning",
+      environmentId: "environment-provisioning",
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+    {
+      name: "syncing placement",
+      sessionId: "session-syncing-valid",
+      state: "syncing",
+      environmentId: "environment-syncing",
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-syncing",
+      recoveryError: null,
+    },
+    {
+      name: "starting placement",
+      sessionId: "session-starting-valid",
+      state: "starting",
+      environmentId: "environment-starting",
+      activeOwnerEpoch: null,
+      workspaceBaseManifestRef: "manifest-starting",
+      remoteWorkspaceDir: "/workspace/starting",
+      workerBundleHash: "bundle-starting",
+      recoveryError: null,
+    },
+    {
+      name: "active placement",
+      sessionId: "session-active-valid",
+      state: "active",
+      environmentId: "environment-active",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-active",
+      remoteWorkspaceDir: "/workspace/active",
+      workerBundleHash: "bundle-active",
+      lastTranscriptAckCursor: 3,
+      lastLiveEventAckCursor: 4,
+      recoveryError: null,
+    },
+    {
+      name: "draining placement",
+      sessionId: "session-draining-valid",
+      state: "draining",
+      environmentId: "environment-draining",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-draining",
+      remoteWorkspaceDir: "/workspace/draining",
+      workerBundleHash: "bundle-draining",
+      recoveryError: null,
+    },
+    {
+      name: "reconciling placement",
+      sessionId: "session-reconciling-valid",
+      state: "reconciling",
+      environmentId: "environment-reconciling",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-reconciling",
+      remoteWorkspaceDir: "/workspace/reconciling",
+      workerBundleHash: "bundle-reconciling",
+      recoveryError: null,
+    },
+    {
+      name: "reclaimed placement with full provenance",
+      sessionId: "session-reclaimed-valid",
+      state: "reclaimed",
+      environmentId: "environment-reclaimed",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-reclaimed",
+      remoteWorkspaceDir: "/workspace/reclaimed",
+      workerBundleHash: "bundle-reclaimed",
+      recoveryError: null,
+    },
+    {
+      name: "failed placement with recovery detail",
+      sessionId: "session-failed-valid",
+      state: "failed",
+      environmentId: "environment-failed",
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: "worker placement failed",
+    },
+  ] satisfies Array<PlacementConstraintProbe & { name: string }>;
+
+  it.each(validPlacementShapes)("allows a valid $name", (input) => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expect(() => insertPlacementConstraintProbe(database.db, input)).not.toThrow();
+  });
+
+  const invalidPlacementShapes = [
+    {
+      name: "local environment",
+      sessionId: "session-local-environment",
+      state: "local",
+      environmentId: "environment-local",
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+    {
+      name: "syncing without environment",
+      sessionId: "session-syncing-environment",
+      state: "syncing",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "syncing workspace metadata",
+      sessionId: "session-syncing-workspace",
+      state: "syncing",
+      environmentId: "environment-syncing",
+      activeOwnerEpoch: null,
+      workspaceBaseManifestRef: "manifest-syncing",
+      remoteWorkspaceDir: "/workspace/syncing",
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "active without owner epoch",
+      sessionId: "session-active-epoch",
+      state: "active",
+      environmentId: "environment-active",
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+      workspaceBaseManifestRef: "manifest-active",
+      remoteWorkspaceDir: "/workspace/active",
+    },
+    {
+      name: "active without worker bundle",
+      sessionId: "session-active-bundle",
+      state: "active",
+      environmentId: "environment-active",
+      activeOwnerEpoch: 7,
+      workerBundleHash: null,
+      recoveryError: null,
+      workspaceBaseManifestRef: "manifest-active",
+      remoteWorkspaceDir: "/workspace/active",
+    },
+    {
+      name: "starting without manifest",
+      sessionId: "session-starting-manifest",
+      state: "starting",
+      environmentId: "environment-starting",
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+      remoteWorkspaceDir: "/workspace/starting",
+    },
+    {
+      name: "starting owner epoch",
+      sessionId: "session-starting-epoch",
+      state: "starting",
+      environmentId: "environment-starting",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-starting",
+      remoteWorkspaceDir: "/workspace/starting",
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "requested worker metadata",
+      sessionId: "session-requested-metadata",
+      state: "requested",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "provisioning worker bundle",
+      sessionId: "session-provisioning-bundle",
+      state: "provisioning",
+      environmentId: "environment-provisioning",
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "active recovery error",
+      sessionId: "session-active-recovery",
+      state: "active",
+      environmentId: "environment-active",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-active",
+      remoteWorkspaceDir: "/workspace/active",
+      workerBundleHash: "bundle-hash",
+      recoveryError: "unexpected active recovery detail",
+    },
+    {
+      name: "reclaimed placement without full provenance",
+      sessionId: "session-reclaimed-provenance",
+      state: "reclaimed",
+      environmentId: "environment-reclaimed",
+      activeOwnerEpoch: null,
+      workerBundleHash: "bundle-hash",
+      recoveryError: null,
+    },
+    {
+      name: "reclaimed recovery error",
+      sessionId: "session-reclaimed-recovery",
+      state: "reclaimed",
+      environmentId: "environment-reclaimed",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-reclaimed",
+      remoteWorkspaceDir: "/workspace/reclaimed",
+      workerBundleHash: "bundle-hash",
+      recoveryError: "unexpected reclaimed recovery detail",
+    },
+    {
+      name: "failed without recovery error",
+      sessionId: "session-failed-recovery",
+      state: "failed",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workerBundleHash: null,
+      recoveryError: null,
+    },
+  ] satisfies Array<PlacementConstraintProbe & { name: string }>;
+
+  it.each(invalidPlacementShapes)("rejects a placement with $name", (input) => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expect(() => insertPlacementConstraintProbe(database.db, input)).toThrow();
+  });
+
+  const invalidPlacementClaimOwners = [
+    {
+      name: "local claim on active placement",
+      state: "active",
+      activeOwnerEpoch: 7,
+      turnClaimOwner: "local",
+      turnClaimOwnerEpoch: undefined,
+    },
+    {
+      name: "worker claim on reconciling placement",
+      state: "reconciling",
+      activeOwnerEpoch: 7,
+      turnClaimOwner: "worker",
+      turnClaimOwnerEpoch: 7,
+    },
+    {
+      name: "stale worker owner epoch",
+      state: "active",
+      activeOwnerEpoch: 7,
+      turnClaimOwner: "worker",
+      turnClaimOwnerEpoch: 8,
+    },
+    {
+      name: "worker claim on reclaimed placement",
+      state: "reclaimed",
+      activeOwnerEpoch: 7,
+      turnClaimOwner: "worker",
+      turnClaimOwnerEpoch: 7,
+    },
+  ] satisfies Array<{
+    name: string;
+    state: string;
+    activeOwnerEpoch: number;
+    turnClaimOwner: "local" | "worker";
+    turnClaimOwnerEpoch: number | undefined;
+  }>;
+
+  it.each(invalidPlacementClaimOwners)("rejects a placement with $name", (input) => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expect(() =>
+      insertPlacementConstraintProbe(database.db, {
+        sessionId: `session-${input.state}-${input.turnClaimOwner}`,
+        state: input.state,
+        environmentId: `environment-${input.state}`,
+        activeOwnerEpoch: input.activeOwnerEpoch,
+        workspaceBaseManifestRef: `manifest-${input.state}`,
+        remoteWorkspaceDir: `/workspace/${input.state}`,
+        workerBundleHash: "bundle-hash",
+        recoveryError: null,
+        turnClaimOwner: input.turnClaimOwner,
+        ...(input.turnClaimOwnerEpoch === undefined
+          ? {}
+          : { turnClaimOwnerEpoch: input.turnClaimOwnerEpoch }),
+      }),
+    ).toThrow();
+  });
+
+  it("allows an exact worker claim while placement drains", () => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expect(() =>
+      insertPlacementConstraintProbe(database.db, {
+        sessionId: "session-draining-worker",
+        state: "draining",
+        environmentId: "environment-draining",
+        activeOwnerEpoch: 7,
+        workspaceBaseManifestRef: "manifest-draining",
+        remoteWorkspaceDir: "/workspace/draining",
+        workerBundleHash: "bundle-hash",
+        recoveryError: null,
+        turnClaimOwner: "worker",
+        turnClaimOwnerEpoch: 7,
+      }),
+    ).not.toThrow();
   });
 
   it("repairs a same-name shared-state uniqueness index", () => {

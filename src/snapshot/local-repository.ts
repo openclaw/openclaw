@@ -209,7 +209,7 @@ type WindowsAclEntry = {
   readonly canWrite: boolean;
 };
 
-export type LocalSqliteSnapshotProviderOptions = {
+type LocalSqliteSnapshotProviderOptions = {
   readonly allowedDatabaseRoles?: readonly SnapshotDatabaseIdentity["role"][];
   readonly repositoryPath: string;
   readonly validationRootPath?: string;

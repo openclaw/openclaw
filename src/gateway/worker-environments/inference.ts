@@ -31,7 +31,7 @@ const DEFAULT_REQUEST_MAX_BYTES = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
 // cancel/restart from creating unbounded provider work without wedging the session forever.
 const MAX_PROVIDER_OPERATIONS_PER_SESSION = 2;
 
-export type WorkerInferenceFenceReason = Extract<
+type WorkerInferenceFenceReason = Extract<
   WorkerInferenceErrorReason,
   "epoch-mismatch" | "session-not-attached"
 >;
@@ -60,7 +60,7 @@ function safeRevalidate(revalidate?: RevalidateInference): WorkerInferenceErrorR
   }
 }
 
-export type WorkerInferenceStartApplicationResult =
+type WorkerInferenceStartApplicationResult =
   | {
       ok: true;
       result: WorkerInferenceStartResult;
@@ -68,7 +68,7 @@ export type WorkerInferenceStartApplicationResult =
     }
   | { ok: false; reason: WorkerInferenceErrorReason };
 
-export type WorkerInferenceCancelApplicationResult =
+type WorkerInferenceCancelApplicationResult =
   | { ok: true; result: WorkerInferenceCancelResult }
   | { ok: false; reason: WorkerInferenceErrorReason };
 
@@ -682,5 +682,3 @@ export function createWorkerInferenceManager(options: {
     stop,
   };
 }
-
-export type WorkerInferenceManager = ReturnType<typeof createWorkerInferenceManager>;

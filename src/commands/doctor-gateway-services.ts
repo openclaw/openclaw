@@ -116,7 +116,7 @@ function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDa
   if (first) {
     const base = normalizeLowercaseStringOrEmpty(path.basename(first));
     if (base === "bun" || base === "bun.exe") {
-      return "bun";
+      return DEFAULT_GATEWAY_DAEMON_RUNTIME; // Legacy Bun services cannot open node:sqlite state.
     }
     if (base === "node" || base === "node.exe") {
       return "node";
@@ -556,7 +556,7 @@ export async function maybeRepairGatewayServiceConfig(
       note(warning, "Gateway runtime");
     } else {
       note(
-        "System Node 22 LTS (22.19+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+        "System Node 22 LTS (22.22.3+) or Node 24.15+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
         "Gateway runtime",
       );
     }

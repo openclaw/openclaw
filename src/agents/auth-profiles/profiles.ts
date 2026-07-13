@@ -23,6 +23,7 @@ export {
   listProfilesForProvider,
   resolveSubscriptionAuthModeForProfiles,
 } from "./profile-list.js";
+export { upsertAuthProfileWithLock } from "./upsert-with-lock.js";
 
 const authProfileProfilesLog = createSubsystemLogger("agent/embedded");
 
@@ -172,26 +173,6 @@ export function upsertAuthProfile(params: {
   saveAuthProfileStore(store, params.agentDir, {
     filterExternalAuthProfiles: false,
     syncExternalCli: false,
-  });
-}
-
-/** Upserts an auth profile under the auth store lock. */
-export async function upsertAuthProfileWithLock(params: {
-  profileId: string;
-  credential: AuthProfileCredential;
-  agentDir?: string;
-}): Promise<AuthProfileStore | null> {
-  const credential = normalizeAuthProfileCredential(params.credential);
-  return await updateAuthProfileStoreWithLock({
-    agentDir: params.agentDir,
-    saveOptions: {
-      filterExternalAuthProfiles: false,
-      syncExternalCli: false,
-    },
-    updater: (store) => {
-      store.profiles[params.profileId] = credential;
-      return true;
-    },
   });
 }
 

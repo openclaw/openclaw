@@ -11,7 +11,7 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.genera
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
-import { hashSnapshotArtifact, parseSnapshotManifest, readSnapshotManifest } from "./manifest.js";
+import { hashSnapshotArtifact, readSnapshotManifest } from "./manifest.js";
 import {
   SNAPSHOT_MANIFEST_FILENAME,
   SNAPSHOT_SQLITE_FILENAME,
@@ -1594,7 +1594,6 @@ describe("local SQLite snapshot repository", () => {
 });
 
 describe("snapshot manifest parser", () => {
-  const manifestPath = "/snapshots/snapshot/manifest.json";
   const snapshotId = "snapshot";
   const validManifest: SnapshotManifest = {
     schemaVersion: 1,
@@ -1654,7 +1653,15 @@ describe("snapshot manifest parser", () => {
       { ...validManifest, artifact: { ...validManifest.artifact, sizeBytes: 0 } },
       /sizeBytes is invalid/u,
     ],
-  ])("rejects %s", (_name, value, error, expectedId = snapshotId) => {
-    expect(() => parseSnapshotManifest(value, manifestPath, expectedId)).toThrow(error);
+  ])("rejects %s", async (_name, value, error, expectedId = snapshotId) => {
+    const snapshotDir = path.join(await createTempDir(), snapshotId);
+    await fs.mkdir(snapshotDir);
+    await fs.writeFile(
+      path.join(snapshotDir, SNAPSHOT_MANIFEST_FILENAME),
+      JSON.stringify(value),
+      "utf8",
+    );
+
+    await expect(readSnapshotManifest(snapshotDir, expectedId)).rejects.toThrow(error);
   });
 });

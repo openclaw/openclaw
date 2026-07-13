@@ -13,27 +13,27 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 
-export type BackupSqliteCreateOptions = {
+type BackupSqliteCreateOptions = {
   global?: boolean;
   agent?: string;
   repository?: string;
   json?: boolean;
 };
 
-export type BackupSqliteRepositoryOptions = {
+type BackupSqliteRepositoryOptions = {
   repository?: string;
   json?: boolean;
 };
 
-export type BackupSqliteJsonOptions = {
+type BackupSqliteJsonOptions = {
   json?: boolean;
 };
 
-export type BackupSqliteVerifyOptions = BackupSqliteJsonOptions & {
+type BackupSqliteVerifyOptions = BackupSqliteJsonOptions & {
   scratch?: string;
 };
 
-export type BackupSqliteRestoreOptions = BackupSqliteJsonOptions & {
+type BackupSqliteRestoreOptions = BackupSqliteJsonOptions & {
   target?: string;
 };
 

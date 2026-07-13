@@ -53,11 +53,10 @@ exceeds the limit.
 Bundled channels spell these overrides as
 `channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`. The flat
 `*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings are
-legacy everywhere except Matrix and Feishu (their nested migration is still
-pending): `openclaw doctor --fix` migrates them into the nested shape, and
-migrated channel schemas reject them. External SDK plugin configs that still
-use the flat spellings keep working through a deprecated fallback (with a
-runtime warning) until the next release train.
+legacy on every bundled channel: `openclaw doctor --fix` migrates them into
+the nested shape, and channel schemas reject them. External SDK plugin
+configs that still use the flat spellings keep working through a deprecated
+fallback (with a runtime warning) until the next release train.
 
 **Boundary semantics** for `blockStreamingBreak`:
 
@@ -134,9 +133,11 @@ replies**, not final replies or tool summaries.
 - **No block streaming:** `blockStreamingDefault: "off"` (only final reply).
 
 Block streaming is **off unless** `*.streaming.block.enabled` is explicitly
-set to `true`. Channels can stream a live preview
-(`channels.<channel>.streaming.mode`) without block replies. The
-`blockStreaming*` defaults live under `agents.defaults`, not the config root.
+set to `true` (exception: QQ Bot has no `streaming.block` keys and streams
+block replies unless `channels.qqbot.streaming.mode` is `"off"`). Channels can
+stream a live preview (`channels.<channel>.streaming.mode`) without block
+replies. The `blockStreaming*` defaults live under `agents.defaults`, not the
+config root.
 
 ## Preview streaming modes
 
@@ -152,9 +153,8 @@ top-level boolean/string spellings are rewritten by `openclaw doctor --fix`).
 
 `streaming.mode: "block"` is a preview-streaming mode for edit-capable
 channels such as Discord and Telegram; it does not by itself enable channel
-block delivery there. Use `streaming.block.enabled` for normal block replies
-(channels without a nested `streaming` config keep the flat `blockStreaming`
-key instead). Microsoft Teams is the
+block delivery there. Use `streaming.block.enabled` for normal block replies.
+Microsoft Teams is the
 exception: it has no draft-preview block transport, so `streaming.mode:
 "block"` disables native streaming entirely and the reply lands as regular
 block delivery instead of native partial/progress streaming. Mattermost also
@@ -188,11 +188,14 @@ Slack-only:
 
 ### Legacy key migration
 
-| Channel  | Legacy keys                                                 | Status                                                                                                                                       |
-| -------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Telegram | `streamMode`, scalar/boolean `streaming`                    | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                |
-| Discord  | `streamMode`, boolean `streaming`                           | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                |
-| Slack    | `streamMode`; boolean `streaming`; legacy `nativeStreaming` | Rewritten to `streaming.mode` (and `streaming.nativeTransport` for the boolean/legacy forms) by `openclaw doctor --fix`; not read at runtime |
+| Channel  | Legacy keys                                                 | Status                                                                                                                                               |
+| -------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Telegram | `streamMode`, scalar/boolean `streaming`                    | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                        |
+| Discord  | `streamMode`, boolean `streaming`                           | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                        |
+| Slack    | `streamMode`; boolean `streaming`; legacy `nativeStreaming` | Rewritten to `streaming.mode` (and `streaming.nativeTransport` for the boolean/legacy forms) by `openclaw doctor --fix`; not read at runtime         |
+| Matrix   | scalar/boolean `streaming`                                  | Rewritten to `streaming.mode` (including Matrix's `"quiet"` mode) by `openclaw doctor --fix`; not read at runtime                                    |
+| Feishu   | boolean `streaming`                                         | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                        |
+| QQ Bot   | boolean `streaming`; `streaming.c2cStreamApi`               | Rewritten to `streaming.mode` (and `streaming.nativeTransport` for the boolean/`c2cStreamApi` forms) by `openclaw doctor --fix`; not read at runtime |
 
 ## Runtime behavior
 

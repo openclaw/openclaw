@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   MAX_DIFF_RENDER_LINES,
   type DiffLine,
@@ -34,12 +35,6 @@ export type PatchViewData = {
   stat: DiffStat;
   move?: { from: string; to: string };
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
