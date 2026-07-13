@@ -15,7 +15,6 @@ import {
   markObservedDialogsHandledRemotelyForPage,
   refLocator,
   respondToObservedDialogOnPage,
-  respondToObservedDialogViaPlaywright,
   retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
 } from "./pw-session.js";
@@ -99,7 +98,6 @@ export const pwAi = {
   markObservedDialogsHandledRemotelyForPage,
   refLocator,
   respondToObservedDialogOnPage,
-  respondToObservedDialogViaPlaywright,
   armDialogViaPlaywright,
   armFileUploadViaPlaywright,
   batchViaPlaywright,
