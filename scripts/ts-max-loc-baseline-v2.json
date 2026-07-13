@@ -994,7 +994,7 @@
   "src/infra/push-apns.ts": 1202,
   "src/infra/restart-stale-pids.ts": 673,
   "src/infra/restart.ts": 1261,
-  "src/infra/session-cost-usage.ts": 3036,
+  "src/infra/session-cost-usage.ts": 2873,
   "src/infra/sqlite-schema-contract.ts": 541,
   "src/infra/sqlite-snapshot.ts": 864,
   "src/infra/state-migrations.debug-proxy.ts": 578,
