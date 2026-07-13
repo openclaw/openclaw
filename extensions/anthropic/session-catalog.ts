@@ -604,19 +604,6 @@ export async function listLocalClaudeSessionPage(
   };
 }
 
-function parseNodeParams(paramsJSON?: string | null): unknown {
-  if (!paramsJSON) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(paramsJSON) as unknown;
-  } catch (error) {
-    throw new ClaudeCatalogParamsError("Claude session parameters must be valid JSON", {
-      cause: error,
-    });
-  }
-}
-
 function readTranscriptParams(
   value: unknown,
   options: { includeHostId?: boolean } = {},
