@@ -466,10 +466,10 @@ export async function startGatewayBonjourAdvertiser(
               `bonjour: ${label} name conflict resolved; newName=${JSON.stringify(name)}`,
             );
           });
-          svc.on("hostname-change", (hostname) => {
+          svc.on("hostname-change", (resolvedHostname) => {
             markConflictObserved(label, svc);
             logger.warn(
-              `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(hostname)}`,
+              `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(resolvedHostname)}`,
             );
           });
         } catch (err) {
@@ -542,7 +542,7 @@ export async function startGatewayBonjourAdvertiser(
     const updateStateTrackers = (services: BonjourCycle) => {
       const now = Date.now();
       for (const { label, svc } of services) {
-        const nextState = svc.serviceState;
+        const nextState: string = svc.serviceState;
         const current = stateTracker.get(label);
         const nextEnteredAt =
           current && current.state !== "announced" && nextState !== "announced"
@@ -629,7 +629,7 @@ export async function startGatewayBonjourAdvertiser(
       updateStateTrackers(cycle);
       for (const { label, svc } of cycle) {
         const now = Date.now();
-        const state = svc.serviceState;
+        const state: string = svc.serviceState;
         if (state === "announced") {
           consecutiveRestarts = 0;
           consecutiveStuckStateRestarts = 0;
