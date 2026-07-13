@@ -968,7 +968,7 @@ export class GatewayClient {
     if (shouldRetryWithDeviceToken) {
       this.pendingDeviceTokenRetry = true;
       this.deviceTokenRetryBudgetUsed = true;
-      this.protocol.capReconnectBackoff(250);
+      this.protocol.resetReconnectBackoff(250);
     }
     const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(error);
     if (startupRetryAfterMs !== null) {
@@ -1001,7 +1001,7 @@ export class GatewayClient {
     ) {
       this.approvalRuntimeTokenCompatibilityDisabled = true;
       this.approvalRuntimeTokenRetryBudgetUsed = true;
-      this.protocol.capReconnectBackoff(250);
+      this.protocol.resetReconnectBackoff(250);
       this.logDebug("gateway rejected approval runtime auth field; retrying without it");
       return { closeCode: 1008, closeReason: "connect retry" };
     }

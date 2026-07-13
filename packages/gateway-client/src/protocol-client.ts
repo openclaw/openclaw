@@ -3,6 +3,7 @@ import {
   isGatewayEventFrame,
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
+import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import {
   GatewayProtocolRequestError,
   type GatewayProtocolClientOptions,
@@ -39,8 +40,7 @@ export class GatewayProtocolClient<TPlan> {
   private connectSent = false;
   private connectRequestSent = false;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private backoffMs: number;
+  private readonly reconnectSupervisor: RetrySupervisor;
   private socketOpened = false;
   private helloReceived = false;
   private connectFailure: GatewayProtocolCloseContext["connectFailure"];
@@ -48,7 +48,12 @@ export class GatewayProtocolClient<TPlan> {
   private stoppedSocket?: { socket: GatewayProtocolSocket; context: CloseSnapshot };
 
   constructor(private readonly opts: GatewayProtocolClientOptions<TPlan>) {
-    this.backoffMs = opts.reconnect.initialMs;
+    this.reconnectSupervisor = new RetrySupervisor({
+      initialMs: opts.reconnect.initialMs,
+      maxMs: opts.reconnect.maxMs,
+      factor: opts.reconnect.multiplier,
+      jitter: 0,
+    });
     this.requests = new GatewayProtocolRequests(opts);
   }
 
@@ -70,13 +75,14 @@ export class GatewayProtocolClient<TPlan> {
 
   start(): void {
     this.stopped = false;
+    this.reconnectSupervisor.cancel();
     this.connect();
   }
 
   stop(): void {
     this.stopped = true;
-    this.clearTimer("handshakeTimer");
-    this.clearTimer("reconnectTimer");
+    this.clearHandshakeTimer();
+    this.reconnectSupervisor.reset();
     const socket = this.socket;
     if (socket && this.opts.notifyStoppedClose) {
       // Node callers observe the transport's final close during explicit stop;
@@ -117,8 +123,8 @@ export class GatewayProtocolClient<TPlan> {
     this.socket?.close(code, reason);
   }
 
-  capReconnectBackoff(maxMs: number): void {
-    this.backoffMs = Math.min(this.backoffMs, maxMs);
+  resetReconnectBackoff(initialMs: number): void {
+    this.reconnectSupervisor.reset(initialMs);
   }
 
   recordTiming(
@@ -156,7 +162,6 @@ export class GatewayProtocolClient<TPlan> {
     if (this.stopped) {
       return;
     }
-    this.clearTimer("reconnectTimer");
     const generation = this.generation + 1;
     this.connectNonce = null;
     this.connectSent = false;
@@ -207,7 +212,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   private armHandshakeTimer(socket: GatewayProtocolSocket, generation: number): void {
-    this.clearTimer("handshakeTimer");
+    this.clearHandshakeTimer();
     const armedAt = Date.now();
     this.handshakeTimer = setTimeout(() => {
       this.handshakeTimer = null;
@@ -235,7 +240,7 @@ export class GatewayProtocolClient<TPlan> {
       return;
     }
     this.connectSent = true;
-    this.clearTimer("handshakeTimer");
+    this.clearHandshakeTimer();
     let planOrPromise: TPlan | Promise<TPlan>;
     try {
       planOrPromise = this.opts.buildConnectPlan({ nonce: this.connectNonce, generation });
@@ -288,7 +293,7 @@ export class GatewayProtocolClient<TPlan> {
         }
         this.helloReceived = true;
         this.connectFailure = undefined;
-        this.backoffMs = this.opts.reconnect.initialMs;
+        this.reconnectSupervisor.reset();
         this.recordTiming("hello", generation, plan);
         this.opts.onConnectHello?.(hello, context);
         this.invoke("hello", () => this.opts.onHello?.(hello));
@@ -378,7 +383,7 @@ export class GatewayProtocolClient<TPlan> {
       return;
     }
     this.socket = null;
-    this.clearTimer("handshakeTimer");
+    this.clearHandshakeTimer();
     const context: GatewayProtocolCloseContext = {
       ...this.closeContext(),
       code,
@@ -406,18 +411,17 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   private scheduleReconnect(overrideMs?: number): void {
-    this.clearTimer("reconnectTimer");
-    const delay = overrideMs ?? this.backoffMs;
-    if (overrideMs === undefined) {
-      this.backoffMs = Math.min(
-        this.backoffMs * this.opts.reconnect.multiplier,
-        this.opts.reconnect.maxMs,
-      );
+    if (overrideMs !== undefined) {
+      // Retry-After is a floor for this wait, not a failed attempt. Preserve
+      // the exponential sequence for the next transport failure.
+      this.reconnectSupervisor.nextDelayOverrideMs = overrideMs;
     }
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.connect();
-    }, delay);
+    const retry = this.reconnectSupervisor.next()!;
+    // Ignore cancelled sleeps only; reconnect start failures stay observable.
+    void sleepWithAbort(retry.delayMs, retry.signal).then(
+      () => this.connect(),
+      () => {},
+    );
   }
 
   private closeContext(): CloseSnapshot {
@@ -438,11 +442,10 @@ export class GatewayProtocolClient<TPlan> {
     return this.opts.nowMs?.() ?? Date.now();
   }
 
-  private clearTimer(key: "handshakeTimer" | "reconnectTimer"): void {
-    const timer = this[key];
-    if (timer) {
-      clearTimeout(timer);
-      this[key] = null;
+  private clearHandshakeTimer(): void {
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = null;
     }
   }
 

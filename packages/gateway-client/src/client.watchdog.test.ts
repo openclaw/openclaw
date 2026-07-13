@@ -58,7 +58,7 @@ type ProtocolHarness = {
   socket: GatewayProtocolSocket | null;
   stopped: boolean;
   generation: number;
-  backoffMs: number;
+  reconnectSupervisor: { reset(initialMs?: number): void };
   requests: { pending: Map<string, unknown> };
   handleMessage: (socket: GatewayProtocolSocket, generation: number, raw: string) => void;
 };
@@ -320,7 +320,7 @@ describe("GatewayClient", () => {
         helloCount += 1;
         if (helloCount === 1) {
           // Keep the real reconnect lifecycle fast without changing production defaults.
-          protocolHarness(client).backoffMs = 10;
+          protocolHarness(client).reconnectSupervisor.reset(10);
           resolveFirstHello();
           return;
         }
