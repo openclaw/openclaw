@@ -9,26 +9,31 @@
  * carry the config path in their argv (`--mcp-config <dir>/mcp.json`, see
  * `injectClaudeMcpConfigArgs`), and live-session dirs can legitimately persist
  * across turns for days — removing a dir still referenced by a persistent CLI
- * child would regress the failure fixed in #73244. A dir is only removed when
- * no running process references it AND it is older than a short grace window,
- * which protects the mkdtemp→spawn race of a run being prepared right now
- * whose child has not spawned yet.
- *
- * False positives in the liveness check (an unrelated process merely mentioning
- * the path in its argv) only KEEP a dir for another boot — the safe direction.
- * Under Linux `hidepid`, processes of the same uid as the gateway (which is
- * what spawns the CLI children) remain visible, so their configs stay
- * protected; a scan that yields nothing at all is treated as unknown and the
- * sweep fails closed.
+ * child would regress the failure fixed in #73244.
  *
  * Argv liveness alone is not enough: the config is rendered at prepare time,
  * before the run enters the serialization queue, so a run waiting in the queue
- * owns a config that no process argv references yet. To avoid a concurrent
- * gateway's sweep reclaiming such a dir, the creating gateway's identity (pid +
- * boot-id prefix + process start time) is encoded in the dir NAME; an
- * argv-unreferenced dir is only removed once its owning gateway is gone.
- * Old-format (legacy) dirs without an encoded owner keep the prior age +
- * liveness behaviour.
+ * owns a config that no process argv references yet. To tell such a live-owned
+ * queued dir from a true orphan without deleting the former, the creating
+ * gateway's identity (pid + boot-id prefix + process start time) is encoded in
+ * the dir NAME by `mkdtemp`; an argv-unreferenced dir is removed only once its
+ * owning gateway is provably gone (pid dead, host rebooted, or pid reused).
+ *
+ * Old-format (legacy) dirs without an encoded owner are NEVER auto-removed.
+ * Their owner cannot be proven, so during a rolling upgrade a concurrently
+ * running older gateway could hold an unspawned queued run whose legacy config
+ * is aged and argv-unreferenced — deleting it would break that run. Legacy
+ * dirs are therefore always kept and surfaced (a startup warn with a count) for
+ * explicit operator cleanup: pre-upgrade leaked configs are reclaimed by
+ * stopping the gateway and removing them by hand, not by this sweep. Once a
+ * host runs an ownership-aware build every new dir is owner-encoded, so the
+ * legacy set only ever shrinks.
+ *
+ * False positives in the liveness check (an unrelated process merely mentioning
+ * the path in its argv) only KEEP a dir — the safe direction. Under Linux
+ * `hidepid`, processes of the same uid as the gateway (which is what spawns the
+ * CLI children) remain visible, so their configs stay protected; a scan that
+ * yields nothing at all is treated as unknown and the sweep fails closed.
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -41,7 +46,6 @@ const execFileAsync = promisify(execFile);
 
 const BUNDLE_MCP_TEMP_PREFIX = "openclaw-cli-mcp-";
 
-const DEFAULT_SPAWN_GRACE_MS = 5 * 60 * 1000;
 const PROCESS_SCAN_TIMEOUT_MS = 10_000;
 
 /**
@@ -150,7 +154,7 @@ type BundleMcpOwnerVerdict = "legacy" | "alive" | "dead";
  * `--mcp-config`. `dead` (pid gone, boot id changed by a reboot, or the pid
  * reused by a different process) means the queued run died with its gateway, so
  * the dir is reclaimable regardless of age. `legacy` (unparseable old-format
- * name) follows the age + argv rule.
+ * name) has no provable owner and is never auto-removed (rolling-upgrade safe).
  */
 async function resolveBundleMcpOwner(
   entryName: string,
@@ -267,8 +271,6 @@ function lineReferencesDir(line: string, dir: string): boolean {
 export async function sweepOrphanedBundleMcpTempDirs(params?: {
   /** Override the scanned root (tests). Defaults to `os.tmpdir()`. */
   tmpRoot?: string;
-  /** Dirs younger than this are always kept. Defaults to 5 minutes. */
-  spawnGraceMs?: number;
   /** Override the process scan (tests). */
   listCommandLines?: () => string[] | Promise<string[]>;
   /** Override the owner liveness probe (tests). Defaults to `process.kill(pid, 0)`. */
@@ -280,7 +282,6 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   log?: { warn: (msg: string) => void };
 }): Promise<{ removed: string[]; kept: string[] }> {
   const tmpRoot = params?.tmpRoot ?? os.tmpdir();
-  const spawnGraceMs = params?.spawnGraceMs ?? DEFAULT_SPAWN_GRACE_MS;
   const isPidAlive = params?.isPidAlive ?? defaultIsPidAlive;
   const readStartTicks = params?.readStartTicks ?? defaultReadStartTicks;
   const removed: string[] = [];
@@ -307,19 +308,16 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   }
 
   const currentBoot = params?.currentBoot ?? (await readBootTag());
-  const now = Date.now();
 
   // Phase 1 — classify. A dir becomes a removal candidate only when nothing live
-  // references it AND its owning gateway is gone (or it is an aged legacy dir).
+  // references it AND its encoded owner is provably gone. Age plays no part: an
+  // owner-encoded dir is judged by owner liveness (a dead owner's config is
+  // reclaimable at any age, so a prompt restart reclaims its own fresh crash
+  // debris), and a legacy dir is never a candidate at all.
   const candidates: string[] = [];
+  let legacyRetained = 0;
   for (const entry of entries) {
     const dir = path.join(tmpRoot, entry);
-    let mtimeMs: number;
-    try {
-      mtimeMs = (await fs.stat(dir)).mtimeMs;
-    } catch {
-      continue; // Raced away since readdir.
-    }
     if (commandLines.some((line) => lineReferencesDir(line, dir))) {
       // A live CLI child (of this gateway, a concurrent gateway, or a
       // persistent live session) still references the config — keep (#73244).
@@ -333,17 +331,24 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
       kept.push(dir);
       continue;
     }
-    if (owner === "legacy" && now - mtimeMs < spawnGraceMs) {
-      // An old-format dir with no encoded owner, created moments ago, may not
-      // have spawned its child yet; keep it inside the grace window. Owner-named
-      // dirs skip the grace check on purpose: a dead owner's config is
-      // reclaimable at any age, which is what lets a prompt gateway restart
-      // reclaim its own fresh crash debris instead of leaking it until the next
-      // restart.
+    if (owner === "legacy") {
+      // Old-format dir with no encoded owner. Its owner cannot be proven, so it
+      // is never auto-removed: during a rolling upgrade a concurrently running
+      // older gateway could still hold an unspawned queued run for it. Keep it
+      // and surface the count below for explicit operator cleanup.
+      legacyRetained += 1;
       kept.push(dir);
       continue;
     }
-    candidates.push(dir); // "dead" (any age) or aged "legacy".
+    candidates.push(dir); // owner === "dead": owning gateway provably gone.
+  }
+
+  if (legacyRetained > 0) {
+    params?.log?.warn(
+      `bundle MCP temp sweep: retained ${legacyRetained} legacy (pre-ownership) temp dir(s); ` +
+        "these are never auto-removed to stay rolling-upgrade safe. To reclaim pre-upgrade " +
+        `leaks, stop the gateway and remove stale ${BUNDLE_MCP_TEMP_PREFIX}* dirs by hand.`,
+    );
   }
 
   if (candidates.length === 0) {

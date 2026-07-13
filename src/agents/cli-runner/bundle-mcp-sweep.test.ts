@@ -60,11 +60,14 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("removes legacy dirs no live process references (gateway died with runs in flight)", async () => {
-    const orphan = await createDir(root, "orphan");
+  it("never auto-removes legacy dirs, aged or fresh — an older gateway's queued config must survive a concurrent sweep (rolling-upgrade safe)", async () => {
+    const aged = await createDir(root, "aged");
+    const fresh = await createDir(root, "fresh", { old: false });
     const result = await sweep(root);
-    expect(result.removed).toEqual([orphan]);
-    await expect(fs.stat(orphan)).rejects.toThrow();
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual(expect.arrayContaining([aged, fresh]));
+    await expect(fs.stat(aged)).resolves.toBeDefined();
+    await expect(fs.stat(fresh)).resolves.toBeDefined();
   });
 
   it("keeps dirs referenced by a live CLI child argv (persistent live session, #73244)", async () => {
@@ -79,22 +82,15 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     await expect(fs.stat(live)).resolves.toBeDefined();
   });
 
-  it("keeps dirs referenced by a concurrent gateway instance's child", async () => {
+  it("keeps dirs referenced by a concurrent gateway instance's child (owner-dead orphan removed)", async () => {
     const other = await createDir(root, "other-instance");
-    const orphan = await createDir(root, "orphan");
+    const orphan = await createDir(root, "orphan", { owner: { pid: 4242 } });
     const result = await sweep(root, {
       listCommandLines: () => [`claude --mcp-config ${path.join(other, "mcp.json")} --other-flag`],
+      isPidAlive: () => false, // the orphan's owning gateway is gone
     });
     expect(result.removed).toEqual([orphan]);
-    expect(result.kept).toEqual([other]);
-  });
-
-  it("keeps recent legacy dirs inside the spawn grace window (child not spawned yet)", async () => {
-    const fresh = await createDir(root, "fresh", { old: false });
-    const result = await sweep(root);
-    expect(result.removed).toEqual([]);
-    expect(result.kept).toEqual([fresh]);
-    await expect(fs.stat(fresh)).resolves.toBeDefined();
+    expect(result.kept).toContain(other);
   });
 
   it("fails closed when the process scan yields nothing", async () => {
@@ -172,7 +168,7 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     // process is the "owner" and is alive, so its own generated dir is kept.
     const dir = await fs.mkdtemp(await bundleMcpOwnedMkdtempPrefix(root));
     await fs.writeFile(path.join(dir, "mcp.json"), `{"mcpServers":{}}\n`, "utf-8");
-    await fs.utimes(dir, OLD_MTIME, OLD_MTIME); // aged, so the grace window cannot mask the result
+    await fs.utimes(dir, OLD_MTIME, OLD_MTIME); // aged — owner liveness decides, not age
     const result = await sweepOrphanedBundleMcpTempDirs({
       tmpRoot: root,
       listCommandLines: () => ["node /usr/bin/unrelated"],
@@ -182,7 +178,7 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     await expect(fs.stat(dir)).resolves.toBeDefined();
   });
 
-  it("reclaims a FRESH dead-owner dir despite the spawn grace window", async () => {
+  it("reclaims a FRESH dead-owner dir regardless of age (owner death, not age, decides)", async () => {
     // A gateway that crashed moments ago leaves fresh debris; the one-shot
     // startup sweep must reclaim it now, not leak it until the next restart.
     const fresh = await createDir(root, "fresh-dead", { old: false, owner: { pid: 4242 } });
@@ -191,15 +187,26 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     await expect(fs.stat(fresh)).rejects.toThrow();
   });
 
-  it("treats an unparseable owner name as legacy (aged → removed)", async () => {
+  it("warns with a count when legacy dirs are retained (operator cleanup signal)", async () => {
+    await createDir(root, "legacy-a");
+    await createDir(root, "legacy-b");
+    const warnings: string[] = [];
+    const result = await sweep(root, { log: { warn: (msg) => warnings.push(msg) } });
+    expect(result.removed).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("retained 2 legacy");
+  });
+
+  it("treats an unparseable owner name as legacy (kept, never auto-removed)", async () => {
     // A prefixed dir whose name does not encode a valid owner (e.g. pid 0) is
-    // legacy, not owned — it follows the age + argv rule.
+    // legacy, not owned — like every legacy dir it is never auto-removed.
     const dir = path.join(root, `${BUNDLE_MCP_TEMP_PREFIX}0-${BOOT}-${START}-badpid`);
     await fs.mkdir(dir, { recursive: true });
     await fs.utimes(dir, OLD_MTIME, OLD_MTIME);
     const result = await sweep(root);
-    expect(result.removed).toEqual([dir]);
-    await expect(fs.stat(dir)).rejects.toThrow();
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toContain(dir);
+    await expect(fs.stat(dir)).resolves.toBeDefined();
   });
 
   it("keeps a removal candidate whose child spawns between the argv scan and removal", async () => {
@@ -222,10 +229,11 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     await expect(fs.stat(racing)).resolves.toBeDefined();
   });
 
-  it("removes legacy empty dirs (mcp.json already gone) with no live reference", async () => {
+  it("keeps legacy empty dirs (mcp.json already gone) — still never auto-removed", async () => {
     const empty = await createDir(root, "empty", { withMcpJson: false });
     const result = await sweep(root);
-    expect(result.removed).toEqual([empty]);
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toContain(empty);
   });
 
   it("ignores non-matching entries and missing roots", async () => {
