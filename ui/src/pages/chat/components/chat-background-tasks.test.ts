@@ -396,6 +396,10 @@ describe("running-tasks status row", () => {
     const row = container.querySelector(".chat-tasks-status");
     expect(row).not.toBeNull();
     expect(row?.querySelector("openclaw-elapsed-time")).not.toBeNull();
+    // The ticking timer must stay outside the polite live region.
+    expect(row?.querySelector(".chat-tasks-status__time")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
     const link = row?.querySelector<HTMLButtonElement>(".chat-tasks-status__link");
     expect(link?.textContent?.trim()).toBe("1 running task");
     link?.click();

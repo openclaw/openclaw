@@ -364,7 +364,9 @@ export function renderBackgroundTasksStatusRow(
       <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
       ${status.startedMs !== null
         ? html`
-            <span class="chat-tasks-status__time">
+            <!-- Ticking time stays out of the polite live region: without
+                 aria-hidden, screen readers would re-announce every second. -->
+            <span class="chat-tasks-status__time" aria-hidden="true">
               <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
             </span>
             <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
