@@ -12,6 +12,7 @@ import {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
+  normalizeOverrides,
   packageJsonForShrinkwrap,
   packageDependencyInputsChanged,
   pnpmLockOverrideVersionForVersions,
@@ -73,6 +74,20 @@ describe("generate-npm-shrinkwrap", () => {
       maxBuffer: 64 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10 * 60 * 1000,
+    });
+  });
+
+  it("normalizes pnpm scoped override selectors for npm shrinkwrap", () => {
+    expect(
+      normalizeOverrides({
+        "openclaw@2026.5.28>undici": "8.5.0",
+        tar: 7.5,
+      }),
+    ).toEqual({
+      "openclaw@2026.5.28": {
+        undici: "8.5.0",
+      },
+      tar: "7.5",
     });
   });
 

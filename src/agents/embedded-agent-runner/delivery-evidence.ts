@@ -30,6 +30,7 @@ type AgentDeliveryEvidence = {
     errorMessage?: unknown;
   };
   didSendViaMessagingTool?: unknown;
+  didSendDeterministicApprovalPrompt?: unknown;
   messagingToolSentTexts?: unknown;
   messagingToolSentMediaUrls?: unknown;
   messagingToolSentTargets?: unknown;
@@ -83,6 +84,18 @@ export function hasCompletedSourceReplyDeliveryEvidence(
   return (
     resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
     hasCommittedSourceReplyDeliveryEvidence(result)
+  );
+}
+
+/** Returns whether delivery evidence completes the current interactive turn. */
+export function hasCompletedTerminalDeliveryEvidence(
+  result: AgentDeliveryEvidence & SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
+): boolean {
+  const explicitFinal = resolveExplicitFinalSourceReplyDeliveryEvidence(result);
+  return (
+    hasCompletedSourceReplyDeliveryEvidence(result) ||
+    (explicitFinal === undefined && hasVisibleOutboundDeliveryEvidence(result)) ||
+    result.didSendDeterministicApprovalPrompt === true
   );
 }
 

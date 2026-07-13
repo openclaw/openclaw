@@ -816,6 +816,10 @@
     "target": "Parallel 搜索"
   },
   {
+    "source": "Mxc plugin",
+    "target": "MXC 插件"
+  },
+  {
     "source": "CLI reference",
     "target": "CLI 参考"
   },

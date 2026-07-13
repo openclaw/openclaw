@@ -14,6 +14,7 @@ const requiredPreparedPathGroups = [
   ["dist/control-ui/index.html"],
 ];
 const requiredControlUiAssetPrefix = "dist/control-ui/assets/";
+const requiredControlUiCompressionSuffixes = [".br", ".gz"] as const;
 const DEFAULT_PREPACK_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
 
@@ -42,6 +43,13 @@ export function collectPreparedPrepackErrors(
   }
 
   if (!normalizedAssets.values().next().done) {
+    for (const suffix of requiredControlUiCompressionSuffixes) {
+      if (!Array.from(normalizedAssets).some((assetPath) => assetPath.endsWith(suffix))) {
+        errors.push(
+          `missing prepared Control UI ${suffix} asset under ${requiredControlUiAssetPrefix}`,
+        );
+      }
+    }
     return errors;
   }
 

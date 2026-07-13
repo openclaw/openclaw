@@ -778,8 +778,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 }
 
-export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
-
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
 
 export const testing = {
@@ -798,4 +796,3 @@ export const testing = {
   getSocketEmitter,
   waitForSlackSocketDisconnect,
 };
-export { testing as __testing };
