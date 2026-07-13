@@ -1186,6 +1186,68 @@ describe("config mutate helpers", () => {
     expect(persistedPlugins.entries?.["strict-plugin"]).toEqual({ enabled: true });
   });
 
+  it("warns when an included config file has JSON5 comments that will be lost", async () => {
+    const home = await suiteRootTracker.make("include-comment-loss");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
+    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    // Include file with JSON5 comments
+    await fs.writeFile(
+      pluginsPath,
+      `{
+  // Plugin entries registry
+  "entries": {
+    "demo": { "enabled": true }
+  }
+}\n`,
+      "utf-8",
+    );
+    const snapshot = createSnapshot({
+      hash: "hash-include-comment-loss",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: { demo: { enabled: true } } } },
+    });
+    const refreshedSnapshot = createSnapshot({
+      hash: "hash-include-comment-loss-refreshed",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: {
+        plugins: { entries: { demo: { enabled: true }, extra: { enabled: false } } },
+      },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: refreshedSnapshot,
+      writeOptions: { expectedConfigPath: configPath },
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig: {
+          plugins: { entries: { demo: { enabled: true }, extra: { enabled: false } } },
+        },
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/Config write will strip JSON5 comments from.*plugins\.json5/),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("rejects direct mutations to external include roots", async () => {
     const home = await suiteRootTracker.make("include-allowed-root");
     const sharedRoot = path.join(home, "shared");

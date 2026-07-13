@@ -30,6 +30,7 @@ import {
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
 import {
   createConfigIO,
+  hasJSON5Comments,
   readConfigFileSnapshotForWrite,
   restoreEnvChangesIfUnchanged,
   resolveConfigSnapshotHash,
@@ -804,6 +805,15 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
           }
         : undefined,
   });
+  // Warn when the included config had JSON5 comments that were stripped
+  // by the JSON.stringify serialization above.  Route through console.warn
+  // to avoid adding a plugin-facing logging contract to ConfigMutationIO.
+  if (previousIncludeRaw !== null && hasJSON5Comments(previousIncludeRaw)) {
+    console.warn(
+      `Config write will strip JSON5 comments from ${expectedIncludeTarget}. ` +
+        "Use a separate tool to re-add documentation comments after modifications.",
+    );
+  }
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;
   try {

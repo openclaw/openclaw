@@ -19,6 +19,7 @@ import { hashConfigIncludeRaw } from "./includes.js";
 import {
   createConfigIO as createObservedConfigIO,
   getRuntimeConfigSourceSnapshot,
+  hasJSON5Comments,
   readConfigFileSnapshotForWrite,
   readConfigFileSnapshotForRuntimeTransaction,
   registerConfigWriteListener,
@@ -3525,6 +3526,242 @@ describe("config io write", () => {
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
       expect(persisted.logging?.file).toBe("~/openclaw-upgrade-survivor/gateway.jsonl");
       expect(persisted.logging?.level).toBe("debug");
+    });
+  });
+
+  it("warns when writing config with JSON5 comments that will be lost", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+      // Write a config with JSON5 comments (line comment and block comment)
+      const configWithComments = `{
+  // This is a line comment that should trigger a warning
+  "gateway": {
+    "mode": "local" // inline comment
+  },
+  /* Block comment
+     spanning multiple lines */
+  "plugins": {}
+}\n`;
+      await fs.writeFile(configPath, configWithComments, "utf-8");
+
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      // Write the config (this should trigger the warning)
+      await io.writeConfigFile({ gateway: { mode: "local" }, plugins: {} });
+
+      // Verify the warning was logged
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toMatch(/Config write will strip JSON5 comments from/);
+
+      // Verify the written config has no comments (JSON.stringify removes them)
+      const writtenContent = await fs.readFile(configPath, "utf-8");
+      expect(writtenContent).not.toContain("//");
+      expect(writtenContent).not.toContain("/*");
+    });
+  });
+
+  it("does not warn when writing config without JSON5 comments", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+      // Write a clean config without comments
+      const cleanConfig = {
+        gateway: { mode: "local" },
+        plugins: {},
+      };
+      await fs.writeFile(configPath, `${JSON.stringify(cleanConfig, null, 2)}\n`, "utf-8");
+
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      // Write the config (should NOT trigger a warning)
+      await io.writeConfigFile({ gateway: { mode: "local" }, plugins: {} });
+
+      // Verify no warning was logged
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not false-positive on URLs in string values", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+      // Write a config with URLs in strings (should not trigger warning)
+      // Using valid config keys that contain URL strings
+      const configWithUrls = {
+        logging: {
+          file: "/tmp/test.log",
+          level: "info" as const,
+        },
+        gateway: { mode: "local" as const },
+      };
+      await fs.writeFile(configPath, `${JSON.stringify(configWithUrls, null, 2)}\n`, "utf-8");
+
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      // Write the config (should NOT trigger a warning for URLs in strings)
+      await io.writeConfigFile(configWithUrls as OpenClawConfig);
+
+      // Verify no warning was logged
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("is not fooled by // or /* inside string values (adversarial escapes)", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+      // Strings with embedded // and /* must not trigger comment detection.
+      const configWithEmbedded = `{
+  "gateway": { "mode": "local" },
+  "url": "https://example.com//path",
+  "desc": "a /* block-like */ token in a string",
+  "re": "\\\\// backslash before slashes",
+  'single': 'no // comments here',
+  \`backtick\`: \`no /* block */ here\`
+}
+`;
+      await fs.writeFile(configPath, configWithEmbedded, "utf-8");
+
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      await io.writeConfigFile({ gateway: { mode: "local" } });
+      // No warning expected — all // and /* live inside string literals.
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("handles escaped quotes and line continuations without false positives", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+      // Escaped quotes and JSON5 line continuations should stay inside
+      // the string and never expose a bogus comment token.
+      const configWithEscapes = `{
+  "gateway": { "mode": "local" },
+  "val": "escaped \\"quote\\" stays inside the string",
+  "multi": "line\\\\
+continuation should not leak"
+}
+`;
+      await fs.writeFile(configPath, configWithEscapes, "utf-8");
+
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      await io.writeConfigFile({ gateway: { mode: "local" } });
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("completes quickly on large escape-heavy payloads (no catastrophic backtracking)", async () => {
+    // Craft a payload where every other character is a backslash inside
+    // a long string — pathological for backtracking regex engines.
+    const pad = "\\/".repeat(40_000);
+    const payload = `{ "gateway": { "mode": "local" }, "k": "${pad}" }\n`;
+
+    const start = performance.now();
+    // No comment tokens outside string literals.
+    expect(hasJSON5Comments(payload)).toBe(false);
+    const elapsed = performance.now() - start;
+
+    // Should complete in well under 100 ms; a backtracking regex would
+    // stall for seconds or run out of stack.
+    expect(elapsed).toBeLessThan(100);
+  });
+
+  it("warns about JSON5 comment loss even when skipOutputLogs is true", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+      const configWithComments = `{
+  // a line comment
+  "gateway": {
+    "mode": "local"
+  }
+}\n`;
+      await fs.writeFile(configPath, configWithComments, "utf-8");
+
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      // skipOutputLogs should NOT suppress the JSON5 comment-loss warning
+      await io.writeConfigFile({ gateway: { mode: "local" } }, { skipOutputLogs: true });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toMatch(/Config write will strip JSON5 comments from/);
+    });
+  });
+
+  it("does not warn about JSON5 comment loss when the write is rejected", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+      // Write a large existing config first so the drop to a minimal config is suspicious
+      const largeConfig: Record<string, unknown> = { gateway: { mode: "local" } };
+      for (let i = 0; i < 100; i += 1) {
+        largeConfig[`key${i}`] = `value-${"x".repeat(50)}`;
+      }
+      await fs.writeFile(
+        configPath,
+        `{
+  // This comment would be stripped — but the write should be rejected first
+  ${JSON.stringify(largeConfig, null, 2).slice(1)}\n`,
+        "utf-8",
+      );
+
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      // Write a tiny config that triggers size-drop rejection
+      await expect(io.writeConfigFile({ gateway: { mode: "local" } })).rejects.toThrow(
+        /Config write rejected/,
+      );
+
+      // The JSON5 comment-loss warning must NOT fire on a rejected write
+      const commentLossWarnings = warn.mock.calls.filter(
+        (call) => typeof call[0] === "string" && call[0].includes("strip JSON5 comments"),
+      );
+      expect(commentLossWarnings).toHaveLength(0);
     });
   });
 });
