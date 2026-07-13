@@ -85,14 +85,6 @@ function hasOnlyMigrationSafePluginEntries(
   });
 }
 
-function readPristineStartupConfig(configPath: string): Record<string, unknown> | null {
-  const config = tryReadJsonSync(configPath);
-  if (!isRecord(config) || Object.hasOwn(config, "$include")) {
-    return null;
-  }
-  return config;
-}
-
 function configIsPristineCoreStateSafe(config: Record<string, unknown>): boolean {
   if ([...STATEFUL_CONFIG_KEYS].some((key) => Object.hasOwn(config, key))) {
     return false;
@@ -101,6 +93,26 @@ function configIsPristineCoreStateSafe(config: Record<string, unknown>): boolean
     return false;
   }
   return true;
+}
+
+export type PristineStartupMigrationPlan = {
+  skipAllStateMigrations: boolean;
+  skipCoreStateMigrations: boolean;
+};
+
+/** Revalidates the authored config after startup recovery without rereading physical state. */
+export function planPristineStartupConfigMigrations(
+  config: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): PristineStartupMigrationPlan {
+  if (!isRecord(config) || Object.hasOwn(config, "$include")) {
+    return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
+  }
+  const skipCoreStateMigrations = configIsPristineCoreStateSafe(config);
+  return {
+    skipAllStateMigrations: skipCoreStateMigrations && configIsPristineStateSafe(config, env),
+    skipCoreStateMigrations,
+  };
 }
 
 function configIsPristineStateSafe(
@@ -141,14 +153,12 @@ export function canSkipPristineStartupStateMigrations(
 }
 
 /** Separates provably absent core state from plugin-owned migration work. */
-export function planPristineStartupStateMigrations(env: NodeJS.ProcessEnv = process.env): {
-  skipAllStateMigrations: boolean;
-  skipCoreStateMigrations: boolean;
-} {
+export function planPristineStartupStateMigrations(
+  env: NodeJS.ProcessEnv = process.env,
+): PristineStartupMigrationPlan {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
-  const config = readPristineStartupConfig(configPath);
-  if (!config || !stateDirHasOnlyConfig(stateDir, configPath)) {
+  if (!stateDirHasOnlyConfig(stateDir, configPath)) {
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
   const homeDir = resolveEffectiveHomeDir(env);
@@ -161,9 +171,12 @@ export function planPristineStartupStateMigrations(env: NodeJS.ProcessEnv = proc
     }
     return !fs.existsSync(legacyDir);
   });
-  const skipCoreStateMigrations = legacyStateAbsent && configIsPristineCoreStateSafe(config);
+  if (!legacyStateAbsent) {
+    return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
+  }
+  const configPlan = planPristineStartupConfigMigrations(tryReadJsonSync(configPath), env);
   return {
-    skipAllStateMigrations: skipCoreStateMigrations && configIsPristineStateSafe(config, env),
-    skipCoreStateMigrations,
+    skipAllStateMigrations: configPlan.skipAllStateMigrations,
+    skipCoreStateMigrations: configPlan.skipCoreStateMigrations,
   };
 }

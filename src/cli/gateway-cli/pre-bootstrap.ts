@@ -626,7 +626,7 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
   preparedGatewayRunStateWasPristine = false;
   preparedGatewayRunCoreStateWasPristine = false;
   const pristineSelectionSignature = resolveGatewayConfigSelectionSignature(process.env);
-  const { planPristineStartupStateMigrations } =
+  const { planPristineStartupConfigMigrations, planPristineStartupStateMigrations } =
     await import("../../commands/doctor/shared/pristine-startup-state.js");
   const pristineStatePlan = planPristineStartupStateMigrations(process.env);
   // Stop the early proxy before recovery can select another config/state target. Its lifecycle
@@ -645,15 +645,23 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
         recoverSuspicious: true,
         restoreSuspicious: true,
       });
+  // Recovery can replace config without changing its selected path. Revalidate the final authored
+  // file while retaining the pre-guard physical-state fact, or stateful backup config could skip.
+  const guardedConfigPlan = planPristineStartupConfigMigrations(
+    guarded ? lastGuardedGatewayRunSnapshot?.parsed : undefined,
+    process.env,
+  );
   preparedGatewayRunStateWasPristine =
     guarded &&
     !params.opts.reset &&
     pristineStatePlan.skipAllStateMigrations &&
+    guardedConfigPlan.skipAllStateMigrations &&
     resolveGatewayConfigSelectionSignature(process.env) === pristineSelectionSignature;
   preparedGatewayRunCoreStateWasPristine =
     guarded &&
     !params.opts.reset &&
     pristineStatePlan.skipCoreStateMigrations &&
+    guardedConfigPlan.skipCoreStateMigrations &&
     resolveGatewayConfigSelectionSignature(process.env) === pristineSelectionSignature;
   await pinGatewayRunRuntimePaths();
   // Dev reset deletes the state directory before recreating config. Migrating first would
