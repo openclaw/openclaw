@@ -418,25 +418,21 @@ export function resolveSession(opts: {
   const lockedModelSelection = isModelSelectionLocked(sessionEntry);
   const skipImplicitExpiry =
     resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
-  const policyFresh = sessionEntry
+  const fresh = sessionEntry
     ? lockedModelSelection ||
-      skipImplicitExpiry ||
-      evaluateSessionFreshness({
-        updatedAt: sessionEntry.updatedAt,
-        ...resolveSessionLifecycleTimestamps({
-          entry: sessionEntry,
-          agentId: sessionAgentId,
-          storePath,
-        }),
-        now,
-        policy: resetPolicy,
-      }).fresh
+      (!terminalMainTranscriptNewerThanRegistry &&
+        (skipImplicitExpiry ||
+          evaluateSessionFreshness({
+            updatedAt: sessionEntry.updatedAt,
+            ...resolveSessionLifecycleTimestamps({
+              entry: sessionEntry,
+              agentId: sessionAgentId,
+              storePath,
+            }),
+            now,
+            policy: resetPolicy,
+          }).fresh))
     : false;
-  // The terminal-main transcript gate exists to detect zombie sessions whose
-  // transcript was modified after the registry marked them done. A session
-  // still fresh under the configured reset policy is not a zombie — only
-  // apply the gate when the session is already stale by policy.
-  const fresh = policyFresh && !(terminalMainTranscriptNewerThanRegistry && !policyFresh);
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
