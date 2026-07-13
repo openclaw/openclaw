@@ -90,6 +90,8 @@ describe("security-path protected-prefix matching", () => {
   it("does not protect unrelated paths", () => {
     expect(isProtectedPluginRoutePath("/plugin/public")).toBe(false);
     expect(isProtectedPluginRoutePath("/api/channels-public")).toBe(false);
+    expect(isProtectedPluginRoutePath("/api/channels%2dpublic")).toBe(false);
+    expect(isProtectedPluginRoutePath("/api/channels%252dpublic")).toBe(false);
     expect(isProtectedPluginRoutePath("/api/foo/..%2fchannels-public")).toBe(false);
     expect(isProtectedPluginRoutePath("/api/channel")).toBe(false);
   });

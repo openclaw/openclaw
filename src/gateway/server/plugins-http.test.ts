@@ -599,6 +599,27 @@ describe("plugin HTTP route auth checks", () => {
     expect(isRegisteredPluginHttpRoutePath(registry, "/api/%2564emo")).toBe(true);
   });
 
+  it("does not match percent-encoded prefix siblings", async () => {
+    const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 200;
+    });
+    const registry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/googlechat", match: "prefix", handler: routeHandler })],
+    });
+
+    expect(isRegisteredPluginHttpRoutePath(registry, "/googlechat%2dpublic")).toBe(false);
+
+    const handler = createGatewayPluginRequestHandler({
+      registry,
+      log: createPluginLog(),
+    });
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/googlechat%2dpublic" } as IncomingMessage, res);
+
+    expect(handled).toBe(false);
+    expect(routeHandler).not.toHaveBeenCalled();
+  });
+
   it("enforces auth for protected and gateway-auth routes", () => {
     const registry = createTestRegistry({
       httpRoutes: [

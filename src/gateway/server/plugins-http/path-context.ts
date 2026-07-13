@@ -27,9 +27,11 @@ function normalizeProtectedPrefix(prefix: string): string {
 
 /** Matches a normalized path against an exact protected prefix boundary. */
 export function prefixMatchPath(pathname: string, prefix: string): boolean {
-  return (
-    pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}%`)
-  );
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function prefixMatchMalformedRawPath(pathname: string, prefix: string): boolean {
+  return prefixMatchPath(pathname, prefix) || pathname.startsWith(`${prefix}%`);
 }
 
 const NORMALIZED_PROTECTED_PLUGIN_ROUTE_PREFIXES =
@@ -50,7 +52,7 @@ export function isProtectedPluginRoutePathFromContext(context: PluginRoutePathCo
     return false;
   }
   return NORMALIZED_PROTECTED_PLUGIN_ROUTE_PREFIXES.some((prefix) =>
-    prefixMatchPath(context.rawNormalizedPath, prefix),
+    prefixMatchMalformedRawPath(context.rawNormalizedPath, prefix),
   );
 }
 
