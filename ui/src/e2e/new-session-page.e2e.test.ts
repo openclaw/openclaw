@@ -662,6 +662,80 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("validates a retained device before enabling submit after reconnect", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "node.list": {
+          nodes: [
+            {
+              nodeId: "old-device",
+              displayName: "Old device",
+              connected: true,
+              commands: ["system.run", "fs.listDir"],
+            },
+          ],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.create": { key: "agent:main:validated-device" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("node.list");
+      const whereSelect = page.locator(
+        ".new-session-page__select:not(.new-session-page__select--folder)",
+      );
+      await whereSelect.locator("summary").click();
+      await page.getByRole("menuitemradio", { name: "Old device" }).click();
+      await page.locator(".new-session-page__message").fill("use a validated device");
+      const start = page.locator("button.chat-send-btn");
+      const nodeRequestsBefore = (await gateway.getRequests("node.list")).length;
+
+      await gateway.setOnline(false);
+      await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+      await gateway.deferNext("node.list");
+      await gateway.setOnline(true);
+      await expect
+        .poll(async () => (await gateway.getRequests("node.list")).length)
+        .toBe(nodeRequestsBefore + 1);
+      await expect.poll(() => start.isDisabled()).toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+      await gateway.resolveDeferred("node.list", { nodes: [] });
+      await expect.poll(() => start.isEnabled()).toBe(true);
+      await start.click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).not.toHaveProperty("execNode");
+      expect(create.params).not.toHaveProperty("cwd");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("rediscovers Gateway-owned draft state when the app replaces its client", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -795,7 +869,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
-  it("releases a pending creation when the app replaces its Gateway client", async () => {
+  it("marks a pending creation outcome unknown when the Gateway client changes", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -858,14 +932,15 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
       await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
       await expect.poll(() => message.inputValue()).toBe("retry this draft on the replacement");
-      await expect.poll(() => start.isEnabled()).toBe(true);
+      await expect.poll(() => message.isEnabled()).toBe(true);
+      await expect.poll(() => start.isDisabled()).toBe(true);
+      await page
+        .getByText(
+          "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
+        )
+        .waitFor();
       expect(new URL(page.url()).searchParams.get("session")).toBeNull();
-
-      await start.click();
-      await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
-        timeout: 30_000,
-      });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
     } finally {
       await context.close();
     }

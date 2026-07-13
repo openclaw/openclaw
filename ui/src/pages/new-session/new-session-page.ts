@@ -52,6 +52,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private execNode = "";
   @state() private message = "";
   @state() private submitting = false;
+  @state() private submissionOutcomeUnknown = false;
   @state() private error: string | null = null;
   @state() private catalogRetrying = false;
   @state() private browserOpen = false;
@@ -64,8 +65,8 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private openedFor: string | null = null;
   private agentsHydrated = false;
-  // Discovery clears during transport retries. Provenance distinguishes user
-  // choices from provisional defaults that must follow refreshed Gateway state.
+  private nodesHydrated = false;
+  // Discovery retry provenance separates user choices from Gateway-derived defaults.
   private agentSelectedByUser = false;
   private folderSelectedByUser = false;
   private submitRequestToken = 0;
@@ -119,6 +120,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private invalidateGatewayDiscovery(resetHostSelection: boolean) {
     this.nodesRequestToken += 1;
+    this.nodesHydrated = false;
     this.branchesRequestToken += 1;
     this.branchesLoading = false;
     this.agentsHydrated = false;
@@ -128,7 +130,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     // A replacement client may target another Gateway. Keep the user's task,
     // but retire every selection and discovery result owned by the old host.
-    this.invalidateSubmission();
+    this.invalidateSubmission(true);
     this.agentId = "";
     this.agentSelectedByUser = false;
     this.folder = "";
@@ -375,6 +377,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private resetDraft() {
     this.invalidateSubmission();
+    this.submissionOutcomeUnknown = false;
     this.agentSelectedByUser = false;
     this.folder = "";
     this.folderSelectedByUser = false;
@@ -393,17 +396,22 @@ class NewSessionPage extends OpenClawLightDomElement {
     });
   }
 
-  private invalidateSubmission() {
+  private invalidateSubmission(outcomeUnknown = false) {
     this.submitRequestToken += 1;
+    if (outcomeUnknown && this.submitting) {
+      this.submissionOutcomeUnknown = true;
+    }
     this.submitting = false;
   }
 
   private async loadNodes() {
     const requestId = ++this.nodesRequestToken;
+    this.nodesHydrated = false;
     const snapshot = this.context?.gateway.snapshot;
     const client = snapshot?.client;
     if (!snapshot?.connected || !client || !this.isAdmin()) {
       this.nodes = [];
+      this.nodesHydrated = true;
       return;
     }
     try {
@@ -413,6 +421,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       }
       const nodes = readDraftNodes(result?.nodes);
       this.nodes = nodes;
+      this.nodesHydrated = true;
       if (this.execNode && !nodes.some((node) => node.nodeId === this.execNode && node.canExec)) {
         // A reconnect can remove a device. Its cwd is not meaningful on the
         // Gateway, so fall back to the selected agent's workspace as one unit.
@@ -427,6 +436,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     } catch {
       if (requestId === this.nodesRequestToken) {
         this.nodes = [];
+        this.nodesHydrated = true;
       }
     }
   }
@@ -491,7 +501,12 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private canSubmit(): boolean {
-    if (this.submitting || !this.message.trim() || !this.context?.gateway.snapshot.connected) {
+    if (
+      this.submitting ||
+      this.submissionOutcomeUnknown ||
+      !this.message.trim() ||
+      !this.context?.gateway.snapshot.connected
+    ) {
       return false;
     }
     // Pre-hydration the selection is a provisional fallback; submitting then
@@ -500,6 +515,12 @@ class NewSessionPage extends OpenClawLightDomElement {
       return false;
     }
     if (!catalog.allowsSelectedAgent(this.data, this.selectedAgent())) {
+      return false;
+    }
+    if (
+      this.execNode &&
+      (!this.nodesHydrated || !this.execNodes().some((node) => node.nodeId === this.execNode))
+    ) {
       return false;
     }
     if (this.usesCustomFolder() && (!this.isAdmin() || (!this.execNode && !this.worktree))) {
@@ -1198,16 +1219,19 @@ class NewSessionPage extends OpenClawLightDomElement {
           ? html`<div class="new-session-page__error">${t("newSession.worktreeNameInvalid")}</div>`
           : nothing}
         ${this.error ? html`<div class="new-session-page__error">${this.error}</div>` : nothing}
+        ${this.submissionOutcomeUnknown
+          ? html`<div class="new-session-page__error">${t("newSession.createOutcomeUnknown")}</div>`
+          : nothing}
         ${renderNewSessionComposer({
           canSubmit: this.canSubmit(),
           message: this.message,
+          requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           submitting: this.submitting,
           onInput: (message) => {
             if (!this.submitting) {
               this.message = message;
             }
           },
-          onKeydown: (event) => this.handleMessageKeydown(event),
           onSubmit: () => void this.submit(),
         })}
       </div>
@@ -1264,24 +1288,6 @@ class NewSessionPage extends OpenClawLightDomElement {
         </div>
       </div>
     `;
-  }
-
-  private handleMessageKeydown(event: KeyboardEvent) {
-    if (this.submitting) {
-      return;
-    }
-    // keyCode 229 mirrors the chat composer's IME guard: some browsers emit
-    // the candidate-confirm Enter with isComposing === false.
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) {
-      return;
-    }
-    // Honor the chat composer's send-shortcut setting so the draft picker
-    // sends exactly like an existing session's composer.
-    const requiresModifier = loadSettings().chatSendShortcut === "modifier-enter";
-    if (!requiresModifier || event.metaKey || event.ctrlKey) {
-      event.preventDefault();
-      void this.submit();
-    }
   }
 }
 

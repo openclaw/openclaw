@@ -484,6 +484,8 @@ export const en: TranslationMap = {
     start: "Start session",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
+    createOutcomeUnknown:
+      "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
     catalogUnavailable: "This session target is unavailable.",
   },
   sessionsView: {

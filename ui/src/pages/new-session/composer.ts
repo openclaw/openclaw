@@ -6,11 +6,27 @@ import { t } from "../../i18n/index.ts";
 type NewSessionComposerOptions = {
   canSubmit: boolean;
   message: string;
+  requiresModifier: boolean;
   submitting: boolean;
   onInput: (message: string) => void;
-  onKeydown: (event: KeyboardEvent) => void;
   onSubmit: () => void;
 };
+
+function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposerOptions) {
+  if (
+    options.submitting ||
+    event.key !== "Enter" ||
+    event.shiftKey ||
+    event.isComposing ||
+    event.keyCode === 229
+  ) {
+    return;
+  }
+  if (!options.requiresModifier || event.metaKey || event.ctrlKey) {
+    event.preventDefault();
+    options.onSubmit();
+  }
+}
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
 export function renderNewSessionComposer(options: NewSessionComposerOptions) {
@@ -26,7 +42,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
             placeholder=${t("newSession.messagePlaceholder")}
             .value=${options.message}
             @input=${(event: Event) => options.onInput((event.target as HTMLTextAreaElement).value)}
-            @keydown=${options.onKeydown}
+            @keydown=${(event: KeyboardEvent) => handleComposerKeydown(event, options)}
           ></textarea>
         </div>
         <div class="agent-chat__composer-actions">
