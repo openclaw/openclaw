@@ -48,8 +48,7 @@ beforeAll(async () => {
     prepareGatewaySuspend,
     resetGatewaySuspendCoordinatorForLifecycleRestart,
     resumeGatewaySuspend,
-  } =
-    await import("../infra/gateway-suspend-coordinator.js"));
+  } = await import("../infra/gateway-suspend-coordinator.js"));
 });
 
 beforeEach(() => {
