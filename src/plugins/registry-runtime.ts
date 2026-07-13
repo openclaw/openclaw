@@ -13,6 +13,11 @@ import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
+import {
+  PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS,
+  PLUGIN_GATEWAY_SESSION_MUTATION_METHODS,
+  resetPluginSessionEntryLifecycle,
+} from "./registry-runtime-session-policy.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
@@ -20,34 +25,6 @@ import {
   withPluginRuntimePluginScope,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
-
-const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
-  "agent",
-  "chat.abort",
-  "chat.inject",
-  "chat.send",
-  "message.action",
-  "plugins.sessionAction",
-  "send",
-  "sessions.abort",
-  "sessions.compact",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
-  "sessions.create",
-  "sessions.delete",
-  "sessions.patch",
-  "sessions.pluginPatch",
-  "sessions.reset",
-  "sessions.send",
-  "sessions.steer",
-  "wake",
-]);
-
-const PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS = new Set([
-  "sessions.cleanup",
-  "sessions.groups.delete",
-  "sessions.groups.rename",
-]);
 
 export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
@@ -611,54 +588,15 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 });
               }),
             resetSessionEntryLifecycle: async (params) =>
-              await runWithPluginScope(async () => {
-                assertStoredSessionEntryOwned({
-                  action: "reset",
-                  sessionKey: params.sessionKey,
-                  ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-                  ...(params.env !== undefined ? { env: params.env } : {}),
-                  ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-                });
-                const resetParams = {
-                  ...params,
-                  releasePhysicalOwner: async (context: {
-                    agentId?: string;
-                    entry: SessionEntry;
-                    reason: "reset";
-                    sessionFile?: string;
-                    sessionId: string;
-                    sessionKey: string;
-                  }) => {
-                    const locked = resolveLockedSessionHarnessRegistration(
-                      context.sessionKey,
-                      context.entry,
-                      "reset",
-                    );
-                    const registration =
-                      locked && "registration" in locked ? locked.registration : undefined;
-                    if (!locked || locked.ownerPluginId !== pluginId || !registration) {
-                      throw new Error(
-                        `Locked session "${context.sessionKey}" is owned by plugin "${locked?.ownerPluginId ?? "unknown"}", not "${pluginId}".`,
-                      );
-                    }
-                    if (!registration.harness.reset) {
-                      throw new Error(
-                        `Agent harness "${locked.harnessId}" must implement reset before locked sessions can be reset.`,
-                      );
-                    }
-                    await registration.harness.reset({
-                      ...(context.agentId !== undefined ? { agentId: context.agentId } : {}),
-                      reason: context.reason,
-                      ...(context.sessionFile !== undefined
-                        ? { sessionFile: context.sessionFile }
-                        : {}),
-                      sessionId: context.sessionId,
-                      sessionKey: context.sessionKey,
-                    });
-                  },
-                };
-                return await session.resetSessionEntryLifecycle(resetParams);
-              }),
+              await runWithPluginScope(() =>
+                resetPluginSessionEntryLifecycle({
+                  assertStoredSessionEntryOwned,
+                  pluginId,
+                  request: params,
+                  reset: session.resetSessionEntryLifecycle,
+                  resolveLockedSessionHarnessRegistration,
+                }),
+              ),
             upsertSessionEntry: async (params) =>
               await runWithPluginScope(async () => {
                 const before = assertStoredSessionEntryOwned({

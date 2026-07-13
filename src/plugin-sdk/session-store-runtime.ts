@@ -1,6 +1,5 @@
 // Narrow session-store helpers for channel hot paths.
 
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -11,7 +10,6 @@ import {
 } from "../config/sessions/ambient-transcript-watermark.js";
 import {
   resolveSessionFilePath as resolveLegacySessionFilePath,
-  resolveSessionFilePathOptions,
   resolveStorePath as resolveSessionStorePath,
 } from "../config/sessions/paths.js";
 import {
@@ -26,8 +24,6 @@ import {
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   replaceSessionEntry,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
-  resetSessionEntryLifecycle as resetAccessorSessionEntryLifecycle,
-  type SessionAccessScope,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -41,11 +37,11 @@ import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/s
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { toSessionAccessScope } from "./session-store-access-scope.js";
 import {
-  interruptSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-} from "../sessions/session-lifecycle-admission.js";
+  resetSessionEntryLifecycleImpl,
+  type ResetSessionEntryLifecycleParams,
+} from "./session-store-lifecycle-runtime.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -103,28 +99,6 @@ type PatchSessionEntryParams = SessionStoreReadParams & {
   update: SessionStoreEntryPatch;
 };
 
-type ResetSessionEntryLifecycleParams = SessionStoreReadParams & {
-  expectedSessionId?: string;
-  expectedUpdatedAt?: number;
-  /** Internal owner hook used by plugin runtime wrappers for locked harness sessions. */
-  releasePhysicalOwner?: (context: {
-    agentId?: string;
-    entry: SessionEntry;
-    reason: "reset";
-    sessionFile?: string;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }) => Promise<void> | void;
-  update: (
-    entry: SessionEntry,
-    context: {
-      nextSessionFile: string;
-      nextSessionId: string;
-    },
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-};
-
 type ReadAmbientTranscriptWatermarkParams = SessionStoreReadParams & {
   key: string;
 };
@@ -162,59 +136,6 @@ type SessionLifecycleArtifactsCleanupResult = {
   archivedTranscriptArtifacts: number;
   removedEntries: number;
 };
-
-class SessionLifecycleResetSkipped extends Error {
-  constructor() {
-    super("session lifecycle reset skipped");
-    this.name = "SessionLifecycleResetSkipped";
-  }
-}
-
-async function rollbackLifecycleResetReservation(params: {
-  expectedReservedRevision: string;
-  originalEntry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): Promise<void> {
-  await patchAccessorSessionEntry(
-    {
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    (currentEntry) => {
-      if (
-        currentEntry.sessionId !== params.originalEntry.sessionId ||
-        currentEntry.lifecycleRevision !== params.expectedReservedRevision
-      ) {
-        throw new Error(
-          `session lifecycle reset reservation changed before rollback: ${params.sessionKey}`,
-        );
-      }
-      return {
-        lifecycleRevision: params.originalEntry.lifecycleRevision,
-      };
-    },
-    {
-      preserveActivity: true,
-      requireWriteSuccess: true,
-    },
-  );
-}
-
-function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScope {
-  // Maintainer note: keep this adapter narrow so plugin callers retain the
-  // object-parameter API while internal accessor-only options stay private.
-  return {
-    sessionKey: params.sessionKey,
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-    ...(params.env !== undefined ? { env: params.env } : {}),
-    ...(params.hydrateSkillPromptRefs !== undefined
-      ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
-      : {}),
-    ...(params.readConsistency !== undefined ? { readConsistency: params.readConsistency } : {}),
-    ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-  };
-}
 
 function resolveLegacySessionStoreTarget(storePath: string): {
   agentId?: string;
@@ -486,190 +407,9 @@ export async function patchSessionEntry(
 export async function resetSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<SessionEntry | null> {
-  const storePath =
-    params.storePath ??
-    resolveSessionStorePath(undefined, {
-      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-      ...(params.env !== undefined ? { env: params.env } : {}),
-    });
-  const snapshot = loadSessionEntry({
-    sessionKey: params.sessionKey,
-    storePath,
-  });
-  const expectedSessionId = params.expectedSessionId ?? snapshot?.sessionId;
-  const expectedUpdatedAt = params.expectedUpdatedAt ?? snapshot?.updatedAt;
-  if (!expectedSessionId) {
-    return null;
-  }
-
-  const identities = [params.sessionKey, expectedSessionId];
-  let skipped = false;
-  let resultEntry: SessionEntry | null = null;
-
-  await runExclusiveSessionLifecycleMutation({
-    scope: storePath,
-    identities,
-    prepare: async () => {
-      const current = loadSessionEntry({
-        sessionKey: params.sessionKey,
-        storePath,
-      });
-      if (
-        !current ||
-        current.sessionId !== expectedSessionId ||
-        (expectedUpdatedAt !== undefined && current.updatedAt !== expectedUpdatedAt)
-      ) {
-        skipped = true;
-        return;
-      }
-      const drained = await interruptSessionWorkAdmissions({
-        scope: storePath,
-        identities,
-        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-      });
-      if (!drained) {
-        throw new Error(
-          `timed out draining work before session lifecycle reset: ${params.sessionKey}`,
-        );
-      }
-    },
-    run: async () => {
-      if (skipped) {
-        return;
-      }
-      const resetReservationRevision = `reset:${randomUUID()}`;
-      let originalEntry: SessionEntry | undefined;
-      let physicalOwnerReleased = false;
-      try {
-        const reserved = await patchAccessorSessionEntry(
-          {
-            sessionKey: params.sessionKey,
-            storePath,
-          },
-          (currentEntry) => {
-            if (
-              currentEntry.sessionId !== expectedSessionId ||
-              (expectedUpdatedAt !== undefined && currentEntry.updatedAt !== expectedUpdatedAt)
-            ) {
-              throw new SessionLifecycleResetSkipped();
-            }
-            originalEntry = structuredClone(currentEntry);
-            return {
-              lifecycleRevision: resetReservationRevision,
-            };
-          },
-          {
-            preserveActivity: true,
-            requireWriteSuccess: true,
-          },
-        );
-        if (!reserved || !originalEntry) {
-          throw new SessionLifecycleResetSkipped();
-        }
-        if (reserved.modelSelectionLocked === true && reserved.agentHarnessId?.trim()) {
-          if (!params.releasePhysicalOwner) {
-            await rollbackLifecycleResetReservation({
-              expectedReservedRevision: resetReservationRevision,
-              originalEntry,
-              sessionKey: params.sessionKey,
-              storePath,
-            });
-            throw new Error(
-              `locked harness-owned session requires physical owner release before lifecycle reset: ${params.sessionKey}`,
-            );
-          }
-          try {
-            await params.releasePhysicalOwner({
-              ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-              entry: structuredClone(originalEntry),
-              reason: "reset",
-              ...(originalEntry.sessionFile ? { sessionFile: originalEntry.sessionFile } : {}),
-              sessionId: expectedSessionId,
-              sessionKey: params.sessionKey,
-              storePath,
-            });
-            physicalOwnerReleased = true;
-          } catch (error) {
-            await rollbackLifecycleResetReservation({
-              expectedReservedRevision: resetReservationRevision,
-              originalEntry,
-              sessionKey: params.sessionKey,
-              storePath,
-            });
-            throw error;
-          }
-        }
-        const result = await resetAccessorSessionEntryLifecycle({
-          ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-          storePath,
-          target: {
-            canonicalKey: params.sessionKey,
-            storeKeys: [params.sessionKey],
-          },
-          buildNextEntry: async ({ currentEntry }) => {
-            if (
-              !currentEntry ||
-              currentEntry.sessionId !== expectedSessionId ||
-              currentEntry.lifecycleRevision !== resetReservationRevision ||
-              (expectedUpdatedAt !== undefined && currentEntry.updatedAt !== expectedUpdatedAt)
-            ) {
-              throw new SessionLifecycleResetSkipped();
-            }
-            const nextSessionId = randomUUID();
-            const nextSessionFile = resolveSessionFilePath(nextSessionId, undefined, {
-              ...resolveSessionFilePathOptions({
-                ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-                storePath,
-              }),
-            });
-            const patch = await params.update(currentEntry, {
-              nextSessionFile,
-              nextSessionId,
-            });
-            if (!patch) {
-              throw new SessionLifecycleResetSkipped();
-            }
-            return {
-              ...patch,
-              lifecycleRevision: undefined,
-              sessionFile: nextSessionFile,
-              sessionId: nextSessionId,
-              updatedAt: patch.updatedAt ?? Date.now(),
-            };
-          },
-        });
-        resultEntry = result.nextEntry;
-      } catch (err) {
-        if (err instanceof SessionLifecycleResetSkipped) {
-          if (physicalOwnerReleased && originalEntry) {
-            await rollbackLifecycleResetReservation({
-              expectedReservedRevision: resetReservationRevision,
-              originalEntry,
-              sessionKey: params.sessionKey,
-              storePath,
-            });
-            throw new Error(
-              `session lifecycle reset skipped after physical owner release: ${params.sessionKey}`,
-              { cause: err },
-            );
-          }
-          skipped = true;
-          return;
-        }
-        if (physicalOwnerReleased && originalEntry) {
-          await rollbackLifecycleResetReservation({
-            expectedReservedRevision: resetReservationRevision,
-            originalEntry,
-            sessionKey: params.sessionKey,
-            storePath,
-          });
-        }
-        throw err;
-      }
-    },
-  });
-
-  return resultEntry;
+  return await resetSessionEntryLifecycleImpl(params, (sessionId, options) =>
+    resolveSessionFilePath(sessionId, undefined, options),
+  );
 }
 
 /** Reads the last activity timestamp for one session entry. */

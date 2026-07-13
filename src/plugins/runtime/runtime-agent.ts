@@ -1,4 +1,3 @@
-// Runtime agent helpers resolve agent-scoped directories and config for plugin execution.
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
@@ -31,7 +30,7 @@ import {
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { resetSessionEntryLifecycle as resetSdkSessionEntryLifecycle } from "../../plugin-sdk/session-store-runtime.js";
+import { resetSessionEntryLifecycle } from "../../plugin-sdk/session-store-runtime.js";
 import {
   beginSessionWorkAdmission,
   isSessionWorkAdmissionActive,
@@ -44,7 +43,6 @@ import type { PluginRuntime } from "./types.js";
 
 type RuntimeSessionStoreReadParams = {
   agentId?: string;
-
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
@@ -80,8 +78,6 @@ type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
     context: { existingEntry?: SessionEntry },
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 };
-
-type RuntimeResetSessionEntryLifecycleParams = Parameters<typeof resetSdkSessionEntryLifecycle>[0];
 
 type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
   entry: SessionEntry;
@@ -135,12 +131,6 @@ async function patchSessionEntry(
     preserveActivity: params.preserveActivity,
     replaceEntry: params.replaceEntry,
   });
-}
-
-async function resetSessionEntryLifecycle(
-  params: RuntimeResetSessionEntryLifecycleParams,
-): Promise<SessionEntry | null> {
-  return await resetSdkSessionEntryLifecycle(params);
 }
 
 async function updateSessionStoreEntry(
