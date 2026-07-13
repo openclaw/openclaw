@@ -507,5 +507,4 @@ describe("exec-command-resolution", () => {
       expect(long.inlineValue).toBe("blocked.txt");
     }
   });
-
 });

@@ -10,10 +10,7 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../../plugin-sdk/windows-spawn.js";
-import {
-  sanitizeEnvVars,
-  sanitizeExplicitSandboxEnvVars,
-} from "./sanitize-env-vars.js";
+import { sanitizeEnvVars, sanitizeExplicitSandboxEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
   allowFailure?: boolean;
