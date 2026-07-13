@@ -10,6 +10,7 @@ import {
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import { loadChatHistory, type ChatMetadataResult, type ChatState } from "./chat-history.ts";
+import * as chatModelCatalog from "./chat-model-catalog.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -153,8 +154,7 @@ function applyChatMetadataResult(
 ): ChatMetadataApplyResult {
   const models = fields.models === false ? undefined : applyModelCatalogResult(result.models);
   if (models) {
-    host.chatModelCatalog = models;
-    host.chatModelCatalogMode = result.catalogMode === "replace" ? "replace" : undefined;
+    chatModelCatalog.applyChatModelCatalog(host, models, result.catalogMode);
   }
   const commandsApplied =
     fields.commands === false
@@ -179,8 +179,7 @@ function ownsChatMetadataRequest(request: ChatMetadataRequest): boolean {
 async function refreshCompatibilityModelCatalog(request: ChatMetadataRequest) {
   const result = await loadModels(request.client, { includeMetadata: true });
   if (ownsChatMetadataRequest(request)) {
-    request.host.chatModelCatalog = result.models;
-    request.host.chatModelCatalogMode = result.catalogMode;
+    chatModelCatalog.applyChatModelCatalog(request.host, result.models, result.catalogMode);
   }
 }
 
@@ -216,10 +215,9 @@ async function refreshMissingChatMetadata(
       ? Promise.resolve()
       : canUseCompatibilityModelCatalog(request.host, request.agentId)
         ? refreshCompatibilityModelCatalog(request)
-          : Promise.resolve().then(() => {
+        : Promise.resolve().then(() => {
             if (ownsChatMetadataRequest(request)) {
-              request.host.chatModelCatalog = [];
-              request.host.chatModelCatalogMode = undefined;
+              chatModelCatalog.clearChatModelCatalog(request.host);
             }
           });
   await Promise.allSettled([commandsRefresh, modelsRefresh]);
@@ -232,8 +230,7 @@ export async function refreshChatMetadata(
   const requestVersion = opts?.requestVersion ?? ++host.chatMetadataRequestVersion;
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    host.chatModelCatalogMode = undefined;
+    chatModelCatalog.clearChatModelCatalog(host);
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   }
   if (host.chatMetadataRequestVersion !== requestVersion) {

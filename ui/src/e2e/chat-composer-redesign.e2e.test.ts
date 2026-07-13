@@ -532,7 +532,7 @@ suite.define(() => {
     });
   });
 
-  it("explains configured-only model results in replace mode", async () => {
+  it("explains model filtering in replace mode", async () => {
     const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
@@ -557,10 +557,10 @@ suite.define(() => {
       const hint = composer.locator(".chat-controls__catalog-hint");
       await expect
         .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
-        .toBe("Replace mode shows only models explicitly listed in Settings. Manage models");
+        .toBe("Replace mode filters models according to your model settings. Manage models");
       await expect
         .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
-        .toBe("/settings/ai-agents");
+        .toBe("/settings/ai-agents?section=models#config-section-models");
     } finally {
       await context.close();
       await browser.close();

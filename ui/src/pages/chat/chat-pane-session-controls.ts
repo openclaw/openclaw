@@ -4,6 +4,7 @@ import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { replaceModeModelSettingsHref } from "./chat-model-catalog.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -59,6 +60,8 @@ export function renderChatPaneComposerControls(params: {
       gatewayAvailable: Boolean(state.client),
       loading: state.chatLoading,
       modelCatalog: state.chatModelCatalog,
+      catalogMode: state.chatModelCatalogMode,
+      modelSettingsHref: replaceModeModelSettingsHref(state.chatModelCatalogMode, state.basePath),
       modelOverrides: state.sessions.state.modelOverrides,
       modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
       modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
