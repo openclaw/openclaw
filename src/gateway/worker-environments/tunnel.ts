@@ -25,7 +25,6 @@ import type {
 } from "./tunnel-contract.js";
 
 export type { WorkerTunnelHandle } from "./tunnel-contract.js";
-
 const READY_MARKER = "OPENCLAW_WORKER_TUNNEL_READY";
 const REMOTE_SOCKET_NAME = "gateway.sock";
 const REMOTE_SETUP_TIMEOUT_MS = 20_000;

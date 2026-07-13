@@ -40,7 +40,6 @@ const MAX_RESTARTS = 10;
 const CHANNEL_STABLE_RUN_MS = RESTART_POLICY.maxMs;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 const CHANNEL_STARTUP_CONCURRENCY = 4;
-
 function waitForChannelStartupHandoff(): Promise<void> {
   return new Promise((resolve) => {
     const handle = setImmediate(resolve);

@@ -171,7 +171,6 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   private get closeTimeoutMs(): number {
     return this.options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
   }
-
   private get connectTimeoutMs(): number {
     return this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   }
