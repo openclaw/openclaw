@@ -66,15 +66,6 @@ export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpd
   emitInternalTranscriptUpdate(nextUpdate);
 }
 
-/** Emits an internal transcript update, including identity-only updates. */
-export function emitInternalSessionTranscriptUpdate(update: InternalSessionTranscriptUpdate): void {
-  const nextUpdate = normalizeSessionTranscriptUpdate(update, { allowIdentityOnly: true });
-  if (!nextUpdate) {
-    return;
-  }
-  emitInternalTranscriptUpdate(nextUpdate);
-}
-
 function normalizeSessionTranscriptUpdate(
   update: InternalSessionTranscriptUpdate,
   options: { allowIdentityOnly: boolean },

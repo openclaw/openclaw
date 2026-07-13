@@ -244,15 +244,6 @@ export async function beginGatewayRootWorkAdmissionWhenOpen(): Promise<GatewayRo
   }
 }
 
-export async function runWithGatewayRootWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
-  const admission = await beginGatewayRootWorkAdmissionWhenOpen();
-  try {
-    return await admission.run(run);
-  } finally {
-    admission.release();
-  }
-}
-
 export async function runWithGatewayIndependentRootWorkAdmission<T>(
   run: () => Promise<T>,
 ): Promise<T> {
