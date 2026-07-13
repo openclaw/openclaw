@@ -467,10 +467,8 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: params.agentId,
     });
-    // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
     let yieldMessage: string | null = null;
-    // Late-binding reference so onYield can abort the session (declared after tool creation)
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
@@ -785,7 +783,6 @@ export async function runEmbeddedAttempt(
       applyAgentAutoCompactionGuard(autoCompactionGuardArgs);
       prepStages.mark("session-resource-loader");
 
-      // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
 
       const {
