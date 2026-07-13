@@ -370,7 +370,7 @@ export async function monitorWebChannel(
               debounceMs: inboundDebounceMs,
               resolveDebounceMs: (msg) =>
                 resolveWhatsAppConversationDebounceMs({
-                  cfg,
+                  cfg: loadCurrentMonitorConfig(),
                   msg,
                   defaultMs: inboundDebounceMs,
                 }),

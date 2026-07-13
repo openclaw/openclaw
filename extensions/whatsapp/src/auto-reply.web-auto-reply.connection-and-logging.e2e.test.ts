@@ -1071,37 +1071,77 @@ describe("web auto-reply connection", () => {
       },
     );
 
-    resetLoadConfigMock();
     const resolveDebounceMs = capture.getLastOptions()?.resolveDebounceMs;
     expect(resolveDebounceMs).toBeTypeOf("function");
-    expect(
-      resolveDebounceMs?.(
-        createTestWebInboundMessage({
-          admission: { conversation: { kind: "direct", id: "+15551234567" } },
-        }),
-      ),
-    ).toBe(0);
-    expect(
-      resolveDebounceMs?.(
-        createTestWebInboundMessage({
-          admission: { conversation: { kind: "direct", id: "+15550001111" } },
-        }),
-      ),
-    ).toBe(750);
-    expect(
-      resolveDebounceMs?.(
-        createTestWebInboundMessage({
-          admission: { conversation: { kind: "group", id: "456@g.us" } },
-        }),
-      ),
-    ).toBe(1200);
-    expect(
-      resolveDebounceMs?.(
-        createTestWebInboundMessage({
-          admission: { conversation: { kind: "group", id: "789@g.us" } },
-        }),
-      ),
-    ).toBe(1500);
+    try {
+      expect(
+        resolveDebounceMs?.(
+          createTestWebInboundMessage({
+            admission: { conversation: { kind: "direct", id: "+15551234567" } },
+          }),
+        ),
+      ).toBe(0);
+      expect(
+        resolveDebounceMs?.(
+          createTestWebInboundMessage({
+            admission: { conversation: { kind: "direct", id: "+15550001111" } },
+          }),
+        ),
+      ).toBe(750);
+      expect(
+        resolveDebounceMs?.(
+          createTestWebInboundMessage({
+            admission: { conversation: { kind: "group", id: "456@g.us" } },
+          }),
+        ),
+      ).toBe(1200);
+      expect(
+        resolveDebounceMs?.(
+          createTestWebInboundMessage({
+            admission: { conversation: { kind: "group", id: "789@g.us" } },
+          }),
+        ),
+      ).toBe(1500);
+
+      setLoadConfigMock({
+        channels: {
+          whatsapp: {
+            debounceMs: 3000,
+            accounts: {
+              work: {
+                authDir: "/tmp/work",
+                direct: {
+                  "*": {
+                    debounceMs: 222,
+                  },
+                },
+                groups: {
+                  "456@g.us": {
+                    debounceMs: 333,
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig);
+      expect(
+        resolveDebounceMs?.(
+          createTestWebInboundMessage({
+            admission: { conversation: { kind: "direct", id: "+15551234567" } },
+          }),
+        ),
+      ).toBe(222);
+      expect(
+        resolveDebounceMs?.(
+          createTestWebInboundMessage({
+            admission: { conversation: { kind: "group", id: "456@g.us" } },
+          }),
+        ),
+      ).toBe(333);
+    } finally {
+      resetLoadConfigMock();
+    }
   });
 
   it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
