@@ -155,6 +155,28 @@ struct BrowserProfileImportModelTests {
         #expect(stub.requests(for: "/system-profile-import/status").count == 2)
     }
 
+    @Test func `automatic offer does not apply after its inline browser closes`() async {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+        let gate = ContinuationBox()
+        var shouldApply = true
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+
+        let request = Task {
+            await model.requestAutomaticOfferIfEligible(while: { shouldApply })
+        }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        shouldApply = false
+        gate.continuation?.resume()
+        #expect(await !request.value)
+        #expect(model.phase == .hidden)
+    }
+
     @Test func `import success records counts and target`() async throws {
         let stub = BrowserImportTransportStub()
         let model = stub.makeModel()

@@ -109,7 +109,7 @@ struct DashboardWindowSmokeTests {
         let controller = DashboardWindowController(
             url: dashboard,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
-            requestBrowserProfileImportOffer: {
+            requestBrowserProfileImportOffer: { _ in
                 requestCount += 1
                 if requestCount == 1 {
                     return await withCheckedContinuation { continuation in
@@ -160,7 +160,7 @@ struct DashboardWindowSmokeTests {
         let controller = DashboardWindowController(
             url: dashboard,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
-            requestBrowserProfileImportOffer: { gate.request() })
+            requestBrowserProfileImportOffer: { _ in gate.request() })
         defer { controller.closeDashboard() }
         let manager = DashboardManager._testMake()
         manager._testSetController(controller)
@@ -184,6 +184,48 @@ struct DashboardWindowSmokeTests {
             await Task.yield()
         }
         #expect(gate.requestCount == 2)
+    }
+
+    @Test func `closing inline browser invalidates an in-flight import offer`() async throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        var requestCount = 0
+        var firstRequestContinuation: CheckedContinuation<Void, Never>?
+        var firstRequestApplied: Bool?
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            requestBrowserProfileImportOffer: { shouldApply in
+                requestCount += 1
+                if requestCount == 1 {
+                    await withCheckedContinuation { continuation in
+                        firstRequestContinuation = continuation
+                    }
+                    firstRequestApplied = shouldApply()
+                    return firstRequestApplied == true
+                }
+                return shouldApply()
+            })
+        defer { controller.closeDashboard() }
+
+        let link = try #require(URL(string: "https://docs.openclaw.ai/"))
+        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        for _ in 0..<200 where firstRequestContinuation == nil {
+            await Task.yield()
+        }
+        #expect(requestCount == 1)
+
+        controller._testCloseLinkBrowser()
+        firstRequestContinuation?.resume()
+        for _ in 0..<200 where firstRequestApplied == nil {
+            await Task.yield()
+        }
+        #expect(firstRequestApplied == false)
+
+        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        for _ in 0..<200 where requestCount == 1 {
+            await Task.yield()
+        }
+        #expect(requestCount == 2)
     }
 
     @Test func `dashboard parses only bounded native link requests`() throws {

@@ -74,7 +74,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var auth: DashboardWindowAuth
     private let updater: UpdaterProviding?
     private var updateBridgeEnabled: Bool
-    private let requestBrowserProfileImportOffer: @MainActor () async -> Bool
+    private let requestBrowserProfileImportOffer:
+        @MainActor (@escaping @MainActor () -> Bool) async -> Bool
     private var canGoBackObservation: NSKeyValueObservation?
     private var canGoForwardObservation: NSKeyValueObservation?
     private var didRequestBrowserProfileImportOffer = false
@@ -87,8 +88,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         auth: DashboardWindowAuth,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
-        requestBrowserProfileImportOffer: @escaping @MainActor () async -> Bool = {
-            await BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible()
+        requestBrowserProfileImportOffer:
+        @escaping @MainActor (@escaping @MainActor () -> Bool) async -> Bool = { shouldApply in
+            await BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible(while: shouldApply)
         })
     {
         let shouldEnableUpdateBridge = updater?.isAvailable == true && updateBridgeEnabled
@@ -341,7 +343,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.browserProfileImportOfferRequestIsInFlight = true
         Task { [weak self] in
             guard let self else { return }
-            let didApply = await self.requestBrowserProfileImportOffer()
+            let didApply = await self.requestBrowserProfileImportOffer { [weak self] in
+                guard let self else { return false }
+                return self.browserProfileImportOfferIsArmed &&
+                    !self.linkBrowserItem.isCollapsed &&
+                    !self.didRequestBrowserProfileImportOffer
+            }
             self.browserProfileImportOfferRequestIsInFlight = false
             let shouldRetry = self.browserProfileImportOfferRetryPending && !didApply
             self.browserProfileImportOfferRetryPending = false

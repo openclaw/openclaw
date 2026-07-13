@@ -123,18 +123,22 @@ final class BrowserProfileImportModel {
     /// visible offer, in-flight import, or result is never clobbered by the
     /// status poll.
     @discardableResult
-    func refreshIfIdle() async -> Bool {
+    func refreshIfIdle(
+        while shouldApply: @escaping @MainActor () -> Bool = { true }) async -> Bool
+    {
         guard !self.dismissedThisSession, case .hidden = self.phase else { return false }
-        return await self.performRefresh(force: false).didApply
+        return await self.performRefresh(force: false, shouldApply: shouldApply).didApply
     }
 
     /// Defers the one-shot automatic offer until the app can actually query
     /// the host-local import endpoint. A remote or pre-onboarding sidebar open
     /// must not consume the first eligible local attempt.
     @discardableResult
-    func requestAutomaticOfferIfEligible() async -> Bool {
-        guard self.isOnboarded(), self.isLocalMode() else { return false }
-        return await self.refreshIfIdle()
+    func requestAutomaticOfferIfEligible(
+        while shouldApply: @escaping @MainActor () -> Bool = { true }) async -> Bool
+    {
+        guard self.isOnboarded(), self.isLocalMode(), shouldApply() else { return false }
+        return await self.refreshIfIdle(while: shouldApply)
     }
 
     /// Force (Settings → Import…) re-offers even after a persisted dismissal
@@ -146,7 +150,11 @@ final class BrowserProfileImportModel {
 
     /// Automatic offers are consumed only after a status response is applied.
     /// Failed or stale startup/reconnect requests stay retryable.
-    private func performRefresh(force: Bool) async -> (outcome: ForceRefreshOutcome, didApply: Bool) {
+    private func performRefresh(
+        force: Bool,
+        shouldApply: @escaping @MainActor () -> Bool = { true }) async
+        -> (outcome: ForceRefreshOutcome, didApply: Bool)
+    {
         guard self.isOnboarded(), self.isLocalMode() else {
             self.setPhase(.hidden)
             return (
@@ -168,7 +176,12 @@ final class BrowserProfileImportModel {
             if force {
                 if case .importing = self.phase { return (.offering, true) }
             } else {
-                guard self.phaseGeneration == generation else { return (.offering, false) }
+                // The sidebar may close while the host-local status request is
+                // in flight. Never surface its automatic offer after that UI
+                // owner has gone away.
+                guard self.phaseGeneration == generation, shouldApply() else {
+                    return (.offering, false)
+                }
             }
             guard Self.shouldOffer(status: status, force: force) else {
                 self.setPhase(.hidden)
