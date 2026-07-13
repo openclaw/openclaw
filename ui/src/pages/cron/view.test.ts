@@ -64,7 +64,6 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     deliveryToSuggestions: [],
     accountSuggestions: [],
     onListTabChange: () => undefined,
-    onShowFailingRuns: () => undefined,
     onDetailTabChange: () => undefined,
     onFormChange: () => undefined,
     onRefresh: () => undefined,
@@ -291,12 +290,14 @@ describe("cron view list pane", () => {
   });
 
   it("shows the global failing count and drills into failing run history", () => {
-    const onShowFailingRuns = vi.fn();
-    const container = renderView({ failingCount: 3, onShowFailingRuns });
+    const onListTabChange = vi.fn();
+    const onRunsFiltersChange = vi.fn();
+    const container = renderView({ failingCount: 3, onListTabChange, onRunsFiltersChange });
     const value = getElement(container, ".cron-stat__value--danger", HTMLSpanElement);
     expect(value.textContent?.trim()).toBe("3");
     getElement(container, '[data-test-id="cron-stat-failing"]', HTMLButtonElement).click();
-    expect(onShowFailingRuns).toHaveBeenCalledTimes(1);
+    expect(onListTabChange).toHaveBeenCalledWith("activity");
+    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] });
 
     const unknown = renderView({ failingCount: null });
     expect(unknown.querySelector(".cron-stat__value--danger")).toBeNull();
