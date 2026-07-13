@@ -2185,6 +2185,23 @@
   min-width: 0;
 }
 
+.list-item__detail-button {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-item__detail-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .list-title {
   font-weight: 500;
 }
