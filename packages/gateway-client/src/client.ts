@@ -1500,9 +1500,11 @@ export class GatewayClient {
     if (!retry) {
       return;
     }
-    void sleepWithAbort(retry.delayMs, retry.signal)
-      .then(() => this.start())
-      .catch(() => {});
+    // Ignore cancelled sleeps only; reconnect start failures must remain observable.
+    void sleepWithAbort(retry.delayMs, retry.signal).then(
+      () => this.start(),
+      () => {},
+    );
   }
 
   private flushPendingErrors(err: Error) {
