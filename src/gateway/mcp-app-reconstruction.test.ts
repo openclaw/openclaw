@@ -25,9 +25,11 @@ vi.mock("../agents/mcp-ui-resource.js", () => ({
 vi.mock("../routing/session-key.js", () => ({
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
 }));
+vi.mock("./session-transcript-readers.js", () => ({
+  visitSessionMessagesAsync: mocks.visitSessionMessagesAsync,
+}));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
-  visitSessionMessagesAsync: mocks.visitSessionMessagesAsync,
 }));
 
 import { restoreMcpAppView } from "./mcp-app-reconstruction.js";
