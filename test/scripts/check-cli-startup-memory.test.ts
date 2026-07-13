@@ -63,6 +63,10 @@ describe("check-cli-startup-memory", () => {
     );
   });
 
+  it("keeps status startup headroom above Linux runner RSS variance", () => {
+    expect(testing.resolveDefaultLimitsMb("linux").statusJson).toBe(425);
+  });
+
   it("keeps invalid startup memory env values from bypassing budgets", () => {
     expect(() =>
       testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {

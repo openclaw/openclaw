@@ -24,6 +24,7 @@ const TARGET_REPO = "/tmp/target-repo";
 const NODE_HOME = "/Users/peter";
 const NODE_PICKED = "/Users/peter/Projects";
 const NODE_UNC = "\\\\server\\share\\repo";
+const EXEC_ONLY_PICKED = "C:\\Users\\peter\\repo";
 
 function installRepositorySwitchGateway(page: Page, sessionKey: string) {
   return installMockGateway(page, {
@@ -520,7 +521,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
-  it("shows Gateway and every node at the browser super-root and browses a capable node", async () => {
+  it("browses capable nodes and accepts manual paths for exec-only nodes", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -651,10 +652,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const oldRoot = roots.getByRole("button", { name: "Old node" });
       expect(await macbookRoot.isEnabled()).toBe(true);
       expect(await macbookRoot.getAttribute("title")).toBeNull();
-      // Disabled rows explain themselves: offline vs. node without browse support.
+      // Offline rows stay disabled; exec-only rows accept a manual path.
       expect(await offlineRoot.isDisabled()).toBe(true);
       expect(await offlineRoot.getAttribute("title")).toBe("Device is offline");
-      expect(await oldRoot.isDisabled()).toBe(true);
+      expect(await oldRoot.isEnabled()).toBe(true);
       expect(await oldRoot.getAttribute("title")).toBe(
         "This device doesn't support folder browsing",
       );
@@ -681,7 +682,8 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe("Agent workspace");
       await expect.poll(() => whereLabel.textContent()).toBe("MacBook");
 
-      // Browse back to the custom folder for the final create assertion.
+      // Browse back to the custom folder, then retarget to the exec-only node
+      // with a manual absolute path for the final create assertion.
       await folderSelect.locator("summary").click();
       await roots.getByRole("button", { name: "MacBook" }).click();
       await roots.getByRole("button", { name: "Projects" }).click();
@@ -690,14 +692,30 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
         .toBe("Projects");
 
+      await folderSelect.locator("summary").click();
+      await roots.getByRole("button", { name: "Old node" }).click();
+      await expect.poll(() => pathInput.inputValue()).toBe("");
+      await pathInput.fill(EXEC_ONLY_PICKED);
+      await pathInput.press("Enter");
+      expect(
+        (await gateway.getRequests("fs.listDir")).filter(
+          (request) => (request.params as { nodeId?: string } | undefined)?.nodeId === "old-node",
+        ),
+      ).toHaveLength(0);
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await expect.poll(() => whereLabel.textContent()).toBe("Old node");
+      await expect
+        .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
+        .toBe("repo");
+
       await page.locator(".new-session-page__message").fill("inspect the remote checkout");
       await page.getByRole("button", { name: "Start session" }).click();
       const createRequest = await gateway.waitForRequest("sessions.create");
       expect(createRequest.params).toMatchObject({
         agentId: "main",
         message: "inspect the remote checkout",
-        execNode: "macbook",
-        cwd: NODE_PICKED,
+        execNode: "old-node",
+        cwd: EXEC_ONLY_PICKED,
       });
       expect(createRequest.params).not.toHaveProperty("worktree");
     } finally {
