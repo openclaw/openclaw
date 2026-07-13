@@ -576,7 +576,8 @@ function createQaSuiteReportNotes(params: {
 }) {
   return [
     ...params.transport.createReportNotes(params),
-    // Crabline 0.1.9 narrows these paths to legacy filename literals.
+    // Crabline narrows requested paths to canonical filenames; completed runs
+    // carry generation paths through this reporting-only selection.
     ...createOpenClawCrablineChannelReportNotes(
       params.channelDriverSelection as OpenClawCrablineChannelDriverSelection | null | undefined,
     ),
