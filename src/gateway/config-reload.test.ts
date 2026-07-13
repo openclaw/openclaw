@@ -120,7 +120,6 @@ describe("diffConfigPaths", () => {
       "plugins.installs.lossless.resolvedAt",
     ]);
   });
-
 });
 
 type WatcherHandler = () => void;
