@@ -67,6 +67,24 @@ type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
 
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
+
+function withSessionResumeCapability(handle: AcpRuntimeHandle): OpenClawRuntimeHandle {
+  const agentCapabilities = (handle as AcpRuntimeHandle & { agentCapabilities?: unknown })
+    .agentCapabilities;
+  if (typeof agentCapabilities !== "object" || agentCapabilities === null) {
+    return handle;
+  }
+  const capabilities = agentCapabilities as {
+    loadSession?: unknown;
+    sessionCapabilities?: { resume?: unknown };
+  };
+  return {
+    ...handle,
+    sessionResumeSupported:
+      capabilities.loadSession === true || capabilities.sessionCapabilities?.resume === true,
+  };
+}
+
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
 const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
 
@@ -1510,7 +1528,8 @@ export class AcpxRuntime implements AcpRuntime {
               }),
             ),
         });
-    return appliedModel ? { ...handle, appliedModel } : handle;
+    const resumableHandle = withSessionResumeCapability(handle);
+    return appliedModel ? { ...resumableHandle, appliedModel } : resumableHandle;
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
