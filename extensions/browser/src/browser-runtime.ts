@@ -75,8 +75,6 @@ export {
   resolveRequestedBrowserProfile,
 } from "./browser/request-policy.js";
 export {
-  acquireTrackedBrowserSessionAccess,
-  claimTrackedBrowserSessionOwner,
   closeTrackedBrowserTabsForSessions,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,

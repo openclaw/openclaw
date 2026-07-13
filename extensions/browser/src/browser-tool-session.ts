@@ -1,21 +1,19 @@
 /** Browser-tool access and run-owner adapters. */
 import type { AnyAgentTool } from "./browser-tool.runtime.js";
 import {
-  acquireTrackedBrowserSessionAccess,
-  claimTrackedBrowserSessionOwner,
   normalizeOptionalString,
   readPositiveIntegerParam,
   readStringValue,
 } from "./browser-tool.runtime.js";
+import {
+  acquireTrackedBrowserSessionAccess,
+  claimTrackedBrowserSessionOwner,
+} from "./browser/session-tab-registry.js";
 
-export type BrowserToolSessionDeps = {
+type BrowserToolSessionDeps = {
   acquireTrackedBrowserSessionAccess: typeof acquireTrackedBrowserSessionAccess;
   claimTrackedBrowserSessionOwner: typeof claimTrackedBrowserSessionOwner;
 };
-export type BrowserToolSessionAccess = BrowserToolSessionDeps["acquireTrackedBrowserSessionAccess"];
-export type BrowserToolSessionOwnerClaim =
-  BrowserToolSessionDeps["claimTrackedBrowserSessionOwner"];
-
 const browserToolSessionDeps: BrowserToolSessionDeps = {
   acquireTrackedBrowserSessionAccess,
   claimTrackedBrowserSessionOwner,
