@@ -4520,6 +4520,9 @@ async function dispatchReplyFromConfigInner(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    // Direct dispatchers queue final payloads synchronously; once-policy state
+    // must settle from the later delivery outcome, not queue admission.
+    const finalPolicySettlements: Promise<void>[] = [];
     const finalDeliveries: Array<{
       outcome: Promise<ReplyDispatchDeliveryOutcome>;
       payload: ReplyPayload;
@@ -4572,20 +4575,44 @@ async function dispatchReplyFromConfigInner(
       }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       attemptedFinalDelivery = true;
-      const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
-      await markOperationalReplyPolicyDelivered(policyResult, finalReply.delivered);
+      let finalReply: Awaited<ReturnType<typeof sendFinalPayload>>;
+      try {
+        finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+      } catch (error) {
+        await markOperationalReplyPolicyDelivered(policyResult, false);
+        throw error;
+      }
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
       if (finalReply.queuedFinal) {
         if (finalReply.dispatcherOutcome) {
+          finalPolicySettlements.push(
+            finalReply.dispatcherOutcome.then(async (outcome) => {
+              await markOperationalReplyPolicyDelivered(policyResult, outcome === "delivered");
+            }),
+          );
           finalDeliveries.push({ outcome: finalReply.dispatcherOutcome, payload: reply });
         } else {
+          await markOperationalReplyPolicyDelivered(policyResult, finalReply.delivered);
           allQueuedFinalsObserved = false;
         }
+      } else {
+        await markOperationalReplyPolicyDelivered(policyResult, finalReply.delivered);
       }
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
       }
+    }
+
+    if (finalPolicySettlements.length > 0) {
+      const settleFinalOperationalPolicies = Promise.all(finalPolicySettlements).catch(
+        (error: unknown) => {
+          logVerbose(
+            `dispatch-from-config: final operational policy settlement failed: ${formatErrorMessage(error)}`,
+          );
+        },
+      );
+      registerReplyDispatcherSettledTask(dispatcher, () => settleFinalOperationalPolicies);
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {

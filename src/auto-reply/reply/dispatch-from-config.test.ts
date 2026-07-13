@@ -12958,6 +12958,59 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(secondDispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("does not consume once policy when direct final delivery fails after queue admission", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s-once-direct-final-failure",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const noticeText = "usage limit reached direct final failure";
+    const cfg = {
+      messages: {
+        operationalReplies: { policy: "once" },
+      },
+    } satisfies OpenClawConfig;
+    const buildNotice = () =>
+      setReplyPayloadMetadata({ text: noticeText }, { deliverDespiteSourceReplySuppression: true });
+    const failedDeliver = vi.fn(async () => {
+      throw new Error("final delivery failed");
+    });
+    const failedDispatcher = createReplyDispatcher({ deliver: failedDeliver });
+
+    const first = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:once-direct-final-failure" }),
+      cfg,
+      dispatcher: failedDispatcher,
+      replyResolver: vi.fn(async () => buildNotice() satisfies ReplyPayload),
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+    await failedDispatcher.waitForIdle();
+
+    expect(first.queuedFinal).toBe(true);
+    expect(failedDeliver).toHaveBeenCalledTimes(1);
+    expect(sessionStoreMocks.currentEntry?.operationalReplyOnceKeys).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.operationalReplyPendingOnceKeys).toBeUndefined();
+
+    const deliveredDispatcher = createReplyDispatcher({ deliver: vi.fn(async () => undefined) });
+    const retry = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:once-direct-final-failure" }),
+      cfg,
+      dispatcher: deliveredDispatcher,
+      replyResolver: vi.fn(async () => buildNotice() satisfies ReplyPayload),
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+    await deliveredDispatcher.waitForIdle();
+
+    expect(retry.queuedFinal).toBe(true);
+    expect(sessionStoreMocks.currentEntry?.operationalReplyOnceKeys).toEqual([expect.any(String)]);
+    expect(sessionStoreMocks.currentEntry?.operationalReplyPendingOnceKeys).toBeUndefined();
+  });
+
   it("keeps pending operational once reservations from shrinking delivered history", async () => {
     setNoAbort();
     const existingKeys = Array.from({ length: 1024 }, (_value, index) => `existing-${index}`);
