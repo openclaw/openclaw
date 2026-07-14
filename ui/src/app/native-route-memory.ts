@@ -7,7 +7,7 @@ import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 // origins, and the degraded path matches pre-route-memory behavior.
 const NATIVE_LAST_ROUTE_KEY = "openclaw.native.lastRoute";
 
-export type StoredNativeRoute = {
+type StoredNativeRoute = {
   routeId: RouteId;
   search: string;
 };
