@@ -2,11 +2,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
-import * as ts from "typescript";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
@@ -16,6 +15,7 @@ import {
   verifyRuntimeLocaleConfig,
 } from "./control-ui-i18n-verify.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
+import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
 import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
@@ -51,27 +51,6 @@ type RunProcessParentSignalState = {
   signal: NodeJS.Signals | null;
 };
 
-type RawCopyFinding = {
-  kind: "html-attribute" | "html-text" | "object-property";
-  line: number;
-  name: string;
-  path: string;
-  text: string;
-};
-
-type RawCopyBaselineEntry = {
-  count: number;
-  kind: RawCopyFinding["kind"];
-  name: string;
-  path: string;
-  text: string;
-};
-
-type RawCopyBaseline = {
-  version: number;
-  entries: RawCopyBaselineEntry[];
-};
-
 const CONTROL_UI_I18N_WORKFLOW = 1;
 const DEFAULT_OPENAI_MODEL = "gpt-5.6-sol";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
@@ -82,15 +61,6 @@ const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const SOURCE_LOCALE = "en";
-const CONTROL_UI_RAW_COPY_SOURCE_DIRS = [
-  path.join(ROOT, "ui", "src", "app"),
-  path.join(ROOT, "ui", "src", "components"),
-  path.join(ROOT, "ui", "src", "lib"),
-  path.join(ROOT, "ui", "src", "pages"),
-] as const;
-const RAW_COPY_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
-const RAW_COPY_BASELINE_VERSION = 1;
-const RAW_COPY_INTERPOLATION_MARKER = "\u0000";
 const MAX_BATCH_ITEMS = 20;
 const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
 const TRANSLATE_MAX_ATTEMPTS = 2;
@@ -501,297 +471,6 @@ function formatDuration(ms: number): string {
 
 function logProgress(message: string) {
   process.stdout.write(`control-ui-i18n: ${message}\n`);
-}
-
-function toRepoPath(filePath: string): string {
-  return path.relative(ROOT, filePath).split(path.sep).join("/");
-}
-
-function normalizeRawCopyText(raw: string): string {
-  return raw
-    .replace(/\\n/g, " ")
-    .replace(/\s+/g, " ")
-    .replace(/&middot;/giu, "·")
-    .trim();
-}
-
-function hasHumanLetters(text: string): boolean {
-  return /\p{L}/u.test(text);
-}
-
-function lineNumberForOffset(source: string, offset: number): number {
-  let line = 1;
-  for (let index = 0; index < offset && index < source.length; index += 1) {
-    if (source.charCodeAt(index) === 10) {
-      line += 1;
-    }
-  }
-  return line;
-}
-
-function parseDoubleQuotedString(raw: string): string {
-  try {
-    return JSON.parse(`"${raw}"`) as string;
-  } catch {
-    return raw;
-  }
-}
-
-function pushRawCopyFinding(
-  findings: RawCopyFinding[],
-  params: Omit<RawCopyFinding, "text"> & { text: string },
-) {
-  const text = normalizeRawCopyText(params.text);
-  if (!text || !hasHumanLetters(text)) {
-    return;
-  }
-  findings.push({
-    ...params,
-    text,
-  });
-}
-
-function pushRawCopySegments(
-  findings: RawCopyFinding[],
-  params: Omit<RawCopyFinding, "text"> & { text: string },
-) {
-  for (const text of params.text.split(RAW_COPY_INTERPOLATION_MARKER)) {
-    pushRawCopyFinding(findings, { ...params, text });
-  }
-}
-
-async function walkControlUiSourceFiles(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    if (entry.name === "test-helpers") {
-      continue;
-    }
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await walkControlUiSourceFiles(fullPath)));
-      continue;
-    }
-    if (!entry.isFile() || !/\.tsx?$/u.test(entry.name)) {
-      continue;
-    }
-    if (/\.(?:test|browser\.test|node\.test)\.tsx?$/u.test(entry.name)) {
-      continue;
-    }
-    files.push(fullPath);
-  }
-  return files;
-}
-
-function collectRawCopyFromSource(params: {
-  filePath: string;
-  source: string;
-  sourceFile: ts.SourceFile;
-}): RawCopyFinding[] {
-  const { filePath, source, sourceFile } = params;
-  const repoPath = toRepoPath(filePath);
-  const findings: RawCopyFinding[] = [];
-  const staticAttrPattern =
-    /\b(aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
-  for (const match of source.matchAll(staticAttrPattern)) {
-    const rawText = match[2];
-    if (!rawText) {
-      continue;
-    }
-    pushRawCopyFinding(findings, {
-      kind: "html-attribute",
-      line: lineNumberForOffset(source, match.index ?? 0),
-      name: match[1] ?? "attribute",
-      path: repoPath,
-      text: parseDoubleQuotedString(rawText),
-    });
-  }
-
-  const propertyPattern =
-    /\b(label|title|subtitle|description|help|placeholder)\s*:\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
-  for (const match of source.matchAll(propertyPattern)) {
-    const rawText = match[2];
-    if (!rawText) {
-      continue;
-    }
-    pushRawCopyFinding(findings, {
-      kind: "object-property",
-      line: lineNumberForOffset(source, match.index ?? 0),
-      name: match[1] ?? "property",
-      path: repoPath,
-      text: parseDoubleQuotedString(rawText),
-    });
-  }
-
-  const attrPattern =
-    /\b(aria-label|placeholder|title)\s*=\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
-  const textPattern = />\s*([^<>{}]*?\p{L}[^<>{}]*?)\s*</gu;
-  const visit = (node: ts.Node) => {
-    if (ts.isTaggedTemplateExpression(node) && node.tag.getText(sourceFile) === "html") {
-      const template = node.template;
-      let logicalText: string;
-      if (ts.isNoSubstitutionTemplateLiteral(template)) {
-        logicalText = template.text;
-      } else {
-        logicalText = [
-          template.head.text,
-          ...template.templateSpans.map((span) => span.literal.text),
-        ].join(RAW_COPY_INTERPOLATION_MARKER);
-      }
-      const line = lineNumberForOffset(source, template.getStart(sourceFile));
-      for (const match of logicalText.matchAll(attrPattern)) {
-        const rawText = match[2];
-        if (rawText?.includes(RAW_COPY_INTERPOLATION_MARKER)) {
-          pushRawCopySegments(findings, {
-            kind: "html-attribute",
-            line,
-            name: match[1] ?? "attribute",
-            path: repoPath,
-            text: parseDoubleQuotedString(rawText),
-          });
-        }
-      }
-      for (const match of logicalText.matchAll(textPattern)) {
-        const rawText = match[1];
-        if (rawText) {
-          pushRawCopySegments(findings, {
-            kind: "html-text",
-            line,
-            name: "text",
-            path: repoPath,
-            text: rawText,
-          });
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-
-  return findings;
-}
-
-async function collectControlUiRawCopyFindings(): Promise<RawCopyFinding[]> {
-  const files = (
-    await Promise.all(CONTROL_UI_RAW_COPY_SOURCE_DIRS.map((dir) => walkControlUiSourceFiles(dir)))
-  ).flat();
-  const findings: RawCopyFinding[] = [];
-  for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
-    const source = await readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-    );
-    findings.push(...collectRawCopyFromSource({ filePath, source, sourceFile }));
-  }
-  return findings;
-}
-
-function summarizeRawCopyFindings(findings: RawCopyFinding[]): RawCopyBaselineEntry[] {
-  const counts = new Map<string, RawCopyBaselineEntry>();
-  for (const finding of findings) {
-    const key = [finding.path, finding.kind, finding.name, finding.text].join("\u0000");
-    const existing = counts.get(key);
-    if (existing) {
-      existing.count += 1;
-      continue;
-    }
-    counts.set(key, {
-      count: 1,
-      kind: finding.kind,
-      name: finding.name,
-      path: finding.path,
-      text: finding.text,
-    });
-  }
-  return [...counts.values()].toSorted(
-    (left, right) =>
-      left.path.localeCompare(right.path) ||
-      left.kind.localeCompare(right.kind) ||
-      left.name.localeCompare(right.name) ||
-      left.text.localeCompare(right.text),
-  );
-}
-
-function formatRawCopyBaseline(entries: RawCopyBaselineEntry[]): string {
-  return `${JSON.stringify(
-    {
-      version: RAW_COPY_BASELINE_VERSION,
-      entries,
-    } satisfies RawCopyBaseline,
-    null,
-    2,
-  )}\n`;
-}
-
-function formatRawCopyBaselineDiff(
-  current: RawCopyBaselineEntry[],
-  expected: RawCopyBaselineEntry[],
-) {
-  const keyFor = (entry: RawCopyBaselineEntry) =>
-    [entry.path, entry.kind, entry.name, entry.text].join("\u0000");
-  const currentByKey = new Map(current.map((entry) => [keyFor(entry), entry]));
-  const expectedByKey = new Map(expected.map((entry) => [keyFor(entry), entry]));
-  const added = current.filter((entry) => {
-    const expectedEntry = expectedByKey.get(keyFor(entry));
-    return !expectedEntry || expectedEntry.count !== entry.count;
-  });
-  const removed = expected.filter((entry) => {
-    const currentEntry = currentByKey.get(keyFor(entry));
-    return !currentEntry || currentEntry.count !== entry.count;
-  });
-  const lines: string[] = [];
-  for (const entry of added.slice(0, 20)) {
-    lines.push(
-      `+ ${entry.path} ${entry.kind}:${entry.name} x${entry.count} ${JSON.stringify(entry.text)}`,
-    );
-  }
-  for (const entry of removed.slice(0, 20)) {
-    lines.push(
-      `- ${entry.path} ${entry.kind}:${entry.name} x${entry.count} ${JSON.stringify(entry.text)}`,
-    );
-  }
-  const extra = added.length + removed.length - lines.length;
-  if (extra > 0) {
-    lines.push(`... ${extra} more baseline delta(s)`);
-  }
-  return lines.join("\n");
-}
-
-async function syncControlUiRawCopyBaseline(options: { checkOnly: boolean; write: boolean }) {
-  const findings = await collectControlUiRawCopyFindings();
-  const entries = summarizeRawCopyFindings(findings);
-  const expected = formatRawCopyBaseline(entries);
-  const current = existsSync(RAW_COPY_BASELINE_PATH)
-    ? await readFile(RAW_COPY_BASELINE_PATH, "utf8")
-    : "";
-  if (!options.checkOnly && options.write && current !== expected) {
-    await mkdir(I18N_ASSETS_DIR, { recursive: true });
-    await writeFile(RAW_COPY_BASELINE_PATH, expected, "utf8");
-  }
-  if (options.checkOnly && current !== expected) {
-    let currentEntries: RawCopyBaselineEntry[];
-    try {
-      const parsed = JSON.parse(current) as Partial<RawCopyBaseline>;
-      currentEntries = Array.isArray(parsed.entries) ? parsed.entries : [];
-    } catch {
-      currentEntries = [];
-    }
-    const diff = formatRawCopyBaselineDiff(entries, currentEntries);
-    throw new Error(
-      [
-        "control-ui raw-copy baseline drift detected.",
-        diff,
-        "Move user-facing strings into ui/src/i18n/locales/en.ts, or update the baseline with `node --import tsx scripts/control-ui-i18n.ts sync --write` when the raw string is intentional.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-  }
-  logProgress(`raw-copy: baseline entries=${entries.length}`);
 }
 
 function isPromptTimeoutError(error: Error): boolean {
