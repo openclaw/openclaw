@@ -333,6 +333,31 @@ describe("googleChatApprovalCapability", () => {
     ).toBe(true);
   });
 
+  it("suppresses the local plugin prompt when a Google Chat native route is active", () => {
+    expect(
+      shouldSuppressLocalGoogleChatExecApprovalPrompt({
+        cfg: {
+          approvals: { plugin: { enabled: true } },
+          channels: { googlechat: GOOGLE_CHAT_APPROVAL_ACCOUNT },
+        },
+        payload: {
+          channelData: {
+            execApproval: {
+              approvalId: "plugin:12345678-1234-1234-1234-123456789012",
+              approvalSlug: "plugin:12345678",
+              approvalKind: "plugin",
+            },
+          },
+        },
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "plugin",
+          nativeRouteActive: true,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("keeps the local exec prompt when native Google Chat delivery cannot own it", () => {
     expect(
       shouldSuppressLocalGoogleChatExecApprovalPrompt({

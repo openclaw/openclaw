@@ -12,8 +12,9 @@ const approvalId = "12345678-1234-1234-1234-123456789012";
 type TestExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 let tokenCounter = 0;
 
-function registerExecApprovalCard(overrides?: {
+function registerApprovalCard(overrides?: {
   approvalId?: string;
+  approvalKind?: "exec" | "plugin";
   expiresAtMs?: number;
   allowedDecisions?: readonly TestExecApprovalDecision[];
 }): void {
@@ -21,7 +22,7 @@ function registerExecApprovalCard(overrides?: {
     token: `token-${tokenCounter++}`,
     accountId: "default",
     approvalId: overrides?.approvalId ?? approvalId,
-    approvalKind: "exec",
+    approvalKind: overrides?.approvalKind ?? "exec",
     decision: "allow-once",
     allowedDecisions: overrides?.allowedDecisions ?? ["allow-once", "deny"],
     spaceName: "spaces/AAA",
@@ -37,7 +38,7 @@ describe("Google Chat approval card action registry", () => {
   });
 
   it("suppresses manual exec approval follow-up text for an active native card", () => {
-    registerExecApprovalCard();
+    registerApprovalCard();
 
     expect(
       shouldSuppressGoogleChatManualExecApprovalFollowupText(
@@ -66,8 +67,35 @@ describe("Google Chat approval card action registry", () => {
     ).toBe(true);
   });
 
+  it("suppresses manual plugin approval follow-up text for native delivery", () => {
+    const pluginApprovalId = "plugin:12345678-1234-1234-1234-123456789012";
+
+    registerApprovalCard({
+      approvalId: pluginApprovalId,
+      approvalKind: "plugin",
+    });
+    expect(
+      shouldSuppressGoogleChatManualExecApprovalFollowupText(
+        `Run this if needed: \`/approve ${pluginApprovalId} deny\``,
+      ),
+    ).toBe(true);
+
+    clearGoogleChatApprovalCardBindingsForTest();
+    registerGoogleChatManualApprovalFollowupSuppression({
+      approvalId: pluginApprovalId,
+      approvalKind: "plugin",
+      allowedDecisions: ["allow-once", "deny"],
+      expiresAtMs: Date.now() + 60_000,
+    });
+    expect(
+      shouldSuppressGoogleChatManualExecApprovalFollowupText(
+        `Please reply with:\n/approve ${pluginApprovalId} allow-once`,
+      ),
+    ).toBe(true);
+  });
+
   it("keeps unrelated, expired, and non-sendable approval text visible", () => {
-    registerExecApprovalCard({ expiresAtMs: Date.now() - 1 });
+    registerApprovalCard({ expiresAtMs: Date.now() - 1 });
     expect(
       shouldSuppressGoogleChatManualExecApprovalFollowupText(
         `/approve ${approvalId.slice(0, 8)} allow-once`,
@@ -75,7 +103,7 @@ describe("Google Chat approval card action registry", () => {
     ).toBe(false);
 
     clearGoogleChatApprovalCardBindingsForTest();
-    registerExecApprovalCard();
+    registerApprovalCard();
     expect(
       shouldSuppressGoogleChatManualExecApprovalFollowupText("/approve deadbeef allow-once"),
     ).toBe(false);
@@ -85,7 +113,7 @@ describe("Google Chat approval card action registry", () => {
   });
 
   it("suppresses only text-only manual approval follow-up payloads", () => {
-    registerExecApprovalCard();
+    registerApprovalCard();
 
     expect(
       shouldSuppressGoogleChatManualExecApprovalFollowupPayload({

@@ -80,9 +80,9 @@ describe("googlechatPlugin config adapter", () => {
     );
   });
 
-  it("wires native exec approval suppression through the outbound adapter", () => {
+  it("wires native approval suppression through the outbound adapter", () => {
     const cfg = {
-      approvals: { exec: { enabled: true } },
+      approvals: { exec: { enabled: true }, plugin: { enabled: true } },
       channels: {
         googlechat: {
           serviceAccount: {
@@ -119,6 +119,28 @@ describe("googlechatPlugin config adapter", () => {
         cfg,
         payload,
         hint,
+      }),
+    ).toBe(true);
+
+    expect(
+      googlechatPlugin.outbound?.shouldSuppressLocalPayloadPrompt?.({
+        cfg,
+        payload: {
+          channelData: {
+            execApproval: {
+              approvalId: "plugin:12345678-1234-1234-1234-123456789012",
+              approvalSlug: "plugin:12345678",
+              approvalKind: "plugin",
+              agentId: "dev",
+              sessionKey: "agent:dev:main",
+            },
+          },
+        },
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "plugin",
+          nativeRouteActive: true,
+        },
       }),
     ).toBe(true);
   });
