@@ -1978,9 +1978,20 @@ export class AgentSession {
       return { status: "skipped" };
     }
 
+    const hasBeforeCompactHandler =
+      this.currentExtensionRunner.hasHandlers("session_before_compact");
+    const nothingToSummarize =
+      preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0;
+    if (nothingToSummarize && !hasBeforeCompactHandler) {
+      if (isManual) {
+        throw new Error("Nothing to compact (session too small)");
+      }
+      return { status: "skipped" };
+    }
+
     let compactionResult: CompactionResult | undefined;
     let fromExtension = false;
-    if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
+    if (hasBeforeCompactHandler) {
       const extensionResult = await this.currentExtensionRunner.emit({
         type: "session_before_compact",
         preparation,
