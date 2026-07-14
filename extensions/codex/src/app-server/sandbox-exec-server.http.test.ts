@@ -99,10 +99,10 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     socket.close();
   });
 
-  it("surfaces a typed error when the sandbox helper returns non-JSON stdout", async () => {
+  it("sanitizes the error when the sandbox helper returns non-JSON stdout", async () => {
     // Helper exits 0 but prints non-JSON (daemon banner, debug log, truncated
-    // output). Without the guard this throws a raw SyntaxError out of the
-    // JSON-RPC handler; the guard wraps it into an attributable error.
+    // output). Without the guard the JSON-RPC error exposes the raw stdout
+    // through the SyntaxError message.
     const runShellCommand = vi.fn(async () => ({
       stdout: Buffer.from("not-json <html>daemon warning</html>"),
       stderr: Buffer.alloc(0),
@@ -118,15 +118,18 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
-    await expect(
-      rpc(socket, "http/request", {
-        requestId: "http-1",
-        method: "POST",
-        url: "https://example.test/mcp",
-        headers: [],
-        bodyBase64: "",
-      }),
-    ).rejects.toThrow(/non-JSON stdout/i);
+    const requestError = await rpc(socket, "http/request", {
+      requestId: "http-1",
+      method: "POST",
+      url: "https://example.test/mcp",
+      headers: [],
+      bodyBase64: "",
+    }).catch((error: unknown) => error);
+    if (!(requestError instanceof Error)) {
+      throw new Error("expected sandbox http/request to reject");
+    }
+    expect(requestError.message).toBe("sandbox http/request returned non-JSON stdout");
+    expect(requestError.message).not.toContain("daemon warning");
     socket.close();
   });
 

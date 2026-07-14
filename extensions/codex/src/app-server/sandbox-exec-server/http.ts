@@ -91,8 +91,8 @@ async function runSandboxHttpRequest(
   }
   // The sandbox shell helper can emit non-JSON stdout (startup banner, debug
   // log interleaved with the response, or stdout truncated by maxBuffer). A raw
-  // SyntaxError here would surface as an opaque JSON-RPC error; wrap it into a
-  // typed, attributable error. The message is kept generic on purpose: the
+  // SyntaxError here would surface as an opaque JSON-RPC error; wrap it into an
+  // attributable error. The message is kept generic on purpose: the
   // SyntaxError embeds a snippet of the raw stdout which is surfaced before
   // session visibility filtering and could leak content via formatErrorMessage.
   let parsed: { status?: unknown; headers?: unknown; bodyBase64?: unknown };
