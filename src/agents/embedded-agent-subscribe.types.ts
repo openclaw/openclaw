@@ -22,11 +22,7 @@ import type {
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
-export type {
-  BlockReplyChunking,
-  ToolProgressDetailMode,
-  ToolResultFormat,
-} from "./embedded-agent-subscribe.shared-types.js";
+export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types.js";
 
 type ReasoningStreamPayload = Pick<
   ReplyPayload,
@@ -54,6 +50,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Attempt-owned delivery proof for message-tool-only source replies. */
   hasDeliveredMessageToolOnlySourceReply?: () => boolean;
+  /** Reports source delivery observed through bridged tool lifecycle events. */
+  onDeliveredMessageToolOnlySourceReply?: () => void;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;

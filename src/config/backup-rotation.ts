@@ -20,10 +20,7 @@ interface BackupMaintenanceFs extends BackupRotationFs {
  * Missing slots are ignored so interrupted writes or first-run configs do not
  * block the next config write.
  */
-export async function rotateConfigBackups(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+async function rotateConfigBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (CONFIG_BACKUP_COUNT <= 1) {
     return;
   }
@@ -48,10 +45,7 @@ export async function rotateConfigBackups(
  * Backups are copied on mixed filesystems, so copy mode preservation is not a
  * portable security guarantee.
  */
-export async function hardenBackupPermissions(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+async function hardenBackupPermissions(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (!ioFs.chmod) {
     return;
   }
@@ -67,10 +61,7 @@ export async function hardenBackupPermissions(
 }
 
 /** Prunes stale `.bak.*` files that are outside the managed numbered ring. */
-export async function cleanOrphanBackups(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+async function cleanOrphanBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (!ioFs.readdir) {
     return;
   }

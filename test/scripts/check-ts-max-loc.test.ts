@@ -108,6 +108,7 @@ describe("scripts/check-ts-max-loc", () => {
     expect(isProductionTypeScriptFile("src/acme-test-support/runner.ts")).toBe(false);
     expect(isProductionTypeScriptFile("src/test-helper-runtime.ts")).toBe(false);
     expect(isProductionTypeScriptFile("src/state/openclaw-state-schema.generated.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/state/openclaw-state-db.generated.d.ts")).toBe(false);
     expect(isProductionTypeScriptFile("src/generated/runtime.ts")).toBe(false);
     expect(isProductionTypeScriptFile("src/regenerated-runtime.ts")).toBe(true);
     expect(isProductionTypeScriptFile("extensions/voice-call/src/providers/mock.ts")).toBe(true);

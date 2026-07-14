@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
-  resetGatewaySuspendCoordinatorForTest,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -1791,7 +1791,7 @@ describe("gateway agent handler", () => {
 
   it("recovers a continuation release after reporting a durable write failure", async () => {
     vi.useFakeTimers();
-    resetGatewaySuspendCoordinatorForTest();
+    resetGatewaySuspendCoordinatorForLifecycleRestart();
     resetGatewayWorkAdmission();
     try {
       mocks.agentCommand.mockClear();
@@ -1887,7 +1887,7 @@ describe("gateway agent handler", () => {
       );
       expect(mocks.agentCommand).toHaveBeenCalledOnce();
     } finally {
-      resetGatewaySuspendCoordinatorForTest();
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetGatewayWorkAdmission();
       vi.useRealTimers();
     }
@@ -1895,7 +1895,7 @@ describe("gateway agent handler", () => {
 
   it("releases suspension admission after continuation recovery exhausts", async () => {
     vi.useFakeTimers();
-    resetGatewaySuspendCoordinatorForTest();
+    resetGatewaySuspendCoordinatorForLifecycleRestart();
     resetGatewayWorkAdmission();
     try {
       const { sessionKey, store } = setupCronContinuationReleaseFixture();
@@ -1963,7 +1963,7 @@ describe("gateway agent handler", () => {
         status: "running",
       });
     } finally {
-      resetGatewaySuspendCoordinatorForTest();
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetGatewayWorkAdmission();
       vi.useRealTimers();
     }

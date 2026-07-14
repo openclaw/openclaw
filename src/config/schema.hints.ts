@@ -111,14 +111,12 @@ function isKernelOwnedChannelHintPath(path: string): boolean {
 }
 
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
-export function isPluginOwnedChannelHintPath(path: string): boolean {
+function isPluginOwnedChannelHintPath(path: string): boolean {
   if (!path.startsWith(CHANNEL_NAMESPACE_PREFIX)) {
     return false;
   }
   return !isKernelOwnedChannelHintPath(path);
 }
-
-export { isSensitiveConfigPath };
 
 /** Build core config UI hints while leaving plugin-owned channel hints to plugin schemas. */
 export function buildBaseHints(): ConfigUiHints {
@@ -330,4 +328,3 @@ export const testApi = {
   collectMatchingSchemaPaths,
   mapSensitivePaths,
 };
-export { testApi as __test__ };
