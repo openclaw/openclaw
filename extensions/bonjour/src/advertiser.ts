@@ -4,8 +4,10 @@ import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
-import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
+import { classifyCiaoProcessError } from "./ciao.js";
 import { formatBonjourError } from "./errors.js";
+
+type CiaoProcessErrorClassification = NonNullable<ReturnType<typeof classifyCiaoProcessError>>;
 
 type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
