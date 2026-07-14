@@ -42,7 +42,7 @@ async function invokeWebhookServerRequest(params: {
     let status = 0;
     const res = {
       headersSent: false,
-      writeHead(code: number) {
+      writeHead(this: { headersSent: boolean }, code: number) {
         status = code;
         this.headersSent = true;
         return this;
