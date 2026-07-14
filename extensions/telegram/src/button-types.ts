@@ -10,6 +10,7 @@ import {
   type MessagePresentation,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   buildTelegramApprovalCallbackData,
   hasTelegramApprovalCallbackPrefix,
@@ -34,6 +35,7 @@ type TelegramInlineButton = {
 export type TelegramInlineButtons = ReadonlyArray<ReadonlyArray<TelegramInlineButton>>;
 
 const TELEGRAM_INTERACTIVE_ROW_SIZE = 3;
+const diagLogger = createSubsystemLogger("telegram/diagnostic");
 
 function toTelegramButtonStyle(
   style?: MessagePresentationButton["style"],
@@ -131,14 +133,17 @@ export function buildTelegramPresentationButtons(
   presentation?: MessagePresentation,
 ): TelegramInlineButtons | undefined {
   const rows: TelegramInlineButton[][] = [];
+  let inputCount = 0;
   for (const block of presentation?.blocks ?? []) {
     if (!isMessagePresentationInteractiveBlock(block)) {
       continue;
     }
     if (block.type === "buttons") {
+      inputCount += block.buttons.length;
       chunkInteractiveButtons(block.buttons, rows);
       continue;
     }
+    inputCount += block.options.length;
     chunkInteractiveButtons(
       block.options.map((option) => ({
         label: option.label,
@@ -146,6 +151,14 @@ export function buildTelegramPresentationButtons(
         value: option.value,
       })),
       rows,
+    );
+  }
+  const outputCount = rows.reduce((sum, row) => sum + row.length, 0);
+  const dropped = inputCount - outputCount;
+  if (dropped > 0) {
+    diagLogger.warn(
+      `telegram inline keyboard: ${dropped} of ${inputCount} button(s) dropped — callback_data likely exceeds Telegram 64-byte limit.` +
+        (outputCount === 0 ? " Message delivered as text-only." : ""),
     );
   }
   return rows.length > 0 ? rows : undefined;
