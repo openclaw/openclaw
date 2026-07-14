@@ -14,10 +14,17 @@ import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from ".
 const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
 
 const taskStatusMocks = vi.hoisted(() => ({ hasPendingGeneratedMediaTask: vi.fn() }));
+const diagMocks = vi.hoisted(() => ({ emitTrustedDiagnosticEvent: vi.fn() }));
 
 vi.mock("../tasks/task-status-access.js", () => ({
   hasPendingGeneratedMediaTaskForSessionKey: taskStatusMocks.hasPendingGeneratedMediaTask,
 }));
+vi.mock("../infra/diagnostic-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/diagnostic-events.js")>(
+    "../infra/diagnostic-events.js",
+  );
+  return { ...actual, emitTrustedDiagnosticEvent: diagMocks.emitTrustedDiagnosticEvent };
+});
 
 function createTestLogger(): Logger {
   return {
@@ -100,6 +107,7 @@ describe("sweepCronRunSessions", () => {
   beforeEach(async () => {
     resetReaperThrottle();
     taskStatusMocks.hasPendingGeneratedMediaTask.mockReset().mockReturnValue(false);
+    diagMocks.emitTrustedDiagnosticEvent.mockReset();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
@@ -450,5 +458,55 @@ describe("sweepCronRunSessions", () => {
     } finally {
       listSpy.mockRestore();
     }
+  });
+
+  it("emits a trusted diagnostic event when sessions are pruned", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:cron:job1": {
+        sessionId: "base-session",
+        updatedAt: now,
+      },
+      "agent:main:cron:job1:run:old-run": {
+        sessionId: "old-run",
+        updatedAt: now - 25 * 3_600_000,
+      },
+    };
+    await seedSessionEntries(storePath, store);
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(1);
+    expect(diagMocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
+    expect(diagMocks.emitTrustedDiagnosticEvent).toHaveBeenCalledWith({
+      type: "session.maintenance.pruned",
+      pruned: 1,
+    });
+  });
+
+  it("does not emit a diagnostic event when no sessions are pruned", async () => {
+    diagMocks.emitTrustedDiagnosticEvent.mockReset();
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:cron:job1:run:recent-run": {
+        sessionId: "recent-run",
+        updatedAt: now - 1 * 3_600_000,
+      },
+    };
+    await seedSessionEntries(storePath, store);
+
+    await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(diagMocks.emitTrustedDiagnosticEvent).not.toHaveBeenCalled();
   });
 });

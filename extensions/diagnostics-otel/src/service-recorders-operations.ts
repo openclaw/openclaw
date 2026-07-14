@@ -24,6 +24,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     sessionRecoveryRequestedCounter,
     sessionRecoveryCompletedCounter,
     sessionRecoveryAgeHistogram,
+    sessionMaintenancePrunedCounter,
     talkEventCounter,
     talkEventDurationHistogram,
     talkAudioBytesHistogram,
@@ -132,6 +133,17 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     }
     sessionRecoveryCompletedCounter.add(1, attrs);
     sessionRecoveryAgeHistogram.record(evt.ageMs, attrs);
+  };
+
+  const recordSessionMaintenancePruned = (
+    evt: Extract<DiagnosticEventPayload, { type: "session.maintenance.pruned" }>,
+    metadata: DiagnosticEventMetadata,
+  ) => {
+    if (!metadata.trusted) {
+      return;
+    }
+    const attrs: Record<string, string> = {};
+    sessionMaintenancePrunedCounter.add(evt.pruned, attrs);
   };
 
   const talkEventAttrs = (evt: TalkDiagnosticEvent): Record<string, string> => ({
@@ -340,6 +352,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     recordSessionStuck,
     recordSessionRecoveryRequested,
     recordSessionRecoveryCompleted,
+    recordSessionMaintenancePruned,
     recordTalkEvent,
     recordRunAttempt,
     recordToolLoop,

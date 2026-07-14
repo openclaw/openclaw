@@ -376,6 +376,12 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   queued: number;
 };
 
+/** Emitted after a successful session reaper sweep that pruned cron run sessions. */
+export type DiagnosticSessionMaintenancePrunedEvent = DiagnosticBaseEvent & {
+  type: "session.maintenance.pruned";
+  pruned: number;
+};
+
 export type DiagnosticLivenessWarningReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
 
 export type DiagnosticPhaseDetails = Record<string, string | number | boolean>;
@@ -772,6 +778,7 @@ export type DiagnosticEventPayload =
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
   | DiagnosticHeartbeatEvent
+  | DiagnosticSessionMaintenancePrunedEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent
   | DiagnosticToolLoopEvent

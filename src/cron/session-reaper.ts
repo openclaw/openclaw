@@ -7,6 +7,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
+import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../tasks/task-status-access.js";
@@ -142,6 +143,10 @@ export async function sweepCronRunSessions(params: {
       { pruned, retentionMs },
       `cron-reaper: pruned ${pruned} expired cron run session(s)`,
     );
+    emitTrustedDiagnosticEvent({
+      type: "session.maintenance.pruned",
+      pruned,
+    });
   }
 
   return { swept: true, pruned };

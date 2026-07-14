@@ -254,6 +254,7 @@ bus.
 - `openclaw.session.recovery.requested` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.completed` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.status`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.age_ms` (histogram, attrs: same as the matching recovery counter)
+- `openclaw.session.maintenance.pruned` (counter, no attrs; pruned rows per successful reaper sweep)
 - `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
 
 ### Session liveness telemetry

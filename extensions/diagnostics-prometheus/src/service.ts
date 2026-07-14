@@ -787,6 +787,14 @@ function recordDiagnosticEvent(
         seconds(evt.ageMs),
       );
       return;
+    case "session.maintenance.pruned":
+      store.counter(
+        "openclaw_session_maintenance_pruned_total",
+        "Cron run sessions pruned by the session reaper.",
+        {},
+        evt.pruned,
+      );
+      return;
     case "queue.lane.enqueue":
     case "queue.lane.dequeue":
       store.gauge(
