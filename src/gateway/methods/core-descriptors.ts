@@ -160,6 +160,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "skills.curator.restore", scope: "operator.admin" },
   { name: "skills.proposals.list", scope: "operator.read" },
   { name: "skills.proposals.inspect", scope: "operator.read" },
+  { name: "skills.proposals.historyStatus", scope: "operator.read" },
+  { name: "skills.proposals.historyScan", scope: "operator.admin" },
   { name: "skills.proposals.create", scope: "operator.admin" },
   { name: "skills.proposals.update", scope: "operator.admin" },
   { name: "skills.proposals.revise", scope: "operator.admin" },
@@ -345,6 +347,16 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "approval.get", scope: "operator.approvals" },
   { name: "approval.resolve", scope: "operator.approvals" },
   { name: "sessions.search", scope: "operator.read" },
+  {
+    name: "sessions.dispatch",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
+  { name: "models.probe", scope: "operator.admin" },
+  // Memory migration reads host assistant state and writes agent workspaces.
+  { name: "migrations.memory.plan", scope: "operator.admin" },
+  { name: "migrations.memory.apply", scope: "operator.admin", controlPlaneWrite: true },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

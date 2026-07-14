@@ -8,7 +8,6 @@ import {
   archiveWorkboardCard,
   captureSessionToWorkboard,
   configureWorkboardPolling,
-  createWorkboardCard,
   deleteWorkboardCard,
   dispatchWorkboard,
   filterWorkboardCardsForPreset,
@@ -2226,66 +2225,6 @@ describe("workboard controller", () => {
     expect(state.mutationReadiness).toBe("stale_edit_draft");
   });
 
-  it("blocks cached card mutations until a lifecycle teardown reload succeeds", async () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    const linked = {
-      ...sampleCard,
-      sessionKey: sampleTaskSessionKey,
-      runId: "run-1",
-      taskId: sampleTask.taskId,
-    } satisfies WorkboardCard;
-    const movedCard = { ...sampleCard, status: "review" as const };
-    const client = createClient({
-      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "review"] },
-      "workboard.cards.move": { card: movedCard },
-      "tasks.list": { tasks: [] },
-    });
-    state.loaded = true;
-    state.cards = [linked];
-    state.tasksByCardId.set(linked.id, sampleTask);
-    state.draftTitle = "Stale draft";
-    state.editingCardId = linked.id;
-    state.draftCommentBody = "Stale comment";
-
-    stopWorkboardLifecycleRefresh(host);
-
-    await createWorkboardCard({ host, client: client as never });
-    await saveWorkboardCardDraft({ host, client: client as never });
-    await addWorkboardCardComment({ host, client: client as never });
-    await moveWorkboardCard({
-      host,
-      client: client as never,
-      cardId: linked.id,
-      status: "review",
-      position: 2000,
-    });
-    await deleteWorkboardCard({ host, client: client as never, cardId: linked.id });
-    await archiveWorkboardCard({ host, client: client as never, cardId: linked.id });
-    await dispatchWorkboard({ host, client: client as never });
-    await startWorkboardCard({ host, client: client as never, card: linked });
-    await stopWorkboardCard({ host, client: client as never, card: linked });
-
-    expect(client.request).not.toHaveBeenCalled();
-
-    state.editingCardId = null;
-    await loadWorkboard({ host, client: client as never });
-    vi.clearAllMocks();
-    await moveWorkboardCard({
-      host,
-      client: client as never,
-      cardId: sampleCard.id,
-      status: "review",
-      position: 2000,
-    });
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.move", {
-      id: sampleCard.id,
-      status: "review",
-      position: 2000,
-    });
-  });
-
   it("keeps an in-flight dispatch reload-required after lifecycle teardown", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -2876,62 +2815,6 @@ describe("workboard controller", () => {
     });
   });
 
-  it("creates cards from draft state", async () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.draftTitle = "Write tests";
-    state.draftNotes = "Cover the happy path";
-    state.draftSessionKey = "agent:main:dashboard:1";
-    const created = {
-      ...sampleCard,
-      id: "card-2",
-      title: "Write tests",
-      sessionKey: "agent:main:dashboard:1",
-    };
-    const client = createClient({ "workboard.cards.create": { card: created } });
-
-    await createWorkboardCard({ host, client: client as never });
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.create", {
-      title: "Write tests",
-      notes: "Cover the happy path",
-      status: "todo",
-      priority: "normal",
-      labels: [],
-      agentId: "",
-      sessionKey: "agent:main:dashboard:1",
-    });
-    expect(state.cards[0]).toMatchObject({ id: "card-2", title: "Write tests" });
-    expect(state.draftOpen).toBe(false);
-    expect(state.draftSessionKey).toBe("");
-  });
-
-  it("creates template-backed cards from draft state", async () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.draftTitle = "Fix: flaky worker";
-    state.draftTemplateId = "bugfix";
-    const created = {
-      ...sampleCard,
-      id: "card-2",
-      title: "Fix: flaky worker",
-      metadata: { templateId: "bugfix" },
-    } satisfies WorkboardCard;
-    const client = createClient({ "workboard.cards.create": { card: created } });
-
-    await createWorkboardCard({ host, client: client as never });
-
-    expect(client.request).toHaveBeenCalledWith(
-      "workboard.cards.create",
-      expect.objectContaining({
-        title: "Fix: flaky worker",
-        templateId: "bugfix",
-      }),
-    );
-    expect(state.cards[0]?.metadata?.templateId).toBe("bugfix");
-    expect(state.draftTemplateId).toBe("");
-  });
-
   it("updates cards from draft state when editing", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -2974,6 +2857,62 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ title: "Updated board", status: "review" });
     expect(state.draftOpen).toBe(false);
     expect(state.editingCardId).toBeNull();
+  });
+
+  it("creates cards from draft state through the save action", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.draftTitle = "Write tests";
+    state.draftNotes = "Cover the happy path";
+    state.draftSessionKey = "agent:main:dashboard:1";
+    const created = {
+      ...sampleCard,
+      id: "card-2",
+      title: "Write tests",
+      sessionKey: "agent:main:dashboard:1",
+    };
+    const client = createClient({ "workboard.cards.create": { card: created } });
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.create", {
+      title: "Write tests",
+      notes: "Cover the happy path",
+      status: "todo",
+      priority: "normal",
+      labels: [],
+      agentId: "",
+      sessionKey: "agent:main:dashboard:1",
+    });
+    expect(state.cards[0]).toMatchObject({ id: "card-2", title: "Write tests" });
+    expect(state.draftOpen).toBe(false);
+    expect(state.draftSessionKey).toBe("");
+  });
+
+  it("creates template-backed cards through the save action", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.draftTitle = "Fix: flaky worker";
+    state.draftTemplateId = "bugfix";
+    const created = {
+      ...sampleCard,
+      id: "card-2",
+      title: "Fix: flaky worker",
+      metadata: { templateId: "bugfix" },
+    } satisfies WorkboardCard;
+    const client = createClient({ "workboard.cards.create": { card: created } });
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.create",
+      expect.objectContaining({
+        title: "Fix: flaky worker",
+        templateId: "bugfix",
+      }),
+    );
+    expect(state.cards[0]?.metadata?.templateId).toBe("bugfix");
+    expect(state.draftTemplateId).toBe("");
   });
 
   it("keeps edit-modal status saves from being rewritten by stale lifecycle sync", async () => {

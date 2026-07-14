@@ -27,6 +27,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialHash: "d",
   bundleHash: "b",
   sessionId: REQUEST.sessionId,
+  runId: REQUEST.runId,
   ownerEpoch: REQUEST.runEpoch,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],

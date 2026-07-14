@@ -53,6 +53,7 @@ const WORKER_CONNECT: WorkerConnectParams = {
     environmentId: "worker-1",
     credential: CREDENTIAL,
     sessionId: null,
+    runId: null,
     ownerEpoch: 1,
     rpcSetVersion: 1,
     handshake: HANDSHAKE,
@@ -63,6 +64,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialHash: "h".repeat(43),
   bundleHash: HANDSHAKE.bundleHash,
   sessionId: null,
+  runId: null,
   ownerEpoch: 1,
   rpcSetVersion: 1,
   protocolFeatures: [...HANDSHAKE.protocolFeatures],
@@ -90,6 +92,7 @@ const LIVE_EVENT = {
 const ATTACHED_IDENTITY: WorkerConnectionIdentity = {
   ...IDENTITY,
   sessionId: "session-1",
+  runId: "run-1",
 };
 const INFERENCE_IDS = {
   runEpoch: 1,

@@ -7,13 +7,14 @@ import type {
   SessionsUsageResult,
   SessionUsageTimeSeries,
 } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -666,7 +667,6 @@ class UsagePage extends OpenClawLightDomElement {
       <section class="content-header content-header--page">
         <div>
           <div class="page-title">${titleForRoute("usage")}</div>
-          <div class="page-sub">${subtitleForRoute("usage")}</div>
         </div>
         ${renderAgentScopeControl({
           agents: this.context.agents.state.agentsList?.agents ?? [],
@@ -677,7 +677,7 @@ class UsagePage extends OpenClawLightDomElement {
           selection: this.context.agentSelection,
         })}
       </section>
-      ${renderUsage(props)}
+      ${renderSettingsWorkspace(renderUsage(props))}
     `;
   }
 }

@@ -256,7 +256,7 @@ export function pluginCategoryLabel(category: string): string {
   }
 }
 
-export type ConnectorMcpTemplate = {
+type ConnectorMcpTemplate = {
   serverName: string;
   config: {
     url?: string;
