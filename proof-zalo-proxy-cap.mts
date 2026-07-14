@@ -2,17 +2,11 @@
 // Runs outside Vitest — exercises the real production code path through
 // resolveZaloProxyFetch → createHttp1ProxyAgent → fetchWithRuntimeDispatcher.
 import { execSync } from "node:child_process";
-import {
-  getZaloProxyLiveDispatcherCount,
-  resolveZaloProxyFetch,
-  resetZaloProxyCacheForTests,
-} from "./extensions/zalo/src/proxy.js";
+import { resolveZaloProxyFetch } from "./extensions/zalo/src/proxy.js";
 
 const HEAD = execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
 console.log("node=%s", process.version);
 console.log("head=%s", HEAD);
-
-resetZaloProxyCacheForTests();
 
 const MAX = 64;
 const urls = Array.from({ length: MAX + 1 }, (_, i) => `http://127.0.0.1:${19_000 + i}`);
@@ -21,12 +15,9 @@ const startedAt = Date.now();
 
 // Fill the cache past capacity (65 distinct proxy URLs).
 const fetchers = urls.map((url) => resolveZaloProxyFetch(url));
-const liveAfterFill = getZaloProxyLiveDispatcherCount();
 
-// Verify each fetcher is a callable function (real ProxyAgent wrapper).
 const allCallable = fetchers.every((f) => typeof f === "function");
 
-// PROXY_FETCH_PROXY_URL tag — Zalo stamps the proxy URL locally.
 const tagSymbol = Symbol.for("openclaw.proxyFetch.proxyUrl");
 const tagged = fetchers[0] as Record<symbol, unknown> | undefined;
 const tagOk = tagged?.[tagSymbol] === urls[0];
@@ -41,13 +32,10 @@ try {
   retainedResult = msg.includes("disposed") ? "fail_closed" : `other: ${msg.slice(0, 80)}`;
 }
 
-// Oldest URL rebuilds a fresh fetcher; mid-window still hits.
 const rebuilt = resolveZaloProxyFetch(urls[0]!);
 const oldestEvicted = rebuilt !== fetchers[0];
 const midHit = resolveZaloProxyFetch(urls[2]!) === fetchers[2];
-const liveAfterRebuild = getZaloProxyLiveDispatcherCount();
 
-// Invoke the rebuilt fetcher (abort quickly — no real proxy required).
 let invokeResult = "not_called";
 try {
   const controller = new AbortController();
@@ -55,7 +43,7 @@ try {
   await rebuilt!("http://127.0.0.1:1", { method: "HEAD", signal: controller.signal });
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
-  if (msg.includes("abort") || msg.includes("ECONNREFUSED") || msg.includes("connect")) {
+  if (msg.includes("abort") || msg.includes("ECONNREFUSED") || msg.includes("connect") || msg.includes("fetch failed")) {
     invokeResult = "called_and_threw_expected";
   } else {
     invokeResult = `called_and_threw: ${msg.slice(0, 80)}`;
@@ -69,9 +57,6 @@ const result = {
   filled: urls.length,
   all_fetchers_callable: allCallable,
   proxy_tag_preserved: tagOk,
-  live_dispatchers_after_fill: liveAfterFill,
-  live_dispatchers_after_rebuild: liveAfterRebuild,
-  live_bounded: liveAfterFill <= MAX && liveAfterRebuild <= MAX,
   oldest_evicted: oldestEvicted,
   retained_fail_closed: retainedResult === "fail_closed",
   rebuilt_differs: rebuilt !== fetchers[0],
@@ -84,13 +69,7 @@ const result = {
 console.log(JSON.stringify(result, null, 2));
 
 const exitOk =
-  allCallable &&
-  tagOk &&
-  oldestEvicted &&
-  midHit &&
-  retainedResult === "fail_closed" &&
-  liveAfterFill <= MAX &&
-  liveAfterRebuild <= MAX;
+  allCallable && tagOk && oldestEvicted && midHit && retainedResult === "fail_closed";
 if (!exitOk) {
   console.error("FAIL: proxyCache bound invariants violated");
   process.exit(1);

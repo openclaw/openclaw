@@ -28,12 +28,9 @@ const proxyCache = new Map<string, ZaloProxyCacheEntry>();
 /** Entries removed from the map but still leased (deferred dispose). */
 const retiredByUrl = new Map<string, ZaloProxyCacheEntry>();
 
-let liveDispatcherCount = 0;
-
 function createZaloProxyCacheEntry(proxyUrl: string): ZaloProxyCacheEntry {
   // createHttp1ProxyAgent already applies managed proxy TLS options.
   const agent = createHttp1ProxyAgent({ uri: proxyUrl });
-  liveDispatcherCount += 1;
   let disposed = false;
   const fetchFn = (async (input: string, init?: RequestInit) => {
     // Fail closed after dispose so retained callers cannot rebuild an untracked agent.
@@ -61,7 +58,6 @@ function createZaloProxyCacheEntry(proxyUrl: string): ZaloProxyCacheEntry {
         return;
       }
       disposed = true;
-      liveDispatcherCount = Math.max(0, liveDispatcherCount - 1);
       void agent.close().catch(() => undefined);
     },
   };
@@ -156,25 +152,4 @@ export function releaseZaloProxyFetch(proxyUrl?: string | null): void {
   if (entry.retired && entry.leases === 0) {
     disposeEntryWhenIdle(entry);
   }
-}
-
-/** Test/proof diagnostics: live ProxyAgent count after creates/disposes. */
-export function getZaloProxyLiveDispatcherCount(): number {
-  return liveDispatcherCount;
-}
-
-/** Test helper: clear module cache between Vitest cases. */
-export function resetZaloProxyCacheForTests(): void {
-  for (const entry of proxyCache.values()) {
-    entry.leases = 0;
-    entry.retired = true;
-    entry.dispose();
-  }
-  proxyCache.clear();
-  for (const entry of retiredByUrl.values()) {
-    entry.leases = 0;
-    entry.dispose();
-  }
-  retiredByUrl.clear();
-  liveDispatcherCount = 0;
 }

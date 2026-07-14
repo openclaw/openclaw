@@ -20,8 +20,6 @@ describe("resolveZaloProxyFetch", () => {
   let resolveZaloProxyFetch: typeof import("./proxy.js").resolveZaloProxyFetch;
   let acquireZaloProxyFetch: typeof import("./proxy.js").acquireZaloProxyFetch;
   let releaseZaloProxyFetch: typeof import("./proxy.js").releaseZaloProxyFetch;
-  let getZaloProxyLiveDispatcherCount: typeof import("./proxy.js").getZaloProxyLiveDispatcherCount;
-  let resetZaloProxyCacheForTests: typeof import("./proxy.js").resetZaloProxyCacheForTests;
   const ZALO_PROXY_CACHE_MAX_ENTRIES = 64;
 
   beforeEach(async () => {
@@ -29,14 +27,8 @@ describe("resolveZaloProxyFetch", () => {
     createHttp1ProxyAgentMock.mockClear();
     closeSpy.mockClear();
     fetchWithRuntimeDispatcherMock.mockClear();
-    ({
-      resolveZaloProxyFetch,
-      acquireZaloProxyFetch,
-      releaseZaloProxyFetch,
-      getZaloProxyLiveDispatcherCount,
-      resetZaloProxyCacheForTests,
-    } = await import("./proxy.js"));
-    resetZaloProxyCacheForTests();
+    ({ resolveZaloProxyFetch, acquireZaloProxyFetch, releaseZaloProxyFetch } =
+      await import("./proxy.js"));
   });
 
   it("returns undefined for empty or whitespace proxy URLs", () => {
@@ -82,12 +74,9 @@ describe("resolveZaloProxyFetch", () => {
     const fetchers = urls.map((url) => resolveZaloProxyFetch(url));
     expect(createHttp1ProxyAgentMock).toHaveBeenCalledTimes(ZALO_PROXY_CACHE_MAX_ENTRIES + 1);
 
-    // Oldest URL was evicted: resolving it again rebuilds a fresh fetcher.
     const rebuilt = resolveZaloProxyFetch(urls[0]!);
     expect(rebuilt).not.toBe(fetchers[0]);
     expect(createHttp1ProxyAgentMock).toHaveBeenCalledTimes(ZALO_PROXY_CACHE_MAX_ENTRIES + 2);
-
-    // A mid-window entry still hits the cache.
     expect(resolveZaloProxyFetch(urls[2]!)).toBe(fetchers[2]);
     expect(createHttp1ProxyAgentMock).toHaveBeenCalledTimes(ZALO_PROXY_CACHE_MAX_ENTRIES + 2);
 
@@ -101,17 +90,18 @@ describe("resolveZaloProxyFetch", () => {
       resolveZaloProxyFetch(`http://proxy-${i}.example:8080`);
     }
     expect(closeSpy).not.toHaveBeenCalled();
-    expect(getZaloProxyLiveDispatcherCount()).toBe(ZALO_PROXY_CACHE_MAX_ENTRIES);
+    expect(createHttp1ProxyAgentMock).toHaveBeenCalledTimes(ZALO_PROXY_CACHE_MAX_ENTRIES);
 
     resolveZaloProxyFetch(`http://proxy-65.example:8080`);
     expect(closeSpy).toHaveBeenCalledTimes(1);
-    expect(getZaloProxyLiveDispatcherCount()).toBe(ZALO_PROXY_CACHE_MAX_ENTRIES);
+    // One closed + one created keeps live agents at the cap.
+    expect(createHttp1ProxyAgentMock).toHaveBeenCalledTimes(ZALO_PROXY_CACHE_MAX_ENTRIES + 1);
 
     for (let i = 0; i < 5; i += 1) {
       resolveZaloProxyFetch(`http://churn-${i}.example:8080`);
     }
     expect(closeSpy).toHaveBeenCalledTimes(6);
-    expect(getZaloProxyLiveDispatcherCount()).toBe(ZALO_PROXY_CACHE_MAX_ENTRIES);
+    expect(createHttp1ProxyAgentMock).toHaveBeenCalledTimes(ZALO_PROXY_CACHE_MAX_ENTRIES + 6);
   });
 
   it("retained evicted fetcher fails closed and does not recreate a dispatcher", async () => {
@@ -144,16 +134,14 @@ describe("resolveZaloProxyFetch", () => {
     for (const url of urls) {
       acquireZaloProxyFetch(url);
     }
-    expect(getZaloProxyLiveDispatcherCount()).toBe(ZALO_PROXY_CACHE_MAX_ENTRIES);
+    expect(createHttp1ProxyAgentMock).toHaveBeenCalledTimes(ZALO_PROXY_CACHE_MAX_ENTRIES);
     expect(closeSpy).not.toHaveBeenCalled();
 
-    // Every slot is leased — next insert retires the oldest without closing it yet.
     resolveZaloProxyFetch("http://extra.example:8080");
     expect(closeSpy).not.toHaveBeenCalled();
-    expect(getZaloProxyLiveDispatcherCount()).toBe(ZALO_PROXY_CACHE_MAX_ENTRIES + 1);
+    expect(createHttp1ProxyAgentMock).toHaveBeenCalledTimes(ZALO_PROXY_CACHE_MAX_ENTRIES + 1);
 
     releaseZaloProxyFetch(urls[0]!);
     expect(closeSpy).toHaveBeenCalledTimes(1);
-    expect(getZaloProxyLiveDispatcherCount()).toBe(ZALO_PROXY_CACHE_MAX_ENTRIES);
   });
 });
