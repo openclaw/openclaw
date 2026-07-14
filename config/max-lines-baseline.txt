@@ -1,7 +1,6 @@
 # Files currently allowed to exceed the oxlint max-lines budget.
 # Ratchet: this list may only shrink. Split files; never add entries.
 # Existing suppressions carry a TODO at the file site.
-
 extensions/acpx/src/codex-auth-bridge.ts
 extensions/acpx/src/runtime.test.ts
 extensions/acpx/src/runtime.ts
@@ -803,15 +802,6 @@ src/config/zod-schema.providers-core.ts
 src/config/zod-schema.ts
 src/context-engine/context-engine.test.ts
 src/context-engine/registry.ts
-src/crestodian/agent-turn.test.ts
-src/crestodian/chat-engine.test.ts
-src/crestodian/chat-engine.ts
-src/crestodian/operations.test.ts
-src/crestodian/operations.ts
-src/crestodian/setup-inference.test.ts
-src/crestodian/setup-inference.ts
-src/crestodian/verified-inference.test.ts
-src/crestodian/verified-inference.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
 src/cron/isolated-agent/delivery-dispatch.ts
 src/cron/isolated-agent/delivery-target.test.ts
@@ -1137,6 +1127,13 @@ src/state/openclaw-agent-db.ts
 src/state/openclaw-state-db.test.ts
 src/state/openclaw-state-db.ts
 src/status/status-message.ts
+src/system-agent/agent-turn.test.ts
+src/system-agent/chat-engine.test.ts
+src/system-agent/chat-engine.ts
+src/system-agent/setup-inference.test.ts
+src/system-agent/setup-inference.ts
+src/system-agent/verified-inference.test.ts
+src/system-agent/verified-inference.ts
 src/tasks/task-executor.test.ts
 src/tasks/task-flow-registry.ts
 src/tasks/task-registry.maintenance.ts

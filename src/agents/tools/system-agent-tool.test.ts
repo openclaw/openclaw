@@ -103,7 +103,7 @@ describe("openclaw tool", () => {
 
   it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
     const proposalRef: { current?: string } = {};
-    const tool = createCrestodianTool({ surface: "cli", proposalRef });
+    const tool = createSystemAgentTool({ surface: "cli", proposalRef });
 
     await expect(
       tool.execute("plugin-install", {
@@ -113,7 +113,7 @@ describe("openclaw tool", () => {
       }),
     ).rejects.toThrow(/trusted shell/);
     expect(proposalRef.current).toBeUndefined();
-    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
   it("defers an approved mutation to the host after the full proposal handshake", async () => {

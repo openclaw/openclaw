@@ -268,9 +268,9 @@ describe("parseSystemAgentOperation", () => {
       kind: "plugin-search",
       query: "calendar sync",
     });
-    expect(parseSystemAgentOperation("install npm plugin @openclaw/demo")).toEqual({
+    expect(parseSystemAgentOperation("install npm plugin @openclaw/discord")).toEqual({
       kind: "plugin-install",
-      spec: "npm:@openclaw/demo",
+      spec: "npm:@openclaw/discord",
     });
     expect(parseSystemAgentOperation("plugin install clawhub:openclaw-demo")).toEqual({
       kind: "plugin-install",
@@ -279,6 +279,11 @@ describe("parseSystemAgentOperation", () => {
     expect(parseSystemAgentOperation("plugin uninstall openclaw-demo")).toEqual({
       kind: "plugin-uninstall",
       pluginId: "openclaw-demo",
+    });
+    expect(parseSystemAgentOperation("plugin install npm:@example/plugin")).toEqual({
+      kind: "none",
+      message:
+        "OpenClaw installs only ClawHub, bundled, or official-catalog plugins. Use `openclaw plugins install <spec>` in a trusted shell to review an arbitrary executable source.",
     });
   });
 
