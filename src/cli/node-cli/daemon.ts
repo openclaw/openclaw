@@ -17,7 +17,10 @@ import {
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import { isSystemdUserServiceAvailable, readSystemdUserLingerStatus } from "../../daemon/systemd.js";
+import {
+  isSystemdUserServiceAvailable,
+  readSystemdUserLingerStatus,
+} from "../../daemon/systemd.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -70,10 +73,7 @@ function renderNodeServiceStartHints(): string[] {
   });
 }
 
-async function checkSystemdLingerForNodeInstall(
-  warnings: string[],
-  json: boolean,
-): Promise<void> {
+async function checkSystemdLingerForNodeInstall(warnings: string[], json: boolean): Promise<void> {
   if (process.platform !== "linux") {
     return;
   }
@@ -86,7 +86,8 @@ async function checkSystemdLingerForNodeInstall(
     return;
   }
   const cmd = `loginctl enable-linger ${status.user}`;
-  const message = `Systemd lingering is not enabled for user ${status.user}. ` +
+  const message =
+    `Systemd lingering is not enabled for user ${status.user}. ` +
     `The node service will stop when you log out. ` +
     `Run \`${cmd}\` to keep the service alive after logout.`;
   if (json) {
