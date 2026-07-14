@@ -1,6 +1,6 @@
 // Covers the compaction planning worker boundary and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
+import { convertToLlm, serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildSummaryChunksWithWorker,
@@ -141,7 +141,9 @@ describe("compaction planning worker", () => {
     const chunks = await buildSummaryChunksWithWorker({ messages, maxChunkTokens: 8_000 });
     const returnedMessages = chunks.flat();
 
-    expect(serializeConversation(returnedMessages)).toBe(serializeConversation(messages));
+    expect(serializeConversation(convertToLlm(returnedMessages))).toBe(
+      serializeConversation(convertToLlm(messages)),
+    );
     expect(JSON.stringify(returnedMessages)).toContain(hugeText);
   }, 45_000);
 
