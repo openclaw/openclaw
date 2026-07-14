@@ -126,7 +126,7 @@ function resolveForumLaneKey(payload: TelegramApiPayload): string {
   return "main";
 }
 
-export function createTelegramAccountThrottler(
+function createTelegramAccountThrottler(
   createThrottler: () => ApiThrottlerTransformer = apiThrottler,
 ): ApiThrottlerTransformer {
   const baseThrottler = createThrottler();

@@ -9,8 +9,11 @@ import {
   resetTelegramMessageCacheBucketsForTest,
   resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
-  type TelegramMessageCachePersistentStore,
 } from "./message-cache.js";
+
+type TelegramMessageCachePersistentStore = NonNullable<
+  NonNullable<Parameters<typeof createTelegramMessageCache>[0]>["persistentStore"]
+>;
 
 type PersistedCacheValue = {
   version: 1;

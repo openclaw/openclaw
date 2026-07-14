@@ -1619,11 +1619,16 @@ describe("ci workflow guards", () => {
 
   it("bounds shared base commit fetches", () => {
     const action = readFileSync(".github/actions/ensure-base-commit/action.yml", "utf8");
+    const exactFetch = action.indexOf('fetch_base_ref --no-tags --depth=1 origin "$BASE_SHA"');
+    const branchDeepening = action.indexOf("for deepen_by in 25 100 300");
 
     expect(action).toContain("fetch_base_ref()");
     expect(action).toContain("timeout --signal=TERM --kill-after=10s 30s git");
     expect(action).toContain("-c protocol.version=2");
     expect(action).not.toContain("if ! git fetch --no-tags");
+    expect(exactFetch).toBeGreaterThan(-1);
+    expect(branchDeepening).toBeGreaterThan(exactFetch);
+    expect(action).toContain("::error title=ensure-base-commit missing base::");
   });
 
   it("bounds early unauthenticated checkout fetches", () => {

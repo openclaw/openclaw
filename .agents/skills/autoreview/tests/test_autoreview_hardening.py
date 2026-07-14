@@ -1762,6 +1762,44 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
         )
 
+    def test_secret_detector_allows_typescript_function_parameter_types(self) -> None:
+        signature = (
+            "function formatCredentialLabel("
+            + "credential"
+            + ": ClaudeCliReadableCredential"
+            + "): string {"
+        )
+        access_key = "AKIA" + "ABCDEFGHIJKLMNOP"
+        secret_assignment = "const api" + 'Key = "' + access_key + '";'
+        literal_value = "actual-production-" + "secret"
+        parameter_name = "api" + "Key"
+        type_name = "Api" + "Credential"
+        typed_default = (
+            "function connect("
+            + parameter_name
+            + ": "
+            + type_name
+            + ' = "'
+            + literal_value
+            + '") {}'
+        )
+        benign_default = (
+            "function connect("
+            + parameter_name
+            + ": "
+            + type_name
+            + " = defaultCredential) {}"
+        )
+
+        self.assertFalse(self.helper["secret_text_risk"](signature))
+        self.assertFalse(self.helper["secret_text_risk"](benign_default))
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                signature + "\n  " + secret_assignment + "\n}"
+            )
+        )
+        self.assertTrue(self.helper["secret_text_risk"](typed_default))
+
     def test_secret_detector_handles_punctuation_and_multiline_diff_values(self) -> None:
         value = "Correct-Horse!" + "@Battery$Staple"
         patch = (

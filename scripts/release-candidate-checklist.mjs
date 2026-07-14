@@ -587,6 +587,24 @@ function gitIsAncestor(ancestor, target) {
   );
 }
 
+export function validateNpmPreflightRunSource({
+  workflowRun,
+  workflowRef,
+  isTrustedWorkflowAncestor = gitIsAncestor,
+}) {
+  const trustedRef = `refs/remotes/origin/${workflowRef}`;
+  if (!isTrustedWorkflowAncestor(workflowRun.headSha, trustedRef)) {
+    throw new Error(
+      `npm preflight workflow SHA ${workflowRun.headSha} is not reachable from trusted ${workflowRef}`,
+    );
+  }
+  return {
+    status: "passed",
+    headSha: workflowRun.headSha,
+    workflowRef,
+  };
+}
+
 function candidateContributionRecordPullRequests(
   section,
   label,
@@ -1332,9 +1350,10 @@ async function main() {
     workflowName: "OpenClaw NPM Release",
     workflowRef: options.workflowRef,
   });
-  if (npmRun.headSha !== targetSha) {
-    throw new Error(`run SHA mismatch: tag=${targetSha} npm=${npmRun.headSha}`);
-  }
+  const npmPreflightSource = validateNpmPreflightRunSource({
+    workflowRun: npmRun,
+    workflowRef: options.workflowRef,
+  });
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const fullDir = join(options.outputDir, "full-release-validation");
@@ -1435,6 +1454,7 @@ async function main() {
     fullReleaseValidationUrl: fullRun.url,
     fullReleaseValidationControls: fullManifest.controls,
     npmPreflightUrl: npmRun.url,
+    npmPreflightSource,
     artifacts: {
       npmPreflight: npmArtifactName,
       fullReleaseValidation: fullArtifactName,

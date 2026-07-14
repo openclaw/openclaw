@@ -20,6 +20,7 @@ import {
   validateCandidateCheckout,
   validateCandidateReleaseNotes,
   validateFullManifest,
+  validateNpmPreflightRunSource,
   validatePreflightManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
@@ -518,6 +519,34 @@ describe("release candidate checklist", () => {
         params,
       ),
     ).toThrow("invalid dependency tarball metadata");
+  });
+
+  it("trusts the npm workflow SHA while binding the candidate through its manifest", () => {
+    const workflowSha = "a".repeat(40);
+    const isTrustedWorkflowAncestor = vi.fn(() => true);
+
+    expect(
+      validateNpmPreflightRunSource({
+        workflowRun: { headSha: workflowSha },
+        workflowRef: "main",
+        isTrustedWorkflowAncestor,
+      }),
+    ).toEqual({
+      status: "passed",
+      headSha: workflowSha,
+      workflowRef: "main",
+    });
+    expect(isTrustedWorkflowAncestor).toHaveBeenCalledWith(workflowSha, "refs/remotes/origin/main");
+  });
+
+  it("rejects npm preflight workflow code outside the trusted ref", () => {
+    expect(() =>
+      validateNpmPreflightRunSource({
+        workflowRun: { headSha: "a".repeat(40) },
+        workflowRef: "main",
+        isTrustedWorkflowAncestor: () => false,
+      }),
+    ).toThrow("is not reachable from trusted main");
   });
 
   it("requires run ids when dispatch is disabled", () => {
