@@ -42,6 +42,7 @@ export type CodexSessionCatalogHost = {
   kind: "gateway" | "node";
   connected: boolean;
   nodeId?: string;
+  canContinueCodex?: boolean;
   sessions: CodexSessionCatalogSession[];
   nextCursor?: string;
   backwardsCursor?: string;

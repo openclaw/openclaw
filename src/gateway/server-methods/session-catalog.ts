@@ -17,6 +17,7 @@ import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
+import { bindPluginSessionConversation } from "../../plugins/session-conversation-binding.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -98,6 +99,18 @@ function providerOrRespond(
     );
   }
   return provider;
+}
+
+function registrationOrRespond(catalogId: string, respond: RespondFn) {
+  const registration = registrations().find((candidate) => candidate.provider.id === catalogId);
+  if (!registration) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${catalogId}`),
+    );
+  }
+  return registration;
 }
 
 function catalogResult(
@@ -204,7 +217,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.continue": async ({ params, respond }) => {
+  "sessions.catalog.continue": async ({ params, respond, client }) => {
     if (
       !assertValidParams(
         params,
@@ -216,17 +229,34 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const request = params as SessionsCatalogContinueParams;
-    const provider = providerOrRespond(request.catalogId, respond);
-    if (!provider) {
+    const registration = registrationOrRespond(request.catalogId, respond);
+    if (!registration) {
       return;
     }
+    const provider = registration.provider;
     if (!provider.continueSession) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog is view-only"));
       return;
     }
     try {
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(true, await provider.continueSession(providerRequest));
+      // Fail closed for unscoped callers: providers gate high-authority
+      // continues (e.g. node-executing bindings) on these scopes.
+      const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+      const result = await provider.continueSession({ ...providerRequest, clientScopes });
+      if (result.conversationBinding) {
+        // operator.write on Continue is the approval boundary. Per-turn plugin and
+        // node command authorization still applies after this binding is installed.
+        await bindPluginSessionConversation({
+          pluginId: registration.pluginId,
+          pluginName: registration.pluginName,
+          pluginRoot: registration.rootDir?.trim() || registration.source,
+          sessionKey: result.sessionKey,
+          binding: result.conversationBinding,
+          afterBind: result.afterConversationBound,
+        });
+      }
+      respond(true, { sessionKey: result.sessionKey });
     } catch (error) {
       const details = catalogError(error);
       respond(

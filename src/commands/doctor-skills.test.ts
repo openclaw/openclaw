@@ -66,7 +66,7 @@ describe("doctor skills", () => {
     expect(collectUnavailableAgentSkills(report)).toEqual([unavailable]);
   });
 
-  it("formats actionable missing requirement lines without secret values", () => {
+  it("formats unavailable skill names compactly and alphabetically", () => {
     const lines = formatUnavailableSkillDoctorLines([
       createSkill({
         name: "places",
@@ -88,11 +88,25 @@ describe("doctor skills", () => {
           },
         ],
       }),
+      createSkill({
+        name: "calendar",
+        eligible: false,
+        platformIncompatible: false,
+      }),
     ]);
 
-    expect(lines.join("\n")).toContain("places: bins: goplaces; env: GOOGLE_MAPS_API_KEY");
-    expect(lines.join("\n")).toContain("install option: Install goplaces (brew)");
-    expect(lines.join("\n")).toContain("openclaw doctor --fix");
+    expect(lines).toEqual([
+      "2 allowed skills are not usable in this environment (missing binaries, env vars, or config).",
+      "- calendar, places",
+      "Disable unused skills: openclaw doctor --fix",
+      "Inspect details: openclaw skills check --agent <id> or openclaw skills info <name> --agent <id>",
+    ]);
+  });
+
+  it("uses singular grammar for one unavailable skill", () => {
+    expect(formatUnavailableSkillDoctorLines([createSkill({ name: "places" })])[0]).toBe(
+      "1 allowed skill is not usable in this environment (missing binaries, env vars, or config).",
+    );
   });
 
   it("surfaces a GH_CONFIG_DIR hint when the github skill is eligible but auth lives at a different HOME", () => {
