@@ -37,10 +37,7 @@ import {
   shouldAutoApproveCodexAppServerApprovals,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
-import {
-  resolveCodexMessageToolProvider,
-  shouldEnableCodexAppServerNativeToolSurface,
-} from "./dynamic-tool-build.js";
+import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolErrorDiagnostic,
   emitDynamicToolStartedDiagnostic,
@@ -58,6 +55,7 @@ import {
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector.js";
+import { resolveCodexMessageToolProvider } from "./message-provider-binding.js";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
