@@ -15,6 +15,8 @@ type MockWatcher = {
   __emit: (event: string, ...args: unknown[]) => void;
 };
 
+const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+
 type CanvasWatchFactory = NonNullable<
   Parameters<typeof import("./server.js").createCanvasHostHandler>[0]["watchFactory"]
 >;
@@ -197,7 +199,6 @@ describe("canvas host", () => {
   };
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
   let startCanvasHost: typeof import("./server.js").startCanvasHost;
-  let canvasLiveReloadMaxInboundMessageBytes = 0;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
@@ -242,8 +243,6 @@ describe("canvas host", () => {
     vi.resetModules();
     const serverModule = await import("./server.js");
     ({ createCanvasHostHandler, startCanvasHost } = serverModule);
-    canvasLiveReloadMaxInboundMessageBytes =
-      serverModule.CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES;
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
@@ -507,7 +506,7 @@ describe("canvas host", () => {
     try {
       expect(constructorOptions[0]).toMatchObject({
         noServer: true,
-        maxPayload: canvasLiveReloadMaxInboundMessageBytes,
+        maxPayload: CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES,
       });
       const socketOn = vi.fn();
       connectionHandler?.({ on: socketOn } as unknown as TrackingWebSocket);
