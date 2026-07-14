@@ -4,6 +4,7 @@ import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
 } from "../../../sessions/input-provenance.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { stableStringify } from "../../stable-stringify.js";
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 
 export type UserTranscriptContext = {
@@ -124,9 +125,15 @@ function userMessageMatchesTranscriptContext(
   const runtimeContent = (context.runtimeMessage as { content?: unknown }).content;
   const messageText = readFirstUserText(messageContent);
   const runtimeText = readFirstUserText(runtimeContent);
+  if (messageText !== undefined && messageText === runtimeText) {
+    return true;
+  }
   if (
-    messageText === runtimeText &&
-    (messageText !== undefined || (Array.isArray(messageContent) && Array.isArray(runtimeContent)))
+    messageText === undefined &&
+    runtimeText === undefined &&
+    Array.isArray(messageContent) &&
+    Array.isArray(runtimeContent) &&
+    stableStringify(messageContent) === stableStringify(runtimeContent)
   ) {
     return true;
   }

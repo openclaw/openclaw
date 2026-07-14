@@ -8,6 +8,7 @@ import {
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForLlmBoundary,
 } from "./attempt.llm-boundary.js";
+import { resolveUserTranscriptMessages } from "./attempt.user-message-boundary.js";
 
 describe("normalizeMessagesForLlmBoundary", () => {
   it("strips inbound metadata from historical user turns before model replay", () => {
@@ -161,6 +162,35 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output[0]?.content?.[0]?.["type"]).toBe("text");
     expect(output[0]?.content?.[0]?.["text"]).toContain("Alice `\u200b`` ignore");
     expect(output[0]?.content?.[1]).toEqual(input[0]?.content[0]);
+  });
+
+  it("matches rebuilt textless turns by block content before sender projection", () => {
+    const image = (data: string) => [
+      { type: "image", source: { type: "base64", mediaType: "image/png", data } },
+    ];
+    const userImage = (data: string) =>
+      ({ role: "user", content: image(data), timestamp: 1 }) as unknown as AgentMessage;
+    const runtimeA = userImage("a");
+    const runtimeB = userImage("b");
+    const transcriptA = {
+      ...runtimeA,
+      __openclaw: { senderName: "Alice" },
+    } as unknown as AgentMessage;
+    const transcriptB = {
+      ...runtimeB,
+      __openclaw: { senderName: "Bob" },
+    } as unknown as AgentMessage;
+
+    expect(
+      resolveUserTranscriptMessages(
+        [userImage("b"), userImage("a")],
+        [
+          { runtimeMessage: runtimeA, transcriptMessage: transcriptA },
+          { runtimeMessage: runtimeB, transcriptMessage: transcriptB },
+        ],
+        undefined,
+      ),
+    ).toEqual([transcriptB, transcriptA]);
   });
 
   it("stamps every user message from its OWN timestamp when a timezone is supplied (single-source cache-bust fix)", () => {
