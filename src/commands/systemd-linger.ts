@@ -97,6 +97,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
 export async function ensureSystemdUserLingerNonInteractive(params: {
   runtime: RuntimeEnv;
   env?: NodeJS.ProcessEnv;
+  warn?: (message: string) => void;
 }): Promise<void> {
   if (process.platform !== "linux") {
     return;
@@ -120,7 +121,6 @@ export async function ensureSystemdUserLingerNonInteractive(params: {
     return;
   }
 
-  params.runtime.log(
-    `Systemd lingering is disabled for ${status.user}. Run: sudo loginctl enable-linger ${status.user}`,
-  );
+  const message = `Systemd lingering is disabled for ${status.user}. Run: sudo loginctl enable-linger ${status.user}`;
+  (params.warn ?? params.runtime.log)(message);
 }

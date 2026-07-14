@@ -130,6 +130,12 @@ openclaw node restart
 
 `node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--runtime <node>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
 
+Linux installs use a systemd user service. The installer checks systemd
+lingering and tries to enable it non-interactively; if it cannot, follow the
+printed warning and run `sudo loginctl enable-linger $(whoami)`. Without
+lingering, the node goes offline when the user's login session ends. See
+[Node troubleshooting](/nodes/troubleshooting#linux-service-stops-after-logout).
+
 ### Pair + name
 
 On the gateway host:

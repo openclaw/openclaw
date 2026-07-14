@@ -46,6 +46,26 @@ openclaw logs --follow
 
 If you see `NODE_BACKGROUND_UNAVAILABLE`, bring the node app to the foreground and retry.
 
+## Linux service stops after logout
+
+`openclaw node install` creates a systemd user service on Linux. That service
+needs systemd lingering to remain active after the user's final login session
+ends. The installer checks this state and tries to enable it non-interactively.
+If it prints a warning, run:
+
+```bash
+sudo loginctl enable-linger $(whoami)
+openclaw node restart
+```
+
+Verify the setting with:
+
+```bash
+loginctl show-user $(whoami) -p Linger
+```
+
+The expected result is `Linger=yes`.
+
 ## Permissions matrix
 
 | Capability                   | iOS                                     | Android                                      | macOS node app                   | Typical failure code                          |

@@ -4966,6 +4966,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Command ladder
   - H2: Foreground requirements
+  - H2: Linux service stops after logout
   - H2: Permissions matrix
   - H2: Pairing versus approvals
   - H2: Common node error codes

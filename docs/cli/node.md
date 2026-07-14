@@ -140,6 +140,12 @@ Use `openclaw node run` for a foreground node host (no service).
 
 Service commands accept `--json` for machine-readable output.
 
+On Linux, the node runs as a systemd user service. `node install` checks whether
+systemd lingering is enabled and tries to enable it non-interactively. If that
+is not permitted, it prints a warning; run
+`sudo loginctl enable-linger $(whoami)` so the node stays online after you log
+out. See [Node troubleshooting](/nodes/troubleshooting#linux-service-stops-after-logout).
+
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
 logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can

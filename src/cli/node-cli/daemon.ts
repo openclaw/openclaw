@@ -6,6 +6,7 @@ import {
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
 import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
+import { ensureSystemdUserLingerNonInteractive } from "../../commands/systemd-linger.js";
 import {
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
@@ -195,6 +196,12 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         environment,
         environmentValueSources,
         description,
+      });
+      await ensureSystemdUserLingerNonInteractive({
+        // Keep successful enablement chatter out of --json, while preserving an
+        // actionable failure in the response's structured warnings.
+        runtime: json ? { ...defaultRuntime, log: () => undefined } : defaultRuntime,
+        warn,
       });
     },
   });

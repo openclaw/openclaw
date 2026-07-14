@@ -31,6 +31,11 @@ const mocks = vi.hoisted(() => {
       environment: {},
       environmentValueSources: {},
     })),
+    ensureSystemdUserLingerNonInteractive: vi.fn(
+      async ({ warn }: { warn: (message: string) => void }) => {
+        warn("Systemd lingering is disabled for alice. Run: sudo loginctl enable-linger alice");
+      },
+    ),
     loadNodeHostConfig: vi.fn(),
   };
 });
@@ -45,6 +50,10 @@ vi.mock("../../daemon/node-service.js", () => ({
 
 vi.mock("../../commands/node-daemon-install-helpers.js", () => ({
   buildNodeInstallPlan: mocks.buildNodeInstallPlan,
+}));
+
+vi.mock("../../commands/systemd-linger.js", () => ({
+  ensureSystemdUserLingerNonInteractive: mocks.ensureSystemdUserLingerNonInteractive,
 }));
 
 vi.mock("../../node-host/config.js", () => ({
@@ -102,6 +111,7 @@ describe("runNodeDaemonInstall", () => {
       environment: {},
       environmentValueSources: {},
     });
+    mocks.ensureSystemdUserLingerNonInteractive.mockClear();
     mocks.loadNodeHostConfig.mockReset().mockResolvedValue({
       gateway: {
         host: "saved-gateway.local",
@@ -151,6 +161,25 @@ describe("runNodeDaemonInstall", () => {
       expect.objectContaining({
         tls: true,
         tlsFingerprint: "saved-fingerprint",
+      }),
+    );
+  });
+
+  it("includes a systemd linger warning in JSON install output", async () => {
+    await runNodeDaemonInstall({ force: true, json: true });
+
+    expect(mocks.service.install).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureSystemdUserLingerNonInteractive).toHaveBeenCalledTimes(1);
+    expect(mocks.service.install.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.ensureSystemdUserLingerNonInteractive.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+        result: "installed",
+        warnings: [
+          "Systemd lingering is disabled for alice. Run: sudo loginctl enable-linger alice",
+        ],
       }),
     );
   });
