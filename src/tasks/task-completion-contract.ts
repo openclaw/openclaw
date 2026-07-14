@@ -24,7 +24,7 @@ const HUMAN_ACTION_REQUIRED_PATTERN =
   /(?:^|[\r\n])\s*(?:[-*]\s*)?human[_\s-]*action[_\s-]*required\s*:\s*true\b/i;
 
 const BLOCKER_NEXT_ACTION_PATTERN =
-  /(?:^|[\r\n])\s*(?:[-*]\s*)?(?:\*\*)?blocker(?:s)?(?:\/next action|\s+next action)?\s*:\s*(?:\*\*)?/i;
+  /(?:^|[\r\n])\s*(?:[-*]\s*)?(?:\*\*)?blocker(?:s)?(?:\/next action|\s+next action)?\s*:\s*(?:\*\*)?(?!\s*(?:none|no\s+blockers?|n\/?a|not\s+applicable)\b)/i;
 
 function normalizeCompletionText(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";

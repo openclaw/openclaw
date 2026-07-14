@@ -43,5 +43,10 @@ describe("task-completion-contract", () => {
         "Fixed the issue and verified tests pass. No blockers.",
       ),
     ).toEqual({});
+    expect(
+      resolveRequiredCompletionTerminalResult(
+        "Summary: completed requested work.\n\nBlockers: none",
+      ),
+    ).toEqual({});
   });
 });
