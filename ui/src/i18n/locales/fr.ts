@@ -517,6 +517,7 @@ export const fr: TranslationMap = {
     worktreeNameInvalid:
       "Les noms de worktree utilisent des lettres minuscules, des chiffres et des tirets.",
     messagePlaceholder: "Sur quoi cette session doit-elle travailler ?",
+    readingAttachment: "Lecture de la pièce jointe",
     start: "Démarrer la session",
     starting: "Démarrage…",
     createFailed: "Impossible de créer la session.",
@@ -3746,6 +3747,7 @@ export const fr: TranslationMap = {
       finished: "Terminées ({count})",
       statusRunningOne: "1 tâche en cours",
       statusRunningMany: "{count} tâches en cours",
+      statusPreviewMore: "+{count} de plus",
       stopTask: "Arrêter {title}",
       viewTranscript: "Afficher la transcription",
       toolUseOne: "1 utilisation d’outil",

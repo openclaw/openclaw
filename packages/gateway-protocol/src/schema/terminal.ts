@@ -118,7 +118,7 @@ export type TerminalTextResult = Static<typeof TerminalTextResultSchema>;
 export const TerminalAckResultSchema = closedObject({ ok: Type.Boolean() });
 export type TerminalAckResult = Static<typeof TerminalAckResultSchema>;
 
-/** Streamed output chunk; seq lets the client detect gaps and preserve order. */
+/** Streamed output chunk; seq is a per-session monotonic counter for diagnostics and tests. */
 export const TerminalDataEventSchema = closedObject({
   sessionId: NonEmptyString,
   seq: Type.Integer({ minimum: 0 }),

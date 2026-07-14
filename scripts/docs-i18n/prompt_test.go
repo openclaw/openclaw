@@ -42,6 +42,7 @@ func TestTranslationPromptUsesSharedContractAndLocaleOverlayForEverySupportedLoc
 				"Keep authentication, authorization, credentials, tokens, passwords, secrets, identities, and accounts distinct",
 				"Preserve actors, objects, temporal order, negation, conditions, scope, singular/plural meaning, and requirement strength",
 				"Preserve every factual value exactly, including numbers, units, versions, ports, limits, durations, paths, and comparison operators",
+				"Use one locale-appropriate register within each page. Do not mix formal, informal, honorific, or speech-level forms",
 				"Preserve Markdown list nodes exactly: ordered versus unordered kind, nesting, item count, and ordered-list starting number",
 				"Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly",
 				"Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule",
@@ -141,10 +142,10 @@ func TestTranslationPromptAddsRepresentativeLocaleRules(t *testing.T) {
 	}{
 		{locale: "zh-CN", wants: []string{"Simplified Chinese", "你/你的", "Gateway 网关"}},
 		{locale: "zh-TW", wants: []string{"Traditional Chinese", "Taiwan terminology", "do not emit Simplified Chinese forms", "translate “credentials” as “認證資訊”, not “憑證”", "reserve “憑證” for certificates"}},
-		{locale: "ja-JP", wants: []string{"technical Japanese", "〜でございます", "「 and 」"}},
+		{locale: "ja-JP", wants: []string{"Japanese honorifics", "〜でございます", "「 and 」"}},
 		{locale: "de", wants: []string{"Sie/Ihr/Ihnen", "du/dein/dir"}},
 		{locale: "pt-BR", wants: []string{"Brazilian Portuguese, not European Portuguese"}},
-		{locale: "nl", wants: []string{"Use informal “je/jouw” consistently", "do not switch to formal “u/uw” except inside protected literal quotations"}},
+		{locale: "nl", wants: []string{"Use informal “je/jouw” for direct address", "do not switch to formal “u/uw” except inside protected literal quotations"}},
 		{locale: "fa", wants: []string{"Persian ی and ک", "right-to-left"}},
 		{locale: "ru", wants: []string{"generic noun “plugin” as “плагин”", "inflect it for Russian case and number", "Never force English “Plugin” into ordinary prose"}},
 		{locale: "uk", wants: []string{"Ukrainian terminology rather than Russian calques"}},
@@ -161,6 +162,24 @@ func TestTranslationPromptAddsRepresentativeLocaleRules(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLocaleOverlaysDoNotRepeatSharedQualityRules(t *testing.T) {
+	t.Parallel()
+
+	for locale, rules := range localeRules {
+		for _, duplicate := range []string{
+			"neutral technical tone",
+			"neutral documentation tone",
+			"avoid unnecessary English",
+			"consistent within a page",
+			"mixing speech levels",
+		} {
+			if strings.Contains(rules, duplicate) {
+				t.Errorf("locale %s repeats shared rule %q", locale, duplicate)
+			}
+		}
 	}
 }
 

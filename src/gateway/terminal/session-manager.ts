@@ -1,19 +1,21 @@
-// Owns the lifecycle of operator terminal sessions: one PTY per open, bound to
-// the connection that opened it, streamed back over the gateway event channel.
+// Owns one PTY per operator connection and its gateway event lifecycle.
 import { randomUUID } from "node:crypto";
 import {
   createLocalTerminalBackend,
   type LocalTerminalBackendSpawner,
   type TerminalBackend,
 } from "./backend.js";
+import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
+import { TerminalOutputController } from "./output-flow-control.js";
 import { TerminalOutputRing } from "./output-ring.js";
-
+import {
+  DEFAULT_MAX_DETACHED_SESSIONS,
+  DEFAULT_MAX_SESSIONS,
+  DEFAULT_SCROLLBACK_CHARS,
+} from "./session-limits.js";
+export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 /** Emits one terminal event frame to the single owning connection. */
 type TerminalEventSink = (connId: string, event: string, payload: unknown) => void;
-
-/** Injectable PTY spawner so tests can drive sessions without a real shell. */
-const TERMINAL_EVENT_DATA = "terminal.data" as const;
-const TERMINAL_EVENT_EXIT = "terminal.exit" as const;
 
 type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "detached" | "error";
 
@@ -25,10 +27,10 @@ type TerminalSession = {
   cwd: string;
   shell: string;
   backend: TerminalBackend;
-  seq: number;
   closed: boolean;
   createdAtMs: number;
   buffer: TerminalOutputRing;
+  output: TerminalOutputController;
   /** Kills the session when a detach outlives the grace period. */
   reaper: ReturnType<typeof setTimeout> | null;
   detachedAtMs: number | null;
@@ -44,34 +46,13 @@ type TerminalSessionSummary = {
   createdAtMs: number;
 };
 
-/** Bounds concurrent shells so a client cannot exhaust host processes. */
-const DEFAULT_MAX_SESSIONS = 24;
-/**
- * Rolling output kept per session for reattach replay and terminal.text,
- * in UTF-16 code units (≈ bytes for typical terminal output). Constant, not
- * config: ~256 KiB × session cap bounds worst-case memory at a few MiB.
- */
-const DEFAULT_SCROLLBACK_CHARS = 256 * 1024;
-/**
- * Cap on simultaneously detached sessions; the oldest detached session is
- * killed to make room. Keeps repeated disconnects from parking a full
- * session-cap worth of headless shells.
- */
-const DEFAULT_MAX_DETACHED_SESSIONS = 8;
-/** Default grace period before a detached session is killed (seconds). */
-export const DEFAULT_TERMINAL_DETACH_SECONDS = 300;
-
 type TerminalSessionManagerOptions = {
   emit: TerminalEventSink;
+  getBufferedAmount?: (connId: string) => number | undefined;
   spawn?: LocalTerminalBackendSpawner;
   maxSessions?: number;
   env?: NodeJS.ProcessEnv;
-  /**
-   * How long a session may stay detached after its connection drops before it
-   * is killed. 0 (default) preserves kill-on-disconnect; the config-facing
-   * default lives in DEFAULT_TERMINAL_DETACH_SECONDS and is applied by the
-   * gateway wiring.
-   */
+  /** Detach grace; 0 preserves kill-on-disconnect. Gateway wiring owns its default. */
   detachGraceMs?: number;
   maxDetachedSessions?: number;
   scrollbackChars?: number;
@@ -109,6 +90,7 @@ export class TerminalSessionManager {
   // orphan for a dead connection.
   private readonly pendingOpens = new Map<string, Set<OpenToken>>();
   private readonly emit: TerminalEventSink;
+  private readonly getBufferedAmount: (connId: string) => number | undefined;
   private readonly spawn?: LocalTerminalBackendSpawner;
   private readonly maxSessions: number;
   private readonly detachGraceMs: number;
@@ -120,6 +102,7 @@ export class TerminalSessionManager {
 
   constructor(options: TerminalSessionManagerOptions) {
     this.emit = options.emit;
+    this.getBufferedAmount = options.getBufferedAmount ?? (() => undefined);
     this.spawn = options.spawn;
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.detachGraceMs = options.detachGraceMs ?? 0;
@@ -181,17 +164,39 @@ export class TerminalSessionManager {
       return { ok: false, code: "closed", message: token.abortMessage };
     }
 
+    const sessionId = randomUUID();
+    const buffer = new TerminalOutputRing(this.scrollbackChars);
+    const owner = { connId: request.connId as string | null };
+    let seq = 0;
+    const output = new TerminalOutputController({
+      backend,
+      getConnId: () => owner.connId,
+      getBufferedAmount: this.getBufferedAmount,
+      record: (chunk) => buffer.push(chunk),
+      emit: (connId, data) =>
+        this.emit(connId, TERMINAL_EVENT_DATA, {
+          sessionId,
+          seq: seq++,
+          data,
+        }),
+    });
     const session: TerminalSession = {
-      id: randomUUID(),
-      connId: request.connId,
+      id: sessionId,
+      // One owner cell keeps lifecycle mutation and async output routing atomic.
+      get connId() {
+        return owner.connId;
+      },
+      set connId(connId) {
+        owner.connId = connId;
+      },
       agentId: request.agentId,
       cwd: request.cwd,
       shell: request.shell,
       backend,
-      seq: 0,
       closed: false,
       createdAtMs: Date.now(),
-      buffer: new TerminalOutputRing(this.scrollbackChars),
+      buffer,
+      output,
       reaper: null,
       detachedAtMs: null,
     };
@@ -199,19 +204,9 @@ export class TerminalSessionManager {
     this.indexByConn(request.connId, session.id);
 
     backend.onData((chunk) => {
-      if (session.closed) {
-        return;
+      if (!session.closed) {
+        session.output.push(chunk);
       }
-      // Always buffer so attach can replay; stream only while a conn owns it.
-      session.buffer.push(chunk);
-      if (session.connId === null) {
-        return;
-      }
-      this.emit(session.connId, TERMINAL_EVENT_DATA, {
-        sessionId: session.id,
-        seq: session.seq++,
-        data: chunk,
-      });
     });
     backend.onExit((event) => {
       const signal = event.signal && event.signal !== 0 ? event.signal : null;
@@ -238,6 +233,7 @@ export class TerminalSessionManager {
       return false;
     }
     try {
+      session.output.noteInput();
       session.backend.write(data);
       return true;
     } catch {
@@ -256,6 +252,7 @@ export class TerminalSessionManager {
       session.backend.resize(cols, rows);
       return true;
     } catch {
+      this.finalize(session, "error", { error: "resize failed" });
       return false;
     }
   }
@@ -292,6 +289,7 @@ export class TerminalSessionManager {
       clearTimeout(session.reaper);
       session.reaper = null;
     }
+    session.output.resetOwnership();
     session.detachedAtMs = null;
     if (session.connId !== null && session.connId !== connId) {
       this.byConn.get(session.connId)?.delete(session.id);
@@ -415,6 +413,7 @@ export class TerminalSessionManager {
 
   /** Parks a session ownerless with a reaper; PTY output keeps buffering. */
   private detach(session: TerminalSession): void {
+    session.output.resetOwnership();
     session.connId = null;
     session.detachedAtMs = Date.now();
     session.reaper = setTimeout(() => {
@@ -483,6 +482,7 @@ export class TerminalSessionManager {
     if (session.closed) {
       return;
     }
+    session.output.dispose({ flush: !opts?.silent && session.connId !== null });
     session.closed = true;
     if (session.reaper) {
       clearTimeout(session.reaper);

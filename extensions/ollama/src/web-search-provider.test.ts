@@ -3,11 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createOllamaWebSearchProvider as createContractOllamaWebSearchProvider } from "../web-search-contract-api.js";
-import {
-  testing,
-  createOllamaWebSearchProvider,
-  runOllamaWebSearch,
-} from "./web-search-provider.js";
+import { testing, createOllamaWebSearchProvider } from "./web-search-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -69,6 +65,23 @@ function createSetupNotes() {
       },
     },
   };
+}
+
+async function runOllamaWebSearch(params: {
+  config?: OpenClawConfig;
+  query: string;
+  count?: number;
+}): Promise<Record<string, unknown>> {
+  const tool = createOllamaWebSearchProvider().createTool({
+    config: params.config ?? {},
+  } as never);
+  if (!tool) {
+    throw new Error("Expected Ollama web search tool");
+  }
+  return await tool.execute({
+    query: params.query,
+    ...(params.count === undefined ? {} : { count: params.count }),
+  });
 }
 
 function expectOllamaWebSearchRequest(

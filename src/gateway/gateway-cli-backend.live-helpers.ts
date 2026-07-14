@@ -79,7 +79,7 @@ export type ClaudeCliResumeContinuityProbe = {
   injectedContext: string;
   resumePrompt: string;
   expectedFirstReply: string;
-  expectedResumeReply: string;
+  expectedResumeMarker: string;
 };
 
 function normalizeCliRuntimeModelTarget(raw: string | undefined): string | undefined {
@@ -296,9 +296,9 @@ export function buildClaudeCliResumeContinuityProbe(params: {
     resumePrompt:
       "Do not inspect files or run tools. " +
       "What private session note were you asked to remember earlier? " +
-      `Reply with exactly: CLI backend RESUME OK ${params.resumeNonce} <remembered-note>.`,
+      `Reply with CLI-RESUME-${params.resumeNonce} and the remembered note.`,
     expectedFirstReply: `${firstTurnMarker}.`,
-    expectedResumeReply: `CLI backend RESUME OK ${params.resumeNonce} ${params.memoryToken}.`,
+    expectedResumeMarker: `CLI-RESUME-${params.resumeNonce}`,
   };
 }
 

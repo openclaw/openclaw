@@ -87,6 +87,21 @@ operator see how a card moved through the board without opening the linked
 session; it is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
+The plugin and Control UI use one Workboard card contract. Dashboard refreshes
+therefore preserve workspace provenance and authority, claim state, diagnostic
+actions, and notification sequence numbers instead of projecting a smaller
+UI-only copy of the card. Unknown diagnostic kinds, diagnostic severities, and
+notification kinds are ignored until both surfaces support them; they are never
+rewritten into another valid state.
+
+The open dashboard updates from `plugin.workboard.changed` invalidations. Each
+event contains only a store epoch and revision; the UI then rereads canonical
+cards through the normal `operator.read` RPC. Multiple revisions coalesce into
+one follow-up read. Workboard defers that read while a card is being dragged,
+edited, or written, then resumes after the local interaction finishes. A
+reconnect always performs a canonical reload. There is no routine full-card
+poll, and **Refresh** remains available as manual recovery.
+
 Cards are stored in the plugin's own Gateway state and move with the rest of
 that Gateway's OpenClaw state (see [Storage](#storage)).
 

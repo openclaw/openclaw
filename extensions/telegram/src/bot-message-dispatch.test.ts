@@ -4075,13 +4075,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
-        "Cracking\n\n🛠️ Exec\n🛠️ git rev-parse --abbrev-ref HEAD",
-        "<b>Cracking</b>\n<b>🛠️ Exec</b>\n<b>🛠️ Exec</b> <code>git rev-parse --abbrev-ref HEAD</code>",
+        "Working\n\n🛠️ Exec\n🛠️ git rev-parse --abbrev-ref HEAD",
+        "<b>Working</b>\n<b>🛠️ Exec</b>\n<b>🛠️ Exec</b> <code>git rev-parse --abbrev-ref HEAD</code>",
       ),
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
@@ -4118,7 +4118,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
     });
 
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Terminal block answer");
@@ -4142,7 +4142,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
@@ -4802,11 +4802,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Cracking\n\n🛠️ Exec", "<b>Cracking</b>\n<b>🛠️ Exec</b>"),
+      telegramProgressPreview("Working\n\n🛠️ Exec", "<b>Working</b>\n<b>🛠️ Exec</b>"),
     );
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, trailingFinalStatusText);

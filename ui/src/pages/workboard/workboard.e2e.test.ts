@@ -4,6 +4,7 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
+import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { WorkboardCard, WorkboardStatus } from "../../lib/workboard/index.ts";
 import {
@@ -343,6 +344,11 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       status: "review",
       updatedAt: baseTime + 4,
     });
+    const liveRefreshedCard = card({
+      ...reviewedCard,
+      notes: "Acceptance: live Gateway invalidation refreshed this card",
+      updatedAt: baseTime + 5,
+    });
 
     const writable = await newRecordedPage("workboard-writable");
     try {
@@ -563,6 +569,40 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await details.locator('button[aria-label="Cancel"]').click();
       await details.waitFor({ state: "hidden" });
 
+      await cardInColumn(writable.page, "Review", editedCard.title)
+        .locator('button[aria-label="Edit card"]')
+        .click();
+      await expect.poll(() => editDialog.isVisible()).toBe(true);
+      const listBeforeLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
+        .length;
+      await writableGateway.deferNext("workboard.cards.list");
+      await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
+        epoch: "workboard-e2e",
+        revision: 1,
+      });
+      await writable.page.waitForTimeout(250);
+      expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
+        listBeforeLiveRefresh,
+      );
+      await editForm
+        .locator("form > .workboard-modal__actions")
+        .getByRole("button", { name: "Cancel", exact: true })
+        .click();
+      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
+      await writableGateway.resolveDeferred("workboard.cards.list", {
+        cards: [liveRefreshedCard],
+        statuses: WORKBOARD_STATUSES,
+      });
+      await writable.page
+        .getByText("Acceptance: live Gateway invalidation refreshed this card")
+        .waitFor({ state: "visible" });
+      const listAfterLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
+        .length;
+      await writable.page.waitForTimeout(1_250);
+      expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
+        listAfterLiveRefresh,
+      );
+
       await writableGateway.deferNext("workboard.cards.list");
       const listBeforeReload = (await writableGateway.getRequests("workboard.cards.list")).length;
       await writable.page
@@ -571,13 +611,13 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         .click();
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeReload);
       await writableGateway.resolveDeferred("workboard.cards.list", {
-        cards: [reviewedCard],
+        cards: [liveRefreshedCard],
         statuses: WORKBOARD_STATUSES,
       });
       await cardInColumn(writable.page, "Review", editedCard.title).waitFor({ state: "visible" });
-      await writable.page.getByText("Acceptance: mocked Gateway browser proof").waitFor({
-        state: "visible",
-      });
+      await writable.page
+        .getByText("Acceptance: live Gateway invalidation refreshed this card")
+        .waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "08-reloaded-review");
     } finally {
       await closeRecordedPage(writable, artifacts, "workboard-writable");

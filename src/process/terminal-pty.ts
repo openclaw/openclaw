@@ -7,7 +7,7 @@ import {
 } from "./windows-command.js";
 
 /** Live PTY handle shared by gateway terminals and node-host commands. */
-export type TerminalPtyHandle = {
+type TerminalPtyHandle = {
   pid: number;
   write(data: string): void;
   resize(cols: number, rows: number): void;
@@ -18,7 +18,7 @@ export type TerminalPtyHandle = {
   kill(signal?: string): void;
 };
 
-export function resolveTerminalPtyInvocation(params: {
+function resolveTerminalPtyInvocation(params: {
   file: string;
   args: string[];
   platform?: NodeJS.Platform;

@@ -27,6 +27,8 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 let cameraTempPath: typeof import("./nodes-camera.js").cameraTempPath;
 let parseCameraClipPayload: typeof import("./nodes-camera.js").parseCameraClipPayload;
 let parseCameraSnapPayload: typeof import("./nodes-camera.js").parseCameraSnapPayload;
+let resolveCameraClipTarget: typeof import("./nodes-camera.js").resolveCameraClipTarget;
+let resolveCameraSnapTargets: typeof import("./nodes-camera.js").resolveCameraSnapTargets;
 let writeCameraClipPayloadToFile: typeof import("./nodes-camera.js").writeCameraClipPayloadToFile;
 let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
 let writeUrlToFile: typeof import("./nodes-camera.js").writeUrlToFile;
@@ -76,6 +78,8 @@ describe("nodes camera helpers", () => {
       cameraTempPath,
       parseCameraClipPayload,
       parseCameraSnapPayload,
+      resolveCameraClipTarget,
+      resolveCameraSnapTargets,
       writeCameraClipPayloadToFile,
       writeBase64ToFile,
       writeUrlToFile,
@@ -109,6 +113,35 @@ describe("nodes camera helpers", () => {
     expect(() => parseCameraSnapPayload({ format: "jpg" })).toThrow(
       /invalid camera\.snap payload/i,
     );
+  });
+
+  it("collapses Linux facing requests into one unknown-position capture", () => {
+    expect(resolveCameraSnapTargets({ facing: "both", platform: "linux" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+    expect(resolveCameraSnapTargets({ facing: "back", platform: "linux" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+    expect(
+      resolveCameraSnapTargets({ facing: "front", platform: "linux", deviceId: "/dev/video2" }),
+    ).toEqual([{ artifactFacing: "unknown" }]);
+  });
+
+  it("keeps front and back requests for positioned camera platforms", () => {
+    expect(resolveCameraSnapTargets({ facing: "both", platform: "macos" })).toEqual([
+      { requestFacing: "front", artifactFacing: "front" },
+      { requestFacing: "back", artifactFacing: "back" },
+    ]);
+  });
+
+  it("labels Linux clips as unknown without sending unsupported facing", () => {
+    expect(resolveCameraClipTarget({ facing: "back", platform: "linux" })).toEqual({
+      artifactFacing: "unknown",
+    });
+    expect(resolveCameraClipTarget({ facing: "back", platform: "macos" })).toEqual({
+      requestFacing: "back",
+      artifactFacing: "back",
+    });
   });
 
   it("parses camera.clip payload", () => {

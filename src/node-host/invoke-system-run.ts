@@ -262,7 +262,7 @@ async function resolveSystemRunAutoReviewer(params: {
   });
 }
 
-export type HandleSystemRunInvokeOptions = {
+type HandleSystemRunInvokeOptions = {
   client: NodeHostClient;
   params: SystemRunParams;
   skillBins: SkillBinsProvider;
