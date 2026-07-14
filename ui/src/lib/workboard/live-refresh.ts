@@ -1,5 +1,5 @@
-import type { WorkboardChange } from "@openclaw/workboard-contract";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { normalizeWorkboardChange } from "./change-payload.ts";
 import { refreshWorkboard, shouldDeferWorkboardLiveRefresh } from "./loading.ts";
 import {
   getWorkboardRuntime,
@@ -8,27 +8,7 @@ import {
   type WorkboardHost,
 } from "./runtime.ts";
 
-export const WORKBOARD_LIVE_REFRESH_RETRY_MS = 1000;
-
-export function normalizeWorkboardChange(payload: unknown): WorkboardChange | null {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return null;
-  }
-  const epoch = (payload as { epoch?: unknown }).epoch;
-  const revision = (payload as { revision?: unknown }).revision;
-  const keys = Object.keys(payload);
-  return keys.length === 2 &&
-    keys.includes("epoch") &&
-    keys.includes("revision") &&
-    typeof epoch === "string" &&
-    epoch.length > 0 &&
-    epoch.length <= 128 &&
-    typeof revision === "number" &&
-    Number.isSafeInteger(revision) &&
-    revision > 0
-    ? { epoch, revision }
-    : null;
-}
+const WORKBOARD_LIVE_REFRESH_RETRY_MS = 1000;
 
 function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";

@@ -508,7 +508,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ...updated,
         events: appendEvent(updated, { kind: "specified" }, now),
       };
-      await this.registerCard(specified.id, { version: 1, card: specified });
+      await this.store.register(specified.id, { version: 1, card: specified });
       return specified;
     });
   }
@@ -604,7 +604,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           ...updatedParent,
           events: appendEvent(updatedParent, { kind: "decomposed" }),
         };
-        await this.registerCard(decomposedParent.id, { version: 1, card: decomposedParent });
+        await this.store.register(decomposedParent.id, { version: 1, card: decomposedParent });
         return { parent: decomposedParent, children };
       } catch (error) {
         for (const child of children.toReversed()) {
@@ -613,9 +613,9 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           }
         }
         for (const child of reusedChildSnapshots.values()) {
-          await this.registerCard(child.id, { version: 1, card: child });
+          await this.store.register(child.id, { version: 1, card: child });
         }
-        await this.registerCard(parent.id, { version: 1, card: parent });
+        await this.store.register(parent.id, { version: 1, card: parent });
         throw error;
       }
     });

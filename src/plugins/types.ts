@@ -1,4 +1,3 @@
-// Defines the public plugin API and runtime extension contracts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type {
@@ -96,6 +95,7 @@ import type {
   PluginConversationBindingRequestResult,
   PluginConversationBindingResolvedEvent,
 } from "./conversation-binding.types.js";
+import type { OpenClawPluginGatewayEvents } from "./gateway-events.js";
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import type {
   PluginAgentEventEmitParams,
@@ -210,6 +210,7 @@ export type {
   PluginTextTransforms,
 } from "./cli-backend.types.js";
 export * from "./hook-types.js";
+export * from "./gateway-events.js";
 export type {
   PluginAgentEventEmitParams,
   PluginAgentEventEmitResult,
@@ -2436,16 +2437,6 @@ export type OpenClawGatewayDiscoveryService = {
 };
 
 /** Context passed to long-lived plugin services. */
-export type OpenClawPluginGatewayEventScope = "operator.read" | "operator.write" | "operator.admin";
-
-export type OpenClawPluginGatewayEvents = {
-  emit: (
-    event: string,
-    payload: PluginJsonValue,
-    opts: { scope: OpenClawPluginGatewayEventScope },
-  ) => void;
-};
-
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
   workspaceDir?: string;

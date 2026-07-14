@@ -8,12 +8,12 @@ export type WorkboardLoadToken = {
   queuedAfterGeneration?: number;
 };
 
-export type WorkboardLiveRefreshEntry = {
+type WorkboardLiveRefreshEntry = {
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;
 };
 
-export type WorkboardRuntime = {
+type WorkboardRuntime = {
   state?: WorkboardUiState;
   loadPromise?: Promise<boolean>;
   loadToken?: WorkboardLoadToken;
@@ -46,7 +46,7 @@ export const WORKBOARD_LIFECYCLE_TASK_CONFIRMATION_TIMEOUT_ERROR =
   "Task confirmation exceeded its freshness window.";
 const WORKBOARD_LIFECYCLE_TASK_RETRY_MS = 5000;
 const WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS = 100;
-export const WORKBOARD_LIFECYCLE_TASK_RECONCILE_MS = 5000;
+const WORKBOARD_LIFECYCLE_TASK_RECONCILE_MS = 5000;
 
 export function nextWorkboardLoadGeneration(host: WorkboardHost): number {
   const runtime = getWorkboardRuntime(host);
@@ -98,7 +98,7 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
   nextWorkboardLifecycleReconciliationEpoch(host);
 }
 
-export function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
+function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const timer = runtime.lifecycleTaskPreparedTimer;
   if (timer) {
@@ -107,7 +107,7 @@ export function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
   }
 }
 
-export function clearWorkboardLifecycleTaskRetryTimer(host: WorkboardHost) {
+function clearWorkboardLifecycleTaskRetryTimer(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const timer = runtime.lifecycleTaskRetryTimer;
   if (timer) {

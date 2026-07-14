@@ -250,7 +250,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       throw new Error(`invalid plugin gateway event: ${event}`);
     }
     if (scope !== READ_SCOPE && scope !== WRITE_SCOPE && scope !== ADMIN_SCOPE) {
-      throw new Error(`invalid plugin gateway event scope: ${scope}`);
+      throw new Error("invalid plugin gateway event scope");
     }
     broadcastInternal(event, payload, undefined, undefined, scope);
   };

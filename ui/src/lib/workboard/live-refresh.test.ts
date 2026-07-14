@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeWorkboardChange } from "./change-payload.ts";
 import {
   configureWorkboardLiveRefresh,
   handleWorkboardChanged,
-  normalizeWorkboardChange,
   resumeWorkboardLiveRefresh,
   stopWorkboardLiveRefresh,
-  WORKBOARD_LIVE_REFRESH_RETRY_MS,
 } from "./live-refresh.ts";
 import { getWorkboardState } from "./runtime.ts";
 
@@ -154,7 +153,7 @@ describe("Workboard live refresh", () => {
       client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
     ).toHaveLength(1);
     fail = false;
-    await vi.advanceTimersByTimeAsync(WORKBOARD_LIVE_REFRESH_RETRY_MS);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(
       client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
     ).toHaveLength(2);
@@ -195,7 +194,9 @@ describe("Workboard live refresh", () => {
       statuses: ["todo", "done"],
     });
     await list.promise;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(getWorkboardState(host).cards).toEqual([]);
   });

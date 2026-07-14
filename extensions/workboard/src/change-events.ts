@@ -2,7 +2,7 @@ import type { WorkboardChange } from "@openclaw/workboard-contract";
 import type { OpenClawPluginService } from "../api.js";
 import type { WorkboardStore } from "./store.js";
 
-export const WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = 1000;
+const WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = 1000;
 
 export function createWorkboardChangeEventService(store: WorkboardStore): OpenClawPluginService {
   let unsubscribe: (() => void) | undefined;

@@ -1,4 +1,3 @@
-// Workboard plugin module implements sqlite store behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
@@ -26,15 +25,12 @@ import type {
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
-
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
 const SCHEMA_VERSION = 2;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
-
 type Row = Record<string, unknown>;
-
 type WorkboardSqliteStores = {
   cards: WorkboardKeyedStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;

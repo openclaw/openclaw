@@ -29,6 +29,7 @@ import {
   updateEvent,
   appendEvent,
 } from "./store-card-helpers.js";
+import { WorkboardChangeTracker } from "./store-change-tracker.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
 import type {
   WorkboardBoardInput,
@@ -69,18 +70,14 @@ import {
 export class WorkboardCoreStore {
   private mutationQueue: Promise<unknown> = Promise.resolve();
   private lastNotificationSequence = 0;
-  private readonly changeEpoch = randomUUID();
-  private changeRevision = 0;
-  private visibleMutationRevision = 0;
-  private externalDataVersion: number | undefined;
-  private readonly changeListeners = new Set<(change: WorkboardChange) => void>();
-  private readonly readDataVersion?: () => number;
+  private readonly changes: WorkboardChangeTracker;
+  protected readonly store: WorkboardKeyedStore;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
   protected readonly subscriptionStore: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   protected readonly attachmentStore: WorkboardKeyedStore<PersistedWorkboardAttachment>;
 
   constructor(
-    protected readonly store: WorkboardKeyedStore,
+    store: WorkboardKeyedStore,
     stores: {
       boards?: WorkboardKeyedStore<PersistedWorkboardBoard>;
       subscriptions?: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
@@ -88,94 +85,38 @@ export class WorkboardCoreStore {
       dataVersion?: () => number;
     } = {},
   ) {
-    this.boardStore =
-      stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>);
+    this.changes = new WorkboardChangeTracker(stores.dataVersion);
+    this.store = this.changes.track(store);
+    this.boardStore = this.changes.track(
+      stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>),
+    );
     this.subscriptionStore =
       stores.subscriptions ??
       (store as unknown as WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>);
     this.attachmentStore =
       stores.attachments ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardAttachment>);
-    this.readDataVersion = stores.dataVersion;
-    this.externalDataVersion = stores.dataVersion?.();
   }
 
   subscribeChanges(listener: (change: WorkboardChange) => void): () => void {
-    this.changeListeners.add(listener);
-    return () => this.changeListeners.delete(listener);
+    return this.changes.subscribe(listener);
   }
 
   announceChangeEpoch(): void {
-    this.emitChanged();
+    this.changes.announceEpoch();
   }
 
   reconcileExternalChanges(): boolean {
-    const readDataVersion = this.readDataVersion;
-    if (!readDataVersion) {
-      return false;
-    }
-    const current = readDataVersion();
-    if (current === this.externalDataVersion) {
-      return false;
-    }
-    this.externalDataVersion = current;
-    this.emitChanged();
-    return true;
-  }
-
-  private emitChanged(): void {
-    const change = { epoch: this.changeEpoch, revision: ++this.changeRevision };
-    for (const listener of this.changeListeners) {
-      try {
-        listener(change);
-      } catch {
-        // Persistence already succeeded. Observers cannot turn it into a reported failure.
-      }
-    }
+    return this.changes.reconcileExternalChanges();
   }
 
   protected async enqueueMutation<T>(run: () => Promise<T>): Promise<T> {
-    const runAndNotify = async () => {
-      const visibleMutationRevision = this.visibleMutationRevision;
-      try {
-        return await run();
-      } finally {
-        if (this.visibleMutationRevision !== visibleMutationRevision) {
-          this.emitChanged();
-        }
-      }
-    };
+    const runAndNotify = async () => await this.changes.runMutation(run);
     const result = this.mutationQueue.then(runAndNotify, runAndNotify);
     this.mutationQueue = result.then(
       () => undefined,
       () => undefined,
     );
     return await result;
-  }
-
-  protected async registerCard(key: string, value: PersistedWorkboardCard): Promise<void> {
-    await this.store.register(key, value);
-    this.visibleMutationRevision += 1;
-  }
-
-  protected async deleteCard(key: string): Promise<boolean> {
-    const deleted = await this.store.delete(key);
-    if (deleted) {
-      this.visibleMutationRevision += 1;
-    }
-    return deleted;
-  }
-
-  private async registerBoard(key: string, value: PersistedWorkboardBoard): Promise<void> {
-    await this.boardStore.register(key, value);
-    this.visibleMutationRevision += 1;
-  }
-
-  private async deleteBoardRecord(key: string): Promise<boolean> {
-    const deleted = await this.boardStore.delete(key);
-    if (deleted) {
-      this.visibleMutationRevision += 1;
-    }
-    return deleted;
   }
 
   protected async updateMetadata(
@@ -287,7 +228,7 @@ export class WorkboardCoreStore {
       const id = normalizeBoardIdRequired(input.id);
       const existing = await this.boardStore.lookup(id);
       const board = normalizeBoardMetadata({ ...input, id }, existing?.board);
-      await this.registerBoard(id, { version: 1, board });
+      await this.boardStore.register(id, { version: 1, board });
       return board;
     });
   }
@@ -310,7 +251,7 @@ export class WorkboardCoreStore {
           await this.subscriptionStore.delete(entry.key);
         }
       }
-      return { deleted: await this.deleteBoardRecord(boardId) };
+      return { deleted: await this.boardStore.delete(boardId) };
     });
   }
 
@@ -491,7 +432,7 @@ export class WorkboardCoreStore {
       ...(completedAt ? { completedAt } : {}),
       ...(!metadataIsEmpty(syncedMetadata) ? { metadata: syncedMetadata } : {}),
     };
-    await this.registerCard(card.id, { version: 1, card });
+    await this.store.register(card.id, { version: 1, card });
     try {
       for (const parent of parentCards) {
         card = await this.linkCardsDirect(parent.id, card.id, now, {
@@ -500,7 +441,7 @@ export class WorkboardCoreStore {
         });
       }
     } catch (error) {
-      await this.deleteCard(card.id);
+      await this.store.delete(card.id);
       await this.removeReferencesToCard(card.id);
       throw error;
     }
@@ -671,7 +612,7 @@ export class WorkboardCoreStore {
     if (metadataIsEmpty(next.metadata)) {
       delete next.metadata;
     }
-    await this.registerCard(next.id, { version: 1, card: next });
+    await this.store.register(next.id, { version: 1, card: next });
     await this.deleteDetachedAttachments(existing, next);
     return next;
   }
@@ -713,7 +654,7 @@ export class WorkboardCoreStore {
 
   protected async deleteDirect(id: string): Promise<{ deleted: boolean }> {
     const cardId = id.trim();
-    const deleted = await this.deleteCard(cardId);
+    const deleted = await this.store.delete(cardId);
     if (!deleted) {
       return { deleted: false };
     }
@@ -927,7 +868,7 @@ export class WorkboardCoreStore {
       ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
       events: appendEvent(card, { kind: "dispatch" }, now),
     });
-    await this.registerCard(card.id, { version: 1, card: next });
+    await this.store.register(card.id, { version: 1, card: next });
     return next;
   }
 
@@ -957,20 +898,8 @@ export class WorkboardCoreStore {
       ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
       events: appendEvent(card, { kind: "orchestration" }, now),
     });
-    await this.registerCard(card.id, { version: 1, card: next });
+    await this.store.register(card.id, { version: 1, card: next });
     return next;
-  }
-
-  protected async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
-    if (
-      card.status !== "triage" ||
-      card.metadata?.archivedAt ||
-      card.metadata?.workerProtocol?.state === "idle"
-    ) {
-      return false;
-    }
-    const board = await this.boardStore.lookup(cardBoardId(card));
-    return board?.version === 1 && board.board.orchestration?.autoDecompose === true;
   }
 
   protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
@@ -983,18 +912,5 @@ export class WorkboardCoreStore {
       return card;
     }
     return await this.updateCard(card.id, { status: target });
-  }
-
-  async promoteReady(now = Date.now()): Promise<{ cards: WorkboardCard[]; count: number }> {
-    return await this.enqueueMutation(async () => {
-      const promoted: WorkboardCard[] = [];
-      for (const card of await this.list()) {
-        const next = await this.promoteDependencyReady(card.id, now);
-        if (next.status !== card.status) {
-          promoted.push(next);
-        }
-      }
-      return { cards: promoted, count: promoted.length };
-    });
   }
 }

@@ -1,4 +1,3 @@
-// Core SDK contracts expose stable identifiers, manifests, and shared plugin metadata types.
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
@@ -37,7 +36,6 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
-
 export type {
   AgentPromptGuidance,
   AgentPromptGuidanceEntry,
