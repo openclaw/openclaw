@@ -411,12 +411,12 @@ describe("runGuidedOnboarding", () => {
 
   it("accepts and verifies a manual provider key without displaying it", async () => {
     const enteredValue = "synthetic-value";
-    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-api-key");
+    promptAuthChoiceGrouped.mockResolvedValueOnce("apiKey");
     const text = vi.fn().mockResolvedValueOnce(enteredValue);
     const detect = vi.fn(async () =>
       detection({
         candidates: [],
-        manualProviders: [{ id: "openai-api-key", label: "OpenAI", hint: "API key" }],
+        manualProviders: [{ id: "apiKey", label: "Anthropic", hint: "API key" }],
       }),
     );
     const prompter = createWizardPrompter({
@@ -438,10 +438,13 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedChoices: new Set(["apiKey"]) }),
+    );
     expect(activate).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "api-key",
-        authChoice: "openai-api-key",
+        authChoice: "apiKey",
         apiKey: enteredValue,
       }),
     );
