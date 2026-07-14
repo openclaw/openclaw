@@ -204,6 +204,7 @@ describe("embedded gateway stub", () => {
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
       maxChars: 100_000,
       maxMessages: 200,
+      redactInlineMedia: true,
     });
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
       {
@@ -271,6 +272,7 @@ describe("embedded gateway stub", () => {
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
       maxChars: 100_000,
       maxMessages: 1,
+      redactInlineMedia: true,
     });
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
       {
@@ -330,6 +332,7 @@ describe("embedded gateway stub", () => {
     );
     expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith(rawMessages.slice(0, 2), {
       maxChars: 100_000,
+      redactInlineMedia: true,
     });
     expect(result).toMatchObject({
       messages: rawMessages.slice(0, 2),
@@ -367,6 +370,7 @@ describe("embedded gateway stub", () => {
 
     expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith([rawMessages[1]], {
       maxChars: 100_000,
+      redactInlineMedia: true,
     });
     expect(result.messages).toEqual([projectedMessages[1]]);
     expect(result.nextOffset).toBe(2);
@@ -402,6 +406,7 @@ describe("embedded gateway stub", () => {
     expect(runtime.dropPreSessionStartAnnouncePairs).toHaveBeenCalledWith(rawMessages, 1234);
     expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith(filteredMessages, {
       maxChars: 100_000,
+      redactInlineMedia: true,
     });
     expect(result.messages).toEqual(filteredMessages);
   });
@@ -466,6 +471,7 @@ describe("embedded gateway stub", () => {
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
       maxChars: 100_000,
       maxMessages: 2,
+      redactInlineMedia: true,
     });
     expect(result).toMatchObject({
       messages: projectedMessages,
@@ -520,6 +526,7 @@ describe("embedded gateway stub", () => {
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
       maxChars: 100_000,
       maxMessages: 2,
+      redactInlineMedia: true,
     });
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
       {

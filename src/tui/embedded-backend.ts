@@ -543,6 +543,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       projectRecentChatDisplayMessages(rawMessages, {
         maxChars: effectiveMaxChars,
         maxMessages: max,
+        redactInlineMedia: true,
       }),
     );
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);

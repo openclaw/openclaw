@@ -898,6 +898,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const projectedMessage = resolved.message
       ? projectChatDisplayMessage(resolved.message, {
           maxChars: effectiveMaxChars,
+          redactInlineMedia: true,
         })
       : undefined;
     const projected = projectedMessage

@@ -14,6 +14,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
+import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
@@ -30,6 +31,12 @@ import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+
+type ChatHistorySanitizeOpts = {
+  preserveExactToolPayload?: boolean;
+  maxChars?: number;
+  redactInlineMedia?: boolean;
+};
 
 type RoleContentMessage = {
   role: string;
@@ -347,9 +354,17 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
   return changed ? next : messages;
 }
 
+function redactInlineMediaBytes(value: string): { omitted: true; bytes: number } {
+  return { omitted: true, bytes: Buffer.byteLength(value, "utf8") };
+}
+
+function isInlineDataUrl(value: string): boolean {
+  return classifyMediaReferenceSource(value).isDataUrl;
+}
+
 function sanitizeChatHistoryContentBlock(
   block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
+  opts?: ChatHistorySanitizeOpts,
 ): { block: unknown; changed: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false };
@@ -420,6 +435,63 @@ function sanitizeChatHistoryContentBlock(
     entry.omitted = true;
     entry.bytes = bytes;
     changed = true;
+  }
+  if (opts?.redactInlineMedia === true) {
+    if (type === "image" && typeof entry.url === "string" && isInlineDataUrl(entry.url)) {
+      const redacted = redactInlineMediaBytes(entry.url);
+      delete entry.url;
+      entry.omitted = redacted.omitted;
+      entry.bytes = redacted.bytes;
+      changed = true;
+    }
+    if (type === "image" && entry.source && typeof entry.source === "object") {
+      const source = { ...(entry.source as Record<string, unknown>) };
+      if (typeof source.data === "string") {
+        const redacted = redactInlineMediaBytes(source.data);
+        delete source.data;
+        source.omitted = redacted.omitted;
+        source.bytes = redacted.bytes;
+        entry.source = source;
+        changed = true;
+      } else if (typeof source.url === "string" && isInlineDataUrl(source.url)) {
+        const redacted = redactInlineMediaBytes(source.url);
+        delete source.url;
+        source.omitted = redacted.omitted;
+        source.bytes = redacted.bytes;
+        entry.source = source;
+        changed = true;
+      }
+    }
+    if (type === "input_image") {
+      if (typeof entry.image_url === "string" && isInlineDataUrl(entry.image_url)) {
+        const redacted = redactInlineMediaBytes(entry.image_url);
+        delete entry.image_url;
+        entry.omitted = redacted.omitted;
+        entry.bytes = redacted.bytes;
+        changed = true;
+      } else if (entry.image_url && typeof entry.image_url === "object") {
+        const imageUrl = { ...(entry.image_url as Record<string, unknown>) };
+        if (typeof imageUrl.url === "string" && isInlineDataUrl(imageUrl.url)) {
+          const redacted = redactInlineMediaBytes(imageUrl.url);
+          delete imageUrl.url;
+          imageUrl.omitted = redacted.omitted;
+          imageUrl.bytes = redacted.bytes;
+          entry.image_url = imageUrl;
+          changed = true;
+        }
+      }
+      if (entry.source && typeof entry.source === "object") {
+        const source = { ...(entry.source as Record<string, unknown>) };
+        if (typeof source.data === "string") {
+          const redacted = redactInlineMediaBytes(source.data);
+          delete source.data;
+          source.omitted = redacted.omitted;
+          source.bytes = redacted.bytes;
+          entry.source = source;
+          changed = true;
+        }
+      }
+    }
   }
   if (type === "audio" && entry.source && typeof entry.source === "object") {
     const source = { ...(entry.source as Record<string, unknown>) };
@@ -565,6 +637,7 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
 function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  opts?: Pick<ChatHistorySanitizeOpts, "redactInlineMedia">,
 ): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
@@ -636,7 +709,11 @@ function sanitizeChatHistoryMessage(
     }
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) =>
-      sanitizeChatHistoryContentBlock(block, { preserveExactToolPayload, maxChars }),
+      sanitizeChatHistoryContentBlock(block, {
+        preserveExactToolPayload,
+        maxChars,
+        redactInlineMedia: opts?.redactInlineMedia,
+      }),
     );
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);
@@ -1238,6 +1315,7 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  opts?: Pick<ChatHistorySanitizeOpts, "redactInlineMedia">,
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -1249,7 +1327,7 @@ export function sanitizeChatHistoryMessages(
       changed = true;
       continue;
     }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
+    const res = sanitizeChatHistoryMessage(message, maxChars, opts);
     changed ||= res.changed;
     if (shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;
@@ -1784,17 +1862,19 @@ const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before produ
 
 function sanitizeAssistantErrorDisplayMessage(
   message: Record<string, unknown>,
+  opts?: Pick<ChatHistorySanitizeOpts, "redactInlineMedia">,
 ): Record<string, unknown> {
   const { content, ...envelope } = message;
-  const next = sanitizeChatHistoryMessage(envelope, Number.MAX_SAFE_INTEGER).message as Record<
-    string,
-    unknown
-  >;
+  const next = sanitizeChatHistoryMessage(envelope, Number.MAX_SAFE_INTEGER, opts)
+    .message as Record<string, unknown>;
   next.content = Array.isArray(content)
     ? content
         .map(
           (block) =>
-            sanitizeChatHistoryContentBlock(block, { maxChars: Number.MAX_SAFE_INTEGER }).block,
+            sanitizeChatHistoryContentBlock(block, {
+              maxChars: Number.MAX_SAFE_INTEGER,
+              redactInlineMedia: opts?.redactInlineMedia,
+            }).block,
         )
         .filter((block) => {
           if (!block || typeof block !== "object" || Array.isArray(block)) {
@@ -1814,6 +1894,7 @@ function sanitizeAssistantErrorDisplayMessage(
 
 function projectEmptyAssistantErrorMessages(
   messages: Array<Record<string, unknown>>,
+  opts?: Pick<ChatHistorySanitizeOpts, "redactInlineMedia">,
 ): Array<Record<string, unknown>> {
   let changed = false;
   const projected = messages.map((message) => {
@@ -1836,9 +1917,9 @@ function projectEmptyAssistantErrorMessages(
       });
     if (hasDisplayableStructuredContent) {
       changed = true;
-      return sanitizeAssistantErrorDisplayMessage(message);
+      return sanitizeAssistantErrorDisplayMessage(message, opts);
     }
-    const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
+    const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER, opts)
       .message as Record<string, unknown>;
     const visibleTexts: string[] = [];
     if (typeof sanitized.content === "string") {
@@ -1863,7 +1944,7 @@ function projectEmptyAssistantErrorMessages(
     );
     if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleReplyText) {
       changed = true;
-      return sanitizeAssistantErrorDisplayMessage(message);
+      return sanitizeAssistantErrorDisplayMessage(message, opts);
     }
     changed = true;
     const next: Record<string, unknown> = {
@@ -1884,21 +1965,28 @@ function projectEmptyAssistantErrorMessages(
 
 export function projectChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: { maxChars?: number; stripEnvelope?: boolean; redactInlineMedia?: boolean },
 ): Array<Record<string, unknown>> {
+  const sanitizeOpts = { redactInlineMedia: options?.redactInlineMedia };
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   const mirrored = mirrorMessageToolVisibleReplies(source);
-  const projectedErrors = projectEmptyAssistantErrorMessages(toProjectedMessages(mirrored));
+  const projectedErrors = projectEmptyAssistantErrorMessages(
+    toProjectedMessages(mirrored),
+    sanitizeOpts,
+  );
   const projectedForwarded = mergeTtsSupplementMessages(
     filterVisibleProjectedHistoryMessages(
       projectSessionsSendInterSessionMessages(
-        toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
+        toProjectedMessages(
+          sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, sanitizeOpts),
+        ),
       ),
     ),
   );
   return sanitizeChatHistoryMessages(
     projectedForwarded,
     options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    sanitizeOpts,
   ) as Array<Record<string, unknown>>;
 }
 
@@ -1916,7 +2004,12 @@ function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
 
 export function projectRecentChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
+  options?: {
+    maxChars?: number;
+    maxMessages?: number;
+    stripEnvelope?: boolean;
+    redactInlineMedia?: boolean;
+  },
 ): Array<Record<string, unknown>> {
   return limitChatDisplayMessages(
     projectChatDisplayMessages(messages, options),
@@ -1926,7 +2019,7 @@ export function projectRecentChatDisplayMessages(
 
 export function projectChatDisplayMessage(
   message: unknown,
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: { maxChars?: number; stripEnvelope?: boolean; redactInlineMedia?: boolean },
 ): Record<string, unknown> | undefined {
   return projectChatDisplayMessages([message], options)[0];
 }

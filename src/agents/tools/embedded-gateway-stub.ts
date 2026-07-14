@@ -67,10 +67,13 @@ interface EmbeddedGatewayRuntime {
     messages: unknown[],
     sessionStartedAt: number | undefined,
   ) => unknown[];
-  projectChatDisplayMessages: (msgs: unknown[], opts?: { maxChars?: number }) => unknown[];
+  projectChatDisplayMessages: (
+    msgs: unknown[],
+    opts?: { maxChars?: number; redactInlineMedia?: boolean },
+  ) => unknown[];
   projectRecentChatDisplayMessages: (
     msgs: unknown[],
-    opts?: { maxChars?: number; maxMessages?: number },
+    opts?: { maxChars?: number; maxMessages?: number; redactInlineMedia?: boolean },
   ) => unknown[];
   capArrayByJsonBytes: (items: unknown[], maxBytes: number) => { items: unknown[] };
   listSessionsFromStoreAsync: (opts: {
@@ -424,13 +427,18 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
       ? rt.projectRecentChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
           maxMessages: max,
+          redactInlineMedia: true,
         })
       : offset === 0
         ? rt.projectRecentChatDisplayMessages(recencyFilteredMessages, {
             maxChars: effectiveMaxChars,
             maxMessages: max,
+            redactInlineMedia: true,
           })
-        : rt.projectChatDisplayMessages(recencyFilteredMessages, { maxChars: effectiveMaxChars });
+        : rt.projectChatDisplayMessages(recencyFilteredMessages, {
+            maxChars: effectiveMaxChars,
+            redactInlineMedia: true,
+          });
   const windowed =
     params.offset === undefined || offset === 0
       ? projected

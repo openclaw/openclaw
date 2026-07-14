@@ -303,9 +303,11 @@ export async function readChatHistoryPage(params: {
       ? projectRecentChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
           maxMessages: max,
+          redactInlineMedia: true,
         })
       : projectChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
+          redactInlineMedia: true,
         });
     const windowed = messageId
       ? (capChatHistoryAroundMessage({
@@ -389,6 +391,7 @@ export async function readChatHistoryPage(params: {
     );
     const displayMessages = projectChatDisplayMessages(mergedMessages, {
       maxChars: effectiveMaxChars,
+      redactInlineMedia: true,
     });
     return {
       messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
@@ -413,6 +416,7 @@ export async function readChatHistoryPage(params: {
   const displayMessages = projectRecentChatDisplayMessages(recencyFilteredMessages, {
     maxChars: effectiveMaxChars,
     maxMessages: max,
+    redactInlineMedia: true,
   });
   return {
     messages: augmentChatHistoryWithCanvasBlocks(displayMessages),

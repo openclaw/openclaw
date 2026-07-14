@@ -32,6 +32,7 @@ import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
+  projectChatDisplayMessage,
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
@@ -928,6 +929,276 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
+  it("redacts base64 image content blocks from chat history", () => {
+    const image = Buffer.from("png-bytes");
+    const data = image.toString("base64");
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "image", data }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            omitted: true,
+            bytes: image.byteLength,
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("redacts data-url image blocks from chat history", () => {
+    const payload = Buffer.from("png-bytes").toString("base64");
+    const url = `data:image/png;base64,${payload}`;
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "see this" },
+            { type: "image", url },
+          ],
+          timestamp: 1,
+        },
+      ],
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "see this" },
+          {
+            type: "image",
+            omitted: true,
+            bytes: Buffer.byteLength(url, "utf8"),
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("redacts WebChat Responses input_image blocks from chat history", () => {
+    const payload = Buffer.from("png-bytes").toString("base64");
+    const image_url = `data:image/png;base64,${payload}`;
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "input_image", image_url }],
+          timestamp: 1,
+        },
+      ],
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "input_image",
+            omitted: true,
+            bytes: Buffer.byteLength(image_url, "utf8"),
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("preserves non-data image URLs in chat history", () => {
+    const url = "https://example.test/photo.png";
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "image", url }],
+          timestamp: 1,
+        },
+      ],
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "image", url }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("redacts image.source.data blocks from chat history", () => {
+    const data = Buffer.from("png-bytes").toString("base64");
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data },
+            },
+          ],
+          timestamp: 1,
+        },
+      ],
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              omitted: true,
+              bytes: Buffer.byteLength(data, "utf8"),
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("redacts input_image.source.data blocks from chat history", () => {
+    const data = Buffer.from("png-bytes").toString("base64");
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "input_image",
+              source: { type: "base64", media_type: "image/png", data },
+            },
+          ],
+          timestamp: 1,
+        },
+      ],
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "input_image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              omitted: true,
+              bytes: Buffer.byteLength(data, "utf8"),
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("redacts nested input_image.image_url.url data URLs from chat history", () => {
+    const payload = Buffer.from("png-bytes").toString("base64");
+    const url = `data:image/png;base64,${payload}`;
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "input_image", image_url: { url } }],
+          timestamp: 1,
+        },
+      ],
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "input_image",
+            image_url: {
+              omitted: true,
+              bytes: Buffer.byteLength(url, "utf8"),
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("redacts mixed-case data URLs from chat history", () => {
+    const payload = Buffer.from("png-bytes").toString("base64");
+    const image_url = `DATA:image/png;BASE64,${payload}`;
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "input_image", image_url }],
+          timestamp: 1,
+        },
+      ],
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "input_image",
+            omitted: true,
+            bytes: Buffer.byteLength(image_url, "utf8"),
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("preserves input_image data URLs when inline media redaction is disabled", () => {
+    const image_url = "data:image/png;base64,cG5n";
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "input_image", image_url }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "input_image", image_url }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("strips internal reasoning replay metadata from chat history", () => {
     const result = sanitizeChatHistoryMessages([
       {
@@ -1030,6 +1301,26 @@ describe("sanitizeChatHistoryMessages", () => {
         role: "assistant",
         content: [{ type: "text", text: "real reply" }],
         timestamp: 3,
+      },
+    ]);
+  });
+
+  it("redacts input_image data URLs for the single-message reader used by chat.message.get", () => {
+    const image_url = "data:image/png;base64,cG5n";
+    const projected = projectChatDisplayMessage(
+      {
+        role: "assistant",
+        content: [{ type: "input_image", image_url }],
+      },
+      { redactInlineMedia: true },
+    );
+
+    expect(projected).toBeDefined();
+    expect(projected!.content).toEqual([
+      {
+        type: "input_image",
+        omitted: true,
+        bytes: Buffer.byteLength(image_url, "utf8"),
       },
     ]);
   });
