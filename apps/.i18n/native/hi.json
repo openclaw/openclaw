@@ -13969,6 +13969,11 @@
       "translated": "स्वास्थ्य सारांश चालू करने के बाद, OpenClaw अनुरोधित समेकित डेटा को आपके कॉन्फ़िगर किए गए AI प्रदाता के साथ साझा करने के लिए कदम, नींद, आराम की हृदय गति और वर्कआउट पढ़ता है।"
     },
     {
+      "id": "native.apple.89de9bad79f17038",
+      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "OpenClaw हेल्थ डेटा को लिखता या बदलता नहीं है। Health Summaries आपके कॉन्फ़िगर किए गए AI प्रदाता के साथ अनुरोधित समुच्चय साझा करने के लिए कदम, नींद, विश्राम हृदय गति और वर्कआउट पढ़ता है।"
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw आपके असिस्टेंट को आपकी अनुमति वाली फ़ोटो पढ़ने देता है और आपको साझा करने के लिए फ़ोटो चुनने देता है।"

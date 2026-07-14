@@ -13969,6 +13969,11 @@
       "translated": "После включения сводок о здоровье OpenClaw считывает данные о шагах, сне, пульсе в состоянии покоя и тренировках, чтобы передавать запрошенные агрегированные данные настроенному поставщику ИИ."
     },
     {
+      "id": "native.apple.89de9bad79f17038",
+      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "OpenClaw не записывает и не изменяет данные Health. Сводки Health считывают шаги, сон, пульс в покое и тренировки, чтобы передать запрошенные агрегированные данные вашему настроенному AI-провайдеру."
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw позволяет вашему ассистенту читать разрешённые вами фотографии и позволяет вам выбирать фотографии для отправки."

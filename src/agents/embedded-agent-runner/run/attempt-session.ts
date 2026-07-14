@@ -30,25 +30,6 @@ import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-/**
- * Session construction bridge for embedded-attempt runs.
- */
-type EmbeddedAgentSessionOptions = {
-  cwd: string;
-  agentDir: string;
-  authStorage: unknown;
-  modelRegistry: unknown;
-  model: unknown;
-  thinkingLevel: unknown;
-  tools: NonNullable<CreateAgentSessionOptions["tools"]>;
-  customTools: NonNullable<CreateAgentSessionOptions["customTools"]>;
-  sessionManager: unknown;
-  settingsManager: unknown;
-  resourceLoader: unknown;
-  resolveDeferredTool?: CreateAgentSessionOptions["resolveDeferredTool"];
-  withSessionWriteLock?: CreateAgentSessionOptions["withSessionWriteLock"];
-};
-
 type ClientToolPreparation = Omit<
   Parameters<typeof prepareEmbeddedAttemptClientTools>[0],
   "attempt"
@@ -128,62 +109,58 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   });
   const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
 
-  const createdSession = await createEmbeddedAgentSessionWithResourceLoader({
-    createAgentSession: async (options) =>
-      await createAgentSession(options as unknown as Parameters<typeof createAgentSession>[0]),
-    options: {
-      cwd: input.effectiveCwd,
-      agentDir: input.agentDir,
-      authStorage: attempt.authStorage,
-      modelRegistry: attempt.modelRegistry,
-      model: attempt.model,
-      thinkingLevel: input.agentCoreThinkingLevel,
-      tools: sessionToolAllowlist,
-      customTools: allCustomTools,
-      sessionManager: input.sessionManager,
-      settingsManager,
-      resourceLoader,
-      resolveDeferredTool: input.clientToolPreparation.deferredDirectoryToolsCallable
-        ? ({ toolCall }) => {
-            const tool = resolveToolSearchCatalogTool(
-              {
-                config: attempt.config,
-                runtimeConfig: attempt.config,
-                agentId: input.sessionAgentId,
-                sessionKey: input.clientToolPreparation.sandboxSessionKey,
-                sessionId: attempt.sessionId,
-                runId: attempt.runId,
-                catalogRef: input.clientToolPreparation.toolSearchCatalogRef,
-                abortSignal: input.runAbortSignal,
-              },
-              toolCall.name,
-            );
-            // Catalog entries already own before_tool_call wrapping.
-            const definition = tool
-              ? toToolDefinitions([tool], input.clientToolPreparation.catalogToolHookContext)[0]
-              : undefined;
-            const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
-            if (hydratedTool) {
-              log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
-              const originalExecute = hydratedTool.execute;
-              hydratedTool.execute = (async (...args: Parameters<typeof originalExecute>) => {
-                const interval = setInterval(() => notifyToolActivity(attempt.runId), 60_000);
-                interval.unref?.();
-                try {
-                  notifyToolActivity(attempt.runId);
-                  return await originalExecute(...args);
-                } finally {
-                  clearInterval(interval);
-                  notifyToolActivity(attempt.runId);
-                }
-              }) as typeof originalExecute;
-            }
-            return hydratedTool;
+  const createdSession = await createAgentSession({
+    cwd: input.effectiveCwd,
+    agentDir: input.agentDir,
+    authStorage: attempt.authStorage,
+    modelRegistry: attempt.modelRegistry,
+    model: attempt.model,
+    thinkingLevel: input.agentCoreThinkingLevel,
+    tools: sessionToolAllowlist,
+    customTools: allCustomTools,
+    sessionManager: input.sessionManager,
+    settingsManager,
+    resourceLoader,
+    resolveDeferredTool: input.clientToolPreparation.deferredDirectoryToolsCallable
+      ? ({ toolCall }) => {
+          const tool = resolveToolSearchCatalogTool(
+            {
+              config: attempt.config,
+              runtimeConfig: attempt.config,
+              agentId: input.sessionAgentId,
+              sessionKey: input.clientToolPreparation.sandboxSessionKey,
+              sessionId: attempt.sessionId,
+              runId: attempt.runId,
+              catalogRef: input.clientToolPreparation.toolSearchCatalogRef,
+              abortSignal: input.runAbortSignal,
+            },
+            toolCall.name,
+          );
+          // Catalog entries already own before_tool_call wrapping.
+          const definition = tool
+            ? toToolDefinitions([tool], input.clientToolPreparation.catalogToolHookContext)[0]
+            : undefined;
+          const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
+          if (hydratedTool) {
+            log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
+            const originalExecute = hydratedTool.execute;
+            hydratedTool.execute = (async (...args: Parameters<typeof originalExecute>) => {
+              const interval = setInterval(() => notifyToolActivity(attempt.runId), 60_000);
+              interval.unref?.();
+              try {
+                notifyToolActivity(attempt.runId);
+                return await originalExecute(...args);
+              } finally {
+                clearInterval(interval);
+                notifyToolActivity(attempt.runId);
+              }
+            }) as typeof originalExecute;
           }
-        : undefined,
-      withSessionWriteLock: (operation) =>
-        input.sessionLockController.withSessionWriteLock(operation),
-    },
+          return hydratedTool;
+        }
+      : undefined,
+    withSessionWriteLock: (operation) =>
+      input.sessionLockController.withSessionWriteLock(operation),
   });
   const activeSession = createdSession.session;
   if (!activeSession) {
@@ -219,12 +196,4 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     setActiveSessionSystemPrompt,
     settingsManager,
   };
-}
-
-/** Invokes the supplied session factory with the prepared embedded-agent session options. */
-async function createEmbeddedAgentSessionWithResourceLoader<Result>(params: {
-  createAgentSession: (options: EmbeddedAgentSessionOptions) => Promise<Result> | Result;
-  options: EmbeddedAgentSessionOptions;
-}): Promise<Result> {
-  return await params.createAgentSession(params.options);
 }
