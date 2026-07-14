@@ -163,7 +163,6 @@ import {
 } from "../worker-environments/placement-session-runtime.js";
 import { resolveWorkerSessionTarget } from "../worker-environments/session-target.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import {
@@ -173,6 +172,10 @@ import {
 } from "./session-active-runs.js";
 import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import {
+  resolveSessionCreateInitialTurn,
+  shouldAttachPendingMessageSeq,
+} from "./session-create-initial-turn.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -406,30 +409,6 @@ function loadSessionEntriesForTarget(params: {
   const store = target.store;
   const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
   return { target, storePath: target.storePath, store, entry };
-}
-
-function resolveOptionalInitialSessionMessage(params: {
-  task?: unknown;
-  message?: unknown;
-}): string | undefined {
-  if (typeof params.task === "string" && params.task.trim()) {
-    return params.task;
-  }
-  if (typeof params.message === "string" && params.message.trim()) {
-    return params.message;
-  }
-  return undefined;
-}
-
-function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: boolean }): boolean {
-  if (params.cached) {
-    return false;
-  }
-  const status =
-    params.payload && typeof params.payload === "object"
-      ? (params.payload as { status?: unknown }).status
-      : undefined;
-  return status === "started";
 }
 
 function emitSessionOperation(
@@ -1558,9 +1537,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const initialMessage = resolveOptionalInitialSessionMessage(p);
-    const normalizedInitialAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
-    if (p.attachments?.length && !initialMessage && normalizedInitialAttachments.length === 0) {
+    const initialTurn = resolveSessionCreateInitialTurn(p);
+    if (!initialTurn) {
       respond(
         false,
         undefined,
@@ -1571,10 +1549,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const initialAttachments = normalizedInitialAttachments.length
-      ? normalizedInitialAttachments
-      : undefined;
-    const hasInitialTurn = initialMessage !== undefined || initialAttachments !== undefined;
+    const {
+      attachments: initialAttachments,
+      hasInitialTurn,
+      message: initialMessage,
+    } = initialTurn;
     const requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
     if (requestedCwd && p.worktree !== true && !requestedExecNode) {

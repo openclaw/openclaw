@@ -72,6 +72,7 @@ import {
   syncSelectedSessionMessageSubscription,
   type ChatHistoryPagination,
 } from "./chat-history.ts";
+import { dismissChatError, resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
@@ -85,7 +86,6 @@ import {
   canCreateChatSession,
   ChatStateController,
   createPageState,
-  dismissChatError,
   handlePageGatewayEvent,
   refreshChatCommands,
   refreshChatMetadata,
@@ -94,7 +94,6 @@ import {
   refreshRouteSessionOptions,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
-  resolveAssistantAttachmentAuthToken,
   resolveChatAgentId,
   resolveChatAvatarUrl,
   saveRouteSessionSettings,

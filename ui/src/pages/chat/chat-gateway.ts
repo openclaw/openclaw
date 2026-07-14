@@ -21,7 +21,10 @@ import {
   clearToolStreamSegments,
   hasVisibleStreamParts,
 } from "./stream-reconciliation.ts";
-import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
+import {
+  authoritativeHistoryAppliedForRun,
+  rememberLiveTerminalRun,
+} from "./terminal-message-identity.ts";
 
 export type { ChatEventPayload } from "./chat-history.ts";
 
@@ -165,8 +168,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     payload.runId === state.chatRunId;
   const authoritativeTerminalMatches = Boolean(
     payload.runId &&
-    state.chatAuthoritativeTerminal?.historyApplied === true &&
-    state.chatAuthoritativeTerminal.runId === payload.runId &&
+    authoritativeHistoryAppliedForRun(state, payload.runId) &&
     chatEventSessionMatches(state, payload),
   );
   if (!sessionMatches && !activeRunMatches) {

@@ -1,10 +1,6 @@
 // Control UI page module owns Chat transcript loading and selected-session message subscription.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../../api/gateway.ts";
+import { type GatewayBrowserClient, type GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
@@ -48,6 +44,12 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
+  isRetryableStartupUnavailable,
+  isUnknownGatewayMethodError,
+  resolveStartupRetryDelayMs,
+  sleep,
+} from "./chat-history-retry.ts";
+import {
   isLocallyOptimisticHistoryMessage,
   messageDisplaySignature,
   preserveOptimisticTailMessages,
@@ -76,15 +78,13 @@ import {
   prunePersistedToolStreamMessages,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
-import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
+import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
-const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
-const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
 
@@ -307,41 +307,6 @@ function collectLateOptimisticTailMessages(
   return lateTail;
 }
 
-function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
-  if (!(err instanceof GatewayRequestError)) {
-    return false;
-  }
-  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
-    return false;
-  }
-  const details = err.details;
-  if (!details || typeof details !== "object") {
-    return true;
-  }
-  const detailMethod = (details as { method?: unknown }).method;
-  return typeof detailMethod !== "string" || detailMethod === method;
-}
-
-function isUnknownGatewayMethodError(err: unknown, method: string): err is GatewayRequestError {
-  return (
-    err instanceof GatewayRequestError &&
-    err.gatewayCode === "INVALID_REQUEST" &&
-    err.message.includes(`unknown method: ${method}`)
-  );
-}
-
-function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
-  const retryAfterMs =
-    typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
-  return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -363,12 +328,6 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
-  chatAuthoritativeTerminal?: {
-    historyApplied: boolean;
-    messageId: string;
-    runId: string;
-    sessionKey: string;
-  } | null;
   lastError: string | null;
   chatError?: string | null;
   /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
@@ -387,18 +346,6 @@ export type ChatState = {
   hello: GatewayHelloOk | null;
   settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
 };
-
-function messageOpenClawString(message: unknown, key: string): string | null {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return null;
-  }
-  const meta = (message as Record<string, unknown>)["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return null;
-  }
-  const value = (meta as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim() ? value : null;
-}
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -1027,36 +974,25 @@ async function loadChatHistoryUncached(
     state.chatHistoryPagination = resolveChatHistoryPagination(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
-    const authoritativeTerminal = state.chatAuthoritativeTerminal;
-    const historyContainsTerminal = Boolean(
-      authoritativeTerminal &&
-      areUiSessionKeysEquivalent(authoritativeTerminal.sessionKey, sessionKey) &&
-      visibleMessages.some(
-        (message) => messageOpenClawString(message, "id") === authoritativeTerminal.messageId,
-      ),
-    );
-    const liveTerminalRunId = historyContainsTerminal ? authoritativeTerminal?.runId : null;
-    const previousWithoutReconciledLiveFinal = liveTerminalRunId
-      ? previousMessages.filter((message) => !isLiveTerminalForRun(message, liveTerminalRunId))
-      : previousMessages;
-    const currentWithoutReconciledLiveFinal = liveTerminalRunId
-      ? state.chatMessages.filter((message) => !isLiveTerminalForRun(message, liveTerminalRunId))
-      : state.chatMessages;
+    const reconciledTerminal = reconcileAuthoritativeTerminalHistory({
+      currentMessages: state.chatMessages,
+      host: state,
+      previousMessages,
+      sessionKey,
+      visibleMessages,
+    });
     const lateOptimisticTail = collectLateOptimisticTailMessages(
-      previousWithoutReconciledLiveFinal,
-      currentWithoutReconciledLiveFinal,
+      reconciledTerminal.previousMessages,
+      reconciledTerminal.currentMessages,
       visibleMessages,
     );
     state.chatMessages = preserveOptimisticTailMessages(
       visibleMessages,
-      previousWithoutReconciledLiveFinal,
+      reconciledTerminal.previousMessages,
       shouldHideHistoryMessage,
     );
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
-    }
-    if (authoritativeTerminal && historyContainsTerminal) {
-      state.chatAuthoritativeTerminal = { ...authoritativeTerminal, historyApplied: true };
     }
     replaceCachedChatMessages(state, sessionKey, state.chatMessages, requestAgentId);
     state.currentSessionId =
