@@ -594,6 +594,7 @@ async function readCodexSessionTranscript(params: {
       ...(params.cursor ? { cursor: params.cursor } : {}),
     },
     timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+    scopes: ["operator.write"],
   });
   const page = parseTranscriptPage(unwrapNodeInvokePayload(raw));
   return {
