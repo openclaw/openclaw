@@ -450,6 +450,33 @@ describe("worker inference provider runtime", () => {
     });
   });
 
+  it("rejects tool-call deltas after the end event", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      const message = finalMessage();
+      stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
+      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: message });
+      stream.push({
+        type: "toolcall_end",
+        contentIndex: 1,
+        toolCall: TOOL_CALL,
+        partial: message,
+      });
+      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: " ", partial: message });
+      stream.push({ type: "done", reason: "toolUse", message });
+      return stream;
+    });
+    const emitted: Parameters<Execution["emit"]>[0][] = [];
+
+    await expect(
+      runtime.executor(params(request(), (event) => emitted.push(event))),
+    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
+    expect(
+      emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
+    ).toEqual(["{}"]);
+  });
+
   it("rejects a normally ended tool call omitted from the terminal message", async () => {
     const runtime = setup();
     runtime.stream.mockImplementation(() => {

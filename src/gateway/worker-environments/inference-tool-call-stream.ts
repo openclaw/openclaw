@@ -100,6 +100,9 @@ export function createWorkerToolCallStream(params: {
     value: string,
     partial: AssistantMessage,
   ): ToolCallEmissionResult => {
+    if (ended.has(contentIndex)) {
+      return "invalid";
+    }
     if (started.has(contentIndex)) {
       return emitDelta(contentIndex, value);
     }
