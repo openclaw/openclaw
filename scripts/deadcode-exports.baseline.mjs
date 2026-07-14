@@ -1190,7 +1190,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/wizard/i18n/index.ts: resolveWizardLocale",
   "src/wizard/i18n/index.ts: resolveWizardLocaleFromEnv",
   "src/wizard/i18n/index.ts: WIZARD_SUPPORTED_LOCALES",
-  "src/wizard/setup.migration-import.ts: inspectSetupMigrationFreshness",
   "src/wizard/setup.official-plugins.ts: resolveOfficialPluginOnboardingInstallEntries",
   "src/wizard/setup.official-plugins.ts: testing",
 ];
