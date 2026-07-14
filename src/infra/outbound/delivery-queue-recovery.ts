@@ -526,8 +526,8 @@ async function drainQueuedEntry(opts: {
         if (getErrnoCode(deferErr) === "ENOENT") {
           return "already-gone";
         }
+        throw deferErr;
       }
-      return "deferred";
     }
     const reconciliation = await reconcileUnknownQueuedDelivery({
       entry,
