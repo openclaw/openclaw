@@ -6,6 +6,7 @@ import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCorruptClaim,
   ChannelIngressQueueRecord,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -43,7 +44,7 @@ type TelegramSpooledUpdatePayload = {
   update: unknown;
 };
 
-export class TelegramSpooledUpdateCompletionOwnershipError extends Error {
+class TelegramSpooledUpdateCompletionOwnershipError extends Error {
   constructor(updateId: number) {
     super(`Telegram spooled update ${updateId} lost claim ownership before completion.`);
     this.name = "TelegramSpooledUpdateCompletionOwnershipError";
@@ -66,7 +67,7 @@ export function resolveTelegramIngressSpoolDir(params: {
   );
 }
 
-export function resolveTelegramUpdateId(update: unknown): number | null {
+function resolveTelegramUpdateId(update: unknown): number | null {
   if (!update || typeof update !== "object") {
     return null;
   }
@@ -231,6 +232,21 @@ export function isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
     claim.claim.processPid !== process.pid &&
     isFreshClaimOwner(claim.claim, options) &&
     processExists(claim.claim.processPid),
+  );
+}
+
+export function isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(
+  claim: ChannelIngressQueueCorruptClaim,
+  options?: { maxAgeMs?: number; now?: number },
+): boolean {
+  const processId = claim.claim.ownerId;
+  const processPid = processPidFromOwnerId(processId);
+  const owner = { processId, processPid, claimedAt: claim.claim.claimedAt };
+  if (processId === TELEGRAM_SPOOLED_UPDATE_PROCESS_ID) {
+    return isFreshClaimOwner(owner, options);
+  }
+  return (
+    processPid !== process.pid && isFreshClaimOwner(owner, options) && processExists(processPid)
   );
 }
 
@@ -430,8 +446,10 @@ export async function recoverStaleTelegramSpooledUpdateClaims(params: {
   staleMs?: number;
   now?: number;
   shouldRecover?: (claim: ClaimedTelegramSpooledUpdate) => boolean | Promise<boolean>;
+  shouldRecoverCorrupt?: (claim: ChannelIngressQueueCorruptClaim) => boolean | Promise<boolean>;
 }): Promise<number> {
   const shouldRecover = params.shouldRecover;
+  const shouldRecoverCorrupt = params.shouldRecoverCorrupt;
   return await createTelegramIngressQueue(params.spoolDir).recoverStaleClaims({
     staleMs: params.staleMs ?? TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS,
     ...(params.now === undefined ? {} : { now: params.now }),
@@ -443,5 +461,6 @@ export async function recoverStaleTelegramSpooledUpdateClaims(params: {
           },
         }
       : {}),
+    ...(shouldRecoverCorrupt ? { shouldRecoverCorrupt } : {}),
   });
 }

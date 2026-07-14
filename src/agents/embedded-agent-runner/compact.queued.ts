@@ -23,7 +23,6 @@ import {
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
-import { mergeAbortSignals } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -41,29 +40,27 @@ import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "../harness/selection.js";
-import {
-  resolveAgentHarnessPreparedAuthSupport,
-  resolveAgentHarnessPreparedRouteSupport,
-} from "../harness/support.js";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
 } from "../model-auth.js";
 import { isOpenAIProvider } from "../openai-routing.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
+import {
+  providerUsesCredentialScopedModelMetadata,
+  resolveReusableRuntimeModelAuth,
+} from "../runtime-plan/credential-scoped-model.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import {
-  agentRuntimeAuthPlanMatchesTarget,
   prepareAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
+import { buildCompactionHarnessModelProvider } from "./compaction-harness-model-provider.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
@@ -119,27 +116,6 @@ const DEFERRED_CONTEXT_ENGINE_COMPACTION_SCHEDULE_FAILURE_REASON =
 const MANUAL_COMPACTION_ACTIVE_RUN_REASON =
   "manual compaction unavailable while another embedded run is active";
 const COMPACTION_ABORTED_REASON = "compaction aborted";
-
-function buildQueuedCompactionHarnessModelProvider(params: {
-  model?: ProviderRuntimeModel;
-  plan?: AgentRuntimeAuthPlan;
-  attempt?: PreparedAgentRuntimeAuthAttempt;
-}): AgentHarnessPreparedModelProvider {
-  const route = params.plan?.modelRoute;
-  return {
-    api: route?.api ?? params.model?.api,
-    baseUrl: route?.baseUrl ?? params.model?.baseUrl,
-    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
-    ...(params.plan
-      ? {
-          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-            plan: params.plan,
-            source: params.attempt?.kind === "implicit" ? undefined : params.attempt?.kind,
-          }),
-        }
-      : {}),
-  };
-}
 
 function createCompactionAbortedResult(): EmbeddedAgentCompactResult {
   return {
@@ -311,7 +287,9 @@ export async function compactEmbeddedAgentSession(
   }
 
   const controller = new AbortController();
-  const mergedAbort = mergeAbortSignals([params.abortSignal, controller.signal]);
+  const abortSignal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, controller.signal])
+    : controller.signal;
   const handle: EmbeddedAgentQueueHandle = {
     kind: "embedded",
     queueMessage: async () => {},
@@ -324,10 +302,9 @@ export async function compactEmbeddedAgentSession(
   try {
     return await compactEmbeddedAgentSessionImpl({
       ...params,
-      abortSignal: mergedAbort.signal,
+      abortSignal,
     });
   } finally {
-    mergedAbort.dispose();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
   }
 }
@@ -449,6 +426,14 @@ async function compactResolvedContextEngine(
   const ceRuntimeProvider = resolvedCompactionTarget.runtimeProvider ?? ceProvider;
   const ceContextConfigProvider = resolvedCompactionTarget.contextProvider ?? ceProvider;
   const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+  const providedRuntimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
+  const { plan: reusableRuntimeAuthPlan, modelAuth: initialModelAuth } =
+    resolveReusableRuntimeModelAuth({
+      plan: providedRuntimeAuthPlan,
+      provider: ceProvider,
+      modelId: ceModelId,
+      authProfileId: resolvedCompactionTarget.authProfileId,
+    });
   const attemptNativeHarnessCompaction = shouldAttemptNativeHarnessCompaction({
     provider: ceProvider,
     nativeHarnessCompaction: resolvedCompactionTarget.nativeHarnessCompaction,
@@ -458,25 +443,29 @@ async function compactResolvedContextEngine(
   let preparedHarnessRuntime = selectedHarnessRuntime;
   let preparedParams = params;
   try {
-    if (attemptNativeHarnessCompaction) {
-      await ensureSelectedAgentHarnessPlugin({
-        config: params.config,
-        provider: ceProvider,
-        modelId: ceModelId,
-        agentId: runtimePolicyAgentId,
-        sessionKey: runtimePolicySessionKey,
-        agentHarnessId: params.agentHarnessId,
-        agentHarnessRuntimeOverride: selectedHarnessRuntime,
-        workspaceDir: resolvedWorkspaceDir,
-      });
-    }
+    // Ensure the policy-selected harness plugin so selection can pick implicit codex.
+    await ensureSelectedAgentHarnessPlugin({
+      config: params.config,
+      provider: ceProvider,
+      modelId: ceModelId,
+      agentId: runtimePolicyAgentId,
+      sessionKey: runtimePolicySessionKey,
+      agentHarnessId: params.agentHarnessId,
+      agentHarnessRuntimeOverride: selectedHarnessRuntime,
+      workspaceDir: resolvedWorkspaceDir,
+    });
     const {
       model: ceModel,
       authStorage,
       modelRegistry,
-    } = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, params.config);
+    } = await resolveModelAsync(
+      ceRuntimeProvider,
+      ceModelId,
+      agentDir,
+      params.config,
+      initialModelAuth,
+    );
     const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
-    const providedRuntimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
     const runtimeAuthProfileStore = isOpenAIProvider(ceProvider)
       ? ensureAuthProfileStore(agentDir, {
           externalCliProviderIds: ["openai"],
@@ -485,15 +474,8 @@ async function compactResolvedContextEngine(
       : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
           allowKeychainPrompt: false,
         });
-    const reusableRuntimeAuthPlan =
-      providedRuntimeAuthPlan &&
-      agentRuntimeAuthPlanMatchesTarget(providedRuntimeAuthPlan, {
-        provider: ceProvider,
-        modelId: ceModelId,
-      })
-        ? providedRuntimeAuthPlan
-        : undefined;
-    const compactionHarnessRuntimeOverride = selectedHarnessRuntime ?? "openclaw";
+    // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
+    // selection can pick the credential-owning harness (codex for ChatGPT OAuth).
     const selectHarnessForPreparedAttempts = (
       attempts: readonly PreparedAgentRuntimeAuthAttempt[],
     ) =>
@@ -501,7 +483,7 @@ async function compactResolvedContextEngine(
         provider: ceProvider,
         modelId: ceModelId,
         modelProviders: attempts.map((attempt) =>
-          buildQueuedCompactionHarnessModelProvider({
+          buildCompactionHarnessModelProvider({
             model: ceRuntimeModel,
             plan: attempt.plan,
             attempt,
@@ -511,19 +493,19 @@ async function compactResolvedContextEngine(
         agentId: runtimePolicyAgentId,
         sessionKey: runtimePolicySessionKey,
         agentHarnessId: params.agentHarnessId,
-        agentHarnessRuntimeOverride: compactionHarnessRuntimeOverride,
+        agentHarnessRuntimeOverride: selectedHarnessRuntime,
       });
     const initialHarness = reusableRuntimeAuthPlan
       ? undefined
       : selectAgentHarness({
           provider: ceProvider,
           modelId: ceModelId,
-          modelProvider: buildQueuedCompactionHarnessModelProvider({ model: ceRuntimeModel }),
+          modelProvider: buildCompactionHarnessModelProvider({ model: ceRuntimeModel }),
           config: params.config,
           agentId: runtimePolicyAgentId,
           sessionKey: runtimePolicySessionKey,
           agentHarnessId: params.agentHarnessId,
-          agentHarnessRuntimeOverride: compactionHarnessRuntimeOverride,
+          agentHarnessRuntimeOverride: selectedHarnessRuntime,
         });
     const prepareRuntimeAuth = (harness: ReturnType<typeof selectAgentHarness>) =>
       prepareAgentRuntimeAuth({
@@ -561,12 +543,21 @@ async function compactResolvedContextEngine(
     }
     preparedHarnessRuntime = selectedPreparedHarness.id;
     const runtimeAuthPlan = runtimeAuthPreparation.plan;
+    const providerUsesProfileScopedModelMetadata = providerUsesCredentialScopedModelMetadata({
+      provider: ceRuntimeProvider,
+      modelId: ceModelId,
+      config: params.config,
+      agentDir,
+      workspaceDir: resolvedWorkspaceDir,
+    });
     effectiveRuntimeModel = await materializePreparedRuntimeModel<ProviderRuntimeModel>({
       plan: runtimeAuthPlan,
       provider: ceProvider,
       modelId: ceModelId,
       config: params.config,
       model: ceRuntimeModel,
+      forceResolve:
+        providerUsesProfileScopedModelMetadata && Boolean(runtimeAuthPlan.selectedAuthMode),
       resolveModel: async ({ config, authProfileId, authProfileMode }) => {
         const resolved = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, config, {
           authStorage,

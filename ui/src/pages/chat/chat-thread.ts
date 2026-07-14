@@ -1,10 +1,10 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
-import { t } from "../../i18n/index.ts";
 import type {
   ChatItem,
   MessageGroup,
@@ -33,13 +33,25 @@ import {
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
+import {
+  extractToolCardsCached,
+  extractToolPreview,
+  isToolCardError,
+} from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import {
+  buildCompactionDividerItem,
+  clearWorkingStartedAt,
+  resetWorkingStartedAt,
+  resolveWorkingStartedAt,
+  shouldRenderQueuedSendInThread,
+} from "./chat-progress.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
-export type BuildChatItemsProps = {
+type BuildChatItemsProps = {
   sessionKey: string;
+  runId?: string | null;
   /** Invalidates cached display copy when the active UI language changes. */
   locale?: string;
   messages: unknown[];
@@ -56,6 +68,7 @@ export type BuildChatItemsProps = {
   searchOpen?: boolean;
   searchQuery?: string;
   historyRenderLimit?: number;
+  allowExpandedHistoryRenderLimit?: boolean;
 };
 
 type CachedChatItems = {
@@ -77,6 +90,7 @@ const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
 export function resetChatThreadState(): void {
   chatItemsBySession.clear();
+  resetWorkingStartedAt();
   expandedToolCardsBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
@@ -126,12 +140,6 @@ function appendCanvasBlockToAssistantMessage(
   };
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
   if (!asRecord(message)) {
     return null;
@@ -152,13 +160,36 @@ function messageMatchesSearchQuery(message: unknown, query: string): boolean {
   return text.includes(normalizedQuery);
 }
 
-function extractChatMessagePreview(toolMessage: unknown): {
+function turnHasMatchingAssistant(
+  messages: unknown[],
+  sourceIndex: number,
+  searchQuery: string,
+): boolean {
+  for (let index = sourceIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index];
+    const normalized = safeNormalizeMessage(message);
+    if (!normalized) {
+      continue;
+    }
+    const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+    if (role === "user" || role === "system") {
+      return false;
+    }
+    if (role === "assistant" && messageMatchesSearchQuery(message, searchQuery)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+type ChatMessagePreview = {
   preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
   text: string | null;
   timestamp: number | null;
-} | null {
-  const normalized = safeNormalizeMessage(toolMessage);
-  if (!normalized) {
+};
+
+function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | null {
+  if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
   const cards = extractToolCardsCached(toolMessage, "preview");
@@ -168,7 +199,7 @@ function extractChatMessagePreview(toolMessage: unknown): {
       return {
         preview: card.preview,
         text: card.outputText ?? null,
-        timestamp: normalized.timestamp ?? null,
+        timestamp: rawMessageTimestamp(toolMessage),
       };
     }
   }
@@ -184,16 +215,88 @@ function extractChatMessagePreview(toolMessage: unknown): {
   if (preview?.kind !== "canvas") {
     return null;
   }
-  return { preview, text: text ?? null, timestamp: normalized.timestamp ?? null };
+  return { preview, text: text ?? null, timestamp: rawMessageTimestamp(toolMessage) };
+}
+
+function canvasPreviewBaseIdentity(message: unknown, source: ChatMessagePreview): string | null {
+  const toolCallId = resolveMessageToolUseId(asRecord(message) ?? {});
+  const previewId = source.preview.viewId ?? source.preview.url;
+  return toolCallId && previewId ? JSON.stringify([toolCallId, previewId]) : null;
+}
+
+function createCanvasAssistantMessage(
+  source: ChatMessagePreview,
+  timestamp = source.timestamp,
+): unknown {
+  return appendCanvasBlockToAssistantMessage(
+    {
+      role: "assistant",
+      content: [],
+      ...(timestamp != null ? { timestamp } : {}),
+    },
+    source.preview,
+    source.text,
+  );
+}
+
+function transcriptPositionTimestamp(messages: unknown[], sourceIndex: number): number | null {
+  let previous: number | null = null;
+  for (let index = sourceIndex - 1; index >= 0; index -= 1) {
+    previous = rawMessageTimestamp(messages[index]);
+    if (previous != null) {
+      break;
+    }
+  }
+  let next: number | null = null;
+  for (let index = sourceIndex + 1; index < messages.length; index += 1) {
+    next = rawMessageTimestamp(messages[index]);
+    if (next != null) {
+      break;
+    }
+  }
+  if (previous != null && next != null) {
+    return previous < next ? Math.min(previous + 1, next) : next;
+  }
+  if (previous != null) {
+    return previous + 1;
+  }
+  return next;
 }
 
 function findNearestAssistantMessageIndex(
   items: ChatItem[],
   toolTimestamp: number | null,
 ): number | null {
+  let currentTurnStart = 0;
+  let currentTurnEnd = items.length;
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item?.kind !== "message") {
+      continue;
+    }
+    const normalized = safeNormalizeMessage(item.message);
+    if (!normalized || normalizeRoleForGrouping(normalized.role).toLowerCase() !== "user") {
+      continue;
+    }
+    if (
+      toolTimestamp != null &&
+      normalized.timestamp != null &&
+      normalized.timestamp > toolTimestamp
+    ) {
+      currentTurnEnd = index;
+      break;
+    }
+    if (
+      toolTimestamp == null ||
+      normalized.timestamp == null ||
+      normalized.timestamp <= toolTimestamp
+    ) {
+      currentTurnStart = index + 1;
+    }
+  }
   const assistantEntries = items
     .map((item, index) => {
-      if (item.kind !== "message") {
+      if (index < currentTurnStart || index >= currentTurnEnd || item.kind !== "message") {
         return null;
       }
       const message = item.message as Record<string, unknown>;
@@ -238,6 +341,28 @@ function findNearestAssistantMessageIndex(
     return next.index;
   }
   return assistantEntries[assistantEntries.length - 1]?.index ?? null;
+}
+
+function findCanvasInsertionIndex(items: ChatItem[], toolTimestamp: number | null): number {
+  if (toolTimestamp == null) {
+    return items.length;
+  }
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item?.kind !== "message") {
+      continue;
+    }
+    const normalized = safeNormalizeMessage(item.message);
+    if (
+      normalized &&
+      normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" &&
+      normalized.timestamp != null &&
+      normalized.timestamp > toolTimestamp
+    ) {
+      return index;
+    }
+  }
+  return items.length;
 }
 
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
@@ -623,7 +748,12 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
 }
 
 function assistantGroupHasReplyText(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
+  return group.messages.some(({ message }) => {
+    if (extractTextCached(message)?.trim()) {
+      return true;
+    }
+    return safeNormalizeMessage(message)?.content.some((block) => block.type === "canvas") ?? false;
+  });
 }
 
 function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
@@ -856,18 +986,6 @@ function sanitizeStreamText(text: string): string {
   return stripped.trim().length > 0 ? stripped : "";
 }
 
-function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
-  if (typeof item.sendSubmittedAtMs !== "number" || item.sendState === "failed") {
-    return false;
-  }
-  return (
-    item.sendState === "waiting-model" ||
-    item.sendState === "waiting-idle" ||
-    item.sendState === "sending" ||
-    item.sendState === "waiting-reconnect"
-  );
-}
-
 function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
   const content = buildUserChatMessageContentBlocks(item.text, item.attachments);
   if (content.length === 0) {
@@ -1068,11 +1186,12 @@ function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean
   return count;
 }
 
-function resolveHistoryRenderLimit(limit: number | undefined): number {
+function resolveHistoryRenderLimit(limit: number | undefined, allowExpanded = false): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) {
     return CHAT_HISTORY_RENDER_LIMIT;
   }
-  return Math.max(1, Math.min(CHAT_HISTORY_RENDER_LIMIT, Math.floor(limit)));
+  const normalized = Math.max(1, Math.floor(limit));
+  return allowExpanded ? normalized : Math.min(CHAT_HISTORY_RENDER_LIMIT, normalized);
 }
 
 function resolveHistoryStartIndex(
@@ -1103,27 +1222,70 @@ function resolveHistoryStartIndex(
   return startIndex;
 }
 
-export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
+function expandHistoryStartForPersistedPreviews(messages: unknown[], historyStart: number): number {
+  const firstVisible = safeNormalizeMessage(messages[historyStart]);
+  if (!firstVisible || normalizeRoleForGrouping(firstVisible.role).toLowerCase() !== "assistant") {
+    return historyStart;
+  }
+  let expandedStart = historyStart;
+  for (let index = historyStart - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const normalized = safeNormalizeMessage(message);
+    if (!normalized) {
+      continue;
+    }
+    const normalizedRole = normalized.role.toLowerCase();
+    const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+    if (role === "user" || role === "system") {
+      break;
+    }
+    if (normalizedRole === "toolresult" && extractChatMessagePreview(message)) {
+      expandedStart = index;
+      continue;
+    }
+    if (role === "assistant" && hasRenderableNormalizedMessage(message)) {
+      break;
+    }
+  }
+  return expandedStart;
+}
+
+function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
-  const historyRenderLimit = resolveHistoryRenderLimit(props.historyRenderLimit);
+  const historyRenderLimit = resolveHistoryRenderLimit(
+    props.historyRenderLimit,
+    props.allowExpandedHistoryRenderLimit,
+  );
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const liftedCanvasSources = tools
-    .map((tool) => extractChatMessagePreview(tool))
-    .filter((entry) => Boolean(entry)) as Array<{
-    preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
-    text: string | null;
-    timestamp: number | null;
-  }>;
+  const liftedCanvasSources = tools.flatMap((message, index) => {
+    const source = extractChatMessagePreview(message);
+    return source ? [{ ...source, message, index }] : [];
+  });
+  const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
+  const persistedCanvasIdentities = new Set<string>();
+  for (const message of history) {
+    const source = extractChatMessagePreview(message);
+    if (!source) {
+      continue;
+    }
+    const baseIdentity = canvasPreviewBaseIdentity(message, source);
+    if (baseIdentity) {
+      // fetchMcpAppView assigns a fresh viewId to every invocation. Matching the call and
+      // view therefore identifies the same preview while still tolerating a reused call ID.
+      persistedCanvasIdentities.add(baseIdentity);
+    }
+  }
   const historyStart = resolveHistoryStartIndex(history, props.showToolCalls, historyRenderLimit);
+  const previewHistoryStart = expandHistoryStartForPersistedPreviews(history, historyStart);
   const hiddenHistoryCount = countVisibleHistoryMessages(
-    history.slice(0, historyStart),
+    history.slice(0, previewHistoryStart),
     props.showToolCalls,
   );
   const visibleHistoryCount = countVisibleHistoryMessages(
-    history.slice(historyStart),
+    history.slice(previewHistoryStart),
     props.showToolCalls,
   );
   if (hiddenHistoryCount > 0) {
@@ -1137,7 +1299,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       },
     });
   }
-  for (let i = historyStart; i < history.length; i++) {
+  for (let i = previewHistoryStart; i < history.length; i++) {
     const msg = history[i];
     const normalized = safeNormalizeMessage(msg);
     if (!normalized) {
@@ -1146,24 +1308,27 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const raw = asRecord(msg) ?? {};
     const marker = raw["__openclaw"] as Record<string, unknown> | undefined;
     if (marker && marker.kind === "compaction") {
-      items.push({
-        kind: "divider",
-        key:
-          typeof marker.id === "string"
-            ? `divider:compaction:${marker.id}`
-            : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: t("chat.compaction.label"),
-        description: t("chat.compaction.description"),
-        action: {
-          kind: "session-checkpoints",
-          label: t("chat.compaction.openCheckpoints"),
-        },
-        timestamp: normalized.timestamp ?? Date.now(),
-      });
+      items.push(buildCompactionDividerItem(marker, normalized.timestamp ?? Date.now(), i));
       continue;
     }
 
-    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+    const isToolResult = normalized.role.toLowerCase() === "toolresult";
+    const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
+    const renderPersistedPreview =
+      persistedCanvasSource != null &&
+      (!searchFiltering || turnHasMatchingAssistant(history, i, props.searchQuery ?? ""));
+    if (persistedCanvasSource && renderPersistedPreview) {
+      items.push({
+        kind: "message",
+        key: `${messageKey(msg, i)}:canvas`,
+        message: createCanvasAssistantMessage(
+          persistedCanvasSource,
+          persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
+        ),
+      });
+    }
+
+    if (!props.showToolCalls && isToolResult) {
       continue;
     }
 
@@ -1182,13 +1347,20 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     });
   }
   const queuedSends = Array.isArray(props.queue) ? props.queue : [];
-  for (const queued of queuedSends) {
+  const activeRunQueuedSends = queuedSends.filter((queued) => queued.sendState === "waiting-model");
+  const futureQueuedSends = queuedSends.filter((queued) => !activeRunQueuedSends.includes(queued));
+  const futureQueuedTimestamp = futureQueuedSends.reduce<number | null>(
+    (earliest, queued) =>
+      earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
+    null,
+  );
+  const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
-      continue;
+      return;
     }
     const message = queuedSendThreadMessage(queued);
     if (!message) {
-      continue;
+      return;
     }
     const searchQuery = props.searchQuery ?? "";
     if (
@@ -1196,17 +1368,46 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       searchQuery.trim() &&
       !messageMatchesSearchQuery(message, searchQuery)
     ) {
-      continue;
+      return;
     }
     items.push({
       kind: "message",
       key: `pending-send:${queued.id}`,
       message,
     });
+  };
+  for (const queued of activeRunQueuedSends) {
+    appendQueuedSend(queued);
   }
   for (const liftedCanvasSource of liftedCanvasSources) {
+    const baseIdentity = canvasPreviewBaseIdentity(liftedCanvasSource.message, liftedCanvasSource);
+    if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
+      continue;
+    }
     const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
     if (assistantIndex == null) {
+      if (searchFiltering) {
+        continue;
+      }
+      const insertionIndex = findCanvasInsertionIndex(items, liftedCanvasSource.timestamp);
+      const nextItem = items[insertionIndex];
+      const nextTimestamp =
+        nextItem?.kind === "message" ? rawMessageTimestamp(nextItem.message) : null;
+      const boundaryTimestamp =
+        nextTimestamp == null
+          ? futureQueuedTimestamp
+          : futureQueuedTimestamp == null
+            ? nextTimestamp
+            : Math.min(nextTimestamp, futureQueuedTimestamp);
+      const timestamp =
+        liftedCanvasSource.timestamp != null && boundaryTimestamp != null
+          ? Math.min(liftedCanvasSource.timestamp, boundaryTimestamp)
+          : liftedCanvasSource.timestamp;
+      items.splice(insertionIndex, 0, {
+        kind: "message",
+        key: `${messageKey(liftedCanvasSource.message, liftedCanvasSource.index + history.length)}:canvas`,
+        message: createCanvasAssistantMessage(liftedCanvasSource, timestamp),
+      });
       continue;
     }
     const item = items[assistantIndex];
@@ -1221,6 +1422,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         liftedCanvasSource.text,
       ),
     };
+  }
+  for (const queued of futureQueuedSends) {
+    appendQueuedSend(queued);
   }
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
@@ -1336,10 +1540,21 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       queuedSends.some(
         (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
       ));
+  if (props.runWorking !== true && props.stream === null && !hasPendingResponse) {
+    clearWorkingStartedAt(props.sessionKey);
+  }
   if (hasPendingResponse) {
     items.push({
       kind: "reading-indicator",
       key: `stream:${props.sessionKey}:pending`,
+      startedAt: resolveWorkingStartedAt(
+        props.sessionKey,
+        props.runId ?? null,
+        props.streamStartedAt,
+        queuedSends,
+        segments,
+        tools,
+      ),
     });
   } else if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
@@ -1357,7 +1572,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         });
       }
     } else if (props.stream.trim().length === 0) {
-      items.push({ kind: "reading-indicator", key });
+      items.push({ kind: "reading-indicator", key, startedAt });
     }
   }
 
@@ -1370,9 +1585,85 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
 }
 
+function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
+  // Source message identity owns the row timestamp too: normalization supplies
+  // Date.now() for missing timestamps, which must not churn stable rows.
+  return (
+    previous.role === next.role &&
+    previous.senderLabel === next.senderLabel &&
+    previous.isStreaming === next.isStreaming &&
+    previous.turnSucceeded === next.turnSucceeded &&
+    previous.messages.length === next.messages.length &&
+    previous.messages.every((entry, index) => {
+      const candidate = next.messages[index];
+      return (
+        candidate !== undefined &&
+        entry.key === candidate.key &&
+        entry.message === candidate.message &&
+        entry.duplicateCount === candidate.duplicateCount
+      );
+    })
+  );
+}
+
+function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
+  if (previous.kind !== next.kind || previous.key !== next.key) {
+    return false;
+  }
+  switch (next.kind) {
+    case "group":
+      return previous.kind === "group" && sameMessageGroup(previous, next);
+    case "message":
+      return (
+        previous.kind === "message" &&
+        previous.message === next.message &&
+        previous.duplicateCount === next.duplicateCount
+      );
+    case "divider":
+      return (
+        previous.kind === "divider" &&
+        previous.label === next.label &&
+        previous.metric === next.metric &&
+        previous.description === next.description &&
+        previous.timestamp === next.timestamp &&
+        previous.action?.kind === next.action?.kind &&
+        previous.action?.label === next.action?.label
+      );
+    case "stream":
+      return (
+        previous.kind === "stream" &&
+        previous.text === next.text &&
+        previous.startedAt === next.startedAt &&
+        previous.isStreaming === next.isStreaming
+      );
+    case "reading-indicator":
+      return previous.kind === "reading-indicator" && previous.startedAt === next.startedAt;
+  }
+  return false;
+}
+
+function stabilizeChatItems(
+  previous: ReturnType<typeof buildChatItems>,
+  next: ReturnType<typeof buildChatItems>,
+): ReturnType<typeof buildChatItems> {
+  if (previous.length === 0 || next.length === 0) {
+    return next;
+  }
+  const previousByKey = new Map(previous.map((item) => [`${item.kind}\u0000${item.key}`, item]));
+  const stabilized = next.map((item) => {
+    const prior = previousByKey.get(`${item.kind}\u0000${item.key}`);
+    return prior && sameChatItem(prior, item) ? prior : item;
+  });
+  return stabilized.length === previous.length &&
+    stabilized.every((item, index) => item === previous[index])
+    ? previous
+    : stabilized;
+}
+
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.runId === next.runId &&
     previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
@@ -1385,7 +1676,8 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
-    previous.historyRenderLimit === next.historyRenderLimit
+    previous.historyRenderLimit === next.historyRenderLimit &&
+    previous.allowExpandedHistoryRenderLimit === next.allowExpandedHistoryRenderLimit
   );
 }
 
@@ -1399,7 +1691,7 @@ export function buildCachedChatItems(
   if (cached.input && sameChatItemsInput(cached.input, input)) {
     return cached.items;
   }
-  const items = buildChatItems(input);
+  const items = stabilizeChatItems(cached.items, buildChatItems(input));
   cached.input = input;
   cached.items = items;
   return items;
@@ -1428,6 +1720,169 @@ export function coalesceStreamRuns(
     result.push(item);
   }
   flush();
+  return result;
+}
+
+/** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
+type WorkGroupRenderItem = {
+  kind: "work-group";
+  key: string;
+  groups: MessageGroup[];
+  durationMs: number | null;
+  hasError: boolean;
+};
+
+type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
+
+function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
+  if (item.kind !== "group") {
+    return false;
+  }
+  const role = item.role.toLowerCase();
+  // sessions_send projections start a new autonomous turn, same contract as
+  // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
+  return role === "user" || (role === "assistant" && assistantGroupIsForwardedBoundary(item));
+}
+
+function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
+  if (item.kind !== "group" || item.isStreaming) {
+    return false;
+  }
+  const role = item.role.toLowerCase();
+  return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
+}
+
+// Attachment/canvas/media-only replies carry no text but are still the turn's
+// visible outcome; they must never fold into the work rollup. Normalized
+// content passes unknown block types through (e.g. raw image blocks), so
+// anything that is not a tool block counts as visible reply content.
+function assistantGroupHasVisibleReplyContent(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) => {
+    if (extractTextCached(message)?.trim()) {
+      return true;
+    }
+    const content = safeNormalizeMessage(message)?.content ?? [];
+    return content.some((block) => {
+      if (block.type === "text") {
+        return Boolean(block.text?.trim());
+      }
+      return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
+    });
+  });
+}
+
+// History carries no final-vs-commentary marker (commentary exists only as
+// live stream segments), so the last assistant group with visible content
+// stands in for the final reply. Turns whose last content is commentary
+// merely collapse less; the visible reply is never folded away.
+function isFinalReplyGroup(item: TurnRenderItem): boolean {
+  return (
+    isCollapsibleWorkGroup(item) &&
+    item.role.toLowerCase() === "assistant" &&
+    assistantGroupHasVisibleReplyContent(item)
+  );
+}
+
+function workGroupHasError(groups: MessageGroup[]): boolean {
+  return groups.some(
+    (group) =>
+      group.role.toLowerCase() === "tool" &&
+      group.turnSucceeded !== true &&
+      group.messages.some((entry) =>
+        extractToolCardsCached(entry.message, entry.key).some(isToolCardError),
+      ),
+  );
+}
+
+/**
+ * Once a turn is done, its intermediate work (tool groups and assistant
+ * commentary before the final reply) collapses behind one "Worked for X"
+ * disclosure so the thread reads final-output-first. Live turns stay fully
+ * expanded; the collapse itself is the done signal.
+ */
+export function collapseCompletedTurnWork(
+  items: TurnRenderItem[],
+  opts: { runWorking: boolean; searchActive?: boolean },
+): Array<TurnRenderItem | WorkGroupRenderItem> {
+  // Chat search filters the thread to matching messages; folding a match into
+  // a collapsed rollup would hide the very row the query found.
+  if (opts.searchActive) {
+    return items;
+  }
+  const turns: TurnRenderItem[][] = [];
+  let currentTurn: TurnRenderItem[] = [];
+  for (const item of items) {
+    if (isTurnBoundaryGroup(item) && currentTurn.length > 0) {
+      turns.push(currentTurn);
+      currentTurn = [];
+    }
+    currentTurn.push(item);
+  }
+  if (currentTurn.length > 0) {
+    turns.push(currentTurn);
+  }
+
+  const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
+  for (const [turnIndex, turn] of turns.entries()) {
+    // In-flight content (stream runs, streaming groups) marks the turn live.
+    // While the run works, the trailing turn also stays expanded so activity
+    // is watchable until the terminal rebuild collapses it.
+    const isLive =
+      (opts.runWorking && turnIndex === turns.length - 1) ||
+      turn.some(
+        (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
+      );
+    if (isLive) {
+      result.push(...turn);
+      continue;
+    }
+    let finalReplyIndex = -1;
+    for (let index = turn.length - 1; index >= 0; index -= 1) {
+      const candidate = turn[index];
+      if (candidate && isFinalReplyGroup(candidate)) {
+        finalReplyIndex = index;
+        break;
+      }
+    }
+    // Without a final reply, the tool rows are the turn's only visible result.
+    // Keep them exposed instead of replacing the result with an opaque rollup.
+    if (finalReplyIndex === -1) {
+      result.push(...turn);
+      continue;
+    }
+    const segmentEnd = finalReplyIndex - 1;
+    let segmentStart = segmentEnd + 1;
+    for (let index = segmentEnd; index >= 0; index -= 1) {
+      const candidate = turn[index];
+      if (!candidate || !isCollapsibleWorkGroup(candidate)) {
+        break;
+      }
+      segmentStart = index;
+    }
+    const groups = turn.slice(segmentStart, segmentEnd + 1) as MessageGroup[];
+    const firstGroup = groups[0];
+    if (!firstGroup) {
+      result.push(...turn);
+      continue;
+    }
+    const boundary = turn[0];
+    const startTimestamp =
+      boundary && boundary.kind === "group" && isTurnBoundaryGroup(boundary)
+        ? boundary.timestamp
+        : firstGroup.timestamp;
+    const finalReply = turn[finalReplyIndex] as MessageGroup;
+    const endTimestamp = finalReply.timestamp;
+    const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
+    result.push(...turn.slice(0, segmentStart));
+    result.push({
+      kind: "work-group",
+      key: `work:${firstGroup.key}`,
+      groups,
+      durationMs,
+      hasError: workGroupHasError(groups),
+    });
+    result.push(...turn.slice(segmentEnd + 1));
+  }
   return result;
 }
 

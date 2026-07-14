@@ -3,7 +3,7 @@ import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { PresenceEntry } from "../../api/types.ts";
-import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -36,6 +36,7 @@ import {
   type NodesPageDataState,
 } from "../../lib/nodes/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderNodes } from "./view.ts";
 
@@ -97,7 +98,15 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   private hasBoundGateway = false;
   private presenceRequestId = 0;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
-  private nodesPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private readonly polling = new PollController(
+    this,
+    NODES_ACTIVE_POLL_INTERVAL_MS,
+    () => {
+      void loadNodes(this, { quiet: true });
+      void loadDevices(this, { quiet: true });
+    },
+    false,
+  );
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.runtimeConfig,
@@ -164,7 +173,6 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   }
 
   override disconnectedCallback() {
-    this.stopPolling();
     this.subscriptions.clear();
     this.requestGeneration += 1;
     this.presenceRequestId += 1;
@@ -286,23 +294,10 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
 
   private syncPolling() {
     if (this.connected && this.client) {
-      if (this.nodesPollInterval == null) {
-        this.nodesPollInterval = globalThis.setInterval(() => {
-          void loadNodes(this, { quiet: true });
-          void loadDevices(this, { quiet: true });
-        }, NODES_ACTIVE_POLL_INTERVAL_MS);
-      }
+      this.polling.start();
       return;
     }
-    this.stopPolling();
-  }
-
-  private stopPolling() {
-    if (this.nodesPollInterval == null) {
-      return;
-    }
-    clearInterval(this.nodesPollInterval);
-    this.nodesPollInterval = null;
+    this.polling.stop();
   }
 
   private async loadPresence() {
@@ -358,7 +353,6 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("nodes")}</div>
-          <div class="page-sub">${subtitleForRoute("nodes")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(
@@ -385,11 +379,6 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
           execApprovalsSelectedAgent: this.execApprovalsSelectedAgent,
           execApprovalsTarget: this.execApprovalsTarget,
           execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
-          onRefresh: () => {
-            void loadNodes(this);
-            void loadDevices(this);
-            void this.loadPresence();
-          },
           onDevicePairSetupOpen: () => void this.context.overlays.openDevicePairSetup(),
           onDeviceApprove: (requestId) => void approveDevicePairing(this, requestId),
           onDeviceReject: (requestId) => void rejectDevicePairing(this, requestId),

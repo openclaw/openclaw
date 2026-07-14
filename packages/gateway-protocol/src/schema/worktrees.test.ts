@@ -20,10 +20,13 @@ describe("managed worktree protocol schemas", () => {
     expect(validateWorktreesRemoveParams({ id: "id", force: true })).toBe(true);
     expect(validateWorktreesGcParams({})).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", worktree: true })).toBe(true);
+    expect(validateSessionsCreateParams({ agentId: "main", catalogId: "claude" })).toBe(true);
     expect(
       Value.Check(SessionsCreateResultSchema, {
         ok: true,
         key: "agent:main:dashboard:test",
+        runStarted: false,
+        runError: { code: "INVALID_REQUEST", message: "send blocked by session policy" },
         worktree: { id: "id", path: "/worktree", branch: "openclaw/wt-test" },
       }),
     ).toBe(true);

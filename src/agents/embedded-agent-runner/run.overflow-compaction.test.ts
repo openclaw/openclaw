@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -13,7 +14,7 @@ import {
   claimAgentRunContext,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
-  resetAgentRunContextForTest,
+  resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
@@ -300,6 +301,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   beforeEach(() => {
+    resetAgentEventsForTest();
     resetRunOverflowCompactionHarnessMocks();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
   });
@@ -1116,7 +1118,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("rebinds preserved queued work to the current lifecycle generation", async () => {
-    resetAgentRunContextForTest();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
     let enqueueCount = 0;
     let runQueuedTask: (() => void) | undefined;
@@ -1156,7 +1157,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(onExecutionStarted).toHaveBeenCalledWith({
       lifecycleGeneration: currentLifecycleGeneration,
     });
-    resetAgentRunContextForTest();
   });
 
   it("revalidates reserved harness ownership after the global queue wait", async () => {
@@ -1221,7 +1221,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("rejects background work queued across lifecycle rotation", async () => {
-    resetAgentRunContextForTest();
     let enqueueCount = 0;
     let runQueuedTask: (() => void) | undefined;
     const runPromise = runEmbeddedAgent({
@@ -1255,7 +1254,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("does not claim a rebound generation after queued work was aborted", async () => {
-    resetAgentRunContextForTest();
     let enqueueCount = 0;
     let runQueuedTask: (() => void) | undefined;
     const abortController = new AbortController();
@@ -1291,7 +1289,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("rejects stale descendants admitted after lifecycle rotation", async () => {
-    resetAgentRunContextForTest();
     const preRestartGeneration = getAgentEventLifecycleGeneration();
     rotateAgentEventLifecycleGeneration();
 
@@ -1578,9 +1575,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expectRecordFields(authProfiles["openai:work"], { provider: "openai" });
     expect(harnessParams.toolAuthProfileStore).toBe(codexAuthStore);
     expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledTimes(1);
-    const [[successParams]] = mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<
-      [{ provider?: string; profileId?: string }]
-    >;
+    const [successParams] = expectDefined(
+      (
+        mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<
+          [{ provider?: string; profileId?: string }]
+        >
+      )[0],
+      "(mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<\n        [{ provider?: string; profileId?: string }]\n      >)[0] test invariant",
+    );
     expect(successParams.provider).toBe("openai");
     expect(successParams.profileId).toBe("openai:work");
   });
@@ -1922,6 +1924,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
+    expect(mockedResolveModelAsync).toHaveBeenCalledTimes(1);
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(authStorage.setRuntimeApiKey).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
@@ -2841,11 +2844,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       authStorage,
     });
     queueOpenAIResolvedModel({
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      authStorage,
-    });
-    queueOpenAIResolvedModel({
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       authStorage,
@@ -2906,6 +2904,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).toHaveBeenCalledOnce();
+    expect(mockedResolveModelAsync).toHaveBeenCalledTimes(3);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(2);
     const firstAttempt = mockCallArg(pluginRunAttempt) as EmbeddedRunAttemptParams;
     const secondAttempt = mockCallArg(pluginRunAttempt, 1) as EmbeddedRunAttemptParams;
@@ -3812,7 +3811,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("does not let an old execution rotate a newer same-id run context", async () => {
-    resetAgentRunContextForTest();
     const currentLifecycleGeneration = rotateAgentEventLifecycleGeneration();
     claimAgentRunContext("shared-run", {
       sessionKey: "new-session-key",
@@ -3842,7 +3840,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         lifecycleGeneration: currentLifecycleGeneration,
       }),
     );
-    resetAgentRunContextForTest();
   });
 
   it("guards thrown engine-owned overflow compaction attempts", async () => {

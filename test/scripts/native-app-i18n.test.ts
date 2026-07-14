@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   assignNativeI18nIds,
@@ -21,6 +22,14 @@ type NativeTranslationArtifact = {
   locale: string;
   version: 1;
 };
+
+function artifactEntry(
+  artifact: NativeTranslationArtifact,
+  index: number,
+  context: string,
+): NativeTranslationArtifact["entries"][number] {
+  return expectDefined(artifact.entries[index], context);
+}
 
 describe("native app i18n inventory", () => {
   it("keeps IDs stable across extractor classification changes", () => {
@@ -173,6 +182,8 @@ describe("native app i18n inventory", () => {
             Button("Swift first " + "argument") {}
             Text(enabled ? "Enabled " + "now" : "Disabled " + "now")
             Text(LocalizedStringKey("Localized key"))
+            let count = 2
+            Text(AttributedString(localized: "^[\\(count) entry](inflect: true)"))
           }
 
           var statusText: String {
@@ -222,6 +233,7 @@ describe("native app i18n inventory", () => {
         "Enabled now",
         "Disabled now",
         "Localized key",
+        "^[\\(count) entry](inflect: true)",
         "Switch ready",
         "Switch waiting",
         "Kotlin first argument",
@@ -250,6 +262,19 @@ describe("native app i18n inventory", () => {
     ).toBe(false);
   });
 
+  it("ignores generated Android resource entries", () => {
+    const entries = extractNativeI18nCandidates(
+      "android",
+      "apps/android/app/src/main/res/values/strings.xml",
+      `<resources>
+        <string name="manual_status">Gateway ready</string>
+        <string name="native_0123456789abcdef">Generated feedback</string>
+      </resources>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
+  });
+
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));
@@ -268,6 +293,7 @@ describe("native app i18n inventory", () => {
         (entry) => !/(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u.test(entry.path),
       ),
     ).toBe(true);
+    expect(entries.every((entry) => !entry.path.endsWith("/NativeStringResources.kt"))).toBe(true);
     expect(
       entries
         .filter((entry) => entry.surface === "apple")
@@ -314,12 +340,6 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source === "Choose a supported ${issue.target.title} provider on the Gateway",
-      ),
-    ).toBe(true);
     expect(
       entries.some(
         (entry) => entry.source === "Talk failed: Realtime provider closed unexpectedly.",
@@ -480,7 +500,7 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.source ===
-          "Approve this device on the gateway.\n1) `\\(commandLine)`\n2) `/pair approve` in your OpenClaw chat\n\\(requestLine)\nOpenClaw will also retry automatically when you return to this app.",
+          "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenClaw chat\n%2$@\nOpenClaw will also retry automatically when you return to this app.",
       ),
     ).toBe(true);
     expect(
@@ -498,7 +518,7 @@ describe("native app i18n inventory", () => {
           entry.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
           entry.kind === "ui-localized-call-multiline" &&
           entry.source ===
-            "Can't reach gateway at \\(host):\\(port). Verify Tailscale Serve is enabled and publishes this Gateway.",
+            "Can't reach gateway at %1$@:%2$@. Verify Tailscale Serve is enabled and publishes this Gateway.",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Approve this device on the gateway.\n")).toBe(
@@ -635,6 +655,31 @@ describe("native app i18n inventory", () => {
       expect(await readFile(artifactPath, "utf8")).toBe(firstContents);
       expect((await stat(artifactPath)).mtimeMs).toBe(firstModifiedAt);
 
+      const movedEntries = entries.map((entry, index) => ({
+        ...entry,
+        id: `${entry.id}.moved`,
+        line: index + 20,
+      }));
+      const moved = await syncNativeLocale("sv", movedEntries, {
+        glossary: [],
+        translationsDir,
+        translate: async (pending) =>
+          new Map(pending.map((entry) => [entry.id, `moved:${entry.source}`])),
+      });
+      expect(moved).toEqual({ changed: true, translated: 4 });
+      const movedArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        entries: Array<{ id: string; source: string; translated: string }>;
+      };
+      expect(movedArtifact.entries.map((entry) => entry.id)).toEqual(
+        movedEntries.map((entry) => entry.id),
+      );
+      expect(movedArtifact.entries.map((entry) => entry.translated)).toEqual([
+        "moved:Hello",
+        "moved:Request ID: \\(requestId)",
+        "moved:Showing ${visibleApps.size} of ${apps.size}",
+        "moved:\\(granted) of \\(total) permissions granted",
+      ]);
+
       const refreshed = await syncNativeLocale("sv", entries, {
         glossary: [{ source: "Request", target: "Begäran" }],
         translationsDir,
@@ -651,6 +696,196 @@ describe("native app i18n inventory", () => {
       expect(
         refreshedArtifact.entries.every((entry) => entry.translated.startsWith("refreshed:")),
       ).toBe(true);
+
+      const fallbackEntries = [
+        {
+          id: "native.apple.fallback",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/example.swift",
+          source: "Try again",
+          surface: "apple",
+        },
+      ] satisfies NativeI18nEntry[];
+      await writeFile(
+        artifactPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            locale: "sv",
+            glossaryHash: refreshedArtifact.glossaryHash,
+            entries: [
+              {
+                id: "native.apple.fallback.previous",
+                source: fallbackEntries[0]!.source,
+                translated: fallbackEntries[0]!.source,
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const retried = await syncNativeLocale("sv", fallbackEntries, {
+        glossary: [{ source: "Request", target: "Begäran" }],
+        translationsDir,
+        translate: async (pending) => new Map(pending.map((entry) => [entry.id, "Försök igen"])),
+      });
+      expect(retried).toEqual({ changed: true, translated: 1 });
+
+      const ambiguousEntries = [
+        {
+          id: "native.apple.ambiguous.current",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/example.swift",
+          source: "Open",
+          surface: "apple",
+        },
+      ] satisfies NativeI18nEntry[];
+      await writeFile(
+        artifactPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            locale: "sv",
+            glossaryHash: refreshedArtifact.glossaryHash,
+            entries: [
+              {
+                id: "native.apple.ambiguous.action",
+                source: "Open",
+                translated: "Öppna",
+              },
+              {
+                id: "native.apple.ambiguous.state",
+                source: "Open",
+                translated: "Öppen",
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const ambiguous = await syncNativeLocale("sv", ambiguousEntries, {
+        glossary: [{ source: "Request", target: "Begäran" }],
+        translationsDir,
+        translate: async (pending) =>
+          new Map(pending.map((entry) => [entry.id, "Öppna i aktuell kontext"])),
+      });
+      expect(ambiguous).toEqual({ changed: true, translated: 1 });
+      const ambiguousArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        entries: Array<{ translated: string }>;
+      };
+      expect(ambiguousArtifact.entries[0]?.translated).toBe("Öppna i aktuell kontext");
+
+      const partialChurnEntries = [
+        {
+          id: "native.apple.partial.action.current",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/action.swift",
+          source: "Open",
+          surface: "apple",
+        },
+        {
+          id: "native.apple.partial.state.current",
+          kind: "ui-call",
+          line: 2,
+          path: "apps/ios/state.swift",
+          source: "Open",
+          surface: "apple",
+        },
+      ] satisfies NativeI18nEntry[];
+      await writeFile(
+        artifactPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            locale: "sv",
+            glossaryHash: refreshedArtifact.glossaryHash,
+            entries: [
+              {
+                id: "native.apple.partial.action.previous",
+                source: "Open",
+                translated: "Öppna",
+              },
+              {
+                id: "native.apple.partial.state.previous",
+                source: "Open",
+                translated: "Open",
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const partialChurn = await syncNativeLocale("sv", partialChurnEntries, {
+        glossary: [{ source: "Request", target: "Begäran" }],
+        translationsDir,
+        translate: async (pending) =>
+          new Map(pending.map((entry, index) => [entry.id, `Översatt ${index + 1}`])),
+      });
+      expect(partialChurn).toEqual({ changed: true, translated: 2 });
+      const partialChurnArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        entries: Array<{ translated: string }>;
+      };
+      expect(partialChurnArtifact.entries.map((entry) => entry.translated)).toEqual([
+        "Översatt 1",
+        "Översatt 2",
+      ]);
+
+      const duplicateEntries = [
+        {
+          id: "native.apple.open.action",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/action.swift",
+          source: "Open",
+          surface: "apple",
+        },
+        {
+          id: "native.apple.open.state",
+          kind: "ui-call",
+          line: 2,
+          path: "apps/ios/state.swift",
+          source: "Open",
+          surface: "apple",
+        },
+      ] satisfies NativeI18nEntry[];
+      await writeFile(
+        artifactPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            locale: "sv",
+            glossaryHash: refreshedArtifact.glossaryHash,
+            entries: [
+              {
+                id: "native.apple.open.action",
+                source: "Open",
+                translated: "Öppna",
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const duplicate = await syncNativeLocale("sv", duplicateEntries, {
+        glossary: [{ source: "Request", target: "Begäran" }],
+        translationsDir,
+        translate: async (pending) => new Map(pending.map((entry) => [entry.id, "Öppen"])),
+      });
+      expect(duplicate).toEqual({ changed: true, translated: 1 });
+      const duplicateArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        entries: Array<{ id: string; translated: string }>;
+      };
+      expect(duplicateArtifact.entries).toEqual([
+        { id: "native.apple.open.action", source: "Open", translated: "Öppna" },
+        { id: "native.apple.open.state", source: "Open", translated: "Öppen" },
+      ]);
     } finally {
       cleanupTempDirs(tempDirs);
     }
@@ -681,6 +916,17 @@ describe("native app i18n inventory", () => {
           surface: "apple",
         },
         translated: "Sändningen misslyckades",
+      },
+      {
+        entry: {
+          id: "native.apple.percent",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/example.swift",
+          source: "Context %@%% used",
+          surface: "apple",
+        },
+        translated: "Kontext %@ används",
       },
     ] satisfies Array<{ entry: NativeI18nEntry; translated: string }>;
 
@@ -720,6 +966,8 @@ describe("native app i18n inventory", () => {
         surface: "apple",
       },
     ];
+    const greeting = expectDefined(inventory[0], "native greeting inventory entry");
+    const other = expectDefined(inventory[1], "native other inventory entry");
     const emptyGlossaryHash = createHash("sha256").update(JSON.stringify([])).digest("hex");
     const createArtifact = (): NativeTranslationArtifact => ({
       version: 1,
@@ -727,13 +975,13 @@ describe("native app i18n inventory", () => {
       glossaryHash: emptyGlossaryHash,
       entries: [
         {
-          id: inventory[0].id,
-          source: inventory[0].source,
+          id: greeting.id,
+          source: greeting.source,
           translated: "Hej ${name}\nNästa",
         },
         {
-          id: inventory[1].id,
-          source: inventory[1].source,
+          id: other.id,
+          source: other.source,
           translated: "Annat",
         },
       ],
@@ -766,21 +1014,36 @@ describe("native app i18n inventory", () => {
         expected: "entries[0].source does not match inventory",
         mutate: (artifact) => ({
           ...artifact,
-          entries: [{ ...artifact.entries[0], source: "Changed" }, artifact.entries[1]],
+          entries: [
+            { ...artifactEntry(artifact, 0, "first native translation entry"), source: "Changed" },
+            artifactEntry(artifact, 1, "second native translation entry"),
+          ],
         }),
       },
       {
         expected: 'duplicate id "native.android.greeting"',
         mutate: (artifact) => ({
           ...artifact,
-          entries: [artifact.entries[0], { ...artifact.entries[1], id: artifact.entries[0].id }],
+          entries: [
+            artifactEntry(artifact, 0, "first duplicate native translation entry"),
+            {
+              ...artifactEntry(artifact, 1, "second duplicate native translation entry"),
+              id: artifactEntry(artifact, 0, "duplicate native translation source entry").id,
+            },
+          ],
         }),
       },
       {
         expected: "entries[1].translated must be nonempty",
         mutate: (artifact) => ({
           ...artifact,
-          entries: [artifact.entries[0], { ...artifact.entries[1], translated: "  " }],
+          entries: [
+            artifactEntry(artifact, 0, "first nonempty native translation entry"),
+            {
+              ...artifactEntry(artifact, 1, "second nonempty native translation entry"),
+              translated: "  ",
+            },
+          ],
         }),
       },
       {
@@ -795,8 +1058,11 @@ describe("native app i18n inventory", () => {
         mutate: (artifact) => ({
           ...artifact,
           entries: [
-            { ...artifact.entries[0], translated: "Hej ${name} Nästa" },
-            artifact.entries[1],
+            {
+              ...artifactEntry(artifact, 0, "first structural native translation entry"),
+              translated: "Hej ${name} Nästa",
+            },
+            artifactEntry(artifact, 1, "second structural native translation entry"),
           ],
         }),
       },
@@ -845,29 +1111,33 @@ describe("native app i18n inventory", () => {
         surface: "android",
       },
     ];
+    const languagePicker = expectDefined(inventory[0], "native language picker inventory entry");
+    const androidInspect = expectDefined(inventory[1], "native Android inspect inventory entry");
+    const appleInspect = expectDefined(inventory[2], "native Apple inspect inventory entry");
+    const voiceNote = expectDefined(inventory[3], "native voice note inventory entry");
     const artifact: NativeTranslationArtifact = {
       version: 1,
       locale: "id",
       glossaryHash: createHash("sha256").update(JSON.stringify([])).digest("hex"),
       entries: [
         {
-          id: inventory[0].id,
-          source: inventory[0].source,
-          translated: inventory[0].source,
+          id: languagePicker.id,
+          source: languagePicker.source,
+          translated: languagePicker.source,
         },
         {
-          id: inventory[1].id,
-          source: inventory[1].source,
-          translated: inventory[1].source,
+          id: androidInspect.id,
+          source: androidInspect.source,
+          translated: androidInspect.source,
         },
         {
-          id: inventory[2].id,
-          source: inventory[2].source,
+          id: appleInspect.id,
+          source: appleInspect.source,
           translated: "Periksa",
         },
         {
-          id: inventory[3].id,
-          source: inventory[3].source,
+          id: voiceNote.id,
+          source: voiceNote.source,
           translated: "Ghi ghi chú thoại",
         },
       ],

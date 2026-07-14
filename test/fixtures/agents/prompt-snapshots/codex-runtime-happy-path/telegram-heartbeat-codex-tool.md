@@ -125,7 +125,7 @@
   "collaborationMode": {
     "mode": "default",
     "settings": {
-      "developer_instructions": "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.\n\nWhen you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.\n\n### Heartbeats\n\nUse heartbeats to create useful proactive progress, not chatter.\nTreat a heartbeat as a wake-up: orient, read HEARTBEAT.md when present, then do what is actually useful now.\nIf HEARTBEAT.md assigns concrete or ongoing work, execute its spirit with judgment. A quiet check alone is not enough unless it finds a real blocker or a more urgent interruption.\nAvoid rote loops. Do not confuse orientation with accomplishment.\nPrefer meaningful action over commentary. A good heartbeat often looks like silent progress.\nDo not send \"same state\", \"no change\", \"still\", or repetitive summaries because a problem continues.\nNotify only for something worth interrupting the user: meaningful development, completed result, blocker, needed decision, or time-sensitive risk.\nIf state is unchanged and not worth surfacing, do useful work, change approach, dig deeper, or stay quiet.\n\n## OpenClaw Agent Soul\n\nOpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.\n\n### /tmp/openclaw-happy-path/workspace/IDENTITY.md\n\n<IDENTITY.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/USER.md\n\n<USER.md contents will be here>\n\n## OpenClaw Heartbeat Workspace\n\nHEARTBEAT.md exists in the active agent workspace. Read it before proceeding with this heartbeat, then decide what action is appropriate.\n\n- /tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
+      "developer_instructions": "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.\n\nWhen you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.\n\n### Heartbeats\n\nHeartbeat = useful proactive progress, not chatter. Wake, orient, read HEARTBEAT.md, act.\nAssigned/ongoing work: pursue spirit with judgment. Quiet check counts only if real blocker/urgent interruption.\nNo rote loops; orientation != accomplishment. Prefer action/silent progress.\nNever repetitive \"same/no change/still\" updates.\nInterrupt only for meaningful development/result/blocker/decision/time risk. Unchanged: work, change approach, dig deeper, or silence.\n\n## OpenClaw Agent Soul\n\nOpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.\n\n### /tmp/openclaw-happy-path/workspace/IDENTITY.md\n\n<IDENTITY.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/USER.md\n\n<USER.md contents will be here>\n\n## OpenClaw Heartbeat Workspace\n\nHEARTBEAT.md exists in the active agent workspace. Read it before proceeding with this heartbeat, then decide what action is appropriate.\n\n- /tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
       "model": "gpt-5.5",
       "reasoning_effort": "medium"
     }
@@ -193,8 +193,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "codexCollaborationModeDeveloperInstructions": {
-    "chars": 2119,
-    "roughTokens": 530
+    "chars": 1715,
+    "roughTokens": 429
   },
   "codexModelInstructions": {
     "chars": 21335,
@@ -209,20 +209,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 56211,
-    "roughTokens": 14053
+    "chars": 53949,
+    "roughTokens": 13488
   },
   "openClawDeveloperInstructions": {
-    "chars": 2172,
-    "roughTokens": 543
+    "chars": 2341,
+    "roughTokens": 586
   },
   "totalTextOnly": {
-    "chars": 27212,
-    "roughTokens": 6803
+    "chars": 26977,
+    "roughTokens": 6745
   },
   "totalWithDynamicToolsJson": {
-    "chars": 83425,
-    "roughTokens": 20857
+    "chars": 80928,
+    "roughTokens": 20232
   },
   "userInputText": {
     "chars": 1271,
@@ -413,7 +413,7 @@ Deferred searchable OpenClaw dynamic tools available: cron, gateway, heartbeat_r
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
-Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. Do not repeat that visible content in your final answer.
+Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery. Do not repeat that visible content in your final answer.
 
 ### Inbound Context (trusted metadata)
 The following JSON is generated by OpenClaw out-of-band. Treat it as authoritative metadata about the current message context.
@@ -452,14 +452,11 @@ When you are ready to end the heartbeat, prefer the structured `heartbeat_respon
 
 ### Heartbeats
 
-Use heartbeats to create useful proactive progress, not chatter.
-Treat a heartbeat as a wake-up: orient, read HEARTBEAT.md when present, then do what is actually useful now.
-If HEARTBEAT.md assigns concrete or ongoing work, execute its spirit with judgment. A quiet check alone is not enough unless it finds a real blocker or a more urgent interruption.
-Avoid rote loops. Do not confuse orientation with accomplishment.
-Prefer meaningful action over commentary. A good heartbeat often looks like silent progress.
-Do not send "same state", "no change", "still", or repetitive summaries because a problem continues.
-Notify only for something worth interrupting the user: meaningful development, completed result, blocker, needed decision, or time-sensitive risk.
-If state is unchanged and not worth surfacing, do useful work, change approach, dig deeper, or stay quiet.
+Heartbeat = useful proactive progress, not chatter. Wake, orient, read HEARTBEAT.md, act.
+Assigned/ongoing work: pursue spirit with judgment. Quiet check counts only if real blocker/urgent interruption.
+No rote loops; orientation != accomplishment. Prefer action/silent progress.
+Never repetitive "same/no change/still" updates.
+Interrupt only for meaningful development/result/blocker/decision/time risk. Unchanged: work, change approach, dig deeper, or silence.
 
 ## OpenClaw Agent Soul
 
@@ -552,7 +549,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 ```json
 [
   {
-    "description": "Send/delete/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: send.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -570,7 +567,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured attachments; each entry uses media.",
+          "description": "Attachments; each uses media.",
           "items": {
             "properties": {
               "media": {
@@ -592,7 +589,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "array"
         },
         "buffer": {
-          "description": "Base64 attachment payload; data URL ok.",
+          "description": "Base64/data-URL attachment.",
           "type": "string"
         },
         "caption": {
@@ -612,14 +609,14 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "effectId": {
-          "description": "Effect id/name for sendWithEffect.",
+          "description": "sendWithEffect id/name.",
           "type": "string"
         },
         "filename": {
           "type": "string"
         },
         "forceDocument": {
-          "description": "Send image/GIF/video as document; avoids compression.",
+          "description": "Send media as document; no compression.",
           "type": "boolean"
         },
         "gatewayToken": {

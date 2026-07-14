@@ -12,9 +12,11 @@ import {
   validateCommandsListParams,
   validateConnectParams,
   validateModelsListParams,
+  validateModelsProbeParams,
   validateNodeEventResult,
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
+  validateNodePresenceActivityPayload,
   validateNodePresenceAlivePayload,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
@@ -180,6 +182,15 @@ describe("lazy protocol validators", () => {
         agentId: "work",
         limit: 50,
         offset: 100,
+      }),
+    ).toBe(true);
+    expect(
+      validateChatHistoryParams({
+        sessionKey: "global",
+        agentId: "work",
+        limit: 11,
+        messageId: "matching-message",
+        sessionId: "matching-session",
       }),
     ).toBe(true);
     expect(
@@ -944,6 +955,21 @@ describe("validateModelsListParams", () => {
   });
 });
 
+describe("validateModelsProbeParams", () => {
+  it("accepts one provider with optional profile and timeout", () => {
+    expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
+    expect(
+      validateModelsProbeParams({ provider: "OpenAI", profileId: "work", timeoutMs: 20_000 }),
+    ).toBe(true);
+  });
+
+  it("rejects missing providers, invalid timeouts, and extra fields", () => {
+    expect(validateModelsProbeParams({})).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", timeoutMs: 0 })).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", extra: true })).toBe(false);
+  });
+});
+
 describe("validateTasksListParams", () => {
   it("accepts SDK task ledger filters", () => {
     expect(
@@ -987,6 +1013,21 @@ describe("validateNodePresenceAlivePayload", () => {
         arbitrary: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("validateNodePresenceActivityPayload", () => {
+  it("accepts bounded input idle time", () => {
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 12 })).toBe(true);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_000, saturated: true })).toBe(
+      true,
+    );
+  });
+
+  it("rejects negative, unbounded, and extra fields", () => {
+    expect(validateNodePresenceActivityPayload({ idleSeconds: -1 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_001 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 1, active: true })).toBe(false);
   });
 });
 

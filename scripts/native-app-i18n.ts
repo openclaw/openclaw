@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import pMap from "p-map";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 
 type NativeI18nSurface = "android" | "apple";
@@ -86,14 +88,14 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
-const NATIVE_FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
+const NATIVE_FORMAT_RE = /%(?:%|(?:\d+\$)?[@a-z])/giu;
 const NATIVE_SOURCE_READ_CONCURRENCY = 32;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
-  /\b(?:String\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
+  /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedString(?:Key|Resource)\s*\(|(?:\b[A-Za-z_]\w*)?\.localized(?:Format)?\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_LOCALIZED_STRING_MULTILINE_CALLS =
-  /\b(?:String\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu;
+  /\b(?:String\s*\(\s*localized:|AttributedString\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu;
 const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
@@ -128,6 +130,7 @@ const ANDROID_BUILTIN_UI_CALLS = new Set([
   "LazyRow",
   "nativeString",
   "nativeStringResource",
+  "nativeText",
   "OutlinedButton",
   "OutlinedTextField",
   "RadioButton",
@@ -147,7 +150,8 @@ const APPLE_SWITCH_BRANCH_START = /(?:\bcase\b[^:\n]+|\bdefault)\s*:\s*(?:return
 const ANDROID_STRING_FUNCTION =
   /\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*:\s*String\s*(=|\{)/gu;
 const ANDROID_WHEN_BRANCH_START = /(?:[^\n{}]+|\belse)\s*->\s*/gu;
-const ANDROID_RESOURCE_STRINGS = /<string\b[^>]*>([\s\S]*?)<\/string>/gu;
+const ANDROID_RESOURCE_STRINGS = /<string\b([^>]*)>([\s\S]*?)<\/string>/gu;
+const ANDROID_RESOURCE_NAME = /\bname\s*=\s*"([^"]+)"/u;
 const ANDROID_RESOURCE_COLLECTIONS =
   /<(?:string-array|plurals)\b[^>]*>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
 const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
@@ -184,6 +188,7 @@ const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
+const GENERATED_FILE_RE = /(?:^|[\\/])NativeStringResources\.kt$/u;
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
 const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 const ANDROID_LANGUAGE_PICKER_PATH =
@@ -211,18 +216,18 @@ function isAsciiAlphaNumeric(character: string): boolean {
 
 export function isConditionalBranchIdentifier(source: string): boolean {
   let index = 0;
-  while (index < source.length && isAsciiLowercaseLetter(source[index])) {
+  while (index < source.length && isAsciiLowercaseLetter(source.charAt(index))) {
     index += 1;
   }
 
   // Keep this scanner linear: PR-controlled native source passes through CI,
   // so a backtracking regex here can become a cheap native-i18n DoS trigger.
-  if (index === 0 || index >= source.length || !isAsciiUppercaseLetter(source[index])) {
+  if (index === 0 || index >= source.length || !isAsciiUppercaseLetter(source.charAt(index))) {
     return false;
   }
 
   for (index += 1; index < source.length; index += 1) {
-    if (!isAsciiAlphaNumeric(source[index])) {
+    if (!isAsciiAlphaNumeric(source.charAt(index))) {
       return false;
     }
   }
@@ -622,15 +627,18 @@ function identifierBefore(source: string, offset: number): string | null {
     cursor -= 1;
   }
   const end = cursor + 1;
-  while (cursor >= 0 && (isAsciiAlphaNumeric(source[cursor]) || source[cursor] === "_")) {
+  while (
+    cursor >= 0 &&
+    (isAsciiAlphaNumeric(source.charAt(cursor)) || source.charAt(cursor) === "_")
+  ) {
     cursor -= 1;
   }
   const start = cursor + 1;
   if (
     start === end ||
-    (!isAsciiLowercaseLetter(source[start]) &&
-      !isAsciiUppercaseLetter(source[start]) &&
-      source[start] !== "_")
+    (!isAsciiLowercaseLetter(source.charAt(start)) &&
+      !isAsciiUppercaseLetter(source.charAt(start)) &&
+      source.charAt(start) !== "_")
   ) {
     return null;
   }
@@ -739,18 +747,18 @@ function addCapturedLiteralCandidates(
 
 function skipWhitespaceAndBrace(source: string, offset: number): number {
   let cursor = offset;
-  while (cursor < source.length && /\s/u.test(source[cursor])) {
+  while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
     cursor += 1;
   }
-  if (source[cursor] === "{") {
+  if (source.charAt(cursor) === "{") {
     cursor += 1;
-    while (cursor < source.length && /\s/u.test(source[cursor])) {
+    while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
       cursor += 1;
     }
   }
   if (source.startsWith("return", cursor) && !isAsciiAlphaNumeric(source[cursor + 6] ?? "")) {
     cursor += 6;
-    while (cursor < source.length && /\s/u.test(source[cursor])) {
+    while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
       cursor += 1;
     }
   }
@@ -1029,12 +1037,16 @@ export function extractNativeI18nCandidates(
   }
   if (surface === "android" && /\/res\/values\/[^/]+\.xml$/u.test(repoPath)) {
     for (const match of source.matchAll(ANDROID_RESOURCE_STRINGS)) {
-      if (match[1]) {
+      const resourceName = match[1]?.match(ANDROID_RESOURCE_NAME)?.[1];
+      if (resourceName?.startsWith("native_")) {
+        continue;
+      }
+      if (match[2]) {
         addCandidate(
           entries,
           surface,
           repoPath,
-          match[1],
+          match[2],
           "resource-string",
           lineNumber(source, match.index ?? 0),
         );
@@ -1100,7 +1112,8 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
       const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
       return entry.isFile() &&
         (allowed.has(extension) || isAndroidValuesXml) &&
-        !EXCLUDED_FILE_RE.test(entry.name)
+        !EXCLUDED_FILE_RE.test(entry.name) &&
+        !GENERATED_FILE_RE.test(fullPath)
         ? [fullPath]
         : [];
     }),
@@ -1173,29 +1186,6 @@ async function readNativeI18nInventory(): Promise<{
   return { entries: inventory.entries as NativeI18nEntry[], raw };
 }
 
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  limit: number,
-  run: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results = Array<R>(values.length);
-  let nextIndex = 0;
-  const workerCount = Math.min(limit, values.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      for (;;) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= values.length) {
-          return;
-        }
-        results[index] = await run(values[index]);
-      }
-    }),
-  );
-  return results;
-}
-
 export async function collectNativeI18nEntries(
   previousEntries?: readonly NativeI18nEntry[],
 ): Promise<NativeI18nEntry[]> {
@@ -1211,14 +1201,17 @@ export async function collectNativeI18nEntries(
       surface,
     })),
   );
-  const sources = await mapWithConcurrency(
+  const sources = await pMap(
     filesByRoot.flatMap(({ files, surface }) => files.map((filePath) => ({ filePath, surface }))),
-    NATIVE_SOURCE_READ_CONCURRENCY,
     async ({ filePath, surface }) => ({
       repoPath: path.relative(ROOT, filePath).split(path.sep).join("/"),
       source: await readFile(filePath, "utf8"),
       surface,
     }),
+    {
+      concurrency: NATIVE_SOURCE_READ_CONCURRENCY,
+      stopOnError: true,
+    },
   );
   const typedSources: Array<{
     repoPath: string;
@@ -1306,10 +1299,14 @@ function adjacentDuplicateWords(value: string, locale: string): string[] {
   const duplicates = new Set<string>();
   for (let index = 1; index < words.length; index += 1) {
     if (
-      words[index - 1].normalize("NFKC").toLocaleLowerCase(locale) ===
-      words[index].normalize("NFKC").toLocaleLowerCase(locale)
+      expectDefined(words[index - 1], `native i18n word before index ${index}`)
+        .normalize("NFKC")
+        .toLocaleLowerCase(locale) ===
+      expectDefined(words[index], `native i18n word at index ${index}`)
+        .normalize("NFKC")
+        .toLocaleLowerCase(locale)
     ) {
-      duplicates.add(words[index]);
+      duplicates.add(expectDefined(words[index], `duplicate native i18n word at index ${index}`));
     }
   }
   return [...duplicates].toSorted(compareCodePoints);
@@ -1443,8 +1440,8 @@ export function validateNativeLocaleArtifact(
     errors.push(`entry count must be ${inventory.length}, got ${rawEntries.length}`);
   }
   for (let index = 0; index < Math.min(entries.length, inventory.length); index += 1) {
-    const actual = entries[index];
-    const expected = inventory[index];
+    const actual = expectDefined(entries[index], `native locale entry at index ${index}`);
+    const expected = expectDefined(inventory[index], `native inventory entry at index ${index}`);
     if (actual.id !== expected.id) {
       errors.push(
         `entries[${index}].id must be ${JSON.stringify(expected.id)}, got ${JSON.stringify(actual.id)}`,
@@ -1532,14 +1529,17 @@ export async function syncNativeLocale(
     // The first refresh creates the locale artifact.
   }
   const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
+  const reusableById = new Map(
+    entries.map((entry) => {
+      const exact = previousById.get(entry.id);
+      const translated =
+        exact?.source === entry.source && exact.translated.trim() ? exact.translated : undefined;
+      return [entry.id, translated] as const;
+    }),
+  );
   const glossaryChanged = previous.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter((entry) => {
-      const current = previousById.get(entry.id);
-      return (
-        glossaryChanged || !current || current.source !== entry.source || !current.translated.trim()
-      );
-    })
+    .filter((entry) => glossaryChanged || !reusableById.get(entry.id))
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
@@ -1555,8 +1555,7 @@ export async function syncNativeLocale(
     entries: entries.map((entry) => ({
       id: entry.id,
       source: entry.source,
-      translated:
-        translated.get(entry.id) ?? previousById.get(entry.id)?.translated ?? entry.source,
+      translated: translated.get(entry.id) ?? reusableById.get(entry.id) ?? entry.source,
     })),
   };
   try {

@@ -50,9 +50,8 @@ openclaw-new-session-page {
   text-align: left;
 }
 
-/* Cursor-style quiet target row: plain muted text controls with the native
-   select chevrons, no chip borders; hover/focus restores full contrast. */
-.new-session-page__targets {
+/* Cursor-style quiet trigger row. Web Awesome owns popup/listbox behavior. */
+.new-session-page__triggers {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -60,52 +59,183 @@ openclaw-new-session-page {
   padding: 0 2px;
 }
 
-.new-session-page__target {
+.new-session-page__select {
+  position: relative;
+}
+
+.new-session-page__trigger {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   padding: 2px 0;
+  font-size: 12px;
+  color: var(--muted);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
   border: 0;
-  background: none;
+  background: transparent;
+  font-family: inherit;
+}
+
+.new-session-page__trigger::-webkit-details-marker {
+  display: none;
+}
+
+.new-session-page__trigger:hover,
+.new-session-page__trigger[aria-expanded="true"] {
+  color: var(--text);
+}
+
+.new-session-page__trigger--disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.new-session-page__trigger--disabled:hover {
+  color: var(--muted);
+}
+
+/* Keep the anchor focusable while Web Awesome finishes its hide animation. */
+.new-session-page__trigger--hiding {
+  pointer-events: none;
+}
+
+.new-session-page__runtime {
+  color: var(--text);
+  cursor: default;
+}
+
+.new-session-page__catalog-unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.new-session-page__trigger-label {
+  max-width: min(40vw, 260px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-session-page__trigger-chevron {
+  display: inline-flex;
+  color: inherit;
+}
+
+/* Icon templates only carry paths; without an explicit stroke rule the SVGs
+   render as solid black fills (invisible-blob chips in dark mode). */
+.new-session-page__trigger-chevron svg,
+.new-session-page__target-icon svg,
+.new-session-page__browser-nav svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.new-session-page__trigger-chevron svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Menu panel anchored under its trigger; item rows reuse the shared
+   .session-menu__* styles so every menu in the app reads the same. */
+wa-popover.new-session-page__select {
+  --max-width: min(320px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__select::part(body) {
+  min-width: 224px;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.new-session-page__menu-title {
+  padding: 4px 8px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.new-session-page__menu-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 8px;
   font-size: 12px;
   color: var(--muted);
 }
 
-.new-session-page__target:hover,
-.new-session-page__target:focus-within {
-  color: var(--text);
+.new-session-page__menu-field span {
+  flex: 0 0 auto;
 }
 
-.new-session-page__target select,
-.new-session-page__target input[type="text"] {
-  border: 0;
+.new-session-page__menu-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: inherit;
+  color: var(--text);
   font-size: 12px;
   outline: none;
-  cursor: pointer;
 }
 
-.new-session-page__target input[type="text"] {
-  cursor: text;
+.new-session-page__menu-field input:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
-.new-session-page__target input[type="text"]::placeholder {
+/* The folder menu hosts the directory browser; wider than the list menus. */
+wa-popover.new-session-page__select--folder::part(body) {
+  width: min(420px, calc(100vw - 24px));
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+.new-session-page__browser-menu {
+  width: 100%;
+}
+
+.new-session-page__agent-select::part(form-control-label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.new-session-page__agent-select::part(combobox) {
+  min-height: 0;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.new-session-page__agent-select::part(display-input) {
+  font-size: 12px;
   color: inherit;
-}
-
-/* Compact by default so the browse button hugs the path; grows only as far
-   as a long path needs, then ellipsizes via the input's own scroll. */
-.new-session-page__target--folder {
-  flex: 0 1 auto;
-  min-width: 0;
-}
-
-.new-session-page__target--folder input {
-  width: 150px;
-  max-width: 40vw;
-  min-width: 0;
-  field-sizing: content;
 }
 
 .new-session-page__target-icon {
@@ -113,16 +243,6 @@ openclaw-new-session-page {
   color: var(--muted);
 }
 
-.new-session-page__target-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.new-session-page__branch {
-  width: 140px;
-}
-
-.new-session-page__browse,
 .new-session-page__browser-nav {
   display: inline-flex;
   align-items: center;
@@ -136,16 +256,9 @@ openclaw-new-session-page {
   cursor: pointer;
 }
 
-.new-session-page__browse:hover,
 .new-session-page__browser-nav:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   color: var(--text);
-}
-
-.new-session-page__browse svg,
-.new-session-page__browser-nav svg {
-  width: 14px;
-  height: 14px;
 }
 
 .new-session-page__browser-nav:disabled {
@@ -153,11 +266,9 @@ openclaw-new-session-page {
   cursor: default;
 }
 
+/* The menu panel already draws the border/background chrome. */
 .new-session-page__browser {
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--panel);
 }
 
 .new-session-page__browser-head {
@@ -168,14 +279,25 @@ openclaw-new-session-page {
   border-bottom: 1px solid var(--border);
 }
 
+/* Editable path (input) or the pick-a-root hint (span). */
 .new-session-page__browser-path {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: transparent;
   font-size: 12px;
   color: var(--text);
+  outline: none;
+}
+
+.new-session-page__browser-loading {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .new-session-page__browser-list {
@@ -250,4 +372,28 @@ openclaw-new-session-page {
 .new-session-page__browser-use:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Phones (and short landscape): match the chat thread's mobile inset, and
+   anchor menus to the trigger row instead of their trigger — a near
+   viewport-wide panel under a non-leftmost trigger would otherwise run past
+   the right edge. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .new-session-page__scroll {
+    padding: 12px 8px;
+  }
+
+  .new-session-page__triggers {
+    position: relative;
+    gap: 4px 12px;
+  }
+
+  .new-session-page__select {
+    position: static;
+  }
+
+  wa-popover.new-session-page__select::part(body) {
+    width: auto;
+    max-width: none;
+  }
 }

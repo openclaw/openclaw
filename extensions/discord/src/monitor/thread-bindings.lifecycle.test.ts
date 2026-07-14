@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { ChannelType } from "discord-api-types/v10";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -106,6 +107,12 @@ function expectFields(
     expect(record[key]).toEqual(expected);
   }
   return record;
+}
+
+function expectThreadCreateOptionsWithoutArchiveOverride(value: unknown): void {
+  const options = requireRecord(value, "thread options");
+  expect(options.name).toBeTypeOf("string");
+  expect(options).not.toHaveProperty("autoArchiveMinutes");
 }
 
 function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
@@ -219,7 +226,6 @@ describe("thread binding lifecycle", () => {
           params.channelId,
           {
             name: params.threadName,
-            autoArchiveMinutes: 60,
           },
           {
             accountId: params.accountId,
@@ -473,11 +479,12 @@ describe("thread binding lifecycle", () => {
       });
 
       expect(updated).toHaveLength(1);
+      const updatedBinding = expectDefined(updated[0], "idle-timeout thread binding");
       expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T23:15:00.000Z").getTime());
       expect(updated[0]?.boundAt).toBe(boundAt);
       expect(
         resolveThreadBindingInactivityExpiresAt({
-          record: updated[0],
+          record: updatedBinding,
           defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
         }),
       ).toBe(new Date("2026-02-21T01:15:00.000Z").getTime());
@@ -514,11 +521,12 @@ describe("thread binding lifecycle", () => {
       });
 
       expect(updated).toHaveLength(1);
+      const updatedBinding = expectDefined(updated[0], "max-age thread binding");
       expect(updated[0]?.boundAt).toBe(new Date("2026-02-20T10:30:00.000Z").getTime());
       expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T10:30:00.000Z").getTime());
       expect(
         resolveThreadBindingMaxAgeExpiresAt({
-          record: updated[0],
+          record: updatedBinding,
           defaultMaxAgeMs: manager.getMaxAgeMs(),
         }),
       ).toBe(new Date("2026-02-20T13:30:00.000Z").getTime());
@@ -892,12 +900,8 @@ describe("thread binding lifecycle", () => {
     });
     expect(hoisted.createThreadDiscord).toHaveBeenCalledTimes(1);
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe("parent-1");
-    expectFields(
+    expectThreadCreateOptionsWithoutArchiveOverride(
       mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
     );
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
@@ -942,12 +946,8 @@ describe("thread binding lifecycle", () => {
     expectFields(childBinding, "child binding", { channelId: "parent-1" });
     expect(hoisted.restGet).toHaveBeenCalledTimes(1);
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe("parent-1");
-    expectFields(
+    expectThreadCreateOptionsWithoutArchiveOverride(
       mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
     );
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
@@ -1114,12 +1114,8 @@ describe("thread binding lifecycle", () => {
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe(
       "parent-runtime",
     );
-    expectFields(
+    expectThreadCreateOptionsWithoutArchiveOverride(
       mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
     );
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
@@ -1177,12 +1173,8 @@ describe("thread binding lifecycle", () => {
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe(
       "1491611525914558667",
     );
-    expectFields(
+    expectThreadCreateOptionsWithoutArchiveOverride(
       mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
     );
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
@@ -1790,8 +1782,9 @@ describe("thread binding lifecycle", () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(probeCallCount).toBe(2);
+    });
     const observedParallelStart = secondProbeStartedBeforeFirstResolved;
 
     resolveFirstProbe?.({ status: "healthy" });

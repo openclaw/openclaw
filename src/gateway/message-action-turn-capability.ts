@@ -69,7 +69,7 @@ function evictOldestCapability(): void {
   }
 }
 
-export function sweepExpiredMessageActionTurnCapabilities(nowMs: number = Date.now()): number {
+function sweepExpiredMessageActionTurnCapabilities(nowMs: number = Date.now()): number {
   let removed = 0;
   for (const [token, capability] of capabilitiesByToken) {
     if (nowMs >= capability.expiresAtMs) {
@@ -162,8 +162,4 @@ export function resolveMessageActionTurnCapability(params: {
 
 export function revokeMessageActionTurnCapability(token: string | undefined): boolean {
   return token ? capabilitiesByToken.delete(token) : false;
-}
-
-export function resetMessageActionTurnCapabilitiesForTest(): void {
-  capabilitiesByToken.clear();
 }

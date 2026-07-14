@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   parseArgs,
+  releaseProfileForTarget,
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
+  selectWorkflowRunCheckSuite,
 } from "../../scripts/full-release-validation-at-sha.mjs";
 
 describe("full-release-validation-at-sha", () => {
@@ -38,6 +40,15 @@ describe("full-release-validation-at-sha", () => {
       targetRef: "release/2026.7.1",
       workflowSha: "origin/main",
     });
+  });
+
+  it("infers the release profile from the target package version", () => {
+    const readVersion = (version: string) => () => JSON.stringify({ version });
+
+    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-beta.4"))).toBe("beta");
+    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-alpha.4"))).toBe("beta");
+    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1"))).toBe("stable");
+    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-1"))).toBe("stable");
   });
 
   it("keeps release context separate from the exact target SHA", () => {
@@ -99,6 +110,9 @@ describe("full-release-validation-at-sha", () => {
     expect(() => parseArgs(["-f", "reuse_evidence=maybe"])).toThrow(
       "reuse_evidence must be true or false",
     );
+    expect(() => parseArgs(["-f", "release_profile=minimum"])).toThrow(
+      "release_profile must be beta, stable, or full",
+    );
   });
 
   it("reserves the candidate ref for the resolved --sha", () => {
@@ -115,6 +129,29 @@ describe("full-release-validation-at-sha", () => {
       "--json",
     ]);
     expect(() => releaseEvidenceVerificationArgs("")).toThrow("positive decimal");
+  });
+
+  it("selects the exact workflow run through GraphQL check-suite metadata", () => {
+    const nodes = [
+      {
+        status: "COMPLETED",
+        conclusion: "SUCCESS",
+        workflowRun: { url: "https://github.com/openclaw/openclaw/actions/runs/122" },
+      },
+      {
+        status: "IN_PROGRESS",
+        conclusion: null,
+        workflowRun: { url: "https://github.com/openclaw/openclaw/actions/runs/123" },
+      },
+    ];
+
+    expect(selectWorkflowRunCheckSuite(nodes, "123")).toEqual(nodes[1]);
+    expect(selectWorkflowRunCheckSuite(nodes, "999")).toBeUndefined();
+    expect(() => selectWorkflowRunCheckSuite(nodes, "")).toThrow("positive decimal");
+
+    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    expect(source).toContain("checkSuites(first: 100, after: $after)");
+    expect(source).not.toContain('["run", "watch"');
   });
 
   it("supports current and legacy verifier locations in trusted workflow checkouts", () => {

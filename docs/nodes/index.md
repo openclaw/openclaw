@@ -11,7 +11,12 @@ A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that conne
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway's WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac). In remote gateway mode, browser automation is handled by the CLI node host (`openclaw node run` or the installed node service), not by the native app node.
+macOS can also run in **node mode**: the menu bar app connects to the Gateway's
+WS server as one node (so `openclaw nodes …` works against this Mac). The app
+adds native Canvas, camera, screen, notification, and computer-control commands
+to the same node-host command surface used by `openclaw node run`. Do not start a
+second CLI node on that Mac; the app runs the matching CLI node-host runtime as
+an internal worker and remains the sole Gateway connection and node identity.
 
 Nodes are **peripherals**, not gateways: they don't run the gateway service, and channel messages (Telegram, WhatsApp, etc.) land on the gateway, not on nodes.
 
@@ -32,6 +37,12 @@ openclaw nodes describe --node <idOrNameOrIp>
 Pending pairing requests expire 5 minutes after the device's last retry — a device that keeps reconnecting keeps its one pending request (and `requestId`) alive instead of minting a new prompt every few minutes; see [Node pairing](/gateway/pairing) for the full request/approve lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — clients get a `device.pair.resolved` event for the superseded request, and you should re-run `openclaw devices list` before approving.
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
+- A connected native Mac with Accessibility permission can report coalesced
+  physical-input activity. The Gateway marks the freshest eligible Mac as
+  `active`, gives the agent a stable node-id hint, and routes node connection
+  alerts there before a delayed fallback. See
+  [Active computer presence](/nodes/presence) for setup, privacy, timing, and
+  troubleshooting.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
 - `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate, gateway-owned node pairing store that tracks the node's approved command/capability surface across reconnects. It does **not** gate transport authentication — device pairing does that.
 - `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
@@ -117,7 +128,7 @@ openclaw node start
 openclaw node restart
 ```
 
-`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--runtime <node|bun>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
+`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--runtime <node>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
 
 ### Pair + name
 
@@ -320,13 +331,40 @@ byte-offset cursors and bounded backward file reads, so selecting a large
 session or loading an older page does not read the whole JSONL history into one
 Gateway response.
 
-Both node commands are read-only. They expose catalog metadata and transcript
+The list and read commands are read-only. They expose catalog metadata and transcript
 content only through the generic `sessions.catalog.list` and
 `sessions.catalog.read` methods to an authenticated operator connection with
-`operator.write`. Paired-node rows stay view-only. A Gateway-local Claude CLI
-row can be adopted from the normal Chat composer: OpenClaw imports bounded
-visible history, resumes with `--fork-session` on the first turn, and leaves the
-source transcript untouched. Claude Desktop rows remain view-only.
+`operator.write`. A Gateway-local Claude CLI row can be adopted from the normal
+Chat composer: OpenClaw imports bounded visible history, resumes with
+`--fork-session` on the first turn, and leaves the source transcript untouched.
+
+A headless node host can opt into the same continuation flow:
+
+```json5
+{
+  nodeHost: {
+    agentRuns: {
+      claude: { enabled: true },
+    },
+  },
+}
+```
+
+The node advertises `agent.cli.claude.run.v1` only when this node-local setting
+is enabled and the `claude` executable resolves on that node. The Gateway cannot
+enable it remotely. The command also passes through the node's existing exec
+approval policy. When all three Claude commands are advertised and permitted by
+the Gateway's node command policy, a Claude CLI
+row on that node becomes continuable: OpenClaw imports bounded history, binds
+the adopted session to the node and its catalog-reported working directory, and
+runs each one-shot `claude -p` turn there. The first turn still uses
+`--fork-session`, preserving the source transcript.
+
+Node-placed turns use the node's Claude defaults. In v1 they do not receive the
+Gateway loopback MCP config or Gateway skills plugin, cannot reseed from a
+Gateway transcript, and reject attachments and images. Claude Desktop rows and
+nodes that do not advertise the run command remain view-only. The macOS app
+node does not advertise this command yet, so its rows remain view-only.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
@@ -340,6 +378,17 @@ openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"ja
 ```
 
 `nodes invoke` blocks `system.run` and `system.run.prepare`; those commands only run through the `exec` tool with `host=node` (see above). Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows (canvas, camera, screen, location, below).
+
+Long-running streaming node commands use additive `node.invoke.progress`
+events. Each event carries the invoke ID, a zero-based sequence number, and a
+bounded UTF-8 text chunk; the Gateway orders chunks before delivering them to
+the caller. The existing `node.invoke.result` remains the single terminal
+response. Streaming callers can set an inactivity deadline that starts with the
+first progress event and resets after later progress while retaining the
+invoke's separate hard timeout during approval and execution. Result, hard
+timeout, inactivity timeout, and node disconnect all discard pending stream
+state. Caller cancellation emits `node.invoke.cancel`; the node host then
+terminates the matching process tree. Existing request/response commands are unchanged.
 
 ## Command policy
 
@@ -367,7 +416,7 @@ These rows describe the Gateway policy ceiling, not the commands implemented by 
 
 Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `mcp.tools.call.v1`, and `screen.snapshot` on macOS/Windows) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
 
-Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `computer.act`, `contacts.add`, `calendar.add`, `reminders.add`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries. See [Computer use](/nodes/computer-use) for the additional macOS, tool-policy, and arming gates around desktop input.
+Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `computer.act`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries. See [HealthKit summaries](/platforms/ios-healthkit) for the iPhone consent gate and [Computer use](/nodes/computer-use) for the additional macOS, tool-policy, and arming gates around desktop input.
 
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy runs after the allowlist check and before forwarding to the node, so raw `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin permission boundary. Dangerous plugin node commands still require explicit `gateway.nodes.allowCommands` opt-in.
 
@@ -468,6 +517,7 @@ Notes:
 - Mobile nodes use a bundled app-owned A2UI page for action-capable rendering.
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
 - iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
+- macOS can dispatch actions from the exact capability-scoped Gateway A2UI page selected by the app. Other HTTP/HTTPS pages remain render-only.
 
 ## Photos + videos (node camera)
 

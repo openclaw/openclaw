@@ -29,10 +29,10 @@ import {
   type HostIdentity,
 } from "./service-support.runtime.js";
 
-export const DEFAULT_FLEET_BACKUP_MAX_BYTES = 16 * 1024 ** 3;
+const DEFAULT_FLEET_BACKUP_MAX_BYTES = 16 * 1024 ** 3;
 // Byte caps alone do not stop metadata-only archive bombs: millions of empty
 // files stay under --max-bytes but can exhaust host inodes during extraction.
-export const FLEET_BACKUP_MAX_ENTRIES = 1_000_000;
+const FLEET_BACKUP_MAX_ENTRIES = 1_000_000;
 const MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 // Well under the 5-minute lease TTL so a stalled archive stream cannot outlive
 // the lease by more than one probe interval before the backup aborts.
@@ -62,7 +62,7 @@ type FleetBackupManifest = {
   runtime: "docker" | "podman";
 };
 
-export type FleetBackupResult = {
+type FleetBackupResult = {
   tenant: string;
   archivePath: string;
   fileCount: number;
@@ -71,7 +71,7 @@ export type FleetBackupResult = {
   note: string;
 };
 
-export type FleetRestoreResult = {
+type FleetRestoreResult = {
   tenant: string;
   archivePath: string;
   token: string;
@@ -499,7 +499,7 @@ export async function restoreFleetCell(params: {
   );
   if (inspectionResult.kind === "missing") {
     throw new Error(
-      `Fleet cell container is missing for ${params.record.tenantId}; create the cell (openclaw fleet create ${params.record.tenantId}) and then restore into it.`,
+      `Fleet cell container is missing for ${params.record.tenantId}; remove the stale registration without purging data (openclaw fleet rm ${params.record.tenantId} --force), recreate a stopped cell with the intended image (openclaw fleet create ${params.record.tenantId} --no-start --image <image>), then retry fleet restore.`,
     );
   }
   const inspection = assertManagedInspection(params.record, inspectionResult);

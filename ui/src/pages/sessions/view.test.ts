@@ -40,6 +40,9 @@ function buildProps(result: SessionsListResult): SessionsProps {
     showArchived: false,
     basePath: "",
     searchQuery: "",
+    transcriptSearchAvailable: true,
+    transcriptSearchQuery: "",
+    transcriptSearch: { status: "idle" },
     agentIdentityById: {},
     sortColumn: "updated",
     sortDir: "desc",
@@ -57,6 +60,9 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onFiltersChange: () => undefined,
     onClearFilters: () => undefined,
     onSearchChange: () => undefined,
+    onTranscriptSearchChange: () => undefined,
+    onTranscriptSearch: () => undefined,
+    onClearTranscriptSearch: () => undefined,
     onSortChange: () => undefined,
     onGroupByChange: () => undefined,
     onAssignCategory: () => undefined,
@@ -93,6 +99,119 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
+  it("keeps transcript search distinct from the loaded-roster filter", async () => {
+    const container = document.createElement("div");
+    const onTranscriptSearchChange = vi.fn();
+    const onTranscriptSearch = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        searchQuery: "agent label",
+        transcriptSearchQuery: "  exact phrase  ",
+        onTranscriptSearchChange,
+        onTranscriptSearch,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const rosterFilter = container.querySelector<HTMLInputElement>(
+      '.sessions-filter-bar input[type="text"]',
+    );
+    const transcriptInput = container.querySelector<HTMLInputElement>(
+      '.sessions-transcript-search input[type="search"]',
+    );
+    expect(rosterFilter?.value).toBe("agent label");
+    expect(transcriptInput?.value).toBe("  exact phrase  ");
+
+    transcriptInput!.value = "different words";
+    transcriptInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onTranscriptSearchChange).toHaveBeenCalledWith("different words");
+    expect(onTranscriptSearch).not.toHaveBeenCalled();
+
+    container
+      .querySelector(".sessions-transcript-search__form")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(onTranscriptSearch).toHaveBeenCalledOnce();
+  });
+
+  it("renders transcript provenance and opens the matching session", async () => {
+    const container = document.createElement("div");
+    const onNavigateToChat = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:launch",
+              kind: "direct",
+              label: "Launch planning",
+              updatedAt: Date.parse("2026-07-12T12:00:00.000Z"),
+            },
+          ]),
+        ),
+        transcriptSearchQuery: "launch code",
+        transcriptSearch: {
+          status: "results",
+          results: [
+            {
+              sessionKey: "agent:main:launch",
+              sessionId: "session-launch",
+              messageId: "message-1",
+              role: "assistant",
+              timestamp: Date.parse("2026-07-12T12:00:00.000Z"),
+              snippet: "The <launch code> is ready.",
+              score: 1,
+            },
+          ],
+          indexing: true,
+          truncated: true,
+        },
+        onNavigateToChat,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const result = container.querySelector<HTMLButtonElement>(
+      ".sessions-transcript-search__result",
+    );
+    expect(result?.textContent).toContain("Launch planning");
+    expect(result?.textContent).toContain("Assistant");
+    expect(result?.textContent).toContain("The <launch code> is ready.");
+    expect(result?.querySelector("launch")).toBeNull();
+    expect(container.textContent).toContain("The transcript index is still updating");
+    expect(container.textContent).toContain("Showing the first 25 matches.");
+
+    result?.click();
+    expect(onNavigateToChat).toHaveBeenCalledWith("agent:main:launch");
+  });
+
+  it("disables transcript search when the Gateway does not advertise it", async () => {
+    const container = document.createElement("div");
+    const onTranscriptSearch = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        transcriptSearchAvailable: false,
+        transcriptSearchQuery: "hidden",
+        onTranscriptSearch,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      container.querySelector<HTMLInputElement>('.sessions-transcript-search input[type="search"]')
+        ?.disabled,
+    ).toBe(true);
+    expect(container.textContent).toContain("Transcript search requires a newer Gateway.");
+    container
+      .querySelector(".sessions-transcript-search__form")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(onTranscriptSearch).not.toHaveBeenCalled();
+  });
+
   it("renders an explicit archived-session toggle", async () => {
     const container = document.createElement("div");
     const onFiltersChange = vi.fn();
@@ -585,7 +704,7 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const badge = container.querySelector(".data-table-badge--cron");
+    const badge = container.querySelector(".session-kind--cron");
     expect(badge?.textContent?.trim()).toBe("cron");
   });
 
@@ -630,7 +749,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
-    const badges = Array.from(container.querySelectorAll(".session-status-badge"));
+    const badges = Array.from(container.querySelectorAll(".settings-status"));
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
       "Live",
       "Idle",
@@ -638,17 +757,16 @@ describe("sessions view", () => {
       "Done",
     ]);
     expect(badges.map((badge) => [...badge.classList])).toEqual([
-      ["session-status-badge", "session-status-badge--live"],
-      ["session-status-badge", "session-status-badge--idle"],
-      ["session-status-badge", "session-status-badge--failed"],
-      ["session-status-badge", "session-status-badge--done"],
+      ["settings-status", "settings-status--ok"],
+      ["settings-status"],
+      ["settings-status", "settings-status--danger"],
+      ["settings-status", "settings-status--ok"],
     ]);
-    expect(badges.map((badge) => badge.getAttribute("aria-label"))).toEqual([
-      "Status: Live",
-      "Status: Idle",
-      "Status: Failed",
-      "Status: Done",
-    ]);
+    expect(
+      badges.map(
+        (badge) => (badge.parentElement as (HTMLElement & { content: string }) | null)?.content,
+      ),
+    ).toEqual(["Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
   });
 
   it("renders session goals in the status cell and search index", async () => {
@@ -682,13 +800,17 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const chip = container.querySelector(".session-goal-chip");
-    expect(chip?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Pursuing goal (12k/50k) Ship the web goal indicator",
-    );
-    expect(chip?.getAttribute("aria-label")).toBe(
+    const statuses = container.querySelectorAll(".session-status-stack .settings-status");
+    const goal = statuses[1];
+    expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe("Pursuing goal (12k/50k)");
+    // The wrapper span exposes the objective to keyboard/screen-reader users.
+    const wrapper = goal?.parentElement;
+    expect(wrapper?.getAttribute("tabindex")).toBe("0");
+    expect(wrapper?.getAttribute("aria-label")).toBe(
       "Pursuing goal (12k/50k): Ship the web goal indicator",
     );
+    const tooltip = wrapper?.parentElement as (HTMLElement & { content: string }) | null;
+    expect(tooltip?.content).toBe("Pursuing goal (12k/50k): Ship the web goal indicator");
     expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 
@@ -944,7 +1066,7 @@ describe("sessions view", () => {
       Array.from(details?.querySelectorAll(".session-details-panel__badges > *") ?? []).map(
         (badge) => badge.textContent?.replace(/\s+/g, " ").trim(),
       ),
-    ).toEqual(["Live", "Goal blocked (24k used) Finish the compaction details", "direct"]);
+    ).toEqual(["Live", "Goal blocked (24k used)", "direct"]);
 
     const stats = readSessionDetailStats(details ?? container);
     expect(stats.get("Status")).toBe("running");

@@ -16,6 +16,7 @@ import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
+import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = {
@@ -33,7 +34,7 @@ type CardState = {
   hasNote: boolean;
 };
 
-export type FeishuStreamingFetch = typeof fetch;
+type FeishuStreamingFetch = typeof fetch;
 
 type FeishuStreamingDeps = {
   /** Override fetch for tests while preserving the real SSRF guard path. */
@@ -232,16 +233,6 @@ export function mergeStreamingText(
   }
   // Fallback for fragmented partial chunks: append as-is to avoid losing tokens.
   return `${previous}${next}`;
-}
-
-export function resolveStreamingCardSendMode(options?: StreamingStartOptions) {
-  if (options?.replyToMessageId) {
-    return "reply";
-  }
-  if (options?.rootId) {
-    return "root_create";
-  }
-  return "create";
 }
 
 /** Streaming card session manager */
