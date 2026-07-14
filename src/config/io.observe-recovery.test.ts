@@ -17,13 +17,16 @@ import {
   maybeRecoverSuspiciousConfigReadSync,
   promoteConfigSnapshotToLastKnownGood,
   recoverConfigFromLastKnownGood,
-  resolveLastKnownGoodConfigPath,
-  type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+type ObserveRecoveryDeps = Parameters<typeof maybeRecoverSuspiciousConfigRead>[0]["deps"];
+
+function resolveLastKnownGoodConfigPath(configPath: string): string {
+  return `${configPath}.last-good`;
+}
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";
@@ -492,6 +495,16 @@ describe("config observe recovery", () => {
 
       expect(config.gateway?.mode).toBe("local");
       expectWarnContaining(warn, "Config auto-restored from backup:");
+    });
+  });
+
+  it("loadConfig skips health observation when observation is disabled", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });
+      await seedConfig(configPath, { gateway: { mode: "local" } });
+
+      expect(io.loadConfig().gateway?.mode).toBe("local");
+      expect(readConfigHealthRow(home, configPath)).toBeUndefined();
     });
   });
 

@@ -26,6 +26,11 @@ const SUCCESS_STREAM_CHUNK = Buffer.alloc(64 * 1024, "x");
 const SUCCESS_STREAM_BODY_BYTES = 33 * 1024 * 1024;
 const BROWSER_SUCCESS_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
 
+function scheduleStreamChunk(writeNext: () => void): void {
+  // Separate event-loop turns preserve streaming and backpressure without a wall-clock sleep.
+  setImmediate(writeNext);
+}
+
 describe("fetchHttpJson error body boundary", () => {
   let server: http.Server;
   let baseUrl: string;
@@ -91,11 +96,10 @@ describe("fetchHttpJson error body boundary", () => {
               ? SUCCESS_STREAM_CHUNK
               : SUCCESS_STREAM_CHUNK.subarray(0, remaining);
           written += chunk.byteLength;
-          const scheduleNext = () => setTimeout(writeNext, 2);
           if (res.write(chunk)) {
-            scheduleNext();
+            scheduleStreamChunk(writeNext);
           } else {
-            res.once("drain", scheduleNext);
+            res.once("drain", () => scheduleStreamChunk(writeNext));
           }
         };
         writeNext();
@@ -106,6 +110,23 @@ describe("fetchHttpJson error body boundary", () => {
         req.socket.once("close", () => resolveSmallConnectionClosed());
         res.writeHead(500, { "Content-Type": "text/plain" });
         res.end("session expired");
+        return;
+      }
+
+      if (req.url === "/structured") {
+        res.writeHead(409, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "display required",
+            reason: "no_display_for_headed_profile",
+            details: {
+              profile: "openclaw",
+              requestedHeadless: false,
+              headlessSource: "config",
+              displayPresent: false,
+            },
+          }),
+        );
         return;
       }
 
@@ -126,11 +147,10 @@ describe("fetchHttpJson error body boundary", () => {
           return;
         }
         written += STREAM_CHUNK.byteLength;
-        const writeMore = () => setTimeout(writeNext, 2);
         if (res.write(STREAM_CHUNK)) {
-          writeMore();
+          scheduleStreamChunk(writeNext);
         } else {
-          res.once("drain", writeMore);
+          res.once("drain", () => scheduleStreamChunk(writeNext));
         }
       };
       writeNext();
@@ -186,5 +206,21 @@ describe("fetchHttpJson error body boundary", () => {
       message: "session expired",
     });
     await expect(smallConnectionClosed).resolves.toBeUndefined();
+  });
+
+  it("preserves validated structured errors over HTTP", async () => {
+    const error = await fetchBrowserJson(`${baseUrl}/structured`).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "display required",
+      reason: "no_display_for_headed_profile",
+      details: {
+        profile: "openclaw",
+        requestedHeadless: false,
+        headlessSource: "config",
+        displayPresent: false,
+      },
+    });
   });
 });

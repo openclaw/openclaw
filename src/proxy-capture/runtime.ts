@@ -1,8 +1,12 @@
 // Proxy capture runtime coordinates capture sessions, proxy startup, and storage.
+import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
-import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
+import {
+  hasRegisteredSecretValuesForRedaction,
+  redactRegisteredSecretValues,
+} from "../logging/secret-redaction-registry.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import {
   closeDebugProxyCaptureStore,
@@ -19,6 +23,7 @@ import type {
 
 const DEBUG_PROXY_FETCH_PATCH_KEY = Symbol.for("openclaw.debugProxy.fetchPatch");
 const REDACTED_CAPTURE_HEADER_VALUE = "[REDACTED]";
+const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]", "utf8");
 // Cap captured response bodies so debug proxy capture cannot be turned into an
 // out-of-memory vector. The patched global fetch tees every outbound response
 // through clone(), so a single large (or hostile, effectively endless) provider
@@ -271,6 +276,31 @@ function redactCaptureText(value: string): string {
   return redactRegisteredSecretValues(value, () => REDACTED_CAPTURE_HEADER_VALUE);
 }
 
+function redactCapturePayload(value: string | Buffer | null | undefined): string | Buffer | null {
+  if (typeof value === "string") {
+    return redactCaptureText(value);
+  }
+  if (!Buffer.isBuffer(value)) {
+    return value ?? null;
+  }
+  if (!isUtf8(value)) {
+    // Binary frames can mix arbitrary bytes with credential text. Once any
+    // resolved secret exists, omit their contents instead of guessing safely.
+    return hasRegisteredSecretValuesForRedaction() ? REDACTED_CAPTURE_BINARY_PAYLOAD : value;
+  }
+  const text = value.toString("utf8");
+  const redacted = redactCaptureText(text);
+  return redacted === text ? value : Buffer.from(redacted, "utf8");
+}
+
+function redactedCaptureJson(
+  value: unknown,
+  stringify: typeof safeJsonString = safeJsonString,
+): string | undefined {
+  const serialized = stringify(value);
+  return serialized === undefined ? undefined : redactCaptureText(serialized);
+}
+
 function createHttpCaptureEventBase(params: {
   settings: DebugProxySettings;
   rawUrl: string;
@@ -374,7 +404,7 @@ function installDebugProxyGlobalFetchPatch(
           host: parsed.host,
           path: `${parsed.pathname}${parsed.search}`,
           errorText: redactCaptureText(error instanceof Error ? error.message : String(error)),
-          metaJson: runtime.safeJsonString({ captureOrigin: "global-fetch" }),
+          metaJson: redactedCaptureJson({ captureOrigin: "global-fetch" }, runtime.safeJsonString),
         });
       }
       throw error;
@@ -465,12 +495,21 @@ export function captureHttpExchange(
     typeof params.requestBody === "string" || Buffer.isBuffer(params.requestBody)
       ? params.requestBody
       : null;
+  const rawRequestContentType =
+    params.requestHeaders instanceof Headers
+      ? (params.requestHeaders.get("content-type") ?? undefined)
+      : params.requestHeaders?.["content-type"];
+  const requestContentType =
+    rawRequestContentType === undefined ? undefined : redactCaptureText(rawRequestContentType);
+  const rawResponseContentType =
+    typeof params.response.headers?.get === "function"
+      ? (params.response.headers.get("content-type") ?? undefined)
+      : undefined;
+  const responseContentType =
+    rawResponseContentType === undefined ? undefined : redactCaptureText(rawResponseContentType);
   const requestPayload = runtime.persistEventPayload(store, {
-    data: requestBody,
-    contentType:
-      params.requestHeaders instanceof Headers
-        ? (params.requestHeaders.get("content-type") ?? undefined)
-        : params.requestHeaders?.["content-type"],
+    data: redactCapturePayload(requestBody),
+    contentType: requestContentType,
   });
   store.recordEvent({
     ...createHttpCaptureEventBase({
@@ -483,12 +522,9 @@ export function captureHttpExchange(
       flowId,
       method: params.method,
     }),
-    contentType:
-      params.requestHeaders instanceof Headers
-        ? (params.requestHeaders.get("content-type") ?? undefined)
-        : params.requestHeaders?.["content-type"],
+    contentType: requestContentType,
     headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.requestHeaders)),
-    metaJson: runtime.safeJsonString(params.meta),
+    metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
     ...requestPayload,
   });
   // Records the response status/headers without a body. Used both when a
@@ -507,15 +543,12 @@ export function captureHttpExchange(
         method: params.method,
       }),
       status: params.response.status,
-      contentType:
-        typeof params.response.headers?.get === "function"
-          ? (params.response.headers.get("content-type") ?? undefined)
-          : undefined,
+      contentType: responseContentType,
       headersJson:
         params.response.headers && typeof params.response.headers.entries === "function"
           ? runtime.safeJsonString(redactedCaptureHeaders(params.response.headers))
           : undefined,
-      metaJson: runtime.safeJsonString({ ...params.meta, bodyCapture }),
+      metaJson: redactedCaptureJson({ ...params.meta, bodyCapture }, runtime.safeJsonString),
     });
   };
   const cloneable =
@@ -550,8 +583,8 @@ export function captureHttpExchange(
         return;
       }
       const responsePayload = runtime.persistEventPayload(store, {
-        data: buffer,
-        contentType: params.response.headers.get("content-type") ?? undefined,
+        data: redactCapturePayload(buffer),
+        contentType: responseContentType,
       });
       store.recordEvent({
         ...createHttpCaptureEventBase({
@@ -565,9 +598,9 @@ export function captureHttpExchange(
           method: params.method,
         }),
         status: params.response.status,
-        contentType: params.response.headers.get("content-type") ?? undefined,
+        contentType: responseContentType,
         headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.response.headers)),
-        metaJson: runtime.safeJsonString(params.meta),
+        metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
         ...responsePayload,
       });
     })
@@ -590,24 +623,30 @@ export function captureHttpExchange(
 
 // Websocket seams call this directly because Node fetch patching cannot observe
 // frame traffic.
-export function captureWsEvent(params: {
-  url: string;
-  direction: "outbound" | "inbound" | "local";
-  kind: "ws-open" | "ws-frame" | "ws-close" | "error";
-  flowId: string;
-  payload?: string | Buffer;
-  closeCode?: number;
-  errorText?: string;
-  meta?: Record<string, unknown>;
-}): void {
-  const settings = resolveDebugProxySettings();
+export function captureWsEvent(
+  params: {
+    url: string;
+    direction: "outbound" | "inbound" | "local";
+    kind: "ws-open" | "ws-frame" | "ws-close" | "error";
+    flowId: string;
+    payload?: string | Buffer;
+    closeCode?: number;
+    errorText?: string;
+    meta?: Record<string, unknown>;
+  },
+  resolved?: DebugProxySettings,
+  deps: DebugProxyCaptureRuntimeDeps = {},
+): void {
+  const settings = resolved ?? resolveDebugProxySettings();
   if (!settings.enabled) {
     return;
   }
-  const store = getDebugProxyCaptureStore();
-  const url = new URL(params.url);
-  const payload = persistEventPayload(store, {
-    data: params.payload,
+  const runtime = resolveRuntimeDeps(deps);
+  const store = runtime.getStore();
+  const captureUrl = redactCaptureUrl(params.url);
+  const url = new URL(captureUrl);
+  const payload = runtime.persistEventPayload(store, {
+    data: redactCapturePayload(params.payload),
     contentType: "application/json",
   });
   store.recordEvent({
@@ -615,15 +654,15 @@ export function captureWsEvent(params: {
     ts: Date.now(),
     sourceScope: "openclaw",
     sourceProcess: settings.sourceProcess,
-    protocol: protocolFromUrl(params.url),
+    protocol: protocolFromUrl(captureUrl),
     direction: params.direction,
     kind: params.kind,
     flowId: params.flowId,
     host: url.host,
     path: `${url.pathname}${url.search}`,
     closeCode: params.closeCode,
-    errorText: params.errorText,
-    metaJson: safeJsonString(params.meta),
+    errorText: params.errorText === undefined ? undefined : redactCaptureText(params.errorText),
+    metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
     ...payload,
   });
 }

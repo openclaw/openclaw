@@ -1,4 +1,5 @@
 // Voice Call helper module supports config behavior.
+import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -14,7 +15,6 @@ import {
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
-import { deepMergeDefined } from "./deep-merge.js";
 import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
@@ -299,6 +299,7 @@ const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "xhigh",
   "adaptive",
   "max",
+  "ultra",
 ]);
 
 const VoiceCallStreamingProvidersConfigSchema = z
@@ -363,7 +364,7 @@ export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSche
 
 const VoiceCallStreamingConfigSchema = z
   .object({
-    /** Enable real-time audio streaming (requires WebSocket support) */
+    /** Enable Twilio Media Streams for real-time transcription. */
     enabled: z.boolean().default(false),
     /** Provider id from registered realtime transcription providers. */
     provider: z.string().min(1).optional(),
@@ -549,7 +550,7 @@ function normalizeVoiceCallTtsConfig(
     return undefined;
   }
 
-  return TtsConfigSchema.parse(deepMergeDefined(defaults ?? {}, overrides ?? {}));
+  return TtsConfigSchema.parse(mergeDeep(defaults ?? {}, overrides ?? {}));
 }
 
 function normalizePhoneRouteKey(phone: string | undefined): string {
@@ -920,6 +921,12 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   if (config.realtime.enabled && config.streaming.enabled) {
     errors.push(
       "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
+    );
+  }
+
+  if (config.streaming.enabled && config.provider && config.provider !== "twilio") {
+    errors.push(
+      'plugins.entries.voice-call.config.provider must be "twilio" when streaming.enabled is true',
     );
   }
 

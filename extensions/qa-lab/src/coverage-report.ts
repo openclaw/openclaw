@@ -485,9 +485,9 @@ function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
   const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
   const requiredDrivers = [
     ...new Set(
-      matches.map((match) => match.requiredChannelDriver).filter((driver): driver is string =>
-        Boolean(driver),
-      ),
+      matches
+        .map((match) => match.requiredChannelDriver)
+        .filter((driver): driver is string => Boolean(driver)),
     ),
   ];
   const driverArg =
@@ -495,9 +495,11 @@ function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
       ? ` --channel-driver ${requiredDrivers[0]}`
       : "";
   const channels = [
-    ...new Set(matches.map((match) => match.channel).filter((channel): channel is string =>
-      Boolean(channel),
-    )),
+    ...new Set(
+      matches
+        .map((match) => match.channel)
+        .filter((channel): channel is string => Boolean(channel)),
+    ),
   ];
   const channelArg = driverArg && channels.length === 1 ? ` --channel ${channels[0]}` : "";
   return `pnpm openclaw qa suite${driverArg}${channelArg} ${scenarioArgs}`;
@@ -535,7 +537,10 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
   ];
 
   if (commandGroups.length === 1) {
-    lines.push(`- Suite command: \`${formatSuiteCommand(commandGroups[0].matches)}\``);
+    const group = commandGroups[0];
+    if (group) {
+      lines.push(`- Suite command: \`${formatSuiteCommand(group.matches)}\``);
+    }
   } else if (commandGroups.length > 1) {
     lines.push("- Suite commands:");
     for (const group of commandGroups) {

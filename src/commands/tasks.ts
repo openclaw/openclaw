@@ -19,6 +19,7 @@ import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-intern
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import {
+  assertTaskFlowRegistryMaintenanceReady,
   getInspectableTaskFlowAuditSummary,
   previewTaskFlowRegistryMaintenance,
   runTaskFlowRegistryMaintenance,
@@ -117,10 +118,7 @@ async function tryCancelGatewayOwnedTaskViaGateway(
 }
 
 function configureTaskMaintenanceFromConfig(): void {
-  const cfg = getRuntimeConfig();
-  configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
-  });
+  configureTaskRegistryMaintenance();
 }
 
 type SessionRegistryMaintenanceStoreSummary = {
@@ -349,8 +347,8 @@ export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
 ) {
-  const runtimeFilter = opts.runtime?.trim();
-  const statusFilter = opts.status?.trim();
+  const runtimeFilter = normalizeOptionalString(opts.runtime);
+  const statusFilter = normalizeOptionalString(opts.status);
   const tasks = reconcileInspectableTasks().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
@@ -524,8 +522,10 @@ export async function tasksAuditCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
-  const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
-  const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
+  const severityFilter = normalizeOptionalString(opts.severity) as
+    | TaskSystemAuditSeverity
+    | undefined;
+  const codeFilter = normalizeOptionalString(opts.code) as TaskSystemAuditCode | undefined;
   const auditResult = toSystemAuditFindings({
     severityFilter,
     codeFilter,
@@ -585,6 +585,7 @@ export async function tasksMaintenanceCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
+  assertTaskFlowRegistryMaintenanceReady();
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();
   const taskMaintenance = opts.apply

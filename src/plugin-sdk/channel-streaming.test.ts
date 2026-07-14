@@ -120,18 +120,21 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
-  it("falls back to legacy flat fields when the canonical object is absent", () => {
+  it("resolves flat delivery keys when no nested streaming config exists", () => {
+    // Bundled channel schemas are nested-only. Flat delivery keys remain
+    // compatibility fallbacks for external SDK plugins; mode-family aliases
+    // are doctor-only and stay unread.
     const entry = {
       chunkMode: "newline",
       blockStreaming: true,
       nativeStreaming: true,
       blockStreamingCoalesce: { minChars: 120, maxChars: 240, idleMs: 500 },
       draftChunk: { minChars: 8, maxChars: 16, breakPreference: "newline" },
-    } as const;
+    } as never;
 
     expect(getChannelStreamingConfigObject(entry)).toBeUndefined();
     expect(resolveChannelStreamingChunkMode(entry)).toBe("newline");
-    expect(resolveChannelStreamingNativeTransport(entry)).toBe(true);
+    expect(resolveChannelStreamingNativeTransport(entry)).toBeUndefined();
     expect(resolveChannelStreamingBlockEnabled(entry)).toBe(true);
     expect(resolveChannelStreamingBlockCoalesce(entry)).toEqual({
       minChars: 120,

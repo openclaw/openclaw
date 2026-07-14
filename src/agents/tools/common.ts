@@ -30,6 +30,10 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TResult
 > & {
   displaySummary?: string;
+  /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
+  catalogMode?: "direct-only";
+  /** Gateway client capabilities required before this tool can be assembled. */
+  requiredClientCaps?: string[];
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
@@ -50,6 +54,10 @@ type ErasedAgentToolExecute = {
 export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
     displaySummary?: string;
+    /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
+    catalogMode?: "direct-only";
+    /** Gateway client capabilities required before this tool can be assembled. */
+    requiredClientCaps?: string[];
     prepareBeforeToolCallParams?: AgentToolWithMeta<
       TSchema,
       unknown

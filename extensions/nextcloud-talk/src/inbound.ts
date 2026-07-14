@@ -3,11 +3,13 @@ import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -97,9 +99,9 @@ async function deliverNextcloudTalkReply(params: {
   roomToken: string;
   accountId: string;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
-}): Promise<void> {
+}): Promise<{ visibleReplySent: boolean }> {
   const { cfg, payload, roomToken, accountId, statusSink } = params;
-  await deliverFormattedTextWithAttachments({
+  const visibleReplySent = await deliverFormattedTextWithAttachments({
     payload,
     send: async ({ text, replyToId }) => {
       await sendMessageNextcloudTalk(roomToken, text, {
@@ -110,6 +112,7 @@ async function deliverNextcloudTalkReply(params: {
       statusSink?.({ lastOutboundAt: Date.now() });
     },
   });
+  return { visibleReplySent };
 }
 
 export async function handleNextcloudTalkInbound(params: {
@@ -323,6 +326,7 @@ export async function handleNextcloudTalkInbound(params: {
   });
 
   const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -361,8 +365,15 @@ export async function handleNextcloudTalkInbound(params: {
     dispatchReplyWithBufferedBlockDispatcher:
       core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
+      preparePayload: (payload) =>
+        payload.text === undefined
+          ? payload
+          : {
+              ...payload,
+              text: sanitizeAssistantVisibleText(payload.text),
+            },
       deliver: async (payload) => {
-        await deliverNextcloudTalkReply({
+        return await deliverNextcloudTalkReply({
           cfg: config,
           payload,
           roomToken,
@@ -378,9 +389,7 @@ export async function handleNextcloudTalkInbound(params: {
     replyOptions: {
       skillFilter: roomConfig?.skills,
       disableBlockStreaming:
-        typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
+        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
     },
     record: {
       onRecordError: (err) => {

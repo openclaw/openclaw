@@ -3,15 +3,18 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { GetReplyOptions } from "../types.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -34,8 +37,9 @@ let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRu
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
 let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
 let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
+let replaceSessionEntrySync: typeof import("../../config/sessions/session-accessor.js").replaceSessionEntrySync;
 let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
-let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
+let clearFollowupQueue: typeof import("./queue/state.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
 let sessionRunAccounting: typeof import("./session-run-accounting.js");
 let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntimeConfigSnapshot;
@@ -79,7 +83,7 @@ function joinPromptSections(...sections: Array<string | undefined>): string {
 function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
   return createUserTurnTranscriptRecorder({
     message,
-    target: { transcriptPath: "/tmp/session.jsonl" },
+    target: createTestUserTurnTranscriptTarget(),
     updateMode: "none",
   });
 }
@@ -149,7 +153,11 @@ function registerFollowupTestSessionStore(
   sessionStore: Record<string, SessionEntry>,
 ): void {
   fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
-  fsSync.writeFileSync(storePath, JSON.stringify(sessionStore));
+  // Seed the sqlite accessor so the runner's loadSessionEntry/admitReplyTurn reads
+  // observe these fixtures; the in-memory map still backs the mocked accounting helpers.
+  for (const [sessionKey, entry] of Object.entries(sessionStore)) {
+    replaceSessionEntrySync({ sessionKey, storePath }, entry);
+  }
   FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
   FOLLOWUP_TEST_SESSION_STORE_PATHS.add(storePath);
 }
@@ -233,9 +241,24 @@ function clearFollowupQueueForFollowupTest(key: string): number {
   return cleared;
 }
 
-function enqueueFollowupRunForFollowupTest(key: string, run: FollowupRun): boolean {
+function enqueueFollowupRunForFollowupTest(
+  key: string,
+  run: FollowupRun,
+  _settings?: QueueSettings,
+  _dedupeMode?: unknown,
+  _runFollowup?: unknown,
+  _restartIfIdle?: unknown,
+  options?: { position?: "tail" | "front" },
+): boolean {
+  if (options?.position === "front") {
+    run.protectFromQueueOverflow = true;
+  }
   const queue = getFollowupTestQueue(key);
-  queue.items.push(run);
+  if (options?.position === "front") {
+    queue.items.unshift(run);
+  } else {
+    queue.items.push(run);
+  }
   queue.lastRun = run.run;
   return true;
 }
@@ -387,6 +410,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runCliAgent: (params: unknown) => runCliAgentMock(params),
   }));
   vi.doMock("./queue.js", () => ({
+    admitFollowupRunLifecycle: async (run: Pick<FollowupRun, "queuedLifecycle">) => {
+      await run.queuedLifecycle?.onAdmitted?.();
+    },
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
     completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
       run.queuedLifecycle?.onComplete?.(),
@@ -394,6 +420,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
     isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) =>
       run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
+    resolveQueueSettings: (): QueueSettings => ({ mode: "followup" }),
   }));
   vi.doMock("./session-run-accounting.js", () => ({
     persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
@@ -477,7 +504,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
     await import("../../config/config.js"));
   ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
     await import("../../config/sessions/store.js"));
-  ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
+  ({ replaceSessionEntrySync } = await import("../../config/sessions/session-accessor.js"));
+  ({ clearFollowupQueue } = await import("./queue/state.js"));
+  ({ enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
   ({
@@ -528,6 +557,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  resetAgentEventsForTest({ preserveListeners: true });
   setFastFollowupCliBackendDeps();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
@@ -588,6 +618,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetAgentEventsForTest({ preserveListeners: true });
   cliBackendsTestingForTest?.resetDepsForTest();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
@@ -689,8 +720,150 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(context.text).not.toContain("Active goal:");
   });
 
-  it("notifies queued owners after admission and before model execution", async () => {
+  it("keeps the originating client caps on queued embedded runs", async () => {
+    // Regression: the queued path built runEmbeddedAgent params inline and
+    // dropped run.clientCaps, so capability-gated tools vanished after drain.
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const storePath = "/tmp/openclaw-followup-client-caps.json";
+    const sessionEntry: SessionEntry = { sessionId: "session-client-caps", updatedAt: 1 };
+    registerFollowupTestSessionStore(storePath, { main: sessionEntry });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-client-caps",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+          clientCaps: ["tool-events", "inline-widgets"],
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
+  });
+
+  it("adopts a matching admission-time model lock for queued execution", async () => {
+    const storePath = "/tmp/openclaw-followup-admission-model-lock.json";
+    const queuedEntry: SessionEntry = {
+      sessionId: "catalog-adopted-session",
+      updatedAt: 1,
+    };
+    const admittedEntry: SessionEntry = {
+      ...queuedEntry,
+      updatedAt: 2,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+    registerFollowupTestSessionStore(storePath, { main: admittedEntry });
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["openai/gpt-5.4-mini"],
+          },
+        },
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: queuedEntry,
+      sessionStore: { main: queuedEntry },
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: runtimeConfig,
+          sessionId: queuedEntry.sessionId,
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+
+    const preflightCall = requireLastMockCallArg(
+      runPreflightCompactionIfNeededMock,
+      "preflight compaction",
+    );
+    const preflightRun = requireRecord(preflightCall.followupRun, "preflight follow-up run");
+    expect(requireRecord(preflightRun.run, "preflight run").modelSelectionLocked).toBe(true);
+    const fallbackCall = requireLastMockCallArg(runWithModelFallbackMock, "model fallback");
+    expect(fallbackCall.fallbacksOverride).toEqual([]);
+    expect(requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent")).toMatchObject({
+      modelSelectionLocked: true,
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+    });
+  });
+
+  it("keeps the queued model lock when the admission entry belongs to another session", async () => {
+    const replacementEntry: SessionEntry = {
+      sessionId: "replacement-session",
+      updatedAt: 2,
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["openai/gpt-5.4-mini"],
+          },
+        },
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: replacementEntry,
+      sessionStore: { main: replacementEntry },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: runtimeConfig,
+          sessionId: "queued-session",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+          modelSelectionLocked: true,
+        },
+      }),
+    );
+
+    const fallbackCall = requireLastMockCallArg(runWithModelFallbackMock, "model fallback");
+    expect(fallbackCall.fallbacksOverride).toEqual([]);
+    expect(requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent")).toMatchObject({
+      sessionId: "queued-session",
+      modelSelectionLocked: true,
+    });
+  });
+
+  it("awaits queued-owner admission before model execution", async () => {
     const events: string[] = [];
+    let releaseAdmission!: () => void;
+    const admissionBarrier = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
       events.push("run");
       return { payloads: [], meta: {} };
@@ -702,17 +875,70 @@ describe("createFollowupRunner reply-lane admission", () => {
       defaultModel: "anthropic/claude",
     });
 
-    await runner(
+    const pending = runner(
       createQueuedRun({
         queuedLifecycle: {
-          onAdmitted: () => events.push("admitted"),
+          onAdmitted: async () => {
+            events.push("admission-started");
+            await admissionBarrier;
+            events.push("admitted");
+          },
           onComplete: () => events.push("complete"),
         },
         run: { provider: "anthropic", model: "claude" },
       }),
     );
 
-    expect(events).toEqual(["admitted", "run", "complete"]);
+    await vi.waitFor(() => expect(events).toEqual(["admission-started"]));
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+
+    releaseAdmission();
+    await pending;
+
+    expect(events).toEqual(["admission-started", "admitted", "run", "complete"]);
+  });
+
+  it("stops an aborted queued followup after asynchronous owner admission", async () => {
+    const events: string[] = [];
+    const abortController = new AbortController();
+    let releaseAdmission!: () => void;
+    const admissionBarrier = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+      opts: { onBlockReply },
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        abortSignal: abortController.signal,
+        queuedLifecycle: {
+          onAdmitted: async () => {
+            events.push("admission-started");
+            await admissionBarrier;
+            events.push("admitted");
+          },
+          onComplete: () => events.push("complete"),
+        },
+        run: { provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    await vi.waitFor(() => expect(events).toEqual(["admission-started"]));
+    abortController.abort();
+    releaseAdmission();
+    await pending;
+
+    expect(events).toEqual(["admission-started", "admitted", "complete"]);
+    expect(runPreflightCompactionIfNeededMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("passes prepared media user turns to embedded runtime dispatch", async () => {
@@ -892,7 +1118,6 @@ describe("createFollowupRunner reply-lane admission", () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
-    realAgentEvents.resetAgentRunContextForTest();
     const active = createReplyOperationForTest({
       sessionKey: "main",
       sessionId: "pre-compact-session",
@@ -947,7 +1172,6 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe(
       "post-compact-session",
     );
-    realAgentEvents.resetAgentRunContextForTest();
   });
 
   it("routes preflight compaction failures before starting queued followup runs", async () => {
@@ -1212,6 +1436,67 @@ describe("createFollowupRunner auto fallback primary probes", () => {
 });
 
 describe("createFollowupRunner runtime config", () => {
+  it("keeps a locked Codex harness pinned when a CLI backend shares its id", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            codex: { command: "codex" },
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "catalog-adopted-session",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "claude-cli",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: {
+          supervision: {
+            sourceThreadId: "019f-codex-thread",
+            modelLocked: true,
+          },
+        },
+      },
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: runtimeConfig,
+          sessionId: sessionEntry.sessionId,
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent")).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+    });
+  });
+
   it("routes queued followups through CLI runtime dispatch when the model selects a CLI backend", async () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
@@ -1267,8 +1552,19 @@ describe("createFollowupRunner runtime config", () => {
           provider: "anthropic",
           model: "claude-opus-4-7",
           messageProvider: "telegram",
+          clientCaps: ["tool-events", "inline-widgets"],
           senderId: "sender-42",
+          senderName: "Sender 42",
+          senderUsername: "sender-42-user",
+          senderE164: "+15550003333",
           senderIsOwner: true,
+          execOverrides: { host: "node", node: "mac-b" },
+          bashElevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+          groupId: "group-42",
+          groupChannel: "ops",
+          groupSpace: "workspace-42",
+          spawnedBy: "agent:main:telegram:group:parent",
+          runtimePolicySessionKey: "agent:agent:telegram:default:direct:sender-42",
           cwd: "/tmp/task-repo",
           inputProvenance: {
             kind: "internal_system",
@@ -1283,15 +1579,27 @@ describe("createFollowupRunner runtime config", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
     expect(call.provider).toBe("claude-cli");
+    expect(call.modelProvider).toBe("anthropic");
     expect(call.model).toBe("claude-opus-4-7");
     expect(call.config).toBe(runtimeConfig);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.messageChannel).toBe("telegram");
+    expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
     expect(call.currentChannelId).toBe("telegram:-100123:topic:42");
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-42");
     expect(call.senderId).toBe("sender-42");
+    expect(call.senderName).toBe("Sender 42");
+    expect(call.senderUsername).toBe("sender-42-user");
+    expect(call.senderE164).toBe("+15550003333");
     expect(call.senderIsOwner).toBe(true);
+    expect(call.execOverrides).toEqual({ host: "node", node: "mac-b" });
+    expect(call.bashElevated).toEqual({ enabled: true, allowed: true, defaultLevel: "ask" });
+    expect(call.groupId).toBe("group-42");
+    expect(call.groupChannel).toBe("ops");
+    expect(call.groupSpace).toBe("workspace-42");
+    expect(call.spawnedBy).toBe("agent:main:telegram:group:parent");
+    expect(call.runtimePolicySessionKey).toBe("agent:agent:telegram:default:direct:sender-42");
     expect(call).toMatchObject({
       sessionId: "session-cli-followup",
       sessionKey: "main",
@@ -1427,6 +1735,7 @@ describe("createFollowupRunner runtime config", () => {
           model: "claude-opus-4-7",
           suppressNextUserMessagePersistence: true,
           sourceReplyDeliveryMode: "message_tool_only",
+          taskSuggestionDeliveryMode: "gateway",
           allowEmptyAssistantReplyAsSilent: true,
         },
       }),
@@ -1440,6 +1749,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.currentInboundAudio).toBe(true);
     expect(call.suppressNextUserMessagePersistence).toBe(true);
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call.taskSuggestionDeliveryMode).toBe("gateway");
     expect(call.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
@@ -1931,6 +2241,82 @@ describe("createFollowupRunner runtime config", () => {
     );
   });
 
+  it("starts queued CLI tool presentation before later commentary", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: { "claude-cli": { command: "claude" } },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const callbackOrder: string[] = [];
+    const onToolStart = vi.fn(async () => {
+      callbackOrder.push("tool");
+    });
+    const onItemEvent = vi.fn(async () => {
+      callbackOrder.push("commentary");
+    });
+    runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "exec",
+          toolCallId: "tool-1",
+          args: { command: "pwd" },
+        },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "item",
+        data: {
+          kind: "preamble",
+          itemId: "commentary-1",
+          progressText: "Checking the result.",
+        },
+      });
+      return {
+        payloads: [{ text: "final" }],
+        meta: { agentMeta: { provider: "claude-cli", model: "claude-opus-4-7" } },
+      };
+    });
+
+    const runner = createFollowupRunner({
+      opts: {
+        onToolStart,
+        onItemEvent,
+        commentaryProgressEnabled: true,
+        preserveProgressCallbackStartOrder: true,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "mattermost",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "mattermost",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(callbackOrder).toEqual(["tool", "commentary"]);
+  });
+
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
@@ -2030,6 +2416,55 @@ describe("createFollowupRunner runtime config", () => {
     const embeddedCall = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
     expect(lifecyclePhases).toEqual(["start", "start", "finishing", "end"]);
+  });
+
+  it("revalidates immutable Ultra for embedded and CLI followup fallback candidates", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await params.run("openai", "gpt-5.6-sol");
+        return {
+          result: await params.run("anthropic", "claude-opus-4-7"),
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        };
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    runCliAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const queued = createQueuedRun({
+      run: {
+        config: runtimeConfig,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        thinkLevel: "ultra",
+      },
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.6-sol",
+    });
+
+    await runner(queued);
+
+    expect(requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent").thinkLevel).toBe(
+      "ultra",
+    );
+    expect(requireLastMockCallArg(runCliAgentMock, "run cli agent").thinkLevel).toBe("max");
+    expect(queued.run.thinkLevel).toBe("ultra");
   });
 
   it("delivers an exhausted embedded followup as a failed lifecycle", async () => {
@@ -2415,6 +2850,7 @@ describe("createFollowupRunner runtime config", () => {
           provider: "openai",
           model: "gpt-5.4",
           sourceReplyDeliveryMode: "message_tool_only",
+          taskSuggestionDeliveryMode: "gateway",
         },
       }),
     );
@@ -2429,6 +2865,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(fallbackCall.sessionId).toBe("session");
     expect(call.abortSignal).toBe(fallbackCall.abortSignal);
     expect(call.currentInboundAudio).toBe(true);
+    expect(call.taskSuggestionDeliveryMode).toBe("gateway");
   });
 
   it("does not inherit source abort signals for queued user followups", async () => {
@@ -3440,7 +3877,9 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(onCompactionStart).not.toHaveBeenCalled();
     expect(onCompactionEnd).not.toHaveBeenCalled();
-    expect(sessionStore.main.compactionCount).toBe(1);
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(1);
   });
 
   it("forwards opted-in queued tool lifecycle feedback while verbose progress is disabled", async () => {
@@ -3663,6 +4102,53 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onCommandOutput).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps queued tool-error fallbacks when the channel declines failed progress", async () => {
+    const onCommandOutput = vi.fn(async () => false as const);
+    let completedAfterEvent = false;
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+      }) => {
+        const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+        expect(shouldSuppress()).toBeUndefined();
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            phase: "end",
+            name: "exec",
+            status: "failed",
+            exitCode: 1,
+          },
+        });
+        expect(shouldSuppress()).toBeUndefined();
+        completedAfterEvent = true;
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(completedAfterEvent).toBe(true);
+  });
+
   it("keeps queued full-verbose tool-error fallbacks available after failed progress", async () => {
     const onCommandOutput = vi.fn(async () => {});
 
@@ -3837,7 +4323,9 @@ describe("createFollowupRunner compaction", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
-    expect(sessionStore.main.compactionCount).toBe(1);
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(1);
   });
 
   it("suppresses queued auto-compaction notice when verbose is turned off", async () => {
@@ -3882,7 +4370,9 @@ describe("createFollowupRunner compaction", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectNoBlockReplyTextIncludes(onBlockReply, "Auto-compaction complete");
-    expect(sessionStore.main.compactionCount).toBe(1);
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(1);
   });
 
   it("tracks auto-compaction from embedded result metadata even when no compaction event is emitted", async () => {
@@ -3934,9 +4424,17 @@ describe("createFollowupRunner compaction", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
-    expect(sessionStore.main.compactionCount).toBe(2);
-    expect(sessionStore.main.sessionId).toBe("session-rotated");
-    expect(await normalizeComparablePath(sessionStore.main.sessionFile ?? "")).toBe(
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(2);
+    expect(expectDefined(sessionStore.main, "sessionStore.main test invariant").sessionId).toBe(
+      "session-rotated",
+    );
+    expect(
+      await normalizeComparablePath(
+        expectDefined(sessionStore.main, "sessionStore.main test invariant").sessionFile ?? "",
+      ),
+    ).toBe(
       await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
     );
   });
@@ -4057,7 +4555,9 @@ describe("createFollowupRunner compaction", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toBe("final");
-    expect(sessionStore.main.compactionCount).toBeUndefined();
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBeUndefined();
   });
 
   it("injects the post-compaction refresh prompt before followup runs after preflight compaction", async () => {
@@ -4196,7 +4696,6 @@ describe("createFollowupRunner compaction", () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
-    realAgentEvents.resetAgentRunContextForTest();
     const sessionEntry: SessionEntry = {
       sessionId: "old-session",
       updatedAt: Date.now(),
@@ -4252,14 +4751,12 @@ describe("createFollowupRunner compaction", () => {
 
     expect(observedRunId).toBeDefined();
     expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe("new-session");
-    realAgentEvents.resetAgentRunContextForTest();
   });
 
   it("captures follow-up lifecycle ownership before asynchronous preflight", async () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
     );
-    realAgentEvents.resetAgentRunContextForTest();
     const initialGeneration = realAgentEvents.getAgentEventLifecycleGeneration();
     let releasePreflight: (() => void) | undefined;
     runPreflightCompactionIfNeededMock.mockImplementationOnce(
@@ -4327,7 +4824,6 @@ describe("createFollowupRunner compaction", () => {
       expect(observedLifecycleGeneration).toBe(initialGeneration);
       expect(realAgentEvents.getAgentRunContext(registeredRun?.runId ?? "")).toBeUndefined();
     } finally {
-      realAgentEvents.resetAgentRunContextForTest();
     }
   });
 });
@@ -4401,13 +4897,20 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionKey: string;
       storePath: string;
       opts: GetReplyOptions;
+      onObservedReplyDelivery: () => Promise<void>;
     }> = {},
   ) {
     if (overrides.storePath && overrides.sessionStore) {
       registerFollowupTestSessionStore(overrides.storePath, overrides.sessionStore);
     }
     return createFollowupRunner({
-      opts: { ...overrides.opts, onBlockReply },
+      opts: {
+        ...overrides.opts,
+        onBlockReply,
+        ...(overrides.onObservedReplyDelivery
+          ? { onObservedReplyDelivery: overrides.onObservedReplyDelivery }
+          : {}),
+      },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-6",
@@ -4427,6 +4930,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionKey: string;
       storePath: string;
       opts: GetReplyOptions;
+      onObservedReplyDelivery: () => Promise<void>;
     }>;
     agentEvent?: { stream: string; data: Record<string, unknown> };
   }) {
@@ -4469,7 +4973,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     persistSpy.mockImplementationOnce(async (params) => {
       const nextEntry: SessionEntry = {
-        ...sessionStore[sessionKey],
+        ...expectDefined(sessionStore[sessionKey], "sessionStore[sessionKey] test invariant"),
         updatedAt: Date.now(),
         totalTokens: params.lastCallUsage?.input,
         totalTokensFresh: true,
@@ -5045,6 +5549,41 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
   });
 
+  it("routes a terminal failure after only a message-tool progress delivery", async () => {
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { error: { kind: "tool_result_mismatch", message: "private detail" } },
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C1",
+            sourceReplyFinal: false,
+          },
+        ],
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      },
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
   it("routes a terminal failure when an empty result exhausts model fallback", async () => {
     runWithModelFallbackMock.mockImplementationOnce(
       async (params: {
@@ -5432,6 +5971,356 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(runArg.forceMessageTool).toBe(true);
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("enqueues a one-shot recovery retry for substantive message-tool-only queued followup finals", async () => {
+    const finalText =
+      "Here is the answer the queued user asked for. It includes enough detail to be a visible response, and it has another sentence so the substantive-final detector treats it as a real reply.";
+    const parentOnComplete = vi.fn();
+    const parentLifecycle = { onComplete: parentOnComplete };
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: finalText }],
+        meta: { finalAssistantVisibleText: finalText },
+      },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        queuedLifecycle: parentLifecycle,
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    const retry = FOLLOWUP_TEST_QUEUES.get("main")?.items[0];
+    expect(retry?.summaryLine).toBe("stranded-reply-retry");
+    expect(retry?.strandedReplyRetry).toBe(true);
+    expect(retry?.disableCollectBatching).toBe(true);
+    expect(retry?.protectFromQueueOverflow).toBe(true);
+    expect(retry?.transcriptPrompt).toBeUndefined();
+    expect(retry?.userTurnTranscriptRecorder).toBeUndefined();
+    expect(retry?.currentInboundContext).toBeUndefined();
+    expect(retry?.run.suppressNextUserMessagePersistence).toBe(true);
+    expect(retry?.run.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(retry?.prompt).toContain("message(action=send)");
+    expect(retry?.prompt).toContain(finalText);
+    // System retry detaches from the client turn lifecycle; parent completion owns onComplete once.
+    expect(retry?.queuedLifecycle).toBeUndefined();
+    expect(parentOnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("excludes raw trace and status payloads from queued stranded recovery prompts", async () => {
+    const finalText =
+      "Here is the answer the queued user asked for. It includes enough detail to be a visible response, and it has another sentence so the substantive-final detector treats it as a real reply.";
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [
+          { text: finalText },
+          {
+            text: "🔎 Model Input (User Role):\n```text\nsecret queued trace that must not reach chat\n```",
+          },
+          { text: "🧩 Active Memory: status=ok query=private-context", isStatusNotice: true },
+        ],
+        meta: { finalAssistantVisibleText: finalText },
+      },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    const retry = FOLLOWUP_TEST_QUEUES.get("main")?.items[0];
+    expect(retry?.prompt).toContain(finalText);
+    expect(retry?.prompt).not.toContain("secret queued trace");
+    expect(retry?.prompt).not.toContain("Active Memory");
+  });
+
+  it("does not enqueue stranded recovery for message-tool-only queued room events", async () => {
+    const finalText =
+      "Here is a long ambient room-event note that must stay private. It has enough text and another sentence to otherwise look substantive.";
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: finalText }],
+        meta: { finalAssistantVisibleText: finalText },
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "room_event",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(FOLLOWUP_TEST_QUEUES.get("main")?.items).toBeUndefined();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not enqueue stranded recovery when queued followup send policy denies delivery", async () => {
+    const finalText =
+      "Here is a long reply for a denied session. It includes enough detail to be substantive, but send-policy denial must remain an intentional delivery block.";
+    const queued = baseQueuedRun("discord");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sendPolicy: "deny",
+    };
+    await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: finalText }],
+        meta: { finalAssistantVisibleText: finalText },
+      },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+      runnerOverrides: { sessionEntry, sessionKey: "main" },
+    });
+
+    expect(FOLLOWUP_TEST_QUEUES.get("main")?.items).toBeUndefined();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("routes sanitized diagnostics when message-tool-only stranded retry strands again", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "raw private final" }],
+      },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock.mock.calls[0]?.[0]?.payload?.text).toBe(
+      "I generated a reply but could not deliver it to this chat. Please try again.",
+    );
+    expect(String(routeReplyMock.mock.calls[0]?.[0]?.payload?.text)).not.toContain(
+      "raw private final",
+    );
+  });
+
+  it("routes sanitized diagnostics when message-tool-only stranded retry returns no payloads", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock.mock.calls[0]?.[0]?.payload?.text).toBe(
+      "I generated a reply but could not deliver it to this chat. Please try again.",
+    );
+  });
+
+  it("does not route retry diagnostics when send policy denies delivery", async () => {
+    const queued = baseQueuedRun("discord");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sendPolicy: "deny",
+    };
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+      runnerOverrides: { sessionEntry, sessionKey: "main" },
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not treat the summary marker alone as a stranded retry", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not route retry diagnostics after message-tool delivery evidence", async () => {
+    const queued = baseQueuedRun("discord");
+    const onObservedReplyDelivery = vi.fn(async () => {});
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTexts: ["visible recovered reply"],
+        messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+      runnerOverrides: { onObservedReplyDelivery },
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onObservedReplyDelivery).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes retry diagnostics when message-tool evidence contains only progress", async () => {
+    const queued = baseQueuedRun("discord");
+    const onObservedReplyDelivery = vi.fn(async () => {});
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTexts: ["Still working…"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C1",
+            sourceReplyFinal: false,
+          },
+        ],
+      },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+      runnerOverrides: { onObservedReplyDelivery },
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock.mock.calls[0]?.[0]?.payload?.text).toBe(
+      "I generated a reply but could not deliver it to this chat. Please try again.",
+    );
+    expect(onObservedReplyDelivery).not.toHaveBeenCalled();
+  });
+
+  it("routes retry diagnostics when message-tool sends to a non-source target", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["sent somewhere else"],
+        messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:OTHER" }],
+      },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock.mock.calls[0]?.[0]?.payload?.text).toBe(
+      "I generated a reply but could not deliver it to this chat. Please try again.",
+    );
+  });
+
+  it("does not route retry diagnostics after internal source-reply payloads", async () => {
+    const queued = baseQueuedRun("webchat");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        messagingToolSourceReplyPayloads: [{ text: "visible recovered reply" }],
+      },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
+        originatingChannel: "webchat",
+        originatingTo: undefined,
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
   it("lets provider followup route hooks force dispatcher delivery", async () => {

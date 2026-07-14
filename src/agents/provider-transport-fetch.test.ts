@@ -261,7 +261,7 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("rejects unknown sentinel-shaped values before guarded fetch", async () => {
-    const unknown = "oc-sent-v1-fedcba987654321001234567";
+    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     await expect(
       buildGuardedModelFetch(sentinelModel())("https://api.openai.com/v1/responses", {
         headers: { Authorization: `Bearer ${unknown}` },
@@ -912,6 +912,31 @@ describe("buildGuardedModelFetch", () => {
 
     const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
     expect(policy).toBeUndefined();
+  });
+
+  it("keeps Meta's native endpoint under DNS rebinding checks", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "meta-native" },
+    });
+    const model = {
+      id: "muse-spark-1.1",
+      provider: "meta",
+      api: "openai-responses",
+      baseUrl: "https://api.meta.ai/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("https://api.meta.ai/v1/responses", { method: "POST" });
+
+    const policy = latestGuardedFetchParams().policy as Record<string, unknown> | undefined;
+    expect(policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.meta.ai"],
+    });
+    expect(policy?.allowedOrigins).toBeUndefined();
+    expect(policy?.allowPrivateNetwork).toBeUndefined();
   });
 
   it.each([
@@ -1979,6 +2004,50 @@ describe("buildGuardedModelFetch", () => {
       );
 
       expect(response.headers.get("x-should-retry")).toBeNull();
+    });
+
+    it.each([
+      "Sun, 31 Feb 2027 00:00:00 GMT",
+      "Sunday, 31-Feb-27 00:00:00 GMT",
+      "Mon, 06 Nov 1994 08:49:37 GMT",
+      "Monday, 06-Nov-94 08:49:37 GMT",
+    ])("ignores invalid HTTP-date retry-after values: %s", async (retryAfter) => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after": retryAfter },
+        }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(anthropicModel)(
+        "https://api.anthropic.com/v1/messages",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
+    });
+
+    it("interprets RFC 850 retry-after years within the 50-year future window", async () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-06T00:00:00.000Z"));
+      try {
+        fetchWithSsrFGuardMock.mockResolvedValue({
+          response: new Response(null, {
+            status: 503,
+            headers: { "retry-after": "Sunday, 06-Nov-50 00:00:00 GMT" },
+          }),
+          finalUrl: "https://api.anthropic.com/v1/messages",
+          release: vi.fn(async () => undefined),
+        });
+        const response = await buildGuardedModelFetch(anthropicModel)(
+          "https://api.anthropic.com/v1/messages",
+          { method: "POST" },
+        );
+
+        expect(response.headers.get("x-should-retry")).toBe("false");
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
 
     it("respects OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS", async () => {

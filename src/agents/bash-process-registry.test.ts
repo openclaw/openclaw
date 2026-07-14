@@ -9,14 +9,27 @@ import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,
+  createSessionSlug,
+  deleteSession,
   drainSession,
+  getActiveBackgroundExecSessionCount,
   listFinishedSessions,
+  listRunningSessions,
   markBackgrounded,
   markExited,
   resetProcessRegistryForTests,
+  setJobTtlMs,
   tail,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+
+const randomMocks = vi.hoisted(() => ({
+  generateSecureInt: vi.fn(() => 0),
+}));
+
+vi.mock("../infra/secure-random.js", () => ({
+  generateSecureInt: randomMocks.generateSecureInt,
+}));
 
 describe("bash process registry", () => {
   function createRegistrySession(params: {
@@ -36,6 +49,8 @@ describe("bash process registry", () => {
   }
 
   beforeEach(() => {
+    randomMocks.generateSecureInt.mockReset();
+    randomMocks.generateSecureInt.mockReturnValue(0);
     resetProcessRegistryForTests();
   });
 
@@ -170,6 +185,107 @@ describe("bash process registry", () => {
         totalOutputChars: 0,
       },
     ]);
+  });
+
+  it("tracks only live backgrounded sessions", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+    });
+
+    addSession(session);
+    expect(getActiveBackgroundExecSessionCount()).toBe(0);
+
+    markBackgrounded(session);
+    markBackgrounded(session);
+    expect(getActiveBackgroundExecSessionCount()).toBe(1);
+
+    markExited(session, 0, null, "completed");
+    expect(getActiveBackgroundExecSessionCount()).toBe(0);
+
+    markBackgrounded(session);
+    expect(getActiveBackgroundExecSessionCount()).toBe(0);
+  });
+
+  it("keeps a hidden background session active until its process exits", () => {
+    const session = createRegistrySession({
+      id: "hidden-until-exit",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+    });
+
+    addSession(session);
+    markBackgrounded(session);
+    deleteSession(session.id);
+
+    expect(listRunningSessions()).toHaveLength(0);
+    expect(getActiveBackgroundExecSessionCount()).toBe(1);
+
+    markExited(session, null, "SIGTERM", "killed");
+    expect(getActiveBackgroundExecSessionCount()).toBe(0);
+  });
+
+  it("keeps a hidden active session id reserved until exit", () => {
+    const session = createRegistrySession({
+      id: "amber-atlas",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+    });
+
+    addSession(session);
+    markBackgrounded(session);
+    deleteSession(session.id);
+    expect(createSessionSlug()).toBe("amber-atlas-2");
+
+    session.backgrounded = false;
+    markExited(session, 0, null, "completed");
+    expect(createSessionSlug()).toBe("amber-atlas");
+  });
+
+  it("clears background activity in the test reset", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+    });
+
+    addSession(session);
+    markBackgrounded(session);
+    expect(getActiveBackgroundExecSessionCount()).toBe(1);
+
+    resetProcessRegistryForTests();
+    expect(getActiveBackgroundExecSessionCount()).toBe(0);
+  });
+
+  it("clamps a zero retention TTL to one minute", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-09T00:00:00Z"));
+      setJobTtlMs(0);
+
+      const session = createRegistrySession({
+        id: "zero-ttl",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: true,
+      });
+      addSession(session);
+      markExited(session, 0, null, "completed");
+
+      vi.advanceTimersByTime(30_000);
+      expect(listFinishedSessions()).toHaveLength(1);
+
+      vi.advanceTimersByTime(60_000);
+      expect(listFinishedSessions()).toHaveLength(0);
+    } finally {
+      resetProcessRegistryForTests();
+      setJobTtlMs(30 * 60 * 1000);
+      resetProcessRegistryForTests();
+      vi.useRealTimers();
+    }
   });
 });
 

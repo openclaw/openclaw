@@ -1,5 +1,6 @@
 // Qa Matrix plugin module implements scenario runtime shared behavior.
 import { randomUUID } from "node:crypto";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import type { MatrixQaFaultProxyObserver } from "../../substrate/fault-proxy.js";
@@ -189,7 +190,7 @@ export function buildMatrixReplyArtifact(
 ): MatrixQaReplyArtifact {
   const replyBody = event.body?.trim();
   return {
-    bodyPreview: replyBody?.slice(0, 200),
+    bodyPreview: replyBody === undefined ? undefined : truncateUtf16Safe(replyBody, 200),
     eventId: event.eventId,
     mentions: event.mentions,
     relatesTo: event.relatesTo,
@@ -245,11 +246,11 @@ export function assertThreadReplyArtifact(
   }
 }
 
-export function readMatrixQaSyncCursor(syncState: MatrixQaSyncState, actorId: MatrixQaActorId) {
+function readMatrixQaSyncCursor(syncState: MatrixQaSyncState, actorId: MatrixQaActorId) {
   return syncState[actorId];
 }
 
-export function writeMatrixQaSyncCursor(
+function writeMatrixQaSyncCursor(
   syncState: MatrixQaSyncState,
   actorId: MatrixQaActorId,
   since?: string,

@@ -77,6 +77,7 @@ export type CoreHealthCheckDeps = {
   readonly collectProviderCatalogProjectionFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
+  readonly collectLocalAudioAccelerationFindings: () => Promise<readonly HealthFinding[]>;
   readonly collectGatewayHealthFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
@@ -127,6 +128,13 @@ async function collectProviderCatalogProjectionFindingsWithRuntime(
   return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
 }
 
+async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
+  readonly HealthFinding[]
+> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectLocalAudioAccelerationFindings();
+}
+
 async function collectGatewayHealthFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
@@ -147,6 +155,7 @@ const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
   collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
+  collectLocalAudioAccelerationFindings: collectLocalAudioAccelerationFindingsWithRuntime,
   collectGatewayHealthFindings: collectGatewayHealthFindingsWithRuntime,
   collectGatewayDaemonFindings: collectGatewayDaemonFindingsWithRuntime,
 };
@@ -422,11 +431,12 @@ const hooksModelCheck: HealthCheck = {
   },
 };
 
-const legacyStateCheck: HealthCheck = {
+const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   id: "core/doctor/legacy-state",
   kind: "core",
   description: "Legacy sessions, agent state, and channel auth paths have been migrated.",
   source: "doctor",
+  defaultEnabled: false,
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
     const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
@@ -874,12 +884,15 @@ const browserCheck: HealthCheck = {
   },
 };
 
-function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
+function createSkillsReadinessCheck(
+  deps: CoreHealthCheckDeps,
+): HealthCheck & { readonly defaultEnabled: false } {
   return {
     id: "core/doctor/skills-readiness",
     kind: "core",
     description: "Allowed skills are usable in the current runtime environment.",
     source: "doctor",
+    defaultEnabled: false,
     async detect(ctx, scope) {
       const unavailable = filterUnavailableSkillsForScope(
         await deps.detectUnavailableSkills(ctx.cfg),
@@ -1133,6 +1146,15 @@ function createConvertedWorkflowChecks(
     hooksModelCheck,
     bootstrapSizeCheck,
     createProviderCatalogProjectionCheck(deps),
+    {
+      id: "core/doctor/local-audio-acceleration",
+      kind: "core",
+      description: "Local STT auto-selection and acceleration evidence are visible.",
+      source: "doctor",
+      async detect() {
+        return await deps.collectLocalAudioAccelerationFindings();
+      },
+    },
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
     skillWorkshopToolPolicyCheck,

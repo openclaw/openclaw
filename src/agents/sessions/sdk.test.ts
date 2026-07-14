@@ -1,20 +1,17 @@
+import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover default tool wiring, prompt preservation, and
 // session write-lock behavior.
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
-import {
-  createUserTurnTranscriptRecorder,
-  takeRuntimeUserTurnTranscriptContext,
-} from "../../sessions/user-turn-transcript.js";
+import type { Model, SimpleStreamOptions } from "../../llm/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
 }));
 const streamMocks = vi.hoisted(() => ({
-  streamSimple: vi.fn(
-    (_model: Model, _context: Context, _options?: SimpleStreamOptions) => "stream",
-  ),
+  streamSimple: vi.fn(),
 }));
 
 vi.mock("../../auto-reply/thinking.js", () => ({
@@ -23,6 +20,7 @@ vi.mock("../../auto-reply/thinking.js", () => ({
 vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
 }));
+import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
@@ -49,6 +47,40 @@ const testModel: Model = {
 function createModelWithoutBaseUrl(overrides: Partial<Model>): Model {
   const { baseUrl: _baseUrl, ...model } = { ...testModel, ...overrides };
   return model as unknown as Model;
+}
+
+function createAssistantError(errorMessage: string): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api: testModel.api,
+    provider: testModel.provider,
+    model: testModel.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error",
+    errorMessage,
+    timestamp: 1,
+  };
+}
+
+function createAssistantResultStream(message: AssistantMessage) {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    if (message.stopReason === "error" || message.stopReason === "aborted") {
+      stream.push({ type: "error", reason: message.stopReason, error: message });
+    } else {
+      stream.push({ type: "done", reason: message.stopReason, message });
+    }
+    stream.end();
+  });
+  return stream;
 }
 
 function createEmptyResourceLoader(): ResourceLoader {
@@ -200,7 +232,7 @@ describe("AgentSession queued user turns", () => {
         text: "visible group prompt",
         sender: { id: "user-42", name: "Ada" },
       },
-      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+      target: createTestUserTurnTranscriptTarget(),
     });
     const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
 
@@ -689,5 +721,59 @@ describe("createAgentSession thinking level defaults", () => {
     });
 
     expect(session.thinkingLevel).toBe("off");
+  });
+});
+
+describe("AgentSession retry behavior", () => {
+  async function createRetrySession() {
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    return await createAgentSession({
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory({
+        retry: { baseDelayMs: 0, maxRetries: 1 },
+      }),
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+    });
+  }
+
+  it("stops permanent errors and retries transient HTTP errors in a session", async () => {
+    streamMocks.streamSimple.mockReset();
+    const permanentEvents: string[] = [];
+    streamMocks.streamSimple.mockImplementation(() =>
+      createAssistantResultStream(createAssistantError("model model-x-500-preview not found")),
+    );
+    const { session: permanentSession } = await createRetrySession();
+    permanentSession.subscribe((event) => permanentEvents.push(event.type));
+
+    await permanentSession.prompt("test permanent error");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(permanentEvents).not.toContain("auto_retry_start");
+
+    const transientEvents: string[] = [];
+    streamMocks.streamSimple.mockReset();
+    streamMocks.streamSimple
+      .mockImplementationOnce(() =>
+        createAssistantResultStream(createAssistantError("HTTP 503 temporary provider response")),
+      )
+      .mockImplementationOnce(() =>
+        createAssistantResultStream({
+          ...createAssistantError(""),
+          content: [{ type: "text", text: "recovered" }],
+          stopReason: "stop",
+          errorMessage: undefined,
+        }),
+      );
+    const { session: transientSession } = await createRetrySession();
+    transientSession.subscribe((event) => transientEvents.push(event.type));
+
+    await transientSession.prompt("test transient error");
+
+    expect(streamMocks.streamSimple.mock.calls.length).toBeGreaterThan(1);
+    expect(transientEvents).toContain("auto_retry_start");
+    expect(transientEvents).toContain("auto_retry_end");
   });
 });

@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -34,6 +35,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -293,6 +296,46 @@ class GatewaySessionInvokeTest {
         releaseFirstEvent.complete(Unit)
         runCatching { serverWebSocket.get()?.close(1000, "done") }
         delay(100)
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun explicitNullPayloadsRemainPresentForResponsesAndEvents() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val eventPayload = CompletableDeferred<String?>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          when (method) {
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+              webSocket.send("""{"type":"event","event":"health","payload":null}""")
+            }
+            "test.null-payload" ->
+              webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":null}""")
+          }
+        }
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+          onEvent = { event, payload ->
+            if (event == GatewayEvent.Health.rawValue) eventPayload.complete(payload)
+          },
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val response = harness.session.requestDetailed("test.null-payload", null)
+
+        assertEquals("null", response.payloadJson)
+        assertEquals("null", withTimeout(TEST_TIMEOUT_MS) { eventPayload.await() })
+      } finally {
         shutdownHarness(harness, server)
       }
     }
@@ -661,7 +704,13 @@ class GatewaySessionInvokeTest {
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
         assertEquals(
-          listOf("operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
+          listOf(
+            "operator.admin",
+            "operator.approvals",
+            "operator.read",
+            "operator.talk.secrets",
+            "operator.write",
+          ),
           operatorEntry?.scopes,
         )
       } finally {
@@ -811,6 +860,116 @@ class GatewaySessionInvokeTest {
         result.resultParams["error"]
           ?.jsonObject
           ?.get("message")
+          ?.jsonPrimitive
+          ?.content,
+      )
+    }
+
+  @Test
+  fun nodeInvokeRequest_cancelsHandlerWhenExecutionTimeoutExpires() =
+    runBlocking {
+      val handlerCancelled = CompletableDeferred<Unit>()
+      val result =
+        runInvokeScenario(
+          invokeEventFrame =
+            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-timeout","nodeId":"node-1","command":"camera.clip","timeoutMs":100}}""",
+        ) {
+          try {
+            awaitCancellation()
+          } finally {
+            handlerCancelled.complete(Unit)
+          }
+        }
+
+      withTimeout(TEST_TIMEOUT_MS) { handlerCancelled.await() }
+      assertEquals(
+        false,
+        result.resultParams["ok"]
+          ?.jsonPrimitive
+          ?.content
+          ?.toBooleanStrict(),
+      )
+      assertEquals(
+        "TIMEOUT",
+        result.resultParams["error"]
+          ?.jsonObject
+          ?.get("code")
+          ?.jsonPrimitive
+          ?.content,
+      )
+      assertEquals(
+        "node invoke timed out",
+        result.resultParams["error"]
+          ?.jsonObject
+          ?.get("message")
+          ?.jsonPrimitive
+          ?.content,
+      )
+    }
+
+  @Test
+  fun nodeInvokeRequest_sendsResultForHandlerOwnedTimeout() =
+    runBlocking {
+      val result =
+        runInvokeScenario(
+          invokeEventFrame =
+            """{"type":"event","event":"node.invoke.request","payload":{"id":"handler-timeout","nodeId":"node-1","command":"camera.snap","timeoutMs":5000}}""",
+        ) {
+          withTimeout(10) { awaitCancellation() }
+        }
+
+      assertEquals(
+        false,
+        result.resultParams["ok"]
+          ?.jsonPrimitive
+          ?.content
+          ?.toBooleanStrict(),
+      )
+      assertEquals(
+        "TIMEOUT",
+        result.resultParams["error"]
+          ?.jsonObject
+          ?.get("code")
+          ?.jsonPrimitive
+          ?.content,
+      )
+    }
+
+  @Test
+  fun nodeInvokeRequest_sendsTimeoutWhileBlockingHandlerIsStillRunning() =
+    runBlocking {
+      val releaseHandler = CountDownLatch(1)
+      val handlerFinished = CompletableDeferred<Unit>()
+      val result =
+        runInvokeScenario(
+          invokeEventFrame =
+            """{"type":"event","event":"node.invoke.request","payload":{"id":"blocking-timeout","nodeId":"node-1","command":"camera.clip","timeoutMs":100}}""",
+          afterResult = {
+            assertFalse(handlerFinished.isCompleted)
+            releaseHandler.countDown()
+            withTimeout(TEST_TIMEOUT_MS) { handlerFinished.await() }
+          },
+        ) {
+          try {
+            check(releaseHandler.await(5, TimeUnit.SECONDS)) { "blocking handler was not released" }
+            GatewaySession.InvokeResult.ok(null)
+          } finally {
+            handlerFinished.complete(Unit)
+          }
+        }
+
+      assertEquals(
+        false,
+        result.resultParams["ok"]
+          ?.jsonPrimitive
+          ?.content
+          ?.toBooleanStrict(),
+      )
+      assertEquals(
+        "TIMEOUT",
+        result.resultParams["error"]
+          ?.jsonObject
+          ?.get("code")
           ?.jsonPrimitive
           ?.content,
       )
@@ -1046,7 +1205,7 @@ class GatewaySessionInvokeTest {
     connected: CompletableDeferred<Unit>,
     lastDisconnect: AtomicReference<String>,
     onEvent: (event: String, payloadJson: String?) -> Unit = { _, _ -> },
-    onInvoke: (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
+    onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
   ): NodeHarness {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -1141,7 +1300,8 @@ class GatewaySessionInvokeTest {
   private suspend fun runInvokeScenario(
     invokeEventFrame: String,
     onHandshake: ((RecordedRequest) -> Unit)? = null,
-    onInvoke: (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
+    afterResult: suspend (InvokeScenarioResult) -> Unit = {},
+    onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
   ): InvokeScenarioResult {
     val json = testJson()
     val connected = CompletableDeferred<Unit>()
@@ -1182,7 +1342,9 @@ class GatewaySessionInvokeTest {
       val request = withTimeout(TEST_TIMEOUT_MS) { invokeRequest.await() }
       val resultParamsJson = withTimeout(TEST_TIMEOUT_MS) { invokeResultParams.await() }
       val resultParams = json.parseToJsonElement(resultParamsJson).jsonObject
-      return InvokeScenarioResult(request = request, resultParams = resultParams)
+      val result = InvokeScenarioResult(request = request, resultParams = resultParams)
+      afterResult(result)
+      return result
     } finally {
       shutdownHarness(harness, server)
     }
