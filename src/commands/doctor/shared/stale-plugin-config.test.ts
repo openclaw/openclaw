@@ -143,6 +143,20 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
+  it("stale-plugin-config removes codex from allowlist when called without preservePluginIds (repair-sequencing passes preservePluginIds)", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["codex"],
+      },
+    } as OpenClawConfig);
+
+    // maybeRepairStalePluginConfig alone removes codex because it is not in
+    // knownIds. The preservation of version-bound runtime plugins happens at
+    // the caller (repair-sequencing.ts) via preservePluginIds.
+    expect(result.changes).toEqual(["- plugins.allow: removed 1 stale plugin id (codex)"]);
+    expect(result.config.plugins?.allow).toEqual([]);
+  });
+
   it("does not report slot defaults or none as stale plugin refs", () => {
     expect(
       scanStalePluginConfig({
@@ -417,12 +431,9 @@ describe("doctor stale plugin config helpers", () => {
       },
     } as OpenClawConfig;
 
+    // codex is a version-bound runtime plugin — its allowlist entry is not
+    // flagged as stale so the release backfill install step can install it.
     expect(scanStalePluginConfig(cfg)).toEqual([
-      {
-        pluginId: "codex",
-        pathLabel: "plugins.allow",
-        surface: "allow",
-      },
       {
         pluginId: "acpx",
         pathLabel: "plugins.allow",

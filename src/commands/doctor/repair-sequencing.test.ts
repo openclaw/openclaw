@@ -49,7 +49,8 @@ vi.mock("../doctor-auth-flat-profiles.js", () => ({
   maybeRepairOpenAICodexAuthProfileStores: mocks.maybeRepairOpenAICodexAuthProfileStores,
 }));
 
-vi.mock("./shared/missing-configured-plugin-install.js", () => ({
+vi.mock("./shared/missing-configured-plugin-install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared/missing-configured-plugin-install.js")>()),
   repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
 }));
 
@@ -985,7 +986,7 @@ describe("doctor repair sequencing", () => {
         _env: NodeJS.ProcessEnv | undefined,
         params: { preservePluginIds?: string[] },
       ) => {
-        expect(params.preservePluginIds).toEqual(["brave"]);
+        expect(params.preservePluginIds).toEqual(["brave", "codex"]);
         return {
           config: {
             ...cfg,
@@ -1080,7 +1081,7 @@ describe("doctor repair sequencing", () => {
         _env: NodeJS.ProcessEnv | undefined,
         params: { preservePluginIds?: string[] },
       ) => {
-        expect(params.preservePluginIds).toEqual(["whatsapp"]);
+        expect(params.preservePluginIds).toEqual(["whatsapp", "codex"]);
         return {
           config: cfg,
           changes: [],

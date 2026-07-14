@@ -691,7 +691,10 @@ vi.mock("./doctor/shared/context-engine-host-compat.js", () => ({
   })),
 }));
 
-vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
+vi.mock("./doctor/shared/missing-configured-plugin-install.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("./doctor/shared/missing-configured-plugin-install.js")
+  >()),
   repairMissingConfiguredPluginInstalls: vi.fn(async ({ cfg }) => ({
     config: cfg,
     changes: [],

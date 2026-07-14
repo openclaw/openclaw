@@ -33,7 +33,10 @@ import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
-import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
+import {
+  repairMissingConfiguredPluginInstalls,
+  VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+} from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
 import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.js";
@@ -154,7 +157,7 @@ export async function runDoctorRepairSequence(params: {
   if (!isUpdatePackageSwapInProgress(env) && !hasUnscopedInstallRepairWarnings) {
     applyMutation(
       maybeRepairStalePluginConfig(state.candidate, env, {
-        preservePluginIds: failedPluginIds,
+        preservePluginIds: [...failedPluginIds, ...VERSION_BOUND_RUNTIME_PLUGIN_IDS],
       }),
     );
   }
