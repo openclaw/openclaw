@@ -90,7 +90,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/discord/src/runtime.ts: DiscordRuntime",
   "extensions/discord/src/voice-message.ts: VoiceMessageMetadata",
   "extensions/discord/src/voice/prompt.ts: DISCORD_VOICE_SPOKEN_OUTPUT_CONTRACT",
-  "extensions/duckduckgo/src/config.ts: DEFAULT_DDG_SAFE_SEARCH",
   "extensions/file-transfer/src/node-host/dir-fetch.ts: testing",
   "extensions/file-transfer/src/shared/node-invoke-policy.ts: testing",
   "extensions/file-transfer/src/tools/dir-fetch-tool.ts: testing",
