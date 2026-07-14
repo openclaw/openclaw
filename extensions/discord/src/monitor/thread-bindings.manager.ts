@@ -52,6 +52,8 @@ import {
   shouldDefaultPersist,
   resetThreadBindingsForTests,
 } from "./thread-bindings.state.js";
+import { createSweepRestClient } from "./thread-bindings.sweep-client.js";
+import { createGuardedSweepInterval } from "./thread-bindings.sweep-tick.js";
 import {
   DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
   DEFAULT_THREAD_BINDING_MAX_AGE_MS,
@@ -188,12 +190,11 @@ export function createThreadBindingManager(params: {
       }
       if (!rest) {
         try {
-          const cfg = resolveCurrentCfg();
-          rest = createDiscordRestClient({
-            cfg,
+          rest = createSweepRestClient({
+            cfg: resolveCurrentCfg(),
             accountId,
             token: resolveCurrentToken(),
-          }).rest;
+          });
         } catch {
           return;
         }
@@ -510,14 +511,13 @@ export function createThreadBindingManager(params: {
   };
 
   if (params.enableSweeper !== false) {
-    sweepTimer = setInterval(() => {
-      void runSweepOnce();
-    }, THREAD_BINDINGS_SWEEP_INTERVAL_MS);
-    // Keep the production process free to exit, but avoid breaking fake-timer
-    // sweeper tests where unref'd intervals may never fire.
-    if (!(process.env.VITEST || process.env.NODE_ENV === "test")) {
-      sweepTimer.unref?.();
-    }
+    sweepTimer = createGuardedSweepInterval({
+      tick: runSweepOnce,
+      intervalMs: THREAD_BINDINGS_SWEEP_INTERVAL_MS,
+      // Keep the production process free to exit, but avoid breaking fake-timer
+      // sweeper tests where unref'd intervals may never fire.
+      unref: !(process.env.VITEST || process.env.NODE_ENV === "test"),
+    }).handle;
   }
 
   const sessionBindingAdapter = createThreadBindingSessionAdapter({
