@@ -23,10 +23,12 @@ type InlineEvalInterpreterSnapshot = {
 const INLINE_EVAL_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const INLINE_EVAL_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const INLINE_EVAL_CACHE_MAX_FILES = 256;
+const INLINE_EVAL_CACHE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 const INLINE_EVAL_TEMP_MAX_AGE_MS = 60 * 60 * 1000;
 const MATERIALIZED_SCRIPT_PATTERN = /^[a-f0-9]{64}\.sh$/;
 const MATERIALIZED_TEMP_PATTERN = /^\.[a-f0-9]{64}\.\d+\.[a-f0-9-]+\.tmp$/;
 const INLINE_EVAL_ARGV_MARKER = "# openclaw-inline-eval-argv-v1:";
+const inlineEvalCacheSweepTimers = new Map<string, NodeJS.Timeout>();
 
 function resolveMaterializableInlineEvalCodeIndex(argv: string[], flag: string): number | null {
   if (argv.length !== 3) {
@@ -39,21 +41,41 @@ function quotePosixShellArg(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+function resolvePythonVenvLauncher(interpreter: InlineEvalInterpreterSnapshot): string | undefined {
+  if (interpreter.resolvedPath === interpreter.resolvedRealPath) {
+    return undefined;
+  }
+  const venvRoot = path.dirname(path.dirname(interpreter.resolvedPath));
+  try {
+    return fs.statSync(path.join(venvRoot, "pyvenv.cfg")).isFile()
+      ? interpreter.resolvedPath
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function renderMaterializedInlineEvalScript(params: {
   normalizedExecutable: string;
   flag: string;
   code: string;
   originalArgv: string[];
   interpreter: InlineEvalInterpreterSnapshot;
+  pythonVenvLauncher?: string;
 }): string | null {
   const argvMarker = `${INLINE_EVAL_ARGV_MARKER}${Buffer.from(JSON.stringify(params.originalArgv)).toString("base64url")}`;
-  if (/^(?:python|python\d+(?:\.\d+)*|pypy|pypy\d*)$/.test(params.normalizedExecutable)) {
+  if (/^(?:python|python\d+(?:\.\d+)*)$/.test(params.normalizedExecutable)) {
+    const venvLines = params.pythonVenvLauncher
+      ? [
+          `__PYVENV_LAUNCHER__=${quotePosixShellArg(params.pythonVenvLauncher)}`,
+          "export __PYVENV_LAUNCHER__",
+        ]
+      : [];
     return [
       "#!/bin/sh",
       argvMarker,
       "set -eu",
-      `__PYVENV_LAUNCHER__=${quotePosixShellArg(params.interpreter.resolvedPath)}`,
-      "export __PYVENV_LAUNCHER__",
+      ...venvLines,
       `exec ${quotePosixShellArg(params.interpreter.resolvedRealPath)} ${quotePosixShellArg(params.flag)} ${quotePosixShellArg(params.code)}`,
       "",
     ].join("\n");
@@ -78,9 +100,10 @@ type CachedInlineEvalScript = {
 
 function pruneInlineEvalCacheSync(params: {
   dir: string;
-  targetPath: string;
+  targetPath?: string;
   incomingBytes: number;
-}): { ok: true } | { ok: false; message: string } {
+  incomingFiles: 0 | 1;
+}): { ok: true; remainingScripts: number } | { ok: false; message: string } {
   if (params.incomingBytes > INLINE_EVAL_CACHE_MAX_BYTES) {
     return { ok: false, message: "SYSTEM_RUN_DENIED: inline-eval script exceeds cache limit" };
   }
@@ -89,7 +112,7 @@ function pruneInlineEvalCacheSync(params: {
   try {
     for (const entry of fs.readdirSync(params.dir, { withFileTypes: true })) {
       const entryPath = path.join(params.dir, entry.name);
-      if (entryPath === params.targetPath) {
+      if (params.targetPath && entryPath === params.targetPath) {
         continue;
       }
       if (MATERIALIZED_TEMP_PATTERN.test(entry.name)) {
@@ -116,7 +139,7 @@ function pruneInlineEvalCacheSync(params: {
     scripts.sort((left, right) => left.mtimeMs - right.mtimeMs);
     let totalBytes = scripts.reduce((sum, script) => sum + script.size, 0);
     while (
-      scripts.length + 1 > INLINE_EVAL_CACHE_MAX_FILES ||
+      scripts.length + params.incomingFiles > INLINE_EVAL_CACHE_MAX_FILES ||
       totalBytes + params.incomingBytes > INLINE_EVAL_CACHE_MAX_BYTES
     ) {
       const oldest = scripts.shift();
@@ -126,10 +149,29 @@ function pruneInlineEvalCacheSync(params: {
       fs.rmSync(oldest.path, { force: true });
       totalBytes -= oldest.size;
     }
-    return { ok: true };
+    return { ok: true, remainingScripts: scripts.length + params.incomingFiles };
   } catch {
     return { ok: false, message: "SYSTEM_RUN_DENIED: unable to prune inline-eval cache" };
   }
+}
+
+function scheduleInlineEvalCacheSweep(inlineEvalDir: string): void {
+  if (inlineEvalCacheSweepTimers.has(inlineEvalDir)) {
+    return;
+  }
+  const timer = setInterval(() => {
+    const result = pruneInlineEvalCacheSync({
+      dir: inlineEvalDir,
+      incomingBytes: 0,
+      incomingFiles: 0,
+    });
+    if (!result.ok || result.remainingScripts === 0) {
+      clearInterval(timer);
+      inlineEvalCacheSweepTimers.delete(inlineEvalDir);
+    }
+  }, INLINE_EVAL_CACHE_SWEEP_INTERVAL_MS);
+  timer.unref();
+  inlineEvalCacheSweepTimers.set(inlineEvalDir, timer);
 }
 
 function ensureUserPrivateDirectory(dir: string): { ok: true } | { ok: false; message: string } {
@@ -158,6 +200,7 @@ function writeMaterializedInlineEvalScriptSync(params: {
   code: string;
   originalArgv: string[];
   interpreter: InlineEvalInterpreterSnapshot;
+  pythonVenvLauncher?: string;
 }): { ok: true; scriptPath: string } | { ok: false; message: string } {
   const scriptBody = renderMaterializedInlineEvalScript(params);
   if (scriptBody === null) {
@@ -184,6 +227,7 @@ function writeMaterializedInlineEvalScriptSync(params: {
         code: params.code,
         originalArgv: params.originalArgv,
         interpreterSnapshot: params.interpreter,
+        pythonVenvLauncher: params.pythonVenvLauncher,
         runtimeWrapper: "posix-shell-eval-v2",
       }),
     )
@@ -194,6 +238,7 @@ function writeMaterializedInlineEvalScriptSync(params: {
     dir: inlineEvalDir,
     targetPath: scriptPath,
     incomingBytes: scriptBytes,
+    incomingFiles: 1,
   });
   if (!pruned.ok) {
     return pruned;
@@ -207,6 +252,7 @@ function writeMaterializedInlineEvalScriptSync(params: {
     fs.chmodSync(tmpScriptPath, 0o600);
     fs.renameSync(tmpScriptPath, scriptPath);
     fs.chmodSync(scriptPath, 0o600);
+    scheduleInlineEvalCacheSweep(inlineEvalDir);
     return { ok: true, scriptPath };
   } catch {
     try {
@@ -283,8 +329,14 @@ export function materializeInlineEvalForApprovalSync(
   if (!hit) {
     return { ok: true, command: null };
   }
+  if (/^pypy\d*$/.test(hit.normalizedExecutable)) {
+    return {
+      ok: false,
+      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+    };
+  }
   const supportedInterpreter =
-    /^(?:python|python\d+(?:\.\d+)*|pypy|pypy\d*)$/.test(hit.normalizedExecutable) ||
+    /^(?:python|python\d+(?:\.\d+)*)$/.test(hit.normalizedExecutable) ||
     hit.normalizedExecutable === "node" ||
     hit.normalizedExecutable === "nodejs";
   if (!supportedInterpreter || (hit.flag !== "-c" && hit.flag !== "-e" && hit.flag !== "--eval")) {
@@ -312,6 +364,9 @@ export function materializeInlineEvalForApprovalSync(
     code,
     originalArgv: argv,
     interpreter,
+    pythonVenvLauncher: hit.normalizedExecutable.startsWith("python")
+      ? resolvePythonVenvLauncher(interpreter)
+      : undefined,
   });
   if (!materialized.ok) {
     return materialized;

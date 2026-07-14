@@ -172,9 +172,10 @@ Approval-backed interpreter/runtime runs are intentionally conservative:
 Materialized inline-eval scripts contain the requested code. OpenClaw stores them under the state
 directory at `tmp/inline-eval/`, using deterministic content-derived filenames, private `0700`
 directories, and `0600` files. A later request for the same interpreter snapshot and code reuses the
-same path. OpenClaw removes entries older than 24 hours and prunes the oldest entries before the
-cache exceeds 256 files or 16 MiB. Operators should still apply the same local-access and backup
-policy used for other sensitive OpenClaw state.
+same path. While the node host remains running, an hourly sweep removes entries older than 24 hours;
+after a restart, stale entries are pruned before the next inline-eval materialization. OpenClaw also
+prunes the oldest entries before the cache exceeds 256 files or 16 MiB. Operators should still apply
+the same local-access and backup policy used for other sensitive OpenClaw state.
 
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later approved-run system events (`Exec finished`, and `Exec running` when configured).
