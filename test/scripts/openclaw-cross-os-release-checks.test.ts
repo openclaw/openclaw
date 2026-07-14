@@ -884,6 +884,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const topLevelImports = configSource.slice(0, configSource.indexOf("export type CrossOsSuite"));
 
     expect(topLevelImports).not.toContain("package-dist-inventory");
+    expect(installSource).not.toContain('from "../package-dist-inventory.ts"');
+    expect(installSource).toContain('await import("../package-dist-inventory.ts")');
     expect(installSource).toMatch(
       /function assertNoLegacyPluginDependencyStagingDebris\(packageRoot: string\)/u,
     );

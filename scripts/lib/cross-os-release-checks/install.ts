@@ -13,7 +13,6 @@ import {
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mjs";
-import { writePackageDistInventoryForPublish } from "../package-dist-inventory.ts";
 import type { CandidateBuild, LaneCommandParams, LaneState, PackageJson } from "./config.ts";
 import {
   CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES,
@@ -310,6 +309,9 @@ export async function writePackageDistInventoryForCandidate(params: {
       return isPackagedDistPath(relativePath) ? [relativePath] : [];
     })
     .toSorted((left, right) => left.localeCompare(right));
+  // Matrix resolution runs before dependencies exist. Load the shared publish helper
+  // only after prepareCandidate has installed the source checkout.
+  const { writePackageDistInventoryForPublish } = await import("../package-dist-inventory.ts");
   await writePackageDistInventoryForPublish(params.sourceDir, inventory);
 }
 
