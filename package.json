@@ -2093,6 +2093,7 @@
     "@types/node": "26.1.0",
     "@types/proper-lockfile": "4.1.4",
     "@types/semver": "7.7.1",
+    "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/coverage-v8": "4.1.9",
