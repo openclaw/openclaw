@@ -884,7 +884,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     }
     ```
 
-    `presenceEvents` requires an enabled heartbeat for the routed agent and the privileged **Presence Intent** on the application's Bot page in the Discord Developer Portal. OpenClaw suppresses the initial reconnect snapshot, ignores bots and unchanged online states, and limits each user to one routed event every eight hours. The system event carries immutable user, guild, and channel IDs; display names remain untrusted labels. The agent decides whether and how to greet.
+    `presenceEvents` requires an enabled heartbeat for the routed agent and the privileged **Presence Intent** on the application's Bot page in the Discord Developer Portal. OpenClaw suppresses fresh-session snapshots, ignores bots and unchanged online states, and persists an eight-hour per-user cooldown across Gateway restarts. The system event carries immutable user, guild, and channel IDs without embedding mutable display names. The agent decides whether and how to greet.
 
   </Accordion>
 

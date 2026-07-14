@@ -1,4 +1,4 @@
-import type { GatewayPresenceUpdate } from "discord-api-types/v10";
+import { type GatewayPresenceUpdate, PresenceUpdateStatus } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
 import {
   DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
@@ -10,9 +10,15 @@ function presence(
   status: "online" | "idle" | "dnd" | "offline",
   overrides: Partial<GatewayPresenceUpdate["user"]> = {},
 ): GatewayPresenceUpdate {
+  const statuses = {
+    online: PresenceUpdateStatus.Online,
+    idle: PresenceUpdateStatus.Idle,
+    dnd: PresenceUpdateStatus.DoNotDisturb,
+    offline: PresenceUpdateStatus.Offline,
+  } as const;
   return {
     guild_id: "guild-1",
-    status,
+    status: statuses[status],
     activities: [],
     client_status: {},
     user: { id: "user-1", username: "Alice", ...overrides },
@@ -26,7 +32,7 @@ describe("resolveDiscordOnlinePresenceEvent", () => {
     const result = resolveDiscordOnlinePresenceEvent({
       config,
       data: presence("online", { global_name: "Alice Example" }),
-      previousStatus: "offline",
+      hadOfflineBaseline: true,
       botUserId: "bot-1",
       startedAtMs: 0,
       nowMs: DISCORD_PRESENCE_STARTUP_GRACE_MS,
@@ -34,7 +40,7 @@ describe("resolveDiscordOnlinePresenceEvent", () => {
 
     expect(result).toMatchObject({ channelId: "channel-1", userId: "user-1" });
     expect(result?.text).toContain('user_id="user-1"');
-    expect(result?.text).toContain('User label: "Alice Example"');
+    expect(result?.text).not.toContain("Alice Example");
     expect(result?.text).toContain("retrieve relevant memory and wiki context");
   });
 
@@ -43,7 +49,7 @@ describe("resolveDiscordOnlinePresenceEvent", () => {
       resolveDiscordOnlinePresenceEvent({
         config,
         data: presence("online"),
-        previousStatus: undefined,
+        hadOfflineBaseline: false,
         startedAtMs: 1000,
         nowMs: 1000 + DISCORD_PRESENCE_STARTUP_GRACE_MS - 1,
       }),
@@ -52,7 +58,7 @@ describe("resolveDiscordOnlinePresenceEvent", () => {
       resolveDiscordOnlinePresenceEvent({
         config,
         data: presence("idle"),
-        previousStatus: "online",
+        hadOfflineBaseline: false,
         startedAtMs: 0,
         nowMs: DISCORD_PRESENCE_STARTUP_GRACE_MS,
       }),
@@ -64,7 +70,7 @@ describe("resolveDiscordOnlinePresenceEvent", () => {
       resolveDiscordOnlinePresenceEvent({
         config,
         data: presence("online"),
-        previousStatus: undefined,
+        hadOfflineBaseline: false,
         startedAtMs: 0,
         nowMs: DISCORD_PRESENCE_STARTUP_GRACE_MS,
       }),
@@ -74,7 +80,7 @@ describe("resolveDiscordOnlinePresenceEvent", () => {
   it("honors immutable user allowlists, bot exclusion, and cooldown", () => {
     const base = {
       data: presence("online"),
-      previousStatus: "offline" as const,
+      hadOfflineBaseline: true,
       startedAtMs: 0,
       nowMs: DISCORD_PRESENCE_STARTUP_GRACE_MS,
     };

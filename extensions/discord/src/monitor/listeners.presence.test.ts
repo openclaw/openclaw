@@ -1,4 +1,4 @@
-import type { GatewayPresenceUpdate } from "discord-api-types/v10";
+import { type GatewayPresenceUpdate, PresenceUpdateStatus } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,7 +29,7 @@ import { DiscordPresenceListener } from "./listeners.js";
 function presence(status: "online" | "offline"): GatewayPresenceUpdate {
   return {
     guild_id: "guild-1",
-    status,
+    status: status === "online" ? PresenceUpdateStatus.Online : PresenceUpdateStatus.Offline,
     activities: [],
     client_status: {},
     user: { id: "user-1", username: "Alice" },
@@ -96,7 +96,6 @@ describe("DiscordPresenceListener", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
       expect.stringContaining('user_id="user-1"'),
       expect.objectContaining({
-        trusted: false,
         sessionKey: "agent:molty:discord:channel:channel-1",
         deliveryContext: {
           channel: "discord",

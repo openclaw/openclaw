@@ -175,7 +175,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     const presenceEvent = resolveDiscordOnlinePresenceEvent({
       config,
       data,
-      previousStatus: hasOfflineBaseline ? "offline" : undefined,
+      hadOfflineBaseline: hasOfflineBaseline,
       botUserId: this.params.botUserId,
       startedAtMs: this.startedAtMs,
       nowMs,
@@ -216,7 +216,6 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         peer: { kind: "channel", id: presenceEvent.channelId },
       });
       queued = enqueueSystemEvent(presenceEvent.text, {
-        trusted: false,
         sessionKey: route.sessionKey,
         contextKey: `discord:presence-online:${this.params.accountId}:${data.guild_id}:${userId}`,
         deliveryContext: {
