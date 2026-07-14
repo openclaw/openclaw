@@ -3,7 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 
-const SuspensionTokenSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
+const SuspensionTokenSchema = Type.String({ minLength: 1, maxLength: 128 });
 const CountSchema = Type.Integer({ minimum: 0 });
 
 export const GatewaySuspendTaskBlockerSchema = closedObject({
