@@ -147,10 +147,13 @@ type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
 type ChatHistoryAnchor = {
   sessionKey: string;
-  scrollHeight: number;
-  scrollTop: number;
+  element: HTMLElement;
+  viewportTop: number;
 };
 const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
+const CHAT_HISTORY_INTENT_EDGE_PX = 300;
+const CHAT_HISTORY_INTENT_IDLE_MS = 200;
+const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 
 function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);
@@ -309,10 +312,11 @@ class ChatPane extends OpenClawLightDomElement {
   private historyObserverArmed = false;
   private historyAutoLoadBlocked = false;
   private historyBootstrapPagesLoaded = 0;
+  private historyIntentConsumed = false;
+  private historyIntentTimer: number | null = null;
   private transcriptScrollTop: number | null = null;
   private pendingHistoryAnchor: ChatHistoryAnchor | null = null;
   private nativePaginationSnapshot: ChatHistoryPagination | null = null;
-  private nativeHistoryExpanded = false;
   // Older cursors already requested this session. A provider that cycles cursors
   // (c1 -> c2 -> c1) on empty/duplicate pages would otherwise loop forever, since
   // the sentinel never scrolls out of view when nothing new renders.
@@ -924,7 +928,6 @@ class ChatPane extends OpenClawLightDomElement {
     if (pagination !== this.nativePaginationSnapshot) {
       this.nativePaginationSnapshot = pagination;
       this.olderOffsetsSeen.clear();
-      this.nativeHistoryExpanded = !pagination.hasMore && pagination.completeSnapshot === true;
     }
     return pagination.hasMore && !state.chatLoading;
   }
@@ -935,12 +938,16 @@ class ChatPane extends OpenClawLightDomElement {
     this.historyObserverArmed = false;
     this.historyAutoLoadBlocked = false;
     this.historyBootstrapPagesLoaded = 0;
+    this.historyIntentConsumed = false;
+    if (this.historyIntentTimer !== null) {
+      window.clearTimeout(this.historyIntentTimer);
+      this.historyIntentTimer = null;
+    }
     this.transcriptScrollTop = null;
     this.pendingHistoryAnchor = null;
     this.olderCursorsSeen.clear();
     this.olderOffsetsSeen.clear();
     this.nativePaginationSnapshot = null;
-    this.nativeHistoryExpanded = false;
     this.historyObserver?.disconnect();
     this.historyObserver = null;
   }
@@ -953,17 +960,42 @@ class ChatPane extends OpenClawLightDomElement {
     this.pendingHistoryAnchor = null;
     const state = this.state;
     const thread = this.querySelector<HTMLElement>(".chat-thread");
-    if (!state || !thread || state.sessionKey !== anchor.sessionKey) {
+    if (
+      !state ||
+      !thread ||
+      state.sessionKey !== anchor.sessionKey ||
+      !anchor.element.isConnected
+    ) {
       return;
     }
-    thread.scrollTop = anchor.scrollTop + (thread.scrollHeight - anchor.scrollHeight);
+    // Chromium usually preserves this through native scroll anchoring. Measure
+    // the row relative to the viewport so this only corrects engines that did not.
+    const nextViewportTop =
+      anchor.element.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+    const delta = nextViewportTop - anchor.viewportTop;
+    if (Math.abs(delta) > 1) {
+      thread.scrollTop += delta;
+    }
   }
 
   private currentHistoryAnchor(sessionKey: string): ChatHistoryAnchor | null {
     const thread = this.querySelector<HTMLElement>(".chat-thread");
-    return thread
-      ? { sessionKey, scrollHeight: thread.scrollHeight, scrollTop: thread.scrollTop }
-      : null;
+    if (!thread) {
+      return null;
+    }
+    const viewportRect = thread.getBoundingClientRect();
+    const rows = thread.querySelectorAll<HTMLElement>("[data-chat-row-key]");
+    for (const element of rows) {
+      const rect = element.getBoundingClientRect();
+      if (rect.bottom > viewportRect.top && rect.top < viewportRect.bottom) {
+        return {
+          sessionKey,
+          element,
+          viewportTop: rect.top - viewportRect.top,
+        };
+      }
+    }
+    return null;
   }
 
   private syncHistoryObserver(): void {
@@ -1014,7 +1046,7 @@ class ChatPane extends OpenClawLightDomElement {
           if (bootstrap) {
             this.historyBootstrapPagesLoaded += 1;
           }
-          void this.loadOlderMessages("observer");
+          void this.loadOlderMessages();
         }
       },
       { root, rootMargin: "300px 0px 0px", threshold: 0 },
@@ -1037,14 +1069,16 @@ class ChatPane extends OpenClawLightDomElement {
       !this.loadingOlder &&
       root !== null &&
       previousScrollTop !== null &&
-      root.scrollTop < previousScrollTop;
+      root.scrollTop < previousScrollTop &&
+      root.scrollTop <= CHAT_HISTORY_INTENT_EDGE_PX;
+    const newHistoryIntent = hasUpwardIntent && this.consumeHistoryIntent();
     // A failed request or exhausted bootstrap stays disarmed until renewed
     // upward intent, preventing request loops without stranding older history.
-    if (hasUpwardIntent && this.historyAutoLoadBlocked) {
+    if (newHistoryIntent && this.historyAutoLoadBlocked) {
       this.historyAutoLoadBlocked = false;
       this.historyObserverArmed = true;
       this.syncHistoryObserver();
-    } else if (hasUpwardIntent && !this.historyObserverArmed) {
+    } else if (newHistoryIntent && !this.historyObserverArmed) {
       this.historyObserverArmed = true;
       this.syncHistoryObserver();
     }
@@ -1053,16 +1087,52 @@ class ChatPane extends OpenClawLightDomElement {
     this.state?.handleChatScroll(event);
   }
 
-  private async loadOlderMessages(source: "manual" | "observer" = "manual"): Promise<void> {
+  private consumeHistoryIntent(): boolean {
+    if (this.historyIntentTimer !== null) {
+      window.clearTimeout(this.historyIntentTimer);
+    }
+    this.historyIntentTimer = window.setTimeout(() => {
+      this.historyIntentTimer = null;
+      this.historyIntentConsumed = false;
+    }, CHAT_HISTORY_INTENT_IDLE_MS);
+    if (this.historyIntentConsumed) {
+      return false;
+    }
+    this.historyIntentConsumed = true;
+    return true;
+  }
+
+  private handleTranscriptHistoryIntent(event: Event): void {
+    const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    const upward =
+      (event instanceof WheelEvent && event.deltaY < 0) ||
+      (event instanceof KeyboardEvent && CHAT_HISTORY_UPWARD_KEYS.has(event.key));
+    if (
+      !root ||
+      !upward ||
+      root.scrollTop > CHAT_HISTORY_INTENT_EDGE_PX ||
+      this.loadingOlder ||
+      !this.hasOlderMessages() ||
+      !this.consumeHistoryIntent()
+    ) {
+      return;
+    }
+    this.historyAutoLoadBlocked = false;
+    if (typeof IntersectionObserver !== "function") {
+      void this.loadOlderMessages();
+      return;
+    }
+    this.historyObserverArmed = true;
+    this.syncHistoryObserver();
+  }
+
+  private async loadOlderMessages(): Promise<void> {
     const state = this.state;
     const catalogKey = state ? parseCatalogSessionKey(state.sessionKey) : null;
     if (!state || this.loadingOlder || !this.hasOlderMessages()) {
       return;
     }
     const generation = ++this.olderLoadGeneration;
-    if (source === "manual") {
-      this.historyAutoLoadBlocked = false;
-    }
     this.loadingOlder = true;
     state.requestUpdate();
     let prepended = false;
@@ -1103,9 +1173,6 @@ class ChatPane extends OpenClawLightDomElement {
         const messages = Array.isArray(result.messages) ? result.messages : [];
         const nextMessages = this.prependUniqueNativeMessages(messages, state.chatMessages);
         const grew = nextMessages.length > state.chatMessages.length;
-        // Native scroll-back must render the loaded prefix together with the old
-        // viewport; the default tail-only DOM cap would hide every prepended page.
-        this.nativeHistoryExpanded ||= grew;
         this.pendingHistoryAnchor = grew ? this.currentHistoryAnchor(state.sessionKey) : null;
         state.chatMessages = nextMessages;
         const appliedPagination: ChatHistoryPagination = exhausted
@@ -1891,21 +1958,10 @@ class ChatPane extends OpenClawLightDomElement {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
-      renderAllLoadedHistory:
-        !catalogKey &&
-        (this.nativeHistoryExpanded ||
-          (state.chatHistoryPagination?.hasMore === false &&
-            state.chatHistoryPagination.completeSnapshot === true)),
       historyPagination:
         catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder
           ? {
               loading: this.loadingOlder,
-              // A non-scrollable thread cannot express renewed upward intent, so
-              // the button remains the recovery path after failure or bootstrap.
-              manualFallback:
-                this.hasOlderMessages() &&
-                (typeof IntersectionObserver !== "function" || this.historyAutoLoadBlocked),
-              onLoadOlder: () => void this.loadOlderMessages(),
             }
           : undefined,
       sideChatTurns: catalogKey ? [] : state.chatSideChatTurns,
@@ -2018,6 +2074,7 @@ class ChatPane extends OpenClawLightDomElement {
         void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
       },
       onChatScroll: (event) => this.handleTranscriptScroll(event),
+      onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
       getDraft: () => state.chatMessage,
       onDraftChange: state.handleChatDraftChange,
       onRequestUpdate: state.requestUpdate,

@@ -83,10 +83,7 @@ export type ChatProps = {
   messages: unknown[];
   historyPagination?: {
     loading: boolean;
-    manualFallback: boolean;
-    onLoadOlder: () => void;
   };
-  renderAllLoadedHistory?: boolean;
   sideChatTurns?: ChatSideResult[];
   sideChatPending?: ChatSideResultPending | null;
   sideChatHidden?: boolean;
@@ -156,6 +153,7 @@ export type ChatProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
+  onHistoryIntent?: (event: Event) => void;
   /** Sends a detached /btw side question (selection popup or side-chat
    * follow-up). `displayQuestion` overrides the pending-turn display when the
    * command embeds carried follow-up context; `onSendRejected` lets the panel
@@ -265,7 +263,6 @@ export function renderChat(props: ChatProps) {
     sessionKey: props.sessionKey,
     loading: props.loading,
     historyPagination: props.historyPagination,
-    renderAllLoadedHistory: props.renderAllLoadedHistory,
     messages: props.messages,
     toolMessages: props.toolMessages,
     streamSegments: props.streamSegments,
@@ -297,8 +294,8 @@ export function renderChat(props: ChatProps) {
     onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
     onRequestUpdate: requestUpdate,
-    onScrollToBottom: props.onScrollToBottom,
     onChatScroll: props.onChatScroll,
+    onHistoryIntent: props.onHistoryIntent,
     onDraftChange: props.onDraftChange,
     getDraft: props.getDraft,
     onSend: props.onSend,

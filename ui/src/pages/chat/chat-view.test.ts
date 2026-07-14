@@ -696,8 +696,6 @@ describe("chat history pagination", () => {
     const container = renderChatView({
       historyPagination: {
         loading: true,
-        manualFallback: false,
-        onLoadOlder: () => undefined,
       },
     });
     const threadInner = requireElement(container, ".chat-thread-inner", "chat thread inner");
@@ -711,24 +709,21 @@ describe("chat history pagination", () => {
     expect(sentinel.querySelector("button")).toBeNull();
   });
 
-  it("keeps a manual button only when IntersectionObserver is unavailable", () => {
-    const onLoadOlder = vi.fn();
+  it("loads older history from upward wheel and keyboard intent without a button", () => {
+    const onHistoryIntent = vi.fn();
     const container = renderChatView({
       historyPagination: {
         loading: false,
-        manualFallback: true,
-        onLoadOlder,
       },
+      onHistoryIntent,
     });
-    const button = requireElement(
-      container,
-      ".chat-history-fallback",
-      "history fallback",
-    ) as HTMLButtonElement;
+    const thread = requireElement(container, ".chat-thread", "chat thread");
+    const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
 
-    expect(button.textContent?.trim()).toBe(t("chat.loadOlder"));
-    button.click();
-    expect(onLoadOlder).toHaveBeenCalledTimes(1);
+    expect(sentinel.querySelector("button")).toBeNull();
+    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+    thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
+    expect(onHistoryIntent).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -955,25 +950,8 @@ describe("chat code-block copy", () => {
   });
 });
 
-describe("chat history render window", () => {
-  it("starts freshly loaded large histories with a small render window", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message ${index}`,
-      timestamp: index,
-    }));
-
-    renderChatView({ messages });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 30,
-      }),
-    );
-  });
-
-  it("expands the history render window when the user scrolls to the top", () => {
+describe("chat transcript rendering", () => {
+  it("passes the full loaded history to one render path and leaves scroll ownership to the pane", () => {
     const messages = Array.from({ length: 80 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
       content: `message ${index}`,
@@ -983,205 +961,17 @@ describe("chat history render window", () => {
     const onChatScroll = vi.fn();
 
     const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
-    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
-    thread.scrollTop = 120;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-    thread.scrollTop = 0;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
 
-    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
-    expect(onChatScroll).toHaveBeenCalledTimes(2);
+    const input = buildChatItemsMock.mock.lastCall?.[0] as Record<string, unknown>;
+    expect(input.messages).toBe(messages);
+    expect(input).not.toHaveProperty("historyRenderLimit");
 
-    buildChatItemsMock.mockClear();
-    renderChatView({ messages, onRequestUpdate, onChatScroll });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 60,
-      }),
-    );
-  });
-
-  it("preserves the visible anchor across repeated top-scroll expansion", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message ${index}`,
-      timestamp: index,
-    }));
-    const onRequestUpdate = vi.fn();
-    const onChatScroll = vi.fn();
-    const frameCallbacks: FrameRequestCallback[] = [];
-    vi.stubGlobal(
-      "requestAnimationFrame",
-      vi.fn((callback: FrameRequestCallback) => {
-        frameCallbacks.push(callback);
-        return frameCallbacks.length;
-      }),
-    );
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
-
-    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
-    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
-    Object.defineProperties(thread, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 300 },
-    });
-    thread.scrollTop = 0;
+    onRequestUpdate.mockClear();
+    const thread = requireElement(container, ".chat-thread", "chat thread");
     thread.dispatchEvent(new Event("scroll", { bubbles: true }));
 
-    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 600 });
-    buildChatItemsMock.mockClear();
-    renderChatView({ messages, onRequestUpdate, onChatScroll });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 60,
-      }),
-    );
-    const firstExpandedThread = requireElement(
-      container,
-      ".chat-thread",
-      "chat thread",
-    ) as HTMLElement;
-    Object.defineProperties(firstExpandedThread, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 600 },
-    });
-    for (const callback of frameCallbacks.splice(0)) {
-      callback(0);
-    }
-    expect(firstExpandedThread.scrollTop).toBe(300);
-
-    firstExpandedThread.scrollTop = 0;
-    firstExpandedThread.dispatchEvent(new Event("scroll", { bubbles: true }));
-
-    buildChatItemsMock.mockClear();
-    renderChatView({ messages, onRequestUpdate, onChatScroll });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 80,
-      }),
-    );
-    const secondExpandedThread = requireElement(
-      container,
-      ".chat-thread",
-      "chat thread",
-    ) as HTMLElement;
-    Object.defineProperties(secondExpandedThread, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 900 },
-    });
-    for (const callback of frameCallbacks.splice(0)) {
-      callback(0);
-    }
-    expect(secondExpandedThread.scrollTop).toBe(300);
-    expect(onRequestUpdate).toHaveBeenCalledTimes(2);
-    expect(onChatScroll).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not expand the history render window for bottom auto-scrolls inside the top threshold", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message ${index}`,
-      timestamp: index,
-    }));
-    const onRequestUpdate = vi.fn();
-    const onChatScroll = vi.fn();
-
-    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
-    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
-    thread.scrollTop = 30;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-
+    expect(onChatScroll).toHaveBeenCalledOnce();
     expect(onRequestUpdate).not.toHaveBeenCalled();
-    expect(onChatScroll).toHaveBeenCalledTimes(1);
-
-    buildChatItemsMock.mockClear();
-    const rerenderedContainer = renderChatView({ messages, onRequestUpdate, onChatScroll });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 30,
-      }),
-    );
-
-    const rerenderedThread = requireElement(
-      rerenderedContainer,
-      ".chat-thread",
-      "chat thread",
-    ) as HTMLElement;
-    rerenderedThread.scrollTop = 0;
-    rerenderedThread.dispatchEvent(new Event("scroll", { bubbles: true }));
-
-    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
-    expect(onChatScroll).toHaveBeenCalledTimes(2);
-  });
-
-  it("expands the history render window when the thread is already at the top", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message ${index}`,
-      timestamp: index,
-    }));
-    const onRequestUpdate = vi.fn();
-    const onChatScroll = vi.fn();
-
-    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
-    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
-    thread.scrollTop = 0;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-
-    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
-    expect(onChatScroll).toHaveBeenCalledTimes(1);
-  });
-
-  it("expands the render window after render when the initial window cannot scroll", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message ${index}`,
-      timestamp: index,
-    }));
-    const onRequestUpdate = vi.fn();
-    const onScrollToBottom = vi.fn();
-    const frameCallbacks: FrameRequestCallback[] = [];
-    vi.stubGlobal(
-      "requestAnimationFrame",
-      vi.fn((callback: FrameRequestCallback) => {
-        frameCallbacks.push(callback);
-        return frameCallbacks.length;
-      }),
-    );
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
-
-    renderChatView({ messages, onRequestUpdate, onScrollToBottom });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 30,
-      }),
-    );
-    expect(frameCallbacks).toHaveLength(1);
-
-    itemAt(frameCallbacks, 0, "history growth frame")(0);
-
-    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
-    expect(onScrollToBottom).toHaveBeenCalledTimes(1);
-
-    buildChatItemsMock.mockClear();
-    renderChatView({ messages, onRequestUpdate, onScrollToBottom });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 60,
-      }),
-    );
   });
 });
 

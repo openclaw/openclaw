@@ -535,6 +535,7 @@ describe("grouped chat rendering", () => {
 
     const bubble = expectElement(container, ".chat-bubble", HTMLElement);
     expect(bubble.classList.contains("fade-in")).toBe(false);
+    expect(expectElement(container, ".chat-group", HTMLElement).dataset.chatRowKey).toBeTruthy();
   });
 
   it("uses the displayed answer for assistant message actions", () => {

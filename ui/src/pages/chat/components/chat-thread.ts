@@ -2,7 +2,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
-import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
@@ -15,7 +14,6 @@ import {
   markdownFileLinkFromEvent,
 } from "../../../components/markdown.ts";
 import { i18n, t } from "../../../i18n/index.ts";
-import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
 import type {
   ChatQueueItem,
   ChatStreamSegment,
@@ -65,9 +63,6 @@ import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcom
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-const INITIAL_CHAT_HISTORY_RENDER_WINDOW = 30;
-const CHAT_HISTORY_RENDER_WINDOW_BATCH = 30;
-const CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX = 48;
 
 type ReplyTarget = {
   messageId: string;
@@ -79,17 +74,6 @@ type ChatThreadState = {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
-  historyRenderSessionKey: string | null;
-  historyRenderMessagesRef: unknown[] | null;
-  historyRenderMessageCount: number;
-  historyRenderLimit: number;
-  historyRenderLastScrollTop: number | null;
-  historyRenderExpansionFrame: number | null;
-  historyRenderAnchorAdjustment: {
-    scrollHeight: number;
-    scrollTop: number;
-  } | null;
-  historyRenderAnchorFrame: number | null;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: object;
 };
@@ -100,10 +84,7 @@ type ChatThreadProps = {
   loading: boolean;
   historyPagination?: {
     loading: boolean;
-    manualFallback: boolean;
-    onLoadOlder: () => void;
   };
-  renderAllLoadedHistory?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
@@ -139,8 +120,8 @@ type ChatThreadProps = {
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
-  onScrollToBottom?: () => void;
   onChatScroll?: (event: Event) => void;
+  onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
   /** Current composer draft; the selection popup preserves it when prefilling. */
   getDraft?: () => string;
@@ -164,14 +145,6 @@ function createChatThreadState(): ChatThreadState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
-    historyRenderSessionKey: null,
-    historyRenderMessagesRef: null,
-    historyRenderMessageCount: 0,
-    historyRenderLimit: 0,
-    historyRenderLastScrollTop: null,
-    historyRenderExpansionFrame: null,
-    historyRenderAnchorAdjustment: null,
-    historyRenderAnchorFrame: null,
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
   };
@@ -214,175 +187,12 @@ export function resetChatThreadPresentationState(paneId?: string) {
   // The selection popup is body-portaled; pane teardown/route changes must
   // drop it so it cannot outlive the render that owns its callbacks.
   removeChatSelectionPopup();
-  const states = paneId
-    ? ([threadStates.get(paneId)].filter(Boolean) as ChatThreadState[])
-    : [...threadStates.values()];
-  for (const state of states) {
-    if (state.historyRenderExpansionFrame != null) {
-      cancelAnimationFrame(state.historyRenderExpansionFrame);
-    }
-    if (state.historyRenderAnchorFrame != null) {
-      cancelAnimationFrame(state.historyRenderAnchorFrame);
-    }
-  }
   if (paneId) {
     threadStates.delete(paneId);
   } else {
     threadStates.clear();
     resetChatThreadState();
   }
-}
-
-function resolveChatHistoryRenderCap(messageCount: number, renderAllLoadedHistory = false): number {
-  const count = Math.max(0, messageCount);
-  return renderAllLoadedHistory ? count : Math.min(count, CHAT_HISTORY_RENDER_LIMIT);
-}
-
-function shouldRenderFullChatHistoryWindow(state: ChatThreadState, messageCount: number): boolean {
-  return (
-    messageCount <= INITIAL_CHAT_HISTORY_RENDER_WINDOW ||
-    (state.searchOpen && state.searchQuery.trim().length > 0)
-  );
-}
-
-function resolveChatHistoryRenderWindow(
-  props: Pick<ChatThreadProps, "paneId" | "sessionKey" | "messages" | "renderAllLoadedHistory">,
-) {
-  const state = getChatThreadState(props.paneId);
-  const messages = Array.isArray(props.messages) ? props.messages : [];
-  const cap = resolveChatHistoryRenderCap(messages.length, props.renderAllLoadedHistory);
-  const sessionChanged = state.historyRenderSessionKey !== props.sessionKey;
-  const refChanged = state.historyRenderMessagesRef !== messages;
-  const previousCount = state.historyRenderMessageCount;
-  if (sessionChanged || (refChanged && previousCount === 0)) {
-    state.historyRenderLastScrollTop = null;
-  }
-
-  if (cap === 0) {
-    state.historyRenderSessionKey = props.sessionKey;
-    state.historyRenderMessagesRef = messages;
-    state.historyRenderMessageCount = messages.length;
-    state.historyRenderLimit = 0;
-    state.historyRenderLastScrollTop = null;
-    return 0;
-  }
-
-  if (props.renderAllLoadedHistory || shouldRenderFullChatHistoryWindow(state, messages.length)) {
-    state.historyRenderSessionKey = props.sessionKey;
-    state.historyRenderMessagesRef = messages;
-    state.historyRenderMessageCount = messages.length;
-    state.historyRenderLimit = cap;
-    return cap;
-  }
-
-  if (sessionChanged || (refChanged && previousCount === 0)) {
-    state.historyRenderLimit = Math.min(INITIAL_CHAT_HISTORY_RENDER_WINDOW, cap);
-  } else if (refChanged) {
-    const grewBy = messages.length - previousCount;
-    if (state.historyRenderLimit >= previousCount) {
-      state.historyRenderLimit = cap;
-    } else if (grewBy > 0 && grewBy <= CHAT_HISTORY_RENDER_WINDOW_BATCH) {
-      state.historyRenderLimit = Math.min(cap, state.historyRenderLimit + grewBy);
-    } else {
-      state.historyRenderLimit = Math.min(
-        Math.max(state.historyRenderLimit, INITIAL_CHAT_HISTORY_RENDER_WINDOW),
-        cap,
-      );
-    }
-  }
-
-  state.historyRenderSessionKey = props.sessionKey;
-  state.historyRenderMessagesRef = messages;
-  state.historyRenderMessageCount = messages.length;
-  state.historyRenderLimit = Math.min(Math.max(1, state.historyRenderLimit), cap);
-  return state.historyRenderLimit;
-}
-
-function maybeExpandChatHistoryRenderWindow(
-  state: ChatThreadState,
-  event: Event,
-  requestUpdate: () => void,
-) {
-  const target = event.currentTarget;
-  if (!(target instanceof HTMLElement)) {
-    return;
-  }
-  const scrollTop = Math.max(0, target.scrollTop);
-  const previousScrollTop = state.historyRenderLastScrollTop;
-  state.historyRenderLastScrollTop = scrollTop;
-  const distanceFromBottom = Math.max(0, target.scrollHeight - scrollTop - target.clientHeight);
-  const isTop = scrollTop <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
-  const isBottomAutoScroll =
-    scrollTop > 0 && distanceFromBottom <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
-  const isTopScrollUp =
-    isTop &&
-    (scrollTop === 0 ||
-      (!isBottomAutoScroll && (previousScrollTop == null || scrollTop < previousScrollTop)));
-  if (!isTopScrollUp) {
-    return;
-  }
-  const cap = resolveChatHistoryRenderCap(state.historyRenderMessageCount);
-  if (state.historyRenderLimit >= cap) {
-    return;
-  }
-  state.historyRenderAnchorAdjustment = {
-    scrollHeight: target.scrollHeight,
-    scrollTop,
-  };
-  scheduleChatHistoryRenderAnchorPreservation(state, target);
-  state.historyRenderLimit = Math.min(
-    cap,
-    state.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH,
-  );
-  requestUpdate();
-}
-
-function scheduleChatHistoryRenderAnchorPreservation(state: ChatThreadState, thread: HTMLElement) {
-  const adjustment = state.historyRenderAnchorAdjustment;
-  if (!adjustment || state.historyRenderAnchorFrame != null) {
-    return;
-  }
-  state.historyRenderAnchorFrame = requestAnimationFrame(() => {
-    state.historyRenderAnchorFrame = null;
-    state.historyRenderAnchorAdjustment = null;
-    const heightDelta = thread.scrollHeight - adjustment.scrollHeight;
-    if (heightDelta <= 0) {
-      return;
-    }
-    thread.scrollTop = adjustment.scrollTop + heightDelta;
-  });
-}
-
-function scheduleChatHistoryRenderWindowFill(
-  state: ChatThreadState,
-  thread: HTMLElement | null,
-  requestUpdate: () => void,
-  scrollToBottom: () => void,
-) {
-  if (!thread || state.historyRenderExpansionFrame != null) {
-    return;
-  }
-  const cap = resolveChatHistoryRenderCap(state.historyRenderMessageCount);
-  if (state.historyRenderLimit >= cap) {
-    return;
-  }
-  state.historyRenderExpansionFrame = requestAnimationFrame(() => {
-    state.historyRenderExpansionFrame = null;
-    const nextCap = resolveChatHistoryRenderCap(state.historyRenderMessageCount);
-    if (state.historyRenderLimit >= nextCap) {
-      return;
-    }
-    const canScroll = thread.scrollHeight - thread.clientHeight > 1;
-    if (canScroll) {
-      return;
-    }
-    state.historyRenderLimit = Math.min(
-      nextCap,
-      state.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH,
-    );
-    requestUpdate();
-    scrollToBottom();
-  });
 }
 
 export function renderChatSearchBar(
@@ -785,7 +595,6 @@ export function renderChatThread(props: ChatThreadProps) {
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
   };
-  const historyRenderLimit = resolveChatHistoryRenderWindow(props);
   const deleted = getDeletedMessages(props.sessionKey);
   const locale = i18n.getLocale();
   const chatItems = buildCachedChatItems({
@@ -805,8 +614,6 @@ export function renderChatThread(props: ChatThreadProps) {
     loading: props.loading,
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
-    historyRenderLimit,
-    allowExpandedHistoryRenderLimit: props.renderAllLoadedHistory,
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
@@ -837,26 +644,15 @@ export function renderChatThread(props: ChatThreadProps) {
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
-  const handleChatThreadScroll = (event: Event) => {
-    maybeExpandChatHistoryRenderWindow(state, event, requestUpdate);
-    props.onChatScroll?.(event);
-  };
-
   return html`
     <div
       class="chat-thread ${isDirectThread ? "chat-thread--direct" : ""}"
       role="log"
       aria-live="polite"
-      ${ref((element) => {
-        const threadElement = element instanceof HTMLElement ? element : null;
-        scheduleChatHistoryRenderWindowFill(
-          state,
-          threadElement,
-          requestUpdate,
-          props.onScrollToBottom ?? (() => {}),
-        );
-      })}
-      @scroll=${handleChatThreadScroll}
+      tabindex="0"
+      @scroll=${props.onChatScroll}
+      @wheel=${props.onHistoryIntent}
+      @keydown=${props.onHistoryIntent}
       @mousedown=${beginNativeWindowDragFromTopInset}
       @click=${(event: Event) => {
         handleMarkdownCodeBlockCopy(event);
@@ -879,17 +675,7 @@ export function renderChatThread(props: ChatThreadProps) {
                         <span>${t("common.loading")}</span>
                       </div>
                     `
-                  : props.historyPagination.manualFallback
-                    ? html`
-                        <button
-                          class="btn btn--sm chat-history-fallback"
-                          type="button"
-                          @click=${props.historyPagination.onLoadOlder}
-                        >
-                          ${t("chat.loadOlder")}
-                        </button>
-                      `
-                    : nothing}
+                  : nothing}
               </div>
             `
           : nothing}

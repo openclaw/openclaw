@@ -48,6 +48,7 @@ type TestChatPane = HTMLElement & {
     index: number,
   ) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
+  handleTranscriptHistoryIntent: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
   transcriptScrollTop: number | null;
   syncHistoryObserver: () => void;
@@ -57,12 +58,15 @@ type TestChatPane = HTMLElement & {
   loadOlderMessages: () => Promise<void>;
   hasOlderMessages: () => boolean;
   restoreHistoryAnchor: () => void;
-  pendingHistoryAnchor: { sessionKey: string; scrollHeight: number; scrollTop: number } | null;
+  pendingHistoryAnchor: {
+    sessionKey: string;
+    element: HTMLElement;
+    viewportTop: number;
+  } | null;
   loadingOlder: boolean;
   catalogCursor: string | undefined;
   olderCursorsSeen: Set<string>;
   olderOffsetsSeen: Set<number>;
-  nativeHistoryExpanded: boolean;
   renderPaneHeader: (
     workspace: ReturnType<typeof createSessionWorkspaceProps>,
     tasks: ReturnType<typeof createBackgroundTasksProps>,
@@ -673,26 +677,28 @@ describe("chat pane catalog session lifecycle", () => {
     expect(state.handleChatScroll).toHaveBeenCalledTimes(2);
   });
 
-  it("re-arms a blocked auto-load when the manual fallback is clicked", async () => {
+  it("loads a blocked unscrollable transcript from renewed upward intent", async () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    // A short (non-scrollable) thread cannot emit a scroll event, so a blocked
-    // auto-load must be recoverable through the fallback's loadOlderMessages call.
-    state.sessionKey = "catalog:claude:gateway%3Alocal:thread-1";
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
     pane.historyAutoLoadBlocked = true;
-    pane.loadCatalogSession = vi.fn(async () => false);
     pane.hasOlderMessages = vi.fn(() => true);
+    pane.loadOlderMessages = vi.fn(async () => undefined);
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const thread = document.createElement("div");
+    const event = new WheelEvent("wheel", { deltaY: -1 });
+    Object.defineProperty(event, "currentTarget", { value: thread });
 
-    await pane.loadOlderMessages();
+    pane.handleTranscriptHistoryIntent(event);
+    pane.handleTranscriptHistoryIntent(event);
+    await Promise.resolve();
 
-    // loadOlderMessages clears the block on entry, so the retry is not stranded.
-    expect(pane.loadCatalogSession).toHaveBeenCalledOnce();
-    expect(pane.historyAutoLoadBlocked).toBe(true);
+    expect(pane.loadOlderMessages).toHaveBeenCalledOnce();
+    expect(pane.historyAutoLoadBlocked).toBe(false);
   });
 });
 
 describe("chat pane native history pagination", () => {
-  it("renders every row from a complete imported snapshot", () => {
+  it("does not request older rows from a complete imported snapshot", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     state.chatHistoryPagination = {
@@ -702,7 +708,6 @@ describe("chat pane native history pagination", () => {
     };
 
     expect(pane.hasOlderMessages()).toBe(false);
-    expect(pane.nativeHistoryExpanded).toBe(true);
   });
 
   it("auto-loads a visible sentinel when the initial tail is not scrollable", async () => {
@@ -841,11 +846,25 @@ describe("chat pane native history pagination", () => {
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
-    let scrollHeight = 600;
     const thread = document.createElement("div");
     thread.className = "chat-thread";
     thread.scrollTop = 40;
-    Object.defineProperty(thread, "scrollHeight", { get: () => scrollHeight });
+    let rowTop = 20;
+    thread.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 }) as DOMRect;
+    const row = document.createElement("div");
+    row.dataset.chatRowKey = "row-3";
+    Object.defineProperty(row, "isConnected", { value: true });
+    row.getBoundingClientRect = () =>
+      ({
+        top: rowTop,
+        bottom: rowTop + 20,
+        left: 0,
+        right: 100,
+        width: 100,
+        height: 20,
+      }) as DOMRect;
+    thread.append(row);
     pane.append(thread);
 
     await pane.loadOlderMessages();
@@ -859,10 +878,10 @@ describe("chat pane native history pagination", () => {
     expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 4 });
     expect(pane.pendingHistoryAnchor).toEqual({
       sessionKey: state.sessionKey,
-      scrollHeight: 600,
-      scrollTop: 40,
+      element: row,
+      viewportTop: 20,
     });
-    scrollHeight = 900;
+    rowTop = 320;
     pane.restoreHistoryAnchor();
     expect(thread.scrollTop).toBe(340);
     expect(pane.hasOlderMessages()).toBe(false);
@@ -892,6 +911,33 @@ describe("chat pane native history pagination", () => {
     deferred.resolve({ messages: [], hasMore: false, totalMessages: 4 });
     await Promise.all([first, second]);
     expect(pane.loadingOlder).toBe(false);
+  });
+
+  it("does not double-correct when native scroll anchoring preserved the visible row", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const thread = document.createElement("div");
+    thread.className = "chat-thread";
+    thread.scrollTop = 40;
+    thread.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 }) as DOMRect;
+    const row = document.createElement("div");
+    row.dataset.chatRowKey = "row-3";
+    Object.defineProperty(row, "isConnected", { value: true });
+    row.getBoundingClientRect = () =>
+      ({ top: 20, bottom: 40, left: 0, right: 100, width: 100, height: 20 }) as DOMRect;
+    thread.append(row);
+    pane.append(thread);
+    pane.pendingHistoryAnchor = {
+      sessionKey: state.sessionKey,
+      element: row,
+      viewportTop: 20,
+    };
+
+    pane.restoreHistoryAnchor();
+
+    expect(thread.scrollTop).toBe(40);
+    expect(pane.pendingHistoryAnchor).toBeNull();
   });
 
   it("refreshes the tail instead of mixing an older page from a replacement session", async () => {

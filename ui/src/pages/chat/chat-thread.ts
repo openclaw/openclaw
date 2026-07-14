@@ -12,10 +12,6 @@ import type {
   ToolCard,
 } from "../../lib/chat/chat-types.ts";
 import {
-  CHAT_HISTORY_RENDER_CHAR_BUDGET,
-  CHAT_HISTORY_RENDER_LIMIT,
-} from "../../lib/chat/chat-types.ts";
-import {
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
@@ -67,8 +63,6 @@ type BuildChatItemsProps = {
   loading?: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
-  historyRenderLimit?: number;
-  allowExpandedHistoryRenderLimit?: boolean;
 };
 
 type CachedChatItems = {
@@ -1011,9 +1005,7 @@ function rawMessageTimestamp(message: unknown): number | null {
 function chatItemTimestamp(item: ChatItem): number | null {
   switch (item.kind) {
     case "message":
-      return item.key === "chat:history:notice"
-        ? Number.NEGATIVE_INFINITY
-        : rawMessageTimestamp(item.message);
+      return rawMessageTimestamp(item.message);
     case "divider":
       return item.timestamp;
     case "stream":
@@ -1087,175 +1079,8 @@ function sortChatItemsByVisibleTime(
     .map(({ item }) => item);
 }
 
-type RawContentEstimateState = {
-  visited: WeakSet<object>;
-  nodes: number;
-};
-
-const RAW_CONTENT_ESTIMATE_MAX_DEPTH = 8;
-const RAW_CONTENT_ESTIMATE_MAX_NODES = 400;
-
-function addCapped(total: number, amount: number, limit: number): number {
-  return Math.min(limit, total + Math.max(0, amount));
-}
-
-function estimateRawContentChars(
-  value: unknown,
-  limit: number,
-  state: RawContentEstimateState,
-  depth = 0,
-): number {
-  if (limit <= 0) {
-    return 0;
-  }
-  if (typeof value === "string") {
-    return Math.min(value.length, limit);
-  }
-  if (!value || typeof value !== "object") {
-    return 0;
-  }
-  if (depth >= RAW_CONTENT_ESTIMATE_MAX_DEPTH || state.nodes >= RAW_CONTENT_ESTIMATE_MAX_NODES) {
-    return 0;
-  }
-  if (state.visited.has(value)) {
-    return 0;
-  }
-  state.visited.add(value);
-  state.nodes += 1;
-
-  if (Array.isArray(value)) {
-    let chars = 0;
-    for (const item of value) {
-      chars = addCapped(
-        chars,
-        estimateRawContentChars(item, limit - chars, state, depth + 1),
-        limit,
-      );
-      if (chars >= limit) {
-        break;
-      }
-    }
-    return chars;
-  }
-
-  const record = value as Record<string, unknown>;
-  let chars = 0;
-  for (const key of ["text", "content", "args", "arguments", "input"] as const) {
-    chars = addCapped(
-      chars,
-      estimateRawContentChars(record[key], limit - chars, state, depth + 1),
-      limit,
-    );
-    if (chars >= limit) {
-      break;
-    }
-  }
-  return chars;
-}
-
-function estimateMessageRenderChars(message: unknown, limit: number): number {
-  const record = asRecord(message);
-  if (!record) {
-    return 1;
-  }
-  const state: RawContentEstimateState = { visited: new WeakSet<object>(), nodes: 0 };
-  let chars = 0;
-  for (const key of ["content", "text", "args", "arguments", "input"] as const) {
-    chars = addCapped(chars, estimateRawContentChars(record[key], limit - chars, state), limit);
-    if (chars >= limit) {
-      break;
-    }
-  }
-  return Math.max(chars, 1);
-}
-
-function isHiddenToolMessage(message: unknown, showToolCalls: boolean): boolean {
-  if (showToolCalls) {
-    return false;
-  }
-  return safeNormalizeMessage(message)?.role.toLowerCase() === "toolresult";
-}
-
-function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean): number {
-  let count = 0;
-  for (const message of messages) {
-    if (!isHiddenToolMessage(message, showToolCalls)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function resolveHistoryRenderLimit(limit: number | undefined, allowExpanded = false): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return CHAT_HISTORY_RENDER_LIMIT;
-  }
-  const normalized = Math.max(1, Math.floor(limit));
-  return allowExpanded ? normalized : Math.min(CHAT_HISTORY_RENDER_LIMIT, normalized);
-}
-
-function resolveHistoryStartIndex(
-  messages: unknown[],
-  showToolCalls: boolean,
-  renderLimit: number,
-): number {
-  let visibleCount = 0;
-  let renderChars = 0;
-  let startIndex = messages.length;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (isHiddenToolMessage(message, showToolCalls)) {
-      continue;
-    }
-    if (visibleCount >= renderLimit) {
-      break;
-    }
-    const remainingBudget = Math.max(1, CHAT_HISTORY_RENDER_CHAR_BUDGET - renderChars + 1);
-    const messageChars = estimateMessageRenderChars(message, remainingBudget);
-    if (visibleCount > 0 && renderChars + messageChars > CHAT_HISTORY_RENDER_CHAR_BUDGET) {
-      break;
-    }
-    renderChars += messageChars;
-    visibleCount += 1;
-    startIndex = index;
-  }
-  return startIndex;
-}
-
-function expandHistoryStartForPersistedPreviews(messages: unknown[], historyStart: number): number {
-  const firstVisible = safeNormalizeMessage(messages[historyStart]);
-  if (!firstVisible || normalizeRoleForGrouping(firstVisible.role).toLowerCase() !== "assistant") {
-    return historyStart;
-  }
-  let expandedStart = historyStart;
-  for (let index = historyStart - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    const normalized = safeNormalizeMessage(message);
-    if (!normalized) {
-      continue;
-    }
-    const normalizedRole = normalized.role.toLowerCase();
-    const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-    if (role === "user" || role === "system") {
-      break;
-    }
-    if (normalizedRole === "toolresult" && extractChatMessagePreview(message)) {
-      expandedStart = index;
-      continue;
-    }
-    if (role === "assistant" && hasRenderableNormalizedMessage(message)) {
-      break;
-    }
-  }
-  return expandedStart;
-}
-
 function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
-  const historyRenderLimit = resolveHistoryRenderLimit(
-    props.historyRenderLimit,
-    props.allowExpandedHistoryRenderLimit,
-  );
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
@@ -1278,28 +1103,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
       persistedCanvasIdentities.add(baseIdentity);
     }
   }
-  const historyStart = resolveHistoryStartIndex(history, props.showToolCalls, historyRenderLimit);
-  const previewHistoryStart = expandHistoryStartForPersistedPreviews(history, historyStart);
-  const hiddenHistoryCount = countVisibleHistoryMessages(
-    history.slice(0, previewHistoryStart),
-    props.showToolCalls,
-  );
-  const visibleHistoryCount = countVisibleHistoryMessages(
-    history.slice(previewHistoryStart),
-    props.showToolCalls,
-  );
-  if (hiddenHistoryCount > 0) {
-    items.push({
-      kind: "message",
-      key: "chat:history:notice",
-      message: {
-        role: "system",
-        content: `Showing last ${visibleHistoryCount} messages (${hiddenHistoryCount} hidden).`,
-        timestamp: Date.now(),
-      },
-    });
-  }
-  for (let i = previewHistoryStart; i < history.length; i++) {
+  for (let i = 0; i < history.length; i++) {
     const msg = history[i];
     const normalized = safeNormalizeMessage(msg);
     if (!normalized) {
@@ -1735,9 +1539,7 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.runWorking === next.runWorking &&
     previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
-    previous.searchQuery === next.searchQuery &&
-    previous.historyRenderLimit === next.historyRenderLimit &&
-    previous.allowExpandedHistoryRenderLimit === next.allowExpandedHistoryRenderLimit
+    previous.searchQuery === next.searchQuery
   );
 }
 

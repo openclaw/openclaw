@@ -1613,7 +1613,7 @@ describe("buildCachedChatItems", () => {
     expect(groups).toStrictEqual([]);
   });
 
-  it("renders only the last 100 history messages and shows a hidden-count notice", () => {
+  it("renders all loaded history through one keyed row sequence", () => {
     const items = buildCachedChatItems(
       createProps({
         messages: Array.from({ length: 105 }, (_, index) => ({
@@ -1626,57 +1626,12 @@ describe("buildCachedChatItems", () => {
 
     const groups = items.filter((item) => item.kind === "group");
 
-    const noticeGroup = requireGroup(items[0]);
-    expect(noticeGroup.messages).toHaveLength(1);
-    const noticeMessage = messageRecord(noticeGroup);
-    expect(noticeMessage.role).toBe("system");
-    expect(noticeMessage.content).toBe("Showing last 100 messages (5 hidden).");
-    expect(groups).toHaveLength(101);
-    expect(messageRecord(groupAt(groups, 1)).content).toBe("message 5");
-    expect(groups.map((group) => messageRecord(group).content).at(-1)).toBe("message 104");
-  });
-
-  it("renders native history beyond the tail cap after scroll-back expands it", () => {
-    const items = buildCachedChatItems(
-      createProps({
-        allowExpandedHistoryRenderLimit: true,
-        historyRenderLimit: 140,
-        messages: Array.from({ length: 140 }, (_, index) => ({
-          role: index % 2 === 0 ? "user" : "assistant",
-          content: `message ${index}`,
-          timestamp: index,
-        })),
-      }),
-    );
-    const groups = items.filter((item) => item.kind === "group");
-
-    expect(groups).toHaveLength(140);
+    expect(groups).toHaveLength(105);
     expect(messageRecord(groupAt(groups, 0)).content).toBe("message 0");
-    expect(messageRecord(groupAt(groups, 139)).content).toBe("message 139");
-  });
-
-  it("honors a smaller history render window and preserves the hidden-count notice", () => {
-    const items = buildCachedChatItems(
-      createProps({
-        historyRenderLimit: 30,
-        messages: Array.from({ length: 105 }, (_, index) => ({
-          role: index % 2 === 0 ? "user" : "assistant",
-          content: `message ${index}`,
-          timestamp: index,
-        })),
-      }),
-    );
-
-    const groups = items.filter((item) => item.kind === "group");
-
-    const noticeGroup = requireGroup(items[0]);
-    expect(messageRecord(noticeGroup).content).toBe("Showing last 30 messages (75 hidden).");
-    expect(groups).toHaveLength(31);
-    expect(messageRecord(groupAt(groups, 1)).content).toBe("message 75");
     expect(groups.map((group) => messageRecord(group).content).at(-1)).toBe("message 104");
   });
 
-  it("budgets rendered history by tool-result content size", () => {
+  it("does not truncate loaded history by raw content size", () => {
     const largeOutput = "x".repeat(100_000);
     const items = buildCachedChatItems(
       createProps({
@@ -1693,14 +1648,12 @@ describe("buildCachedChatItems", () => {
         })),
       }),
     );
-
     const groups = items.filter((item) => item.kind === "group");
-    const noticeGroup = requireGroup(items[0]);
-    expect(messageRecord(noticeGroup).content).toBe("Showing last 2 messages (4 hidden).");
-    expect(groups).toHaveLength(2);
-    expect(groupAt(groups, 1).messages).toHaveLength(2);
-    expect(messageRecord(groupAt(groups, 1), 0).timestamp).toBe(4);
-    expect(messageRecord(groupAt(groups, 1), 1).timestamp).toBe(5);
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(6);
+    expect(messageRecord(groupAt(groups, 0), 0).timestamp).toBe(0);
+    expect(messageRecord(groupAt(groups, 0), 5).timestamp).toBe(5);
   });
 
   it("does not crash when history contains malformed entries", () => {
@@ -2263,43 +2216,6 @@ describe("buildCachedChatItems", () => {
     expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "user", "assistant"]);
     expect(canvasBlocksIn(groupAt(groups, 1))).toHaveLength(1);
     expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
-  });
-
-  it("keeps a persisted App preview with its history-cutoff assistant", () => {
-    const groups = messageGroups({
-      messages: [
-        { role: "user", content: "Show the App", timestamp: 1_000 },
-        mcpAppResult("mcp-app-cutoff", "call-cutoff", 1_001),
-        { role: "assistant", content: "Done", timestamp: 1_002 },
-      ],
-      toolMessages: [],
-      showToolCalls: false,
-      historyRenderLimit: 1,
-    });
-
-    const assistant = groups.find((group) => group.role === "assistant");
-    expect(assistant).toBeDefined();
-    expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
-  });
-
-  it("does not expand a persisted preview across a cutoff user turn", () => {
-    const firstResult = {
-      ...mcpAppResult("mcp-app-first", "call-first", 1_001),
-      timestamp: undefined,
-    };
-    const groups = messageGroups({
-      messages: [
-        { role: "user", content: "First request", timestamp: 1_000 },
-        firstResult,
-        { role: "user", content: "Second request", timestamp: 2_000 },
-        { role: "assistant", content: "Second response", timestamp: 2_001 },
-      ],
-      toolMessages: [{ ...firstResult }],
-      showToolCalls: false,
-      historyRenderLimit: 2,
-    });
-
-    expect(groups.flatMap((group) => canvasBlocksIn(group))).toStrictEqual([]);
   });
 
   it("does not lift generic view handles from non-canvas payloads", () => {
