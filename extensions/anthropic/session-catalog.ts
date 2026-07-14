@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
@@ -11,7 +9,6 @@ import type {
   SessionCatalogProvider,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
@@ -19,6 +16,7 @@ import {
   adoptedSourceKey,
   CLAUDE_LOCAL_SESSION_HOST_ID,
 } from "./session-catalog-adoption.js";
+import { importClaudeHistory } from "./session-catalog-history.js";
 import { createNodeListFailedError, resolveNodeLabel } from "./session-catalog-node-helpers.js";
 import {
   currentClaudeSessionCatalogConfig,
@@ -45,6 +43,7 @@ import type {
   ClaudeSessionCatalogSession,
   ClaudeSessionTranscriptPage,
 } from "./session-catalog-types.js";
+import * as upstream from "./session-upstream-activity.js";
 
 export type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 export type {
@@ -1065,72 +1064,6 @@ async function readBoundedClaudeHistory(params: {
   return items;
 }
 
-function importedClaudeMessage(
-  item: ClaudeTranscriptItem,
-  fallbackTimestamp: number,
-): AgentMessage {
-  const timestamp = item.timestamp ? Date.parse(item.timestamp) : fallbackTimestamp;
-  const text = item.text?.trim() || "[Unsupported Claude transcript item]";
-  if (item.type === "userMessage") {
-    return { role: "user", content: text, timestamp } as AgentMessage;
-  }
-  const prefix =
-    item.type === "reasoning"
-      ? "Thinking\n\n"
-      : item.type === "toolCall"
-        ? "Tool call\n\n"
-        : item.type === "toolResult"
-          ? "Tool result\n\n"
-          : "";
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: `${prefix}${text}` }],
-    timestamp,
-    api: "anthropic-messages",
-    provider: CLAUDE_CLI_BACKEND_ID,
-    model: "native-history",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-  } as AgentMessage;
-}
-
-async function importClaudeHistory(params: {
-  items: ClaudeTranscriptItem[];
-  threadId: string;
-  sessionFile: string;
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  cwd?: string;
-  config: OpenClawConfig;
-}): Promise<void> {
-  const items = params.items.toReversed();
-  await withSessionTranscriptWriteLock(params, async (transcript) => {
-    for (const [index, item] of items.entries()) {
-      // The idempotency key rides on the message so recovery re-imports dedupe
-      // against the transcript instead of appending duplicate history.
-      const message = {
-        ...(importedClaudeMessage(item, Date.now() + index) as unknown as Record<string, unknown>),
-        idempotencyKey: `claude-catalog:${params.threadId}:${item.uuid ?? index}`,
-      } as unknown as AgentMessage;
-      await transcript.appendMessage({
-        message,
-        idempotencyLookup: "scan",
-        cwd: params.cwd,
-      });
-    }
-  });
-}
-
-const claudeContinueOperations = new Map<string, Promise<{ sessionKey: string }>>();
-
 export async function resolveNodeClaudeRecord(params: {
   runtime: PluginRuntime;
   nodeId: string;
@@ -1167,11 +1100,22 @@ async function continueClaudeSession(
   threadId: string,
 ): Promise<{ sessionKey: string }> {
   const sourceKey = adoptedSourceKey(hostId, threadId);
+  const linkSession = async (sessionKey: string, history?: ClaudeTranscriptItem[]) =>
+    await upstream.linkContinued({
+      sessionKey,
+      hostId,
+      threadId,
+      ...(history ? { history } : {}),
+      listLocalSessions: listClaudeSessions,
+      readRemote: async () =>
+        (await readClaudeSessionTranscript({ runtime: api.runtime, hostId, threadId, limit: 1 }))
+          .items,
+    });
   const existing = listBoundClaudeSessions(api).get(sourceKey);
   if (existing) {
-    return { sessionKey: existing };
+    return await linkSession(existing);
   }
-  const pending = claudeContinueOperations.get(sourceKey);
+  const pending = upstream.continueOperations.get(sourceKey);
   if (pending) {
     return await pending;
   }
@@ -1257,21 +1201,21 @@ async function continueClaudeSession(
           return { pluginExtensions: { anthropic: { sessionCatalog: marker } } };
         },
       });
-      return { sessionKey: created.key };
+      return await linkSession(created.key, history);
     } catch (error) {
       const raced = listBoundClaudeSessions(api).get(sourceKey);
       if (raced) {
-        return { sessionKey: raced };
+        return await linkSession(raced, history);
       }
       throw error;
     }
   })();
-  claudeContinueOperations.set(sourceKey, operation);
+  upstream.continueOperations.set(sourceKey, operation);
   try {
     return await operation;
   } finally {
-    if (claudeContinueOperations.get(sourceKey) === operation) {
-      claudeContinueOperations.delete(sourceKey);
+    if (upstream.continueOperations.get(sourceKey) === operation) {
+      upstream.continueOperations.delete(sourceKey);
     }
   }
 }
@@ -1374,6 +1318,17 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
         ...request,
         listClaudeSessions,
         resolveNodeClaudeRecord,
+      }),
+    checkUpstreamActivity: async (probes) =>
+      await upstream.checkClaudeUpstreamActivity(probes, async (probe) => {
+        return (
+          await readClaudeSessionTranscript({
+            runtime: api.runtime,
+            hostId: probe.hostId,
+            threadId: probe.threadId,
+            limit: MAX_TRANSCRIPT_LIMIT,
+          })
+        ).items;
       }),
   };
   api.registerSessionCatalog(provider);

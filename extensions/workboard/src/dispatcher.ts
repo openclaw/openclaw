@@ -14,6 +14,7 @@ import type { WorkboardCard, WorkboardExecution, WorkboardWorkspace } from "./ty
 import {
   assertCanonicalWorkboardRootAccess,
   assertWorkboardWorkspaceSourceAccess,
+  WORKBOARD_REQUIRED_WORKER_TOOLS,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
 
@@ -408,6 +409,7 @@ export async function dispatchAndStartWorkboardCards(params: {
           ownerId,
           token: claimValue,
         }),
+        toolsAlsoAllow: [...WORKBOARD_REQUIRED_WORKER_TOOLS],
         ...(params.options?.provider ? { provider: params.options.provider } : {}),
         ...(params.options?.model ? { model: params.options.model } : {}),
         lane: `workboard:${cardBoardId(card)}:${card.id}`,

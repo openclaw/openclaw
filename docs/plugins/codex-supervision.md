@@ -99,6 +99,7 @@ Its private supervision binding uses the supervision connection for source
 reads, canonical branch creation, history injection, and every later turn. With
 the default local connection, that preserves the native user Codex home, auth,
 and provider configuration without changing the default for other sessions.
+Watched adopted Chats also participate in [session state awareness](/concepts/session-state).
 
 For the default local supervision connection, the store is shared with native
 Codex clients. OpenClaw does not assume that another client shares the same live
