@@ -241,7 +241,7 @@ export async function collectTypeScriptInventory(params) {
   const inventory = [];
 
   for (const filePath of params.files) {
-    const cacheKey = filePath;
+    const cacheKey = `${params.scriptKind ?? "auto"}:${filePath}`;
     let sourceFile = parsedTypeScriptSourceCache.get(cacheKey);
     if (!sourceFile) {
       let source = sourceTextCache.get(filePath);
@@ -257,6 +257,7 @@ export async function collectTypeScriptInventory(params) {
         source,
         params.ts.ScriptTarget.Latest,
         true,
+        params.scriptKind,
       );
       parsedTypeScriptSourceCache.set(cacheKey, sourceFile);
     }
