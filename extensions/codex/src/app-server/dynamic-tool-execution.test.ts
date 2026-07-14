@@ -327,6 +327,7 @@ describe("dynamic tool execution helpers", () => {
       ],
     });
     expect((await response).diagnosticTerminalReason).toBe("timed_out");
+    expect((await response).executionStarted).toBe(true);
     expect(capturedSignal?.aborted).toBe(true);
     expect(onFallbackSelected).toHaveBeenCalledOnce();
     expect(onTimeout).toHaveBeenCalledTimes(1);
@@ -346,6 +347,68 @@ describe("dynamic tool execution helpers", () => {
       },
       isError: true,
     });
+  });
+
+  it("marks a timeout during pre-execution hooks as unstarted", async () => {
+    vi.useFakeTimers();
+    const consumeStarted = vi.fn(() => false);
+    const response = handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-prehook-timeout",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "hello" },
+      },
+      toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
+      signal: new AbortController().signal,
+      timeoutMs: 1,
+      executionState: {
+        runId: "run-prehook-timeout",
+        toolExecutionRuntime: {
+          consumeStarted,
+          peekArguments: () => undefined,
+          peekStarted: () => false,
+        },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(response).resolves.toMatchObject({ executionStarted: false, success: false });
+    expect((await response).sideEffectEvidence).toBeUndefined();
+    expect(consumeStarted).toHaveBeenCalledWith("call-prehook-timeout", "run-prehook-timeout");
+  });
+
+  it("uses the dispatched fallback for untracked custom tools", async () => {
+    vi.useFakeTimers();
+    const response = handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-untracked-timeout",
+        namespace: null,
+        tool: "custom_mutation",
+        arguments: {},
+      },
+      toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
+      signal: new AbortController().signal,
+      timeoutMs: 1,
+      executionState: {
+        runId: "run-untracked-timeout",
+        toolExecutionRuntime: {
+          consumeStarted: () => undefined,
+          peekArguments: () => undefined,
+          peekStarted: () => undefined,
+        },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(response).resolves.toMatchObject({ executionStarted: true, success: false });
+    expect((await response).sideEffectEvidence).toBe(true);
   });
 
   it("lets a structured sessions_send timeout win after setup work", async () => {
@@ -420,6 +483,7 @@ describe("dynamic tool execution helpers", () => {
       ],
     });
     expect(result.diagnosticTerminalReason).toBe("cancelled");
+    expect(result.executionStarted).toBe(false);
     expect(handleToolCall).not.toHaveBeenCalled();
     expect(onAgentToolResult).toHaveBeenCalledOnce();
     expect(onAgentToolResult).toHaveBeenCalledWith({
@@ -626,6 +690,14 @@ describe("dynamic tool execution helpers", () => {
       },
       signal: new AbortController().signal,
       timeoutMs: 1,
+      executionState: {
+        runId: "run-timeout",
+        toolExecutionRuntime: {
+          consumeStarted: () => true,
+          peekArguments: () => ({ action: "poll", sessionId: "adjusted-session" }),
+          peekStarted: () => true,
+        },
+      },
     });
 
     await vi.advanceTimersByTimeAsync(1);
@@ -638,6 +710,10 @@ describe("dynamic tool execution helpers", () => {
           text: "OpenClaw dynamic tool call timed out after 1ms while waiting for process action=poll sessionId=process-session. This is a tool RPC timeout, not a session idle timeout.",
         },
       ],
+    });
+    await expect(response).resolves.toMatchObject({ executionStarted: true });
+    await expect(response).resolves.toMatchObject({
+      executedArguments: { action: "poll", sessionId: "adjusted-session" },
     });
     expect(warn).toHaveBeenCalledWith("codex dynamic tool call timed out", {
       tool: "process",
@@ -704,6 +780,18 @@ describe("dynamic tool execution helpers", () => {
       enumerable: false,
       value: true,
     });
+    Object.defineProperties(response, {
+      executedArguments: {
+        configurable: true,
+        enumerable: false,
+        value: { action: "send", to: "channel:123" },
+      },
+      executionStarted: {
+        configurable: true,
+        enumerable: false,
+        value: true,
+      },
+    });
 
     const protocolResponse = toCodexDynamicToolProtocolResponse(response);
     const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
@@ -713,6 +801,8 @@ describe("dynamic tool execution helpers", () => {
       success: true,
     });
     expect(Object.keys(protocolResponse)).not.toContain("asyncStarted");
+    expect("executionStarted" in protocolResponse).toBe(false);
+    expect("executedArguments" in protocolResponse).toBe(false);
     expect(progressResponse).toEqual({
       contentItems: [{ type: "inputText", text: "Background task started." }],
       details: { async: true, status: "started" },

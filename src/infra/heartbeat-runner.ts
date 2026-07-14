@@ -24,15 +24,13 @@ import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lane
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
-import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
-  getHeartbeatToolNotificationText,
-  resolveHeartbeatToolResponseFromReplyResult,
-  type HeartbeatToolResponse,
-} from "../auto-reply/heartbeat-tool-response.js";
+  resolveHeartbeatReplyPayload,
+  resolveHeartbeatTerminalToolFailure,
+} from "../auto-reply/heartbeat-reply-payload.js";
+import { resolveHeartbeatToolResponseFromReplyResult } from "../auto-reply/heartbeat-tool-response.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
@@ -43,6 +41,7 @@ import {
   stripHeartbeatToken,
   type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
+import { copyReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
 import {
@@ -107,7 +106,6 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
@@ -118,6 +116,11 @@ import {
   resolveActiveHoursTimezone,
 } from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
+import {
+  normalizeHeartbeatReply,
+  normalizeHeartbeatToolNotification,
+  stripTrailingHeartbeatNotifyFalse,
+} from "./heartbeat-delivery-normalization.js";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
@@ -134,6 +137,7 @@ import {
   seekNextActivePhaseDueMs,
 } from "./heartbeat-schedule.js";
 import { isHeartbeatEnabledForAgent, resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
+import { handleHeartbeatTerminalToolFailure } from "./heartbeat-terminal-tool-failure.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -824,109 +828,8 @@ async function restoreHeartbeatUpdatedAt(params: {
   );
 }
 
-function stripLeadingHeartbeatResponsePrefix(
-  text: string,
-  responsePrefix: string | undefined,
-): string {
-  const normalizedPrefix = responsePrefix?.trim();
-  if (!normalizedPrefix) {
-    return text;
-  }
-
-  // Require a boundary after the configured prefix so short prefixes like "Hi"
-  // do not strip the beginning of normal words like "History".
-  const prefixPattern = new RegExp(
-    `^${escapeRegExp(normalizedPrefix)}(?=$|\\s|[\\p{P}\\p{S}])\\s*`,
-    "iu",
-  );
-  return text.replace(prefixPattern, "");
-}
-
-type NormalizedHeartbeatDelivery = {
-  shouldSkip: boolean;
-  text: string;
-  hasMedia: boolean;
-  isInternalPlaceholderOnly: boolean;
-  silent?: boolean;
-};
-
-function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
-  let remaining = text.trim();
-  if (!remaining) {
-    return false;
-  }
-
-  while (remaining.startsWith(STREAM_ERROR_FALLBACK_TEXT)) {
-    remaining = remaining.slice(STREAM_ERROR_FALLBACK_TEXT.length).trimStart();
-  }
-  return remaining.length === 0;
-}
-
-const TRAILING_HEARTBEAT_NOTIFY_FALSE_RE = /(?:^|[\r\n])[ \t]*notify=false[ \t]*(?:\r?\n[ \t]*)*$/i;
-
 function truncateHeartbeatPreview(value: string | undefined): string | undefined {
   return value ? truncateUtf16Safe(value, 200) : undefined;
-}
-
-function stripTrailingHeartbeatNotifyFalse(text: string): { text: string; silent: boolean } {
-  const match = TRAILING_HEARTBEAT_NOTIFY_FALSE_RE.exec(text);
-  if (!match) {
-    return { text, silent: false };
-  }
-  return { text: text.slice(0, match.index).trimEnd(), silent: true };
-}
-
-function normalizeHeartbeatReply(
-  payload: ReplyPayload,
-  responsePrefix: string | undefined,
-  ackMaxChars: number,
-): NormalizedHeartbeatDelivery {
-  const rawText = typeof payload.text === "string" ? payload.text : "";
-  const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
-  const stripped = stripHeartbeatToken(textForStrip, {
-    mode: "heartbeat",
-    maxAckChars: ackMaxChars,
-  });
-  const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-  const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
-  const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
-  if ((stripped.shouldSkip || isInternalPlaceholderOnly) && !hasMedia) {
-    return {
-      shouldSkip: true,
-      text: "",
-      hasMedia,
-      isInternalPlaceholderOnly,
-      ...(notifyFalse.silent ? { silent: true } : {}),
-    };
-  }
-  let finalText = isInternalPlaceholderOnly ? "" : notifyFalse.text;
-  if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
-    finalText = `${responsePrefix} ${finalText}`;
-  }
-  const shouldSkip = !hasMedia && finalText.trim().length === 0;
-  return {
-    shouldSkip,
-    text: finalText,
-    hasMedia,
-    isInternalPlaceholderOnly,
-    ...(notifyFalse.silent ? { silent: true } : {}),
-  };
-}
-
-function normalizeHeartbeatToolNotification(
-  response: HeartbeatToolResponse,
-  responsePrefix: string | undefined,
-): NormalizedHeartbeatDelivery {
-  let finalText = getHeartbeatToolNotificationText(response);
-  if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
-    finalText = `${responsePrefix} ${finalText}`;
-  }
-  return {
-    shouldSkip: false,
-    text: finalText,
-    hasMedia: false,
-    isInternalPlaceholderOnly: false,
-  };
 }
 
 type HeartbeatSkipReason = "empty-heartbeat-file";
@@ -1987,6 +1890,7 @@ export async function runHeartbeatOnce(opts: {
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
+    const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     if (
       !heartbeatToolResponse &&
@@ -2008,7 +1912,7 @@ export async function runHeartbeatOnce(opts: {
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
     const responsePrefix = resolveHeartbeatResponsePrefix();
 
-    if (heartbeatToolResponse && !heartbeatToolResponse.notify) {
+    if (heartbeatToolResponse && !heartbeatToolResponse.notify && !heartbeatTerminalToolFailure) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -2073,16 +1977,19 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const normalized = heartbeatToolResponse
-      ? normalizeHeartbeatToolNotification(heartbeatToolResponse, responsePrefix)
-      : replyPayload
+    const normalized =
+      heartbeatTerminalToolFailure && replyPayload
         ? normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars)
-        : {
-            shouldSkip: true,
-            text: "",
-            hasMedia: false,
-            isInternalPlaceholderOnly: false,
-          };
+        : heartbeatToolResponse
+          ? normalizeHeartbeatToolNotification(heartbeatToolResponse, responsePrefix)
+          : replyPayload
+            ? normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars)
+            : {
+                shouldSkip: true,
+                text: "",
+                hasMedia: false,
+                isInternalPlaceholderOnly: false,
+              };
     // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
     // Also, if normalized.text is empty due to token stripping but we have exec completion,
@@ -2115,6 +2022,77 @@ export async function runHeartbeatOnce(opts: {
       normalized.shouldSkip &&
       !normalized.hasMedia &&
       (!hasRelayableExecCompletion || normalized.isInternalPlaceholderOnly);
+    if (heartbeatTerminalToolFailure) {
+      const failureChannel = delivery.channel;
+      const failureTarget = delivery.to;
+      const heartbeatPlugin =
+        failureChannel !== "none" ? resolveHeartbeatChannelPlugin(failureChannel) : undefined;
+      const checkReady = heartbeatPlugin?.heartbeat?.checkReady;
+      return await handleHeartbeatTerminalToolFailure({
+        failure: heartbeatTerminalToolFailure,
+        ...(heartbeatToolResponse ? { response: heartbeatToolResponse } : {}),
+        normalized,
+        shouldSkipMain,
+        delivery,
+        showAlerts: visibility.showAlerts,
+        useIndicator: visibility.useIndicator,
+        startedAt,
+        preview: truncateHeartbeatPreview,
+        restoreUpdatedAt: async () => {
+          await restoreHeartbeatUpdatedAt({
+            storePath,
+            sessionKey,
+            updatedAt: previousUpdatedAt,
+          });
+        },
+        ...(checkReady
+          ? {
+              checkReady: async () =>
+                await checkReady({ cfg, accountId: delivery.accountId, deps: opts.deps }),
+            }
+          : {}),
+        ...(failureChannel !== "none" && failureTarget
+          ? {
+              deliver: async () => {
+                const send = await sendDurableMessageBatch({
+                  cfg,
+                  channel: failureChannel,
+                  to: failureTarget,
+                  accountId: delivery.accountId,
+                  session: outboundSession,
+                  identity: outboundIdentity,
+                  threadId: delivery.threadId,
+                  payloads: [
+                    copyReplyPayloadMetadata(replyPayload, {
+                      ...replyPayload,
+                      text: normalized.text || undefined,
+                    }),
+                  ],
+                  deps: opts.deps,
+                  silent: normalized.silent,
+                });
+                if (send.status === "failed" || send.status === "partial_failed") {
+                  throw send.error;
+                }
+                return send.status === "sent" ? "sent" : "suppressed";
+              },
+            }
+          : {}),
+        clearSatisfiedPendingFinalDelivery,
+        onChannelNotReady: (reason) => {
+          log.info("heartbeat: channel not ready for terminal tool failure", {
+            channel: failureChannel,
+            reason,
+          });
+        },
+        onDeliveryError: (error) => {
+          log.warn("heartbeat: terminal tool failure alert delivery failed", {
+            channel: failureChannel,
+            error: formatErrorMessage(error),
+          });
+        },
+      });
+    }
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,

@@ -17,6 +17,11 @@ import {
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  createFailedDynamicToolResponse,
+  readDynamicToolExecutionState,
+  type CodexDynamicToolRuntimeResponse,
+} from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -144,10 +149,18 @@ export async function handleDynamicToolCallWithTimeout(params: {
   onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
   onFallbackSelected?: () => void;
   onTimeout?: () => void;
-}): Promise<CodexDynamicToolCallResponse> {
+  executionState?: Pick<EmbeddedRunAttemptParams, "runId" | "toolExecutionRuntime">;
+}): Promise<CodexDynamicToolRuntimeResponse> {
   // Timeout or run abort can win while a tool ignores cancellation. Keep the
   // private observer terminal result exactly once across those competing paths.
   let didNotifyAgentToolResult = false;
+  const readExecutionState = (fallback: boolean) =>
+    readDynamicToolExecutionState(params.executionState, params.call.callId, fallback);
+  const consumeExecutionTracking = () =>
+    params.executionState?.toolExecutionRuntime?.consumeStarted(
+      params.call.callId,
+      params.executionState.runId,
+    );
   const notifyAgentToolResult = (
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentToolResult"]>>[0],
   ) => {
@@ -181,7 +194,8 @@ export async function handleDynamicToolCallWithTimeout(params: {
     const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
     params.onFallbackSelected?.();
     notifyFailedToolResult(message, terminalReason);
-    return failedDynamicToolResponse(message, {
+    return createFailedDynamicToolResponse(message, {
+      executionStarted: false,
       terminalReason,
     });
   }
@@ -189,24 +203,30 @@ export async function handleDynamicToolCallWithTimeout(params: {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
-  let resolveAbort: ((response: CodexDynamicToolCallResponse) => void) | undefined;
+  let resolveAbort: ((response: CodexDynamicToolRuntimeResponse) => void) | undefined;
   const abortFromRun = () => {
     const message = "OpenClaw dynamic tool call aborted.";
     const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
     params.onFallbackSelected?.();
     controller.abort(params.signal.reason ?? new Error(message));
     notifyFailedToolResult(message, terminalReason);
+    const executionState = readExecutionState(true);
+    consumeExecutionTracking();
     resolveAbort?.(
-      failedDynamicToolResponse(message, {
-        sideEffectEvidence: true,
+      createFailedDynamicToolResponse(message, {
+        executionStarted: executionState.executionStarted,
+        ...(executionState.executedArguments
+          ? { executedArguments: executionState.executedArguments }
+          : {}),
+        sideEffectEvidence: executionState.executionStarted,
         terminalReason,
       }),
     );
   };
-  const abortPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
+  const abortPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
     resolveAbort = resolve;
   });
-  const timeoutPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
+  const timeoutPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
     const timeoutMs = clampDynamicToolTimeoutMs(params.timeoutMs);
     timeout = setTimeout(() => {
       timedOut = true;
@@ -219,9 +239,15 @@ export async function handleDynamicToolCallWithTimeout(params: {
         consoleMessage: timeoutDetails.consoleMessage,
       });
       notifyFailedToolResult(timeoutDetails.responseMessage, "timed_out");
+      const executionState = readExecutionState(true);
+      consumeExecutionTracking();
       resolve(
-        failedDynamicToolResponse(timeoutDetails.responseMessage, {
-          sideEffectEvidence: true,
+        createFailedDynamicToolResponse(timeoutDetails.responseMessage, {
+          executionStarted: executionState.executionStarted,
+          ...(executionState.executedArguments
+            ? { executedArguments: executionState.executedArguments }
+            : {}),
+          sideEffectEvidence: executionState.executionStarted,
           terminalReason: "timed_out",
         }),
       );
@@ -256,8 +282,13 @@ export async function handleDynamicToolCallWithTimeout(params: {
       : resolveToolExecutionErrorKind(error);
     const message = formatToolExecutionErrorMessage(error, "OpenClaw dynamic tool call failed.");
     notifyFailedToolResult(message, terminalReason);
-    return failedDynamicToolResponse(message, {
-      sideEffectEvidence: true,
+    const executionState = readExecutionState(true);
+    return createFailedDynamicToolResponse(message, {
+      ...(executionState.executedArguments
+        ? { executedArguments: executionState.executedArguments }
+        : {}),
+      executionStarted: executionState.executionStarted,
+      sideEffectEvidence: executionState.executionStarted,
       terminalReason,
     });
   } finally {
@@ -282,40 +313,9 @@ function readDynamicToolResponseText(response: CodexDynamicToolCallResponse): st
   return text || "OpenClaw dynamic tool call failed.";
 }
 
-function failedDynamicToolResponse(
-  message: string,
-  options?: {
-    sideEffectEvidence?: boolean;
-    terminalReason?: "failed" | "cancelled" | "timed_out";
-  },
-): CodexDynamicToolCallResponse {
-  const response: CodexDynamicToolCallResponse = {
-    contentItems: [{ type: "inputText", text: message }],
-    success: false,
-  };
-  Object.defineProperty(response, "diagnosticTerminalType", {
-    configurable: true,
-    enumerable: false,
-    value: "error",
-  });
-  Object.defineProperty(response, "diagnosticTerminalReason", {
-    configurable: true,
-    enumerable: false,
-    value: options?.terminalReason ?? "failed",
-  });
-  if (options?.sideEffectEvidence === true) {
-    Object.defineProperty(response, "sideEffectEvidence", {
-      configurable: true,
-      enumerable: false,
-      value: true,
-    });
-  }
-  return response;
-}
-
 /** Strips OpenClaw-only metadata before sending a dynamic tool response to Codex. */
 export function toCodexDynamicToolProtocolResponse(
-  response: CodexDynamicToolCallResponse,
+  response: CodexDynamicToolRuntimeResponse,
 ): CodexDynamicToolCallResponse {
   return {
     contentItems: response.contentItems,
@@ -325,7 +325,7 @@ export function toCodexDynamicToolProtocolResponse(
 
 /** Adds async-started progress details when a tool result continues out of band. */
 export function toCodexDynamicToolProgressResponse(
-  response: CodexDynamicToolCallResponse,
+  response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
 ): CodexDynamicToolCallResponse & { details?: { async: true; status: "started" } } {
   if (response.asyncStarted !== true) {

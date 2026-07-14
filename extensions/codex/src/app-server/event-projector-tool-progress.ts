@@ -6,6 +6,7 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveCodexDynamicToolErrorState } from "./dynamic-tool-mutation-state.js";
 import {
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
@@ -125,6 +126,10 @@ export class CodexToolProgressProjection {
     callId: string;
     tool: string;
     asyncStarted?: boolean;
+    executionStarted?: boolean;
+    mutationState?: ReturnType<
+      NonNullable<EmbeddedRunAttemptParams["toolMutationRuntime"]>["classify"]
+    >;
     success: boolean;
     terminalType?: "blocked" | "completed" | "error";
     sideEffectEvidence?: boolean;
@@ -138,18 +143,11 @@ export class CodexToolProgressProjection {
       ...(params.asyncStarted === true ? { asyncStarted: true } : {}),
       ...(!params.success ? { isError: true } : {}),
     });
-    if (!params.success && params.terminalType === "blocked") {
-      this.lastNativeToolError = {
-        toolName: params.tool,
-        error: resultText || "codex dynamic tool blocked",
-      };
-    } else if (
-      params.success &&
-      this.lastNativeToolError &&
-      !this.lastNativeToolError.mutatingAction
-    ) {
-      this.lastNativeToolError = undefined;
-    }
+    this.lastNativeToolError = resolveCodexDynamicToolErrorState(
+      this.lastNativeToolError,
+      { ...params, errorText: resultText, toolName: params.tool },
+      this.params.toolMutationRuntime,
+    );
     if (params.sideEffectEvidence === true) {
       this.sideEffectingDynamicIds.add(params.callId);
     }

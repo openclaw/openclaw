@@ -6,11 +6,49 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
+
+/** Minimal deterministic host mutation policy for Codex harness tests. */
+export function createCodexTestToolMutationRuntime(): NonNullable<
+  EmbeddedRunAttemptParams["toolMutationRuntime"]
+> {
+  return {
+    classify: (toolName, args) => {
+      const record =
+        typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+      const action = typeof record.action === "string" ? record.action : undefined;
+      const to = typeof record.to === "string" ? record.to : undefined;
+      const mutatingAction = toolName === "message" && action === "send";
+      const actionFingerprint = mutatingAction
+        ? [`tool=${toolName}`, `action=${action}`, ...(to ? [`to=${to}`] : [])].join("|")
+        : undefined;
+      return {
+        mutatingAction,
+        replaySafe: !mutatingAction,
+        ...(actionFingerprint ? { actionFingerprint } : {}),
+      };
+    },
+    mergeError: (next, current) =>
+      current?.mutatingAction && next.mutatingAction !== true ? current : next,
+    resolveSuccess: (current, success) =>
+      current?.toolName === success.toolName ? undefined : current,
+  };
+}
+
+export function createCodexTestToolExecutionRuntime(): NonNullable<
+  EmbeddedRunAttemptParams["toolExecutionRuntime"]
+> {
+  return {
+    consumeStarted: () => true,
+    peekArguments: () => undefined,
+    peekStarted: () => true,
+  };
+}
 
 /** Creates temp directories that are removed by the supplied test cleanup hook. */
 export function useAutoCleanupTempDirTracker(registerCleanup: (cleanup: () => void) => unknown) {

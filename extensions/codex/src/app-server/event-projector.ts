@@ -430,6 +430,10 @@ export class CodexAppServerEventProjector {
     callId: string;
     tool: string;
     asyncStarted?: boolean;
+    executionStarted?: boolean;
+    mutationState?: ReturnType<
+      NonNullable<EmbeddedRunAttemptParams["toolMutationRuntime"]>["classify"]
+    >;
     success: boolean;
     terminalType?: "blocked" | "completed" | "error";
     sideEffectEvidence?: boolean;

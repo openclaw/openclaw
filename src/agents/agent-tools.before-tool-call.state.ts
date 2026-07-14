@@ -6,6 +6,8 @@
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
+export const startedToolCallIds = new Set<string>();
+const trackedToolCallIds = new Set<string>();
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -37,6 +39,52 @@ export function consumePreExecutionBlockedToolCall(toolCallId: string, runId?: s
   return blocked;
 }
 
+/** Record that the OpenClaw wrapper owns execution-boundary evidence for this call. */
+export function recordToolExecutionTracked(toolCallId: string, runId?: string): void {
+  trackedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
+export function recordToolExecutionStarted(toolCallId: string, runId?: string): void {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  trackedToolCallIds.add(key);
+  startedToolCallIds.add(key);
+}
+
+/** Snapshot authoritative evidence without racing another terminal observer. */
+export function peekToolExecutionStarted(toolCallId: string, runId?: string): boolean {
+  return startedToolCallIds.has(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
+/** Return exact wrapped-call state, or undefined for untracked/custom producers. */
+export function peekTrackedToolExecutionStarted(
+  toolCallId: string,
+  runId?: string,
+): boolean | undefined {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  return trackedToolCallIds.has(key) ? startedToolCallIds.has(key) : undefined;
+}
+
+/** Consume authoritative evidence that the wrapped tool body started. */
+export function consumeToolExecutionStarted(toolCallId: string, runId?: string): boolean {
+  return consumeTrackedToolExecutionStarted(toolCallId, runId) === true;
+}
+
+/**
+ * Consume the wrapped call's exact execution state. Undefined means the call
+ * came from a producer that does not participate in OpenClaw boundary tracking.
+ */
+export function consumeTrackedToolExecutionStarted(
+  toolCallId: string,
+  runId?: string,
+): boolean | undefined {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const tracked = trackedToolCallIds.has(key);
+  const started = startedToolCallIds.has(key);
+  trackedToolCallIds.delete(key);
+  startedToolCallIds.delete(key);
+  return tracked ? started : undefined;
+}
+
 export function recordStructuredReplaySafeToolCall(toolCallId: string, runId?: string): void {
   structuredReplaySafeToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
 }
@@ -52,5 +100,7 @@ export function consumeStructuredReplaySafeToolCall(toolCallId: string, runId?: 
 export function resetAdjustedParamsByToolCallIdForTests(): void {
   adjustedParamsByToolCallId.clear();
   preExecutionBlockedToolCallIds.clear();
+  trackedToolCallIds.clear();
+  startedToolCallIds.clear();
   structuredReplaySafeToolCallIds.clear();
 }

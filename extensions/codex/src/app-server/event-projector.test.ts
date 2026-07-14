@@ -23,7 +23,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import { createCodexTestModel } from "./test-support.js";
+import { createCodexTestModel, createCodexTestToolMutationRuntime } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
 const TURN_ID = "turn-1";
@@ -78,6 +78,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel(),
     thinkLevel: "medium",
+    toolMutationRuntime: createCodexTestToolMutationRuntime(),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -5142,30 +5143,109 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+    expect(result.lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: false,
+    });
   });
 
-  it("clears a blocked dynamic tool outcome after the next successful tool", async () => {
+  it("does not mark a blocked pre-execution dynamic mutation as attempted", async () => {
     const projector = await createProjector();
+    const messageArgs = { action: "send", to: "channel:123", message: "hello" };
 
     projector.recordDynamicToolResult({
-      callId: "call-cron-blocked",
-      tool: "cron",
+      callId: "call-message-preflight-blocked",
+      tool: "message",
+      executionStarted: false,
+      mutationState: createCodexTestToolMutationRuntime().classify("message", messageArgs),
       success: false,
       terminalType: "blocked",
-      contentItems: [{ type: "inputText", text: "blocked by policy" }],
+      contentItems: [{ type: "inputText", text: "blocked before execution" }],
     });
 
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
-      toolName: "cron",
-      error: "blocked by policy",
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: false,
+    });
+  });
+
+  it("keeps a blocked dynamic mutation until the same action succeeds", async () => {
+    const projector = await createProjector();
+    const messageArgs = {
+      action: "send",
+      provider: "discord",
+      to: "channel:123",
+      message: "deployment ready",
+    };
+
+    projector.recordDynamicToolResult({
+      callId: "call-message-blocked",
+      tool: "message",
+      executionStarted: true,
+      mutationState: createCodexTestToolMutationRuntime().classify(
+        "message",
+        messageArgs,
+        "send to channel:123",
+      ),
+      success: false,
+      terminalType: "blocked",
+      contentItems: [{ type: "inputText", text: "cross-context messaging denied" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      error: "cross-context messaging denied",
+      mutatingAction: true,
+      actionFingerprint: expect.stringContaining("tool=message|action=send|to=channel:123"),
     });
 
     projector.recordDynamicToolResult({
-      callId: "call-web-fetch-recovered",
-      tool: "web_fetch",
+      callId: "call-read-failed",
+      tool: "read",
+      executionStarted: true,
+      mutationState: createCodexTestToolMutationRuntime().classify("read", {
+        path: "/tmp/missing",
+      }),
+      success: false,
+      terminalType: "error",
+      contentItems: [{ type: "inputText", text: "file not found" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: true,
+    });
+
+    projector.recordDynamicToolResult({
+      callId: "call-heartbeat-response",
+      tool: "heartbeat_respond",
+      executionStarted: true,
+      mutationState: createCodexTestToolMutationRuntime().classify("heartbeat_respond", {
+        notify: false,
+        summary: "nothing else changed",
+      }),
       success: true,
       terminalType: "completed",
-      contentItems: [{ type: "inputText", text: "fetch ok" }],
+      contentItems: [{ type: "inputText", text: "HEARTBEAT_OK" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: true,
+    });
+
+    projector.recordDynamicToolResult({
+      callId: "call-message-retry",
+      tool: "message",
+      executionStarted: true,
+      mutationState: createCodexTestToolMutationRuntime().classify(
+        "message",
+        messageArgs,
+        "send to channel:123",
+      ),
+      success: true,
+      terminalType: "completed",
+      contentItems: [{ type: "inputText", text: "sent" }],
     });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();

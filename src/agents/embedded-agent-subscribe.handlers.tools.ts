@@ -45,6 +45,7 @@ import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   consumeStructuredReplaySafeToolCall,
+  consumeTrackedToolExecutionStarted,
 } from "./agent-tools.before-tool-call.state.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -88,11 +89,12 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import { mergeUnresolvedMutationError, resolveSuccessfulToolMutation } from "./tool-error-state.js";
 import {
   createToolValidationErrorSummary,
   summarizeToolValidationError,
 } from "./tool-error-summary.js";
-import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
+import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 
@@ -551,8 +553,7 @@ function didShellCronAddSucceed(args: unknown, result: unknown): boolean {
 
 function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
   const progress = readRecordField(asOptionalObjectRecord(result)?.progress);
-  // Only an explicit typed progress field crosses into channel UI. Tool output
-  // and details may contain fetched content or private args, so never infer.
+  // Only typed progress crosses into UI; tool output/details may contain private data.
   if (progress?.visibility !== "channel" || progress.privacy !== "public") {
     return undefined;
   }
@@ -946,7 +947,6 @@ export function handleToolExecutionStart(
       source: "embedded-agent",
     });
 
-    // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), {
       startTime: startedAt,
@@ -1171,8 +1171,7 @@ export function handleToolExecutionUpdate(
   const isExecTool = isExecToolName(toolName);
   const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
   const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
-  // Typed progress already has a sanitized item update path. Suppress the raw
-  // partial-result event for those updates to avoid duplicate preview lines.
+  // Typed progress already has a sanitized path; suppress duplicate raw previews.
   const emitDetailedLiveUpdate =
     !toolProgress && (!isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId));
   if (emitDetailedLiveUpdate) {
@@ -1291,6 +1290,7 @@ export async function handleToolExecutionEnd(
       ? (startData.args as Record<string, unknown>)
       : {};
   const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+  const trackedExecutionStarted = consumeTrackedToolExecutionStarted(toolCallId, runId);
   const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
   const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
   const startArgs =
@@ -1304,9 +1304,10 @@ export async function handleToolExecutionEnd(
     initialCallSummary?.instanceReplaySafe === true,
     structuredReplaySafe,
   );
-  // Older/custom event producers omit executionStarted. Treat omission as
-  // executed; only an explicit false can prove preparation stopped the call.
-  const executionStarted = evt.executionStarted !== false && !executionPrevented;
+  // Wrapped calls use the exact host boundary. Older/custom event producers
+  // retain the prior default unless they explicitly report false.
+  const executionStarted =
+    (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
   const attemptedMutatingAction = callSummary.mutatingAction && executionStarted;
   const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
   const meta = callSummary.meta;
@@ -1335,34 +1336,28 @@ export async function handleToolExecutionEnd(
       evt.executionStarted === false && evt.errorKind === "argument-validation"
         ? createToolValidationErrorSummary(toolName)
         : undefined;
-    ctx.state.lastToolError = {
+    ctx.state.lastToolError = mergeUnresolvedMutationError(
+      {
+        toolName,
+        meta,
+        ...(errorCode ? { errorCode } : {}),
+        error: errorMessage,
+        ...(validationErrorSummary ? { validationErrorSummary } : {}),
+        timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
+        middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
+        mutatingAction: attemptedMutatingAction,
+        actionFingerprint: attemptedMutatingAction ? callSummary.actionFingerprint : undefined,
+        fileTarget: attemptedMutatingAction ? callSummary.fileTarget : undefined,
+      },
+      ctx.state.lastToolError,
+    );
+  } else if (ctx.state.lastToolError) {
+    ctx.state.lastToolError = resolveSuccessfulToolMutation(ctx.state.lastToolError, {
       toolName,
       meta,
-      ...(errorCode ? { errorCode } : {}),
-      error: errorMessage,
-      ...(validationErrorSummary ? { validationErrorSummary } : {}),
-      timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
-      middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
-      mutatingAction: attemptedMutatingAction,
-      actionFingerprint: attemptedMutatingAction ? callSummary.actionFingerprint : undefined,
-      fileTarget: attemptedMutatingAction ? callSummary.fileTarget : undefined,
-    };
-  } else if (ctx.state.lastToolError) {
-    // Keep unresolved mutating failures until the same action succeeds.
-    if (ctx.state.lastToolError.mutatingAction) {
-      if (
-        isSameToolMutationAction(ctx.state.lastToolError, {
-          toolName,
-          meta,
-          actionFingerprint: callSummary?.actionFingerprint,
-          fileTarget: callSummary?.fileTarget,
-        })
-      ) {
-        ctx.state.lastToolError = undefined;
-      }
-    } else {
-      ctx.state.lastToolError = undefined;
-    }
+      actionFingerprint: callSummary.actionFingerprint,
+      fileTarget: callSummary.fileTarget,
+    });
   }
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)

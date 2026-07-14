@@ -49,6 +49,12 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveAgentContextLimitValue } from "./agent-context-limits.js";
 import type { CodexDynamicToolsLoading } from "./config.js";
+import {
+  createFailedDynamicToolResponse,
+  readDynamicToolExecutionStarted,
+  type CodexDynamicToolRuntimeResponse,
+  withDynamicToolExecutionState,
+} from "./dynamic-tool-response-state.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
@@ -82,6 +88,7 @@ type CodexDynamicToolHookContext = {
   sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
   onToolOutcome?: EmbeddedRunAttemptParams["onToolOutcome"];
   allocateToolOutcomeOrdinal?: EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"];
+  toolExecutionRuntime?: EmbeddedRunAttemptParams["toolExecutionRuntime"];
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
@@ -344,7 +351,7 @@ export type CodexDynamicToolBridge = {
       onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
       toolCallOrdinal?: number;
     },
-  ) => Promise<CodexDynamicToolCallResponse>;
+  ) => Promise<CodexDynamicToolRuntimeResponse>;
   telemetry: {
     didSendViaMessagingTool: boolean;
     didDeliverSourceReplyViaMessageTool: boolean;
@@ -491,6 +498,7 @@ export function createCodexDynamicToolBridge(params: {
     handleToolCall: async (call, options) => {
       const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
+        const executedArguments = jsonObjectToRecord(call.arguments);
         const message = registeredToolNames.has(call.tool)
           ? `OpenClaw tool is not available for this turn: ${call.tool}`
           : `Unknown OpenClaw tool: ${call.tool}`;
@@ -509,32 +517,36 @@ export function createCodexDynamicToolBridge(params: {
           failedToolResult(message),
           true,
         );
-        if (registeredToolNames.has(call.tool)) {
-          return {
-            contentItems: [
-              {
-                type: "inputText",
-                text: message,
-              },
-            ],
-            success: false,
-          };
-        }
-        return {
-          contentItems: [{ type: "inputText", text: message }],
-          success: false,
-        };
+        return createFailedDynamicToolResponse(message, {
+          executedArguments,
+          executionStarted: false,
+        });
       }
       const { tool, name: toolName } = toolEntry;
       const args = jsonObjectToRecord(call.arguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
       let didStartExecution = false;
+      let didDispatchExecution = false;
       let executionPrevented = false;
       let executedArgs = structuredClone(args);
+      const executionRuntime = params.hookContext?.toolExecutionRuntime;
+      const captureExecutionBoundary = () => {
+        const observedStart = readDynamicToolExecutionStarted(
+          params.hookContext,
+          call.callId,
+          didDispatchExecution,
+        );
+        didStartExecution ||= observedStart;
+        // Retain state so timeouts racing post-processing fingerprint the executed action.
+        const adjustedExecutedArgs = executionRuntime
+          ? executionRuntime.peekArguments(call.callId, toolResultHookContext.runId)
+          : consumeAdjustedParamsForToolCall(call.callId, toolResultHookContext.runId);
+        if (isRecord(adjustedExecutedArgs)) {
+          executedArgs = adjustedExecutedArgs;
+        }
+      };
       try {
-        // Prepare before marking side-effect evidence; argument preparation can
-        // fail without the target tool actually starting.
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
         const telemetryArgs = isRecord(preparedArgs) ? preparedArgs : args;
         executedArgs = structuredClone(telemetryArgs);
@@ -548,15 +560,9 @@ export function createCodexDynamicToolBridge(params: {
             ? { value: params.hookContext.hasRepliedRef.value }
             : undefined,
         };
-        didStartExecution = true;
+        didDispatchExecution = true;
         const rawResult = await tool.execute(call.callId, preparedArgs, signal);
-        const adjustedExecutedArgs = consumeAdjustedParamsForToolCall(
-          call.callId,
-          toolResultHookContext.runId,
-        );
-        if (isRecord(adjustedExecutedArgs)) {
-          executedArgs = structuredClone(adjustedExecutedArgs);
-        }
+        captureExecutionBoundary();
         executionPrevented = consumePreExecutionBlockedToolCall(
           call.callId,
           toolResultHookContext.runId,
@@ -640,8 +646,7 @@ export function createCodexDynamicToolBridge(params: {
             finalFrameImageIdentity === undefined ||
             finalFrameImageIdentity !== params.computerContextEpoch.frameImageIdentity)
         ) {
-          // Middleware and legacy extensions can replace a screenshot result.
-          // Never retain coordinates for pixels other than the exact frame Codex received.
+          // Middleware may replace screenshots; retain coordinates only for exact frame bytes.
           invalidateComputerFrame(params.computerContextEpoch);
         }
         const response = withDiagnosticTerminalType(
@@ -737,14 +742,20 @@ export function createCodexDynamicToolBridge(params: {
           (!asyncStarted &&
             isReplaySafeToolInstance(toolEntry.tool) &&
             isReplaySafeToolCall(toolName, executedArgs));
-        return withSideEffectEvidence(response, !replaySafe);
+        return withDynamicToolExecutionState(response, {
+          executedArguments: executedArgs,
+          executionStarted: didStartExecution && !executionPrevented,
+          sideEffectEvidence: !replaySafe,
+        });
       } catch (error) {
+        // Post-processing can fail after a successful body. Boundary evidence
+        // is monotonic, so a second observer must never erase an earlier start.
+        captureExecutionBoundary();
         if (
           toolName === "computer" &&
           params.computerContextEpoch?.frameToolCallId === call.callId
         ) {
-          // Execution may have armed a screenshot before post-processing failed.
-          // Never retain coordinates for a frame Codex did not receive.
+          // Post-processing can fail after arming; retain only frames Codex received.
           invalidateComputerFrame(params.computerContextEpoch);
         }
         const beforeToolCallDisposition = getBeforeToolCallFailureDisposition(error);
@@ -757,13 +768,6 @@ export function createCodexDynamicToolBridge(params: {
           error,
           "OpenClaw dynamic tool call failed.",
         );
-        const adjustedExecutedArgs = consumeAdjustedParamsForToolCall(
-          call.callId,
-          toolResultHookContext.runId,
-        );
-        if (isRecord(adjustedExecutedArgs)) {
-          executedArgs = structuredClone(adjustedExecutedArgs);
-        }
         executionPrevented =
           executionPrevented ||
           consumePreExecutionBlockedToolCall(call.callId, toolResultHookContext.runId);
@@ -802,7 +806,7 @@ export function createCodexDynamicToolBridge(params: {
           executionPrevented ||
           (isReplaySafeToolInstance(toolEntry.tool) &&
             isReplaySafeToolCall(toolName, executedArgs));
-        return withSideEffectEvidence(
+        return withDynamicToolExecutionState(
           withDiagnosticFailureDisposition(
             {
               contentItems: [
@@ -815,8 +819,17 @@ export function createCodexDynamicToolBridge(params: {
             },
             executionDisposition,
           ),
-          didStartExecution && !replaySafe,
+          {
+            executedArguments: executedArgs,
+            executionStarted: didStartExecution && !executionPrevented,
+            sideEffectEvidence: didStartExecution && !replaySafe,
+          },
         );
+      } finally {
+        executionRuntime?.consumeStarted(call.callId, toolResultHookContext.runId);
+        if (executionRuntime) {
+          consumeAdjustedParamsForToolCall(call.callId, toolResultHookContext.runId);
+        }
       }
     },
   };
@@ -1307,20 +1320,6 @@ function withDiagnosticFailureDisposition<T extends CodexDynamicToolCallResponse
       value: disposition,
     });
   }
-  return response;
-}
-function withSideEffectEvidence<T extends CodexDynamicToolCallResponse>(
-  response: T,
-  sideEffectEvidence: boolean,
-): T {
-  if (!sideEffectEvidence) {
-    return response;
-  }
-  Object.defineProperty(response, "sideEffectEvidence", {
-    configurable: true,
-    enumerable: false,
-    value: true,
-  });
   return response;
 }
 function withDynamicToolTermination<T extends CodexDynamicToolCallResponse>(
