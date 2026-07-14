@@ -70,7 +70,6 @@ import {
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
-
 /** Logger surface used by plugin update flows. */
 type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -78,10 +77,8 @@ type PluginUpdateLogger = {
   error?: (message: string) => void;
   terminalLinks?: boolean;
 };
-
 /** Outcome status for one plugin update attempt. */
 type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
-
 type PluginUpdateChannelFallback = {
   requestedSpec: string;
   usedSpec: string;
@@ -90,7 +87,6 @@ type PluginUpdateChannelFallback = {
   reason: "unavailable" | "failed";
   message: string;
 };
-
 type BasePluginUpdateOutcome = {
   pluginId: string;
   message: string;
@@ -99,7 +95,6 @@ type BasePluginUpdateOutcome = {
   channelFallback?: PluginUpdateChannelFallback;
   warning?: string;
 };
-
 export type PluginUpdateOutcome =
   | (BasePluginUpdateOutcome & {
       status: "skipped";
@@ -109,13 +104,11 @@ export type PluginUpdateOutcome =
       status: Exclude<PluginUpdateStatus, "skipped">;
       code?: string;
     });
-
 type PluginUpdateSummary = {
   config: OpenClawConfig;
   changed: boolean;
   outcomes: PluginUpdateOutcome[];
 };
-
 export type PluginUpdateIntegrityDriftParams = {
   pluginId: string;
   spec: string;
@@ -125,7 +118,6 @@ export type PluginUpdateIntegrityDriftParams = {
   resolvedVersion?: string;
   dryRun: boolean;
 };
-
 type PluginChannelSyncSummary = {
   switchedToBundled: string[];
   switchedToClawHub: string[];
@@ -133,13 +125,11 @@ type PluginChannelSyncSummary = {
   warnings: string[];
   errors: string[];
 };
-
 type PluginChannelSyncResult = {
   config: OpenClawConfig;
   changed: boolean;
   summary: PluginChannelSyncSummary;
 };
-
 /** Return whether a tracked plugin install source can be updated in place. */
 export function isPluginInstallRecordUpdateSource(
   record: PluginInstallRecord | undefined,
@@ -151,7 +141,6 @@ export function isPluginInstallRecordUpdateSource(
     record?.source === "git"
   );
 }
-
 /** Return whether update identity compatibility can migrate an unscoped install key. */
 export function pluginInstallRecordMayMigrateConfigId(params: {
   pluginId: string;
@@ -176,7 +165,6 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     unscopedPackageName(packageName) === params.pluginId,
   );
 }
-
 function formatNpmInstallFailure(params: {
   pluginId: string;
   spec: string;
@@ -188,7 +176,6 @@ function formatNpmInstallFailure(params: {
   }
   return `Failed to ${params.phase} ${params.pluginId}: ${params.result.error}`;
 }
-
 function formatMarketplaceInstallFailure(params: {
   pluginId: string;
   marketplaceSource: string;
@@ -201,7 +188,6 @@ function formatMarketplaceInstallFailure(params: {
     `${params.error} (marketplace plugin ${params.marketplacePlugin} from ${params.marketplaceSource}).`
   );
 }
-
 function formatClawHubInstallFailure(params: {
   pluginId: string;
   spec: string;
@@ -210,7 +196,6 @@ function formatClawHubInstallFailure(params: {
 }): string {
   return `Failed to ${params.phase} ${params.pluginId}: ${params.error} (ClawHub ${params.spec}).`;
 }
-
 function isClawHubRiskAcknowledgementRequired(result: { ok: false; code?: string }): boolean {
   return result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED;
 }
@@ -218,7 +203,6 @@ function isClawHubRiskAcknowledgementRequired(result: { ok: false; code?: string
 function isClawHubDownloadBlocked(result: { ok: false; code?: string }): boolean {
   return result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED;
 }
-
 function isClawHubSecurityUnavailable(result: { ok: false; code?: string }): boolean {
   return result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE;
 }
@@ -233,7 +217,6 @@ function readClawHubTrustErrorCode(result: { code?: string }): ClawHubTrustError
   }
   return undefined;
 }
-
 function shouldSkipClawHubTrustFailureForExistingInstall(params: {
   result: { ok: false; code?: string; version?: string };
   currentVersion: string | undefined;
@@ -1425,8 +1408,13 @@ export async function updateNpmInstalledPlugins(params: {
     pluginId: string,
     message: string,
     channelFallback?: PluginUpdateChannelFallback,
+    code?: string,
   ) => {
-    if (params.disableOnFailure && !params.dryRun) {
+    if (
+      params.disableOnFailure &&
+      !params.dryRun &&
+      code !== PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE
+    ) {
       const disabledMessage =
         `Disabled "${pluginId}" after plugin update failure; OpenClaw will continue without it. ` +
         message;
@@ -1752,7 +1740,14 @@ export async function updateNpmInstalledPlugins(params: {
         }
       } else {
         if (!parseRegistryNpmSpec(effectiveSpec!)) {
-          recordFailure(pluginId, `Failed to check ${pluginId}: ${metadataResult.error}`);
+          recordFailure(
+            pluginId,
+            `Failed to check ${pluginId}: ${metadataResult.error}`,
+            undefined,
+            metadataResult.category === "metadata-env"
+              ? PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE
+              : undefined,
+          );
           continue;
         }
         logger.warn?.(
@@ -1998,6 +1993,7 @@ export async function updateNpmInstalledPlugins(params: {
                     error: probe.error,
                   }),
           npmChannelFallback,
+          "code" in probe && probe.code ? probe.code : undefined,
         );
         continue;
       }
@@ -2301,6 +2297,7 @@ export async function updateNpmInstalledPlugins(params: {
                   error: result.error,
                 }),
         npmChannelFallback,
+        resultSource === "npm" && result && "code" in result ? result.code : undefined,
       );
       continue;
     }
