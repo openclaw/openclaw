@@ -696,7 +696,7 @@ export function createFollowupRunner(params: {
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: resolveFollowupAbortSignal(queued),
-        onFollowupAdmissionWaitChange: effectiveQueued.onFollowupAdmissionWaitChange,
+        onReplyAdmissionWaitChange: effectiveQueued.onReplyAdmissionWaitChange,
       });
       if (admission.status === "skipped") {
         if (admission.reason === "active-run") {
